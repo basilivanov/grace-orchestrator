@@ -1,0 +1,31 @@
+version: 2
+
+project:
+  key: grace-test
+  root: /tmp/grace-orchestrator-export
+  default_branch: prod-release-20260327
+  grace_dir: grace
+  packets_dir: grace/packets
+
+runtime:
+  state_root: /tmp/grace-test-state
+  artifact_root: /tmp/grace-test-state/artifacts
+  worktree_root: /tmp/grace-test-state/worktrees
+
+workflow_runtime:
+  type: prefect
+  work_pool: grace-test-process
+  queues:
+    live:
+      name: grace-test-live
+      concurrency_limit: 1
+    monitoring:
+      name: grace-test-monitoring
+      concurrency_limit: 1
+
+executors:
+  default: codex-cli
+  command: codex1
+
+security:
+  allow_sandbox_bypass: false
