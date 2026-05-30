@@ -20,6 +20,8 @@ GRACE enables teams to define verification slices—cohesive units of testing, e
 
 ## Quick Start
 
+New to GRACE? See the [Quick Start Guide](docs/QUICKSTART.md) for a 5-minute introduction.
+
 ### Installation
 
 ```bash
@@ -40,6 +42,7 @@ grace init
 
 # This creates:
 # - grace/project.yaml          # Project configuration
+# - grace/agent_profiles.yaml   # Agent and executor configuration
 # - grace/requirements.xml      # System requirements
 # - grace/technology.xml        # Technology constraints
 # - grace/development-plan.xml  # Module structure and phases
@@ -86,22 +89,33 @@ gracectl watch start FLOW-AUTH
 
 ## Architecture
 
-GRACE orchestrates three types of agents:
+GRACE orchestrates multi-agent workflows with intelligent model selection:
 
-1. **Planner**: Analyzes requirements, creates work packets, and defines verification strategy
-2. **Worker**: Executes code changes, runs tests, and collects evidence
-3. **Reviewer**: Validates changes against contracts, reviews evidence, and approves/rejects
+1. **Architect**: Classifies packet complexity (simple/medium/complex)
+2. **Planner**: Analyzes requirements and creates work packets (optional for simple tasks)
+3. **Executor Selection**: Routes packets to appropriate models based on complexity
+4. **Executors**: Execute packets with cost-optimized model selection
+   - Simple packets → gemini-3.5-flash (cheap, fast)
+   - Medium packets → gemini-3.1-pro (balanced)
+   - Complex packets → claude-opus-4 (premium quality)
+5. **Reviewer**: Validates changes against contracts and approves/rejects
 
 ### Workflow
 
 ```
 ┌─────────────┐
-│   Planner   │  Analyzes requirements → Creates work packet
+│  Architect  │  Classifies complexity → Routes to executor
 └──────┬──────┘
        │
        ▼
 ┌─────────────┐
-│   Worker    │  Implements changes → Runs tests → Collects evidence
+│   Planner   │  Analyzes requirements → Creates work packet (optional)
+└──────┬──────┘
+       │
+       ▼
+┌─────────────┐
+│  Executors  │  Implements changes → Runs tests → Collects evidence
+│  (3 tiers)  │  (Flash/Pro/Opus based on complexity)
 └──────┬──────┘
        │
        ▼
@@ -109,6 +123,16 @@ GRACE orchestrates three types of agents:
 │  Reviewer   │  Validates contracts → Reviews evidence → Gates release
 └─────────────┘
 ```
+
+### Cost Optimization
+
+GRACE uses **complexity routing** to optimize costs:
+
+- **87% cost savings** vs. using premium models for everything
+- **Automatic executor rotation** on failures
+- **Log-driven verification** instead of expensive end-to-end tests
+
+See [METRICS.md](docs/METRICS.md) for detailed cost analysis.
 
 ### Prefect Integration
 
@@ -379,6 +403,24 @@ GRACE is built on the principles of artifact-driven development and multi-agent 
 - Standard testing frameworks (pytest, Jest, Playwright, etc.)
 
 ## Support
+
+### Documentation
+
+- [Quick Start Guide](docs/QUICKSTART.md) - Get started in 5 minutes
+- [Log-Driven Verification](docs/LOG_DRIVEN_VERIFICATION.md) - Verification approach and cost savings
+- [Operations Runbook](docs/RUNBOOK.md) - Troubleshooting and operations guide
+- [Metrics Reference](docs/METRICS.md) - Complete metrics documentation
+- [Success Criteria](src/prefect_grace/docs/SUCCESS_CRITERIA.md) - Success definitions
+
+### Tools
+
+- `tools/verify_orchestrator.py` - Verify orchestrator health
+- `tools/aggregate_metrics.py` - Aggregate and analyze metrics
+- `tools/health_check.py` - Health monitoring
+- `tools/query_logs.sh` - Query execution logs
+- `tools/view_trace.py` - Visualize execution traces
+
+### Community
 
 - Documentation: [https://grace-orchestrator.readthedocs.io](https://grace-orchestrator.readthedocs.io)
 - Issues: [https://github.com/yourusername/grace-orchestrator/issues](https://github.com/yourusername/grace-orchestrator/issues)

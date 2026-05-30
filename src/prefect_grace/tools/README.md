@@ -246,6 +246,123 @@ See `docs/SUCCESS_CRITERIA.md` for complete definitions.
 
 ---
 
+## Cost Dashboard
+
+### aggregate_metrics.py
+
+Aggregate cost and usage metrics from execution history.
+
+**Usage:**
+```bash
+python3 aggregate_metrics.py <state_root>
+```
+
+**Example:**
+```bash
+python3 aggregate_metrics.py state > metrics.json
+```
+
+**Output:** JSON metrics report:
+```json
+{
+  "total_executions": 150,
+  "total_cost_usd": 2.4567,
+  "total_tokens": 1250000,
+  "avg_duration_seconds": 45.3,
+  "by_model": {
+    "claude-opus-4": {"count": 15, "cost": 0.9375, "tokens": 125000},
+    "claude-sonnet-4": {"count": 90, "cost": 1.125, "tokens": 750000},
+    "claude-haiku-4": {"count": 45, "cost": 0.3942, "tokens": 375000}
+  },
+  "by_complexity": {
+    "high": {"count": 15, "cost": 0.9375, "tokens": 125000},
+    "medium": {"count": 90, "cost": 1.125, "tokens": 750000},
+    "low": {"count": 45, "cost": 0.3942, "tokens": 375000}
+  },
+  "by_role": {
+    "planner": {"count": 30, "cost": 0.4875, "tokens": 250000},
+    "coder": {"count": 60, "cost": 0.9, "tokens": 600000}
+  },
+  "savings": {
+    "actual_cost_usd": 2.4567,
+    "premium_only_cost_usd": 9.375,
+    "savings_usd": 6.9183,
+    "savings_pct": 73.8
+  }
+}
+```
+
+**Metrics:**
+- **total_executions**: Number of packet executions
+- **total_cost_usd**: Total cost in USD
+- **total_tokens**: Total tokens consumed
+- **avg_duration_seconds**: Average execution duration
+- **by_model**: Breakdown by Claude model
+- **by_complexity**: Breakdown by complexity level
+- **by_role**: Breakdown by agent role
+- **savings**: Cost savings vs using premium model for all executions
+
+---
+
+### generate_dashboard.sh
+
+Generate interactive HTML cost dashboard.
+
+**Usage:**
+```bash
+./generate_dashboard.sh [state_root] [output_dir]
+```
+
+**Examples:**
+```bash
+# Generate dashboard in current directory
+./generate_dashboard.sh state .
+
+# Generate dashboard in specific directory
+./generate_dashboard.sh state /tmp/dashboard
+
+# Use default state directory
+./generate_dashboard.sh
+```
+
+**Output:**
+- `metrics.json` - Aggregated metrics data
+- `dashboard.html` - Interactive HTML dashboard
+
+**Dashboard Features:**
+- Overview metrics (executions, cost, tokens, duration)
+- Cost savings visualization (vs premium-only baseline)
+- Cost breakdown by model
+- Cost breakdown by complexity level
+- Cost breakdown by role
+- Sortable tables with per-execution averages
+
+**Opening Dashboard:**
+```bash
+# Generate and open
+./generate_dashboard.sh state /tmp/dashboard
+open /tmp/dashboard/dashboard.html  # macOS
+xdg-open /tmp/dashboard/dashboard.html  # Linux
+```
+
+---
+
+### test_dashboard.py
+
+Test dashboard with mock data.
+
+**Usage:**
+```bash
+python3 test_dashboard.py
+```
+
+**Purpose:**
+- Generates mock metrics for testing
+- Creates temporary dashboard
+- Useful for development and demonstration
+
+---
+
 ## Common Workflows
 
 ### Debug a Failed Packet
@@ -279,6 +396,25 @@ python3 validate_logs.py state
 
 # View recent activity
 python3 view_trace.py state timeline 100
+```
+
+### Cost Analysis
+
+```bash
+# Generate cost dashboard
+./generate_dashboard.sh state /tmp/dashboard
+
+# Open dashboard in browser
+open /tmp/dashboard/dashboard.html
+
+# Get raw metrics JSON
+python3 aggregate_metrics.py state | jq '.savings'
+
+# Compare costs by model
+python3 aggregate_metrics.py state | jq '.by_model'
+
+# View cost per role
+python3 aggregate_metrics.py state | jq '.by_role'
 ```
 
 ### Cost Analysis
@@ -404,7 +540,8 @@ python3 test_health_check.py
 
 - Python 3.7+
 - jq (for query_logs.sh, alert_on_health.sh)
-- Bash (for query_logs.sh, alert_on_health.sh)
+- Bash (for query_logs.sh, alert_on_health.sh, generate_dashboard.sh)
+- Modern web browser (for viewing dashboard.html)
 
 ## Notes
 
@@ -412,3 +549,4 @@ python3 test_health_check.py
 - Logs are aggregated from `state/runs/*/execution_trace.jsonl`
 - Tools work with empty or partial log sets
 - Malformed log lines are skipped with warnings
+- Cost dashboard uses estimated metrics when EXECUTION_METRICS events are not available
