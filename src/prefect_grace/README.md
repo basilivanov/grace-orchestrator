@@ -1,6 +1,6 @@
-# Prefect Grace Scaffold
+# Prefect Grace Orchestrator
 
-This directory contains a phase-1 file-backed scaffold for Prefect-driven GRACE execution.
+This directory contains the file-backed orchestration layer for Prefect-driven GRACE execution.
 
 ## Structure
 
@@ -10,22 +10,25 @@ This directory contains a phase-1 file-backed scaffold for Prefect-driven GRACE 
 - `roles/` — role contracts and responsibility docs.
 - `templates/` — feature and packet templates.
 - `packets/` — generated packet workspace placeholder.
-- `state/` — YAML/JSON state for features, packets, reviews, and decisions.
 - `state/` — YAML/JSON state for features, packets, reviews, verifications, and decisions.
 
 ## Current purpose
 
-Phase 1 is intentionally conservative:
-- define the operating model;
-- define role contracts;
-- define prompt templates;
-- define file-backed state layout;
-- provide Prefect entry scaffold;
-- provide a Codex subprocess launcher wired through `codexN` and cliproxy.
+The orchestrator provides:
+- Operating model definition and role contracts;
+- Role-specific prompt templates;
+- File-backed state management with registry support;
+- Prefect flow orchestration;
+- Codex subprocess launcher with executor registry and rotation;
+- Evidence-based verification and review workflows.
 
-The scaffold can already dry-run or execute a packet through a configured `codexN` wrapper.
-It now parses verifier, reviewer, and architect-wave outputs and injects dependency context into downstream agent prompts.
-It also supports live Prefect deployments, a scheduled state dashboard artifact, a YAML business-feature intake contract, and an LLM-driven verifier that executes packet contracts through Codex.
+The orchestrator supports:
+- Dry-run and live packet execution through configured executors;
+- Parsing verifier, reviewer, and architect-wave outputs;
+- Dependency context injection into downstream agent prompts;
+- Live Prefect deployments with scheduled state dashboard artifacts;
+- YAML business-feature intake contracts;
+- LLM-driven verification that executes packet contracts through Codex.
 
 ## Evidence architecture
 

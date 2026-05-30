@@ -19,7 +19,7 @@ import yaml
 
 from prefect_grace.models import ReasoningProfile
 from prefect_grace.platform.executor_registry import select_executor_for_packet
-from prefect_grace.platform.state_store import PacketRegistryStore
+from prefect_grace.platform.state_store import PacketRegistryStore, ExecutorHistoryStore
 from prefect_grace.tasks.agent_output_parser import read_agent_message
 from prefect_grace.tasks.codex_launcher_helpers import process_runner as _process_runner
 from prefect_grace.tasks.codex_launcher_helpers import progress_tracker as _progress_tracker
@@ -154,10 +154,34 @@ def _launch_codex_for_packet(
 
     # Try executor registry first
     requested_executor = execution_hints.get("requested_executor") if execution_hints else None
+
+    # Load executor history for rotation logic
+    history = None
+    try:
+        resolved_state_root = Path(runtime_state_root) if runtime_state_root else STATE_ROOT
+        history_store = ExecutorHistoryStore(state_root=resolved_state_root)
+        history = history_store.list_executions()
+
+        if logger:
+            logger.info("EXECUTOR_HISTORY_LOADED", extra={
+                "packet_id": packet_id,
+                "role": role,
+                "total_history_count": len(history)
+            })
+    except Exception as e:
+        # Fallback to None on any error
+        if logger:
+            logger.warning("EXECUTOR_HISTORY_LOAD_FAILED", extra={
+                "packet_id": packet_id,
+                "role": role,
+                "error": str(e)
+            })
+        history = None
+
     executor_selection = select_executor_for_packet(
         project=config,
         packet=packet,
-        history=None,  # TODO: load from ExecutorHistoryStore
+        history=history,
         requested_executor=requested_executor
     )
 
