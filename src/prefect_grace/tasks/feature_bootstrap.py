@@ -19,6 +19,15 @@ PACKET_CONTRACT_END = "END_FINAL_PACKET_CONTRACT_JSON"
 
 
 def _render_template(template_name: str, replacements: dict[str, str]) -> str:
+    """Render a template file by replacing placeholders with provided values.
+
+    Args:
+        template_name: Name of the template file in the templates directory
+        replacements: Dictionary mapping placeholder names to replacement values
+
+    Returns:
+        Rendered template string with all placeholders replaced
+    """
     template = (TEMPLATE_DIR / template_name).read_text(encoding="utf-8")
     for key, value in replacements.items():
         template = template.replace("{{ " + key + " }}", value)
@@ -26,6 +35,14 @@ def _render_template(template_name: str, replacements: dict[str, str]) -> str:
 
 
 def _bullet_lines(items: list[str] | None) -> str:
+    """Convert a list of items into markdown bullet points.
+
+    Args:
+        items: List of strings to convert to bullet points, or None
+
+    Returns:
+        Markdown-formatted bullet list, or "-" if no items
+    """
     cleaned = [item.strip() for item in items or [] if item and item.strip()]
     return "\n".join(f"- {item}" for item in cleaned) if cleaned else "-"
 
@@ -109,6 +126,18 @@ def infer_packet_type(
     parent_packet_id: str | None = None,
     explicit: Any = None,
 ) -> str:
+    """Infer the packet type based on role, title, wave, and parent context.
+
+    Args:
+        role: The packet role (e.g., "coder", "reviewer", "architect")
+        title: The packet title
+        wave_id: The wave identifier
+        parent_packet_id: Optional parent packet ID for rework packets
+        explicit: Explicitly provided packet type to normalize
+
+    Returns:
+        Inferred packet type: "execution", "rework", or "gate_decision"
+    """
     normalized = _normalize_packet_type(explicit)
     if explicit not in (None, ""):
         return normalized
@@ -158,6 +187,14 @@ def _packet_contract_payload(packet: dict[str, Any]) -> dict[str, Any]:
 
 
 def render_packet_markdown(packet: dict[str, Any]) -> str:
+    """Render a packet dictionary into a markdown document.
+
+    Args:
+        packet: Packet dictionary containing all packet metadata
+
+    Returns:
+        Markdown-formatted packet document with embedded JSON contract
+    """
     grace_refs = {
         "grace_feature_ref": str(packet.get("grace_feature_ref") or ""),
         "grace_wave_ref": str(packet.get("grace_wave_ref") or ""),
@@ -211,6 +248,17 @@ def render_packet_markdown(packet: dict[str, Any]) -> str:
 
 
 def sync_packet_file(packet: dict[str, Any]) -> dict[str, Any]:
+    """Write packet markdown file to disk at the path specified in the packet.
+
+    Renders the packet dictionary into markdown format and writes it to the
+    packet_path location. Creates parent directories if they don't exist.
+
+    Args:
+        packet: Packet dictionary containing packet_path and all metadata
+
+    Returns:
+        The same packet dictionary unchanged
+    """
     raw_path = str(packet.get("packet_path") or "").strip()
     if not raw_path:
         return packet
@@ -289,6 +337,21 @@ def bootstrap_feature(
     *,
     state_root: Path | str | None = None,
 ) -> dict[str, Any]:
+    """Bootstrap a new feature with directory structure and feature brief.
+
+    Creates the feature directory structure, writes the feature brief from template,
+    and records the feature in state storage.
+
+    Args:
+        feature_id: Unique feature identifier
+        title: Feature title/objective
+        summary: Feature business intent summary
+        business_context: Optional business context with scope, impacted surfaces, etc.
+        state_root: Optional state storage root path
+
+    Returns:
+        Feature record dictionary
+    """
     resolved_state_root = Path(state_root) if state_root else STATE_ROOT
     feature_dir = FEATURES_DIR / feature_id
     feature_dir.mkdir(parents=True, exist_ok=True)
@@ -389,6 +452,20 @@ def mark_feature_status(
     blocker_reasons: list[str] | None = None,
     state_root: Path | str | None = None,
 ) -> dict[str, Any]:
+    """Update feature status and optionally set blocker reasons.
+
+    Updates the feature record in state storage with the new status.
+    Clears blocker_reasons for non-blocked statuses unless explicitly provided.
+
+    Args:
+        feature_id: Unique feature identifier
+        status: New feature status to set
+        blocker_reasons: Optional list of blocking reasons (cleared for non-blocked statuses)
+        state_root: Optional state storage root path
+
+    Returns:
+        Updated feature record dictionary
+    """
     resolved_state_root = Path(state_root) if state_root else STATE_ROOT
     updates: dict[str, Any] = {"status": status.value}
     if blocker_reasons is not None:
@@ -426,6 +503,36 @@ def create_packet(
     status: PacketStatus = PacketStatus.READY,
     state_root: Path | str | None = None,
 ) -> dict[str, Any]:
+    """Create a new packet with full metadata and write to disk.
+
+    Generates packet ID from feature_id, wave_id, and title slug. Creates
+    GRACE reference IDs, writes packet markdown file, and stores in state.
+    Updates existing packet if one with the same ID already exists.
+
+    Args:
+        feature_id: Feature identifier this packet belongs to
+        wave_id: Wave identifier (e.g., "W00", "W01")
+        title: Packet title (used to generate packet ID)
+        role: Packet role (coder, verifier, reviewer, architect, planner)
+        reasoning: Reasoning profile for agent execution
+        summary: Brief packet summary
+        write_scope: List of files/directories this packet may modify
+        inputs: List of input dependencies and context
+        acceptance_criteria: List of success criteria
+        verification_profile: Verification requirements by surface (backend, frontend, observability)
+        reviewer_gate: List of reviewer gate criteria
+        dependencies: List of packet IDs this packet depends on
+        notes: Additional notes for packet execution
+        parent_packet_id: Parent packet ID for rework packets
+        review_target_packet_id: Target packet ID for reviewer packets
+        packet_type: Explicit packet type (execution, rework, gate_decision)
+        execution_hints: Execution hints for agent runtime
+        status: Initial packet status
+        state_root: Optional state storage root path
+
+    Returns:
+        Created or updated packet record dictionary
+    """
     resolved_state_root = Path(state_root) if state_root else STATE_ROOT
     packet_slug = slugify(title)
     packet_id = f"{feature_id}-{wave_id}-{packet_slug}".upper()
@@ -498,6 +605,38 @@ def seed_test_feature(
     materialize_execution_packets: bool = True,
     state_root: Path | str | None = None,
 ) -> dict[str, Any]:
+    """Seed a complete test feature with architect, optional planner, and execution packets.
+
+    Creates a full feature structure including feature brief, architect packet,
+    optional planner packet, and materialized execution packets (coder, verifier,
+    reviewer) based on the provided contract or defaults.
+
+    Args:
+        feature_id: Unique feature identifier
+        title: Feature title/objective
+        summary: Feature business intent summary
+        implementation_title: Title for the implementation coder packet
+        implementation_summary: Summary for the implementation coder packet
+        verifier_backend_profile: Backend verification profile
+        verifier_frontend_profile: Frontend verification profile
+        verifier_frontend_commands: Custom frontend verification commands
+        verifier_observability_profile: Observability verification profile
+        verifier_observability_commands: Custom observability verification commands
+        verifier_artifact_globs: File globs for verification artifacts
+        verifier_touches_frontend: Whether implementation touches frontend
+        verifier_requires_frontend_visual: Whether visual proof is required
+        verifier_include_day_live_canary: Whether to include day live canary check
+        agent_workdir: Agent working directory
+        agent_sandbox: Agent sandbox mode
+        business_context: Business context with scope, impacted surfaces, etc.
+        planner_contract: Optional planner contract to materialize
+        include_planner_packet: Whether to create planner packet
+        materialize_execution_packets: Whether to materialize execution packets
+        state_root: Optional state storage root path
+
+    Returns:
+        Dictionary containing feature record, packet records, and planner contract
+    """
     resolved_state_root = Path(state_root) if state_root else STATE_ROOT
     business_context = dict(business_context or {})
     impacted_surfaces = list(business_context.get("impacted_surfaces") or [])
