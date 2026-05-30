@@ -127,6 +127,95 @@ def verify_metrics_present(logs: List[Dict]) -> Dict:
     }
 
 
+def check_packet_success(logs: List[Dict], packet_id: str) -> Dict:
+    """
+    Check if a packet succeeded according to success criteria.
+
+    Returns:
+        {
+            "success": bool,
+            "criteria_met": {
+                "status_accepted": bool,
+                "returncode_zero": bool,
+                "metrics_present": bool,
+                "events_complete": bool
+            },
+            "issues": [str]
+        }
+    """
+    packet_logs = [log for log in logs if log.get("packet_id") == packet_id]
+    issues = []
+
+    # Check status
+    end_events = [log for log in packet_logs if log.get("event") == "PACKET_END"]
+    status_accepted = any(log.get("status") == "accepted" for log in end_events)
+
+    # Check returncode
+    returncode_zero = any(log.get("returncode") == 0 for log in end_events)
+
+    # Check metrics
+    metrics_events = [log for log in packet_logs if log.get("event") == "EXECUTION_METRICS"]
+    metrics_present = len(metrics_events) > 0
+
+    # Check events
+    required_events = {"PACKET_START", "EXECUTOR_SELECTED", "PACKET_END"}
+    present_events = {log.get("event") for log in packet_logs}
+    events_complete = required_events.issubset(present_events)
+
+    if not status_accepted:
+        issues.append("Status not accepted")
+    if not returncode_zero:
+        issues.append("Non-zero return code")
+    if not metrics_present:
+        issues.append("Metrics not collected")
+    if not events_complete:
+        missing = required_events - present_events
+        issues.append(f"Missing events: {missing}")
+
+    return {
+        "success": len(issues) == 0,
+        "criteria_met": {
+            "status_accepted": status_accepted,
+            "returncode_zero": returncode_zero,
+            "metrics_present": metrics_present,
+            "events_complete": events_complete
+        },
+        "issues": issues
+    }
+
+
+def check_feature_success(logs: List[Dict], feature_id: str) -> Dict:
+    """
+    Check if a feature succeeded according to success criteria.
+
+    Returns:
+        {
+            "success": bool,
+            "total_packets": int,
+            "successful_packets": int,
+            "packet_results": {packet_id: result}
+        }
+    """
+    # Get all packets for feature
+    feature_logs = [log for log in logs if log.get("feature_id") == feature_id]
+    packet_ids = {log.get("packet_id") for log in feature_logs if log.get("packet_id")}
+
+    # Check each packet
+    packet_results = {}
+    for packet_id in packet_ids:
+        packet_results[packet_id] = check_packet_success(logs, packet_id)
+
+    # Feature succeeds if all packets succeed
+    all_success = all(r["success"] for r in packet_results.values())
+
+    return {
+        "success": all_success,
+        "total_packets": len(packet_ids),
+        "successful_packets": sum(1 for r in packet_results.values() if r["success"]),
+        "packet_results": packet_results
+    }
+
+
 def verify_orchestrator(state_root: Path) -> Dict:
     """
     Main verification function.
