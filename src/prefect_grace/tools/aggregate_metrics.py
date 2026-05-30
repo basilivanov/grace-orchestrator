@@ -24,7 +24,7 @@ def aggregate_metrics(state_root: Path) -> Dict:
             "savings": {...}
         }
     """
-    from aggregate_logs import aggregate_logs
+    from prefect_grace.tools.aggregate_logs import aggregate_logs
 
     logs = aggregate_logs(state_root)
 
