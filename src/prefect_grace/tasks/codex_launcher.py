@@ -18,6 +18,7 @@ from typing import Any
 import yaml
 
 from prefect_grace.models import ReasoningProfile
+from prefect_grace.platform.executor_registry import select_executor_for_packet
 from prefect_grace.platform.state_store import PacketRegistryStore
 from prefect_grace.tasks.agent_output_parser import read_agent_message
 from prefect_grace.tasks.codex_launcher_helpers import process_runner as _process_runner
@@ -150,7 +151,32 @@ def _launch_codex_for_packet(
     effective_stall_timeout_seconds = _resolve_stall_timeout_seconds(packet, role_defaults, stall_timeout_seconds)
     max_auto_resume_attempts = _resolve_max_auto_resume_attempts(packet, role_defaults)
     codex_binary = str(config.get("codex", {}).get("binary") or "codex1")
-    shared_model = str(config.get("codex", {}).get("shared_model") or "gpt-5.4")
+
+    # Try executor registry first
+    requested_executor = execution_hints.get("requested_executor") if execution_hints else None
+    executor_selection = select_executor_for_packet(
+        project=config,
+        packet=packet,
+        history=None,  # TODO: load from ExecutorHistoryStore
+        requested_executor=requested_executor
+    )
+
+    if executor_selection.ok and executor_selection.selected and executor_selection.selected.model:
+        shared_model = executor_selection.selected.model
+        logger.info("EXECUTOR_SELECTED", extra={
+            "executor_id": executor_selection.selected.executor_id,
+            "model": shared_model,
+            "packet_id": packet.get("id"),
+            "role": role
+        })
+    else:
+        # Fallback to shared_model from config
+        shared_model = str(config.get("codex", {}).get("shared_model") or "gpt-5.4")
+        logger.warning("EXECUTOR_FALLBACK", extra={
+            "reason": executor_selection.reason if not executor_selection.ok else "no model specified",
+            "fallback_model": shared_model,
+            "packet_id": packet.get("id")
+        })
 
     # Resolve working directory: workdir_override wins over packet hints and config
     if workdir_override is not None:
@@ -208,6 +234,23 @@ def _launch_codex_for_packet(
 
     role_prompt = role_prompt_for(role)
     prompt = build_packet_prompt(packet, role_prompt)
+
+    # Add verification phase context if specified
+    verification_phase = packet.get("verification_phase")
+    if verification_phase and verification_phase != "full":
+        phase_instructions = {
+            "code": "VERIFICATION PHASE: code\nWrite code only. Do not run tests or linting. Focus on implementation.",
+            "lint": "VERIFICATION PHASE: lint\nRun linting and formatting checks only. Fix any issues found. Do not write new code or run tests.",
+            "test": "VERIFICATION PHASE: test\nRun tests only. Fix any test failures. Do not write new code or run linting."
+        }
+        phase_suffix = phase_instructions.get(verification_phase, "")
+        if phase_suffix:
+            prompt = f"{prompt}\n\n{phase_suffix}"
+            if logger:
+                logger.info("VERIFICATION_PHASE_CONTEXT", extra={
+                    "packet_id": packet_id,
+                    "verification_phase": verification_phase
+                })
 
     # Check if resume is allowed based on source hash gate
     resume_allowed = _check_resume_allowed(packet_id, resume_strategy, logger)

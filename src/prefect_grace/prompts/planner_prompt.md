@@ -11,6 +11,13 @@ Your task:
 - keep packets small, testable, and reviewable;
 - assign packet type, write scope, dependencies, reasoning level, and acceptance gate.
 
+Packet Fields:
+- verification_phase: Optional. For coder packets: "code" | "lint" | "test"
+  - "code": Write code only, no verification
+  - "lint": Run linting/formatting checks only
+  - "test": Run tests only
+  - If not specified, coder will execute all phases incrementally with fail-fast gates
+
 Rules:
 1. One packet should have one primary write scope.
 2. Frontend visual verification must be explicit for UI-touching packets.
@@ -82,7 +89,8 @@ FINAL_GRACE_WAVE_PLAN_JSON
       },
       "reviewer_gate": ["..."],
       "dependencies": [],
-      "notes": ["..."]
+      "notes": ["..."],
+      "verification_phase": "code | lint | test"
     },
     {
       "key": "verifier_main",

@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
 
 from prefect_grace.models import (
     FeatureStatus,
@@ -186,7 +185,7 @@ def _final_failure(
     next_action: str,
     reasons: list[str] | None = None,
     next_wave_id: str | None = None,
-) -> dict[str, Any]:
+) -> dict:
     feature = mark_feature_status(
         feature_id,
         _failure_status_for_category(category),
@@ -225,15 +224,15 @@ POST_ACCEPTANCE_NEXT_ACTION = "commit-feature-changes"
 def _post_acceptance_final_status(
     *,
     feature_id: str,
-    accepted_feature: dict[str, Any],
+    accepted_feature: dict,
     summary: str,
-    packet_results: dict[str, Any],
-    verification_records: list[dict[str, Any]],
-    review_routes: list[dict[str, Any]],
-    wave_routes: list[dict[str, Any]],
+    packet_results: dict,
+    verification_records: list[dict],
+    review_routes: list[dict],
+    wave_routes: list[dict],
     commit_hash: str | None,
     wave_progression: list[dict[str, object]] | None = None,
-) -> dict[str, Any]:
+) -> dict:
     detected_commit = _normalize_commit_marker(commit_hash) or _find_commit_marker(accepted_feature) or _find_commit_marker(packet_results)
     candidate_commit_files = _collect_candidate_commit_files(
         feature_id=feature_id,
@@ -315,50 +314,25 @@ def _post_acceptance_final_status(
     }
 
 
-def _load_architect_manifest(feature_id: str) -> dict[str, Any]:
-    from datetime import datetime, timezone
-    logger = get_run_logger()
+def _load_architect_manifest(feature_id: str) -> dict:
     try:
         feature = find_record("features", "features", "feature_id", feature_id, state_root=STATE_ROOT)
-    except KeyError as e:
-        logger.error("MANIFEST_KEY_ERROR", extra={
-            "error": str(e),
-            "feature_id": feature_id,
-            "expected_key": "features",
-            "timestamp": datetime.now(timezone.utc).isoformat()
-        })
+    except KeyError:
         return {}
     manifest_path = str(feature.get("architect_manifest_path") or "").strip()
     if not manifest_path:
-        logger.warning("MANIFEST_PATH_MISSING", extra={
-            "feature_id": feature_id,
-            "feature_keys": list(feature.keys()),
-            "timestamp": datetime.now(timezone.utc).isoformat()
-        })
         return {}
     path = Path(manifest_path)
     if not path.exists():
-        logger.warning("MANIFEST_FILE_NOT_FOUND", extra={
-            "feature_id": feature_id,
-            "manifest_path": manifest_path,
-            "timestamp": datetime.now(timezone.utc).isoformat()
-        })
         return {}
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as e:
-        logger.error("MANIFEST_LOAD_ERROR", extra={
-            "error": str(e),
-            "error_type": type(e).__name__,
-            "feature_id": feature_id,
-            "manifest_path": manifest_path,
-            "timestamp": datetime.now(timezone.utc).isoformat()
-        })
-        return
+    except (OSError, json.JSONDecodeError):
+        return {}
     return payload if isinstance(payload, dict) else {}
 
 
-def _architect_wave_contract(architect_manifest: dict[str, Any], wave_id: str) -> dict[str, Any]:
+def _architect_wave_contract(architect_manifest: dict, wave_id: str) -> dict:
     target_wave_id = str(wave_id or "").strip().upper()
     for wave in architect_manifest.get("waves") or []:
         if not isinstance(wave, dict):
@@ -368,7 +342,7 @@ def _architect_wave_contract(architect_manifest: dict[str, Any], wave_id: str) -
     return {}
 
 
-def _persist_wave_progression(feature_id: str, wave_progression: list[dict[str, object]]) -> dict[str, Any]:
+def _persist_wave_progression(feature_id: str, wave_progression: list[dict[str, object]]) -> dict:
     return update_record(
         "features",
         "features",
@@ -408,11 +382,11 @@ def _set_wave_progression_status(
 
 def _build_direct_rework_followup_packets(
     *,
-    source_reviewer_packet: dict[str, Any],
-    direct_rework_packet: dict[str, Any],
+    source_reviewer_packet: dict,
+    direct_rework_packet: dict,
     target_packet_id: str,
-    packets_by_id: dict[str, dict[str, Any]],
-) -> tuple[list[dict[str, Any]], str]:
+    packets_by_id: dict[str, dict],
+) -> tuple[list[dict], str]:
     rework_packets = [direct_rework_packet]
     rework_reviewer_packet_id = ""
     verifier_source_packet_id = next(
@@ -508,96 +482,76 @@ def _build_direct_rework_followup_packets(
     return rework_packets, rework_reviewer_packet_id
 
 
-def _should_run_planner(*, run_planner: bool | None, planner_contract: dict[str, Any] | None) -> bool:
+def _should_run_planner(*, run_planner: bool | None, planner_contract: dict | None, architect_plan: dict | None = None) -> bool:
+    """
+    Determine if planner should run.
+
+    Priority:
+    1. Explicit run_planner flag (user override)
+    2. Architect requires_planner decision
+    3. Architect complexity assessment (complex -> requires planner)
+    4. Default to False (skip planner)
+    """
+    # Explicit override takes precedence
     if run_planner is not None:
         return bool(run_planner)
+
+    # Check architect decision
+    if architect_plan:
+        requires_planner = architect_plan.get("requires_planner")
+        if requires_planner is not None:
+            return bool(requires_planner)
+
+        # Fallback: check complexity
+        complexity = str(architect_plan.get("complexity", "")).lower().strip()
+        if complexity == "complex":
+            return True
+        elif complexity in ("simple", "medium"):
+            return False
+
+    # Default: skip planner for backward compatibility
     return False
 
 
-def _architect_plan_next_action(payload: dict[str, Any] | None) -> str:
+def _architect_plan_next_action(payload: dict | None) -> str:
     action = str((payload or {}).get("next_action") or "materialize_packets").strip().lower().replace("-", "_")
     if action in {"materialize_packets", "requires_planner", "requires_user_decision"}:
         return action
     return "materialize_packets"
 
 
-def _architect_packet_candidates_to_contract(payload: dict[str, Any] | None) -> dict[str, Any] | None:
-    from datetime import datetime, timezone
-    logger = get_run_logger()
+def _architect_packet_candidates_to_contract(payload: dict | None) -> dict | None:
     if not isinstance(payload, dict):
-        logger.warning("ARCHITECT_CONTRACT_INVALID_PAYLOAD", extra={
-            "payload_type": type(payload).__name__,
-            "timestamp": datetime.now(timezone.utc).isoformat()
-        })
         return None
     raw_packets = payload.get("packet_candidates")
     if not isinstance(raw_packets, list) or not raw_packets:
-        logger.warning("ARCHITECT_CONTRACT_NO_PACKETS", extra={
-            "has_packet_candidates": "packet_candidates" in payload,
-            "packet_candidates_type": type(raw_packets).__name__ if raw_packets is not None else "None",
-            "timestamp": datetime.now(timezone.utc).isoformat()
-        })
         return None
     packets = [dict(packet) for packet in raw_packets if isinstance(packet, dict)]
     if not packets:
-        logger.warning("ARCHITECT_CONTRACT_NO_VALID_PACKETS", extra={
-            "raw_packet_count": len(raw_packets),
-            "timestamp": datetime.now(timezone.utc).isoformat()
-        })
         return None
     raw_waves = payload.get("waves")
     waves = [dict(wave) for wave in raw_waves if isinstance(wave, dict)] if isinstance(raw_waves, list) else []
-    logger.info("ARCHITECT_CONTRACT_PARSED", extra={
-        "packet_count": len(packets),
-        "wave_count": len(waves),
-        "timestamp": datetime.now(timezone.utc).isoformat()
-    })
     return {"waves": waves, "packets": packets}
 
 
 def _sync_architect_manifest_packets(
     *,
     feature_id: str,
-    generated_packets: list[dict[str, Any]],
+    generated_packets: list[dict],
     architect_packet_id: str,
 ) -> None:
-    from datetime import datetime, timezone
-    logger = get_run_logger()
     try:
         feature = find_record("features", "features", "feature_id", feature_id, state_root=STATE_ROOT)
-    except KeyError as e:
-        logger.error("MANIFEST_SYNC_FEATURE_NOT_FOUND", extra={
-            "error": str(e),
-            "feature_id": feature_id,
-            "timestamp": datetime.now(timezone.utc).isoformat()
-        })
+    except KeyError:
         return
     manifest_path = Path(str(feature.get("architect_manifest_path") or "").strip())
     if not manifest_path.is_file():
-        logger.warning("MANIFEST_SYNC_FILE_NOT_FOUND", extra={
-            "feature_id": feature_id,
-            "manifest_path": str(manifest_path),
-            "timestamp": datetime.now(timezone.utc).isoformat()
-        })
         return
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as e:
-        logger.error("MANIFEST_SYNC_LOAD_ERROR", extra={
-            "error": str(e),
-            "error_type": type(e).__name__,
-            "feature_id": feature_id,
-            "manifest_path": str(manifest_path),
-            "timestamp": datetime.now(timezone.utc).isoformat()
-        })
+    except (OSError, json.JSONDecodeError):
         return
     if not isinstance(manifest, dict):
-        logger.error("MANIFEST_SYNC_INVALID_TYPE", extra={
-            "feature_id": feature_id,
-            "manifest_type": type(manifest).__name__,
-            "manifest_path": str(manifest_path),
-            "timestamp": datetime.now(timezone.utc).isoformat()
-        })
         return
     manifest["packet_candidates"] = [
         {
@@ -625,7 +579,7 @@ def _sync_architect_manifest_packets(
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def _architect_direct_rework_packet_spec_from_run(architect_run: dict[str, Any]) -> dict[str, Any] | None:
+def _architect_direct_rework_packet_spec_from_run(architect_run: dict) -> dict | None:
     try:
         return parse_direct_rework_packet_message(
             read_agent_message(architect_run.get("last_message_path"), architect_run.get("stdout_path"))
@@ -639,10 +593,10 @@ def _build_architect_direct_rework(
     coder_packet_id: str,
     reviewer_packet_id: str,
     reasons: list[str],
-    architect_run: dict[str, Any] | None,
+    architect_run: dict | None,
     route_classification: str,
     rework_mode: str,
-) -> dict[str, Any]:
+) -> dict:
     packet_spec = _architect_direct_rework_packet_spec_from_run(architect_run or {}) if architect_run else None
     if packet_spec and packet_spec.get("route_classification") != route_classification:
         raise ValueError("Architect direct rework packet classification does not match reviewer route")
@@ -669,12 +623,12 @@ def _build_architect_direct_rework(
 
 def _build_light_resume_followup(
     *,
-    source_reviewer_packet: dict[str, Any],
-    resumed_packet: dict[str, Any],
+    source_reviewer_packet: dict,
+    resumed_packet: dict,
     reasons: list[str],
     reviewer_packet_id: str,
-    packets_by_id: dict[str, dict[str, Any]],
-) -> dict[str, Any]:
+    packets_by_id: dict[str, dict],
+) -> dict:
     rework_packet = update_record(
         "packets",
         "packets",
@@ -851,15 +805,6 @@ def feature_pipeline(
     wave_verdict_script: list[str] | None = None,
     wave_reasons_script: list[list[str]] | None = None,
 ):
-    from datetime import datetime, timezone
-    logger = get_run_logger()
-
-    logger.info("PHASE_START", extra={
-        "phase": "bootstrap",
-        "feature_id": feature_id,
-        "timestamp": datetime.now(timezone.utc).isoformat()
-    })
-
     runtime = PipelineRuntime(
         feature_id=feature_id,
         title=title,
@@ -904,54 +849,15 @@ def feature_pipeline(
     )
     deps = _build_pipeline_deps()
     state, final_result = run_bootstrap_phase(runtime, deps)
-    logger.info("PHASE_END", extra={
-        "phase": "bootstrap",
-        "feature_id": feature_id,
-        "timestamp": datetime.now(timezone.utc).isoformat()
-    })
     if final_result is not None:
         return final_result
-
-    logger.info("PHASE_START", extra={
-        "phase": "planning",
-        "feature_id": feature_id,
-        "timestamp": datetime.now(timezone.utc).isoformat()
-    })
     final_result = run_planning_phase(runtime, deps, state)
-    logger.info("PHASE_END", extra={
-        "phase": "planning",
-        "feature_id": feature_id,
-        "timestamp": datetime.now(timezone.utc).isoformat()
-    })
     if final_result is not None:
         return final_result
-
-    logger.info("PHASE_START", extra={
-        "phase": "execution",
-        "feature_id": feature_id,
-        "timestamp": datetime.now(timezone.utc).isoformat()
-    })
     final_result = run_wave_execution_phase(runtime, deps, state)
-    logger.info("PHASE_END", extra={
-        "phase": "execution",
-        "feature_id": feature_id,
-        "timestamp": datetime.now(timezone.utc).isoformat()
-    })
     if final_result is not None:
         return final_result
-
-    logger.info("PHASE_START", extra={
-        "phase": "finalization",
-        "feature_id": feature_id,
-        "timestamp": datetime.now(timezone.utc).isoformat()
-    })
-    result = run_finalization_phase(runtime, deps, state)
-    logger.info("PHASE_END", extra={
-        "phase": "finalization",
-        "feature_id": feature_id,
-        "timestamp": datetime.now(timezone.utc).isoformat()
-    })
-    return result
+    return run_finalization_phase(runtime, deps, state)
 
 
 # START_FUNCTION_CONTRACT

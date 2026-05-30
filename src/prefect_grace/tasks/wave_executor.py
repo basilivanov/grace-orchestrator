@@ -21,27 +21,6 @@ def group_packets_by_wave(packets: list[dict[str, Any]]) -> list[tuple[str, list
 
 
 def order_packets_for_wave(packets: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Order packets within a wave based on dependencies and role priority.
-
-    Implements a topological sort algorithm that respects packet dependencies
-    while using role-based ordering as a tiebreaker. Ensures that all dependencies
-    are satisfied before a packet is scheduled.
-
-    Algorithm:
-    1. Build a map of all packets by ID
-    2. Iteratively select packets whose dependencies are all satisfied
-    3. Sort ready packets by role priority (coder < verifier < reviewer < architect)
-    4. Detect and raise error on circular dependencies
-
-    Args:
-        packets: List of packet dictionaries to order
-
-    Returns:
-        Ordered list of packets respecting dependencies and role priority
-
-    Raises:
-        ValueError: If a dependency cycle is detected or unresolved same-wave dependency exists
-    """
     packets_by_id = {str(packet["packet_id"]): packet for packet in packets}
     remaining = dict(packets_by_id)
     ordered: list[dict[str, Any]] = []

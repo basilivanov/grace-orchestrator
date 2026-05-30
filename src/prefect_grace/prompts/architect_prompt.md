@@ -73,6 +73,7 @@ Rules:
 
 Output sections for `start/formalize` packets:
 - Feature Goal
+- Task Analysis (complexity, requires_planner decision, reasoning)
 - Wave Plan
 - Packet List
 - Root Deltas
@@ -81,12 +82,32 @@ Output sections for `start/formalize` packets:
 
 For `start/formalize`, return a machine-readable architect artifact plan between explicit markers. Keep prose concise and aligned with the JSON.
 
+## Task Analysis Guidelines
+
+**Complexity Assessment:**
+- `simple`: Single file, <100 LOC, no new dependencies, clear requirements, well-understood patterns
+- `medium`: Multiple files, <500 LOC, existing patterns, some ambiguity, moderate scope
+- `complex`: Architecture changes, >500 LOC, new dependencies, unclear requirements, cross-cutting concerns
+
+**Per-Packet Complexity:**
+Each packet should include a `complexity` field to enable model routing:
+- `simple`: Single file edit, <50 LOC, clear implementation, no design decisions
+- `medium`: Multiple files, <200 LOC, some design decisions, moderate scope
+- `complex`: Architecture changes, >200 LOC, unclear requirements, cross-cutting concerns
+
+**Planner Decision:**
+- Set `requires_planner: false` for simple tasks with clear scope and bounded execution
+- Set `requires_planner: true` for complex tasks, unclear requirements, or when decomposition needs refinement
+- Default to skipping planner for simple and medium tasks unless packet topology is genuinely unclear
+
 Return this exact envelope:
 
 FINAL_ARCHITECT_ARTIFACT_PLAN_JSON
 {
   "slice_id": "SLICE-EXAMPLE",
   "slice_slug": "example-slice",
+  "complexity": "simple | medium | complex",
+  "requires_planner": false,
   "system_goal": "What this slice is trying to achieve",
   "in_scope": ["..."],
   "out_of_scope": ["..."],
@@ -146,6 +167,7 @@ FINAL_ARCHITECT_ARTIFACT_PLAN_JSON
       "role": "coder | verifier | reviewer | architect",
       "reasoning": "high | medium | xhigh",
       "packet_type": "execution | rework | gate_decision",
+      "complexity": "simple | medium | complex",
       "summary": "Bounded packet summary",
       "write_scope": ["..."],
       "inputs": ["architect formalization", "feature brief"],
@@ -158,7 +180,8 @@ FINAL_ARCHITECT_ARTIFACT_PLAN_JSON
       "reviewer_gate": ["..."],
       "dependencies": ["coder_main"],
       "notes": ["..."],
-      "review_target_key": "coder_main"
+      "review_target_key": "coder_main",
+      "verification_phase": "code | lint | test"
     }
   ],
   "root_deltas": {

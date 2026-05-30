@@ -507,6 +507,8 @@ def _architect_manifest(
         "slice_id": slice_id,
         "slice_slug": slice_slug,
         "slice_dir": str(slice_dir),
+        "complexity": str(payload.get("complexity", "")).strip().lower() or None,
+        "requires_planner": payload.get("requires_planner"),
         "materialization_mode": "legacy_grace_docs" if requirements_path else "packet_first",
         "requirements_slice_path": str(requirements_path) if requirements_path else "",
         "development_plan_slice_path": str(development_plan_path) if development_plan_path else "",
@@ -548,6 +550,8 @@ def default_architect_artifact_plan(
     return {
         "slice_id": f"SLICE-{_slugify(feature_id).upper()}",
         "slice_slug": _slugify(title or feature_id),
+        "complexity": str(business_context.get("complexity") or "medium").strip().lower(),
+        "requires_planner": bool(business_context.get("requires_planner")) if business_context.get("requires_planner") is not None else None,
         "system_goal": summary,
         "in_scope": _string_list(business_context.get("scope")) or [summary],
         "out_of_scope": _string_list(business_context.get("non_goals")),

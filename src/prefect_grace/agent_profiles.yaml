@@ -3,6 +3,40 @@ codex:
   binary: agy
   workdir: /opt/astro-project
   shared_model: gemini-3.5-flash
+  executors:
+    - executor_id: coder-cheap
+      kind: codex
+      command: agy
+      model: gemini-3.5-flash
+      roles: [coder]
+      priority: 100
+      metadata:
+        complexity: simple
+
+    - executor_id: coder-standard
+      kind: codex
+      command: agy
+      model: gemini-3.1-pro
+      roles: [coder]
+      priority: 50
+      metadata:
+        complexity: medium
+
+    - executor_id: coder-premium
+      kind: codex
+      command: agy
+      model: claude-opus-4
+      roles: [coder]
+      priority: 10
+      metadata:
+        complexity: complex
+
+    - executor_id: architect-standard
+      kind: codex
+      command: agy
+      model: gemini-3.1-pro
+      roles: [architect]
+      priority: 50
   roles:
     canon_digest:
       reasoning: medium

@@ -213,6 +213,7 @@ def normalize_wave_plan_contract(
                     explicit=packet.get("packet_type"),
                 ),
                 "reasoning": reasoning,
+                "complexity": _normalize_complexity(packet.get("complexity")),
                 "summary": str(packet.get("summary") or packet.get("title") or key).strip(),
                 "write_scope": _string_list(packet.get("write_scope")),
                 "inputs": _string_list(packet.get("inputs")),
@@ -403,6 +404,14 @@ def _default_reasoning_for_role(role: str) -> str:
     if role == "verifier":
         return ReasoningProfile.MEDIUM.value
     return ReasoningProfile.HIGH.value
+
+
+def _normalize_complexity(value: Any) -> str:
+    """Normalize complexity value to simple|medium|complex or empty string."""
+    complexity = str(value or "").strip().lower()
+    if complexity in {"simple", "medium", "complex"}:
+        return complexity
+    return ""
 
 
 def _normalize_packet_type(value: Any) -> str:

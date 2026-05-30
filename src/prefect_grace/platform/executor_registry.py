@@ -446,6 +446,34 @@ def select_executor_for_packet(
             reason="no_executor_available",
         )
 
+    # Filter by complexity if packet has it
+    packet_complexity = None
+    if hasattr(packet, "complexity"):
+        packet_complexity = packet.complexity
+    else:
+        packet_complexity = packet.get("complexity", "")
+
+    packet_complexity = str(packet_complexity or "").lower()
+
+    if packet_complexity:
+        complexity_matched = []
+        for spec in candidates:
+            spec_complexity = spec.metadata.get("complexity", "")
+
+            # Handle both string and list complexity constraints
+            if isinstance(spec_complexity, str):
+                spec_complexity = [spec_complexity] if spec_complexity else []
+            elif not isinstance(spec_complexity, list):
+                spec_complexity = []
+
+            # Match if spec has no complexity constraint or packet complexity matches
+            if not spec_complexity or packet_complexity in spec_complexity:
+                complexity_matched.append(spec)
+
+        # Only apply complexity filter if we have matches
+        if complexity_matched:
+            candidates = complexity_matched
+
     # Sort by (priority, executor_id) for deterministic ordering
     candidates.sort(key=lambda s: (s.priority, s.executor_id))
 

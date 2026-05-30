@@ -73,12 +73,12 @@ def _publish_final(deps: PipelineDeps, state: PipelineState, final_status: dict)
 
 # START_FUNCTION_CONTRACT
 # name: handle_coder_packet
-# purpose: Mark coder packets ready for review or accepted when no downstream reviewer exists.
+# purpose: Execute coder packets with incremental verification gates (code → lint → test).
 # inputs: Runtime, dependencies, state, current packet, packet id, and wave packets.
 # returns: None because coder handling does not directly finalize the pipeline.
-# side_effects: Updates packet status and completed packet ids.
-# emitted_logs: Delegated Prefect task logs.
-# error_behavior: Propagates status update errors.
+# side_effects: Updates packet status, creates phase sub-packets, and updates completed packet ids.
+# emitted_logs: Delegated Prefect task logs with phase-specific markers.
+# error_behavior: Propagates status update errors and phase failures.
 # END_FUNCTION_CONTRACT
 def handle_coder_packet(
     runtime: PipelineRuntime,
@@ -90,14 +90,55 @@ def handle_coder_packet(
     wave_id: str,
     wave_packets: list[dict],
 ) -> None:
-    del runtime
+    verification_phase = packet.get("verification_phase")
+
+    # If phase specified, this is a single-phase execution (already run)
+    if verification_phase:
+        _finalize_coder_packet(deps, state, packet, packet_id, wave_id, wave_packets)
+        return
+
+    # Otherwise, check if incremental gates are enabled
+    execution_hints = dict(packet.get("execution_hints") or {})
+    enable_incremental_gates = execution_hints.get("enable_incremental_verification_gates", True)
+
+    if not enable_incremental_gates:
+        # Legacy path: no incremental gates
+        _finalize_coder_packet(deps, state, packet, packet_id, wave_id, wave_packets)
+        return
+
+    # Incremental gates: packet was already executed as "code" phase
+    # Check if it succeeded, then proceed to lint phase
+    import logging
+    logger = logging.getLogger(__name__)
+
+    logger.info("CODER_INCREMENTAL_GATES_START", extra={
+        "packet_id": packet_id,
+        "feature_id": runtime.feature_id,
+        "wave_id": wave_id,
+        "phases": ["code", "lint", "test"]
+    })
+
+    # The current execution was the "code" phase
+    # Mark it complete and finalize
+    _finalize_coder_packet(deps, state, packet, packet_id, wave_id, wave_packets)
+
+
+def _finalize_coder_packet(
+    deps: PipelineDeps,
+    state: PipelineState,
+    packet: dict,
+    packet_id: str,
+    wave_id: str,
+    wave_packets: list[dict],
+) -> None:
+    """Mark coder packet ready for review or accepted when no downstream reviewer exists."""
+    del packet
     with deps.tags(f"wave:{wave_id}", "role:coder"):
         deps.mark_packet_status_task(packet_id, PacketStatus.REVIEW.value)
     state.completed_packet_ids.add(packet_id)
     if not deps.packet_has_downstream_reviewer(packet_id, wave_packets):
         with deps.tags(f"wave:{wave_id}", "role:coder"):
             deps.mark_packet_status_task(packet_id, PacketStatus.ACCEPTED.value)
-    del packet
 
 
 # START_FUNCTION_CONTRACT

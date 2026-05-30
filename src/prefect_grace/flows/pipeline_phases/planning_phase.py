@@ -19,9 +19,13 @@
 
 from __future__ import annotations
 
+import logging
+
 from prefect_grace.models import FeatureStatus, PacketStatus
 
 from prefect_grace.flows.pipeline_phases.context import PipelineDeps, PipelineRuntime, PipelineState
+
+logger = logging.getLogger(__name__)
 
 
 def _bootstrap_return(state: PipelineState, final_status: dict) -> dict:
@@ -106,7 +110,30 @@ def run_planning_phase(runtime: PipelineRuntime, deps: PipelineDeps, state: Pipe
         architect_payload = dict(architect_artifact_plan.get("payload") or {})
         architect_next_action = deps.architect_plan_next_action(architect_payload)
         architect_contract = deps.architect_packet_candidates_to_contract(architect_payload)
-        state.planner_required = state.should_run_planner or architect_next_action == "requires_planner"
+
+        # Check if planner is required based on architect decision
+        architect_requires_planner = deps.should_run_planner(
+            run_planner=None,  # Don't pass user override here, we already have it in state
+            planner_contract=None,
+            architect_plan=architect_payload,
+        )
+        state.planner_required = state.should_run_planner or architect_requires_planner or architect_next_action == "requires_planner"
+
+        # Log planner bypass decision
+        complexity = architect_payload.get("complexity", "unknown")
+        requires_planner_field = architect_payload.get("requires_planner")
+        if not state.planner_required:
+            logger.info(
+                f"Planner bypassed for {runtime.feature_id}: "
+                f"complexity={complexity}, requires_planner={requires_planner_field}, "
+                f"next_action={architect_next_action}"
+            )
+        else:
+            logger.info(
+                f"Planner required for {runtime.feature_id}: "
+                f"complexity={complexity}, requires_planner={requires_planner_field}, "
+                f"next_action={architect_next_action}, user_override={state.should_run_planner}"
+            )
 
         if architect_next_action == "requires_user_decision":
             return _architect_user_decision(runtime, deps, state, architect_payload)
