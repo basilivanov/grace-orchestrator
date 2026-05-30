@@ -1,0 +1,15 @@
+profiles:
+  docs:
+    description: "Documentation only verification profile"
+  backend_quick:
+    description: "Quick backend verification profile"
+  frontend_quick:
+    description: "Quick frontend verification profile"
+  read_only_observability:
+    description: "Read-only observability profile"
+  today_week_observability:
+    description: "Observability profile for Today and Week tabs"
+  prefect_grace_unit:
+    description: "Unit tests for prefect_grace framework"
+  full_orchestrator_contract:
+    description: "Full orchestrator integration verification profile"

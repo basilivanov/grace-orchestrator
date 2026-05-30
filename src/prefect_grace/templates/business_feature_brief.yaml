@@ -1,0 +1,54 @@
+feature_id: FEAT-EXAMPLE-BUSINESS
+title: Example business feature
+summary: Short business intent in one or two sentences.
+
+impacted_surfaces:
+  - backend
+  - frontend
+  - observability
+
+impacted_grace_artifacts:
+  - verification-matrix.md
+  - knowledge-graph.xml
+
+wave_proposal:
+  - W00 architect formalization
+  - Optional planner decomposition only if the architect cannot keep execution bounded without reslicing
+  - W01 implementation + verification + review
+
+open_decisions:
+  - Confirm whether the first wave needs frontend visual proof.
+
+scope:
+  - What is in scope for the first implementation wave.
+  - Keep it bounded and concrete.
+
+acceptance_criteria:
+  - User-visible or operator-visible outcome.
+  - Required technical invariant.
+
+non_goals:
+  - Explicitly excluded follow-up work.
+
+touches_frontend: false
+requires_frontend_visual: false
+visual_expectations: []
+
+implementation:
+  title: Live Implementation Packet
+  summary: Optional packet summary override.
+
+execute: true
+run_planner:
+timeout_seconds: 7200
+agent_workdir: /tmp/prefect_grace_feature_workdir
+agent_sandbox: danger-full-access
+
+verifier:
+  backend_profile: backend_quick
+  frontend_profile:
+  frontend_commands: []
+  observability_profile: read-only
+  observability_commands: []
+  artifact_globs: []
+  include_day_live_canary: false

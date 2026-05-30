@@ -1,0 +1,9 @@
+api_url: http://127.0.0.1:4200/api
+public_ui_url: https://prefect.example.com
+work_pool_name: astro-process
+live_queue_name: grace-live
+live_queue_limit: 1
+monitoring_queue_name: grace-monitoring
+monitoring_queue_limit: 1
+monitoring_interval_seconds: 300
+working_directory: /opt/astro-project

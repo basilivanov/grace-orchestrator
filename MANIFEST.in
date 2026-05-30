@@ -1,0 +1,8 @@
+include README.md
+include LICENSE
+include MIGRATION.md
+recursive-include src/grace_orchestrator/templates *
+recursive-include src/grace_orchestrator/prompts *.md
+recursive-include src/grace_orchestrator/roles *.md
+recursive-include src/grace_orchestrator/policies *.md
+recursive-include docker *

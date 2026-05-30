@@ -1,0 +1,50 @@
+services:
+  grace-worker:
+    image: grace-orchestrator-worker:v0.1.0
+    restart: unless-stopped
+    environment:
+      # Prefect configuration
+      PREFECT_API_URL: ${PREFECT_API_URL:-http://prefect-server:4200/api}
+      GRACE_WORK_POOL: ${GRACE_WORK_POOL:-default}
+      GRACE_LIVE_QUEUE: ${GRACE_LIVE_QUEUE:-grace-live}
+      GRACE_MONITORING_QUEUE: ${GRACE_MONITORING_QUEUE:-grace-monitoring}
+      PREFECT_WORKER_LIMIT: ${GRACE_WORKER_LIMIT:-1}
+
+      # GRACE configuration
+      GRACE_PROJECT_CONFIG: /workspace/grace/project.yaml
+      GRACE_REPO_ROOT: /workspace
+
+      # Git configuration (optional)
+      GRACE_GIT_USER_NAME: ${GRACE_GIT_USER_NAME:-GRACE Worker}
+      GRACE_GIT_USER_EMAIL: ${GRACE_GIT_USER_EMAIL:-grace-worker@local.invalid}
+
+    volumes:
+      # Mount your project directory
+      - .:/workspace
+
+      # Persistent state for GRACE
+      - grace-state:/var/lib/grace-orchestrator
+
+      # Optional: mount SSH keys for git operations
+      # - ~/.ssh:/home/grace/.ssh:ro
+
+      # Optional: mount Docker socket if worker needs to run containers
+      # - /var/run/docker.sock:/var/run/docker.sock
+
+    working_dir: /workspace
+
+    networks:
+      - prefect
+
+    # Optional: add to docker group if worker needs Docker access
+    # group_add:
+    #   - "${DOCKER_GID:-999}"
+
+volumes:
+  grace-state:
+    driver: local
+
+networks:
+  prefect:
+    external: true
+    name: prefect_default

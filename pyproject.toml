@@ -1,0 +1,161 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "grace-orchestrator"
+version = "0.1.0"
+description = "GRACE methodology orchestrator — LLM-driven development with Prefect"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [
+    {name = "GRACE Team"},
+]
+keywords = ["prefect", "orchestration", "llm", "workflow", "grace"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Distributed Computing",
+]
+
+dependencies = [
+    "prefect>=3.0.0",
+    "pyyaml>=6.0.0",
+    "pydantic>=2.7.0",
+    "pydantic-settings>=2.3.0",
+    "typer>=0.12.0",
+    "rich>=13.7.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "black>=24.0.0",
+    "ruff>=0.3.0",
+    "mypy>=1.9.0",
+    "types-pyyaml>=6.0.0",
+]
+
+[project.scripts]
+grace = "prefect_grace.cli:main"
+
+[tool.hatch.build]
+packages = ["src/prefect_grace"]
+
+[project.urls]
+Homepage = "https://github.com/yourusername/grace-orchestrator"
+Documentation = "https://github.com/yourusername/grace-orchestrator/docs"
+Repository = "https://github.com/yourusername/grace-orchestrator"
+Issues = "https://github.com/yourusername/grace-orchestrator/issues"
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/prefect_grace/",
+    "README.md",
+    "LICENSE",
+]
+exclude = [
+    "src/prefect_grace/__pycache__/",
+    "src/prefect_grace/**/__pycache__/",
+    "src/prefect_grace/**/*.pyc",
+    "src/prefect_grace/state/",
+    "src/prefect_grace/packets/",
+    "src/prefect_grace/briefs/",
+]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/prefect_grace/templates" = "prefect_grace/templates"
+"src/prefect_grace/prompts" = "prefect_grace/prompts"
+"src/prefect_grace/roles" = "prefect_grace/roles"
+"src/prefect_grace/policies" = "prefect_grace/policies"
+
+[tool.black]
+line-length = 120
+target-version = ["py311"]
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # directories
+  \.eggs
+  | \.git
+  | \.hatch
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | build
+  | dist
+  | src/prefect_grace/state
+  | src/prefect_grace/packets
+)/
+'''
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = [
+    "src/prefect_grace/state",
+    "src/prefect_grace/packets",
+    "src/prefect_grace/briefs",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+]
+ignore = [
+    "E501",  # line too long (handled by black)
+    "B008",  # do not perform function calls in argument defaults
+    "C901",  # too complex
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+check_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+strict_equality = true
+
+[[tool.mypy.overrides]]
+module = "prefect.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "yaml.*"
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "-v",
+    "--strict-markers",
+    "--tb=short",
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests",
+]

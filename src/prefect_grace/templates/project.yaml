@@ -1,0 +1,32 @@
+# GRACE Project Configuration
+# Project: {{PROJECT_KEY}}
+
+project_key: "{{PROJECT_KEY}}"
+project_name: "{{PROJECT_KEY}}"
+description: "Project description goes here"
+
+# Repository configuration
+repository:
+  url: ""
+  default_branch: "main"
+
+# Agent configuration
+agents:
+  default_profile: "standard"
+  timeout_seconds: 3600
+
+# Verification settings
+verification:
+  require_tests: true
+  require_review: true
+  require_scope_check: true
+
+# Packet management
+packets:
+  root: "./grace/packets"
+  template: "standard"
+
+# State management
+state:
+  root: "./.grace-state"
+  retention_days: 30

@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- GRACE Technology Stack -->
+<!-- Project: {{PROJECT_KEY}} -->
+
+<technology_stack>
+  <metadata>
+    <project>{{PROJECT_KEY}}</project>
+    <version>1.0</version>
+    <last_updated></last_updated>
+  </metadata>
+
+  <languages>
+    <!-- Programming languages used in the project -->
+    <language>
+      <name>Python</name>
+      <version>3.12</version>
+      <purpose>Backend development</purpose>
+    </language>
+  </languages>
+
+  <frameworks>
+    <!-- Frameworks and libraries -->
+    <framework>
+      <name>Example Framework</name>
+      <version>1.0.0</version>
+      <category>web</category>
+    </framework>
+  </frameworks>
+
+  <infrastructure>
+    <!-- Infrastructure and deployment -->
+    <component>
+      <name>Example Infrastructure</name>
+      <type>cloud</type>
+      <description>Description of infrastructure component</description>
+    </component>
+  </infrastructure>
+
+  <tools>
+    <!-- Development and build tools -->
+    <tool>
+      <name>Example Tool</name>
+      <purpose>Development</purpose>
+    </tool>
+  </tools>
+
+  <databases>
+    <!-- Database systems -->
+    <database>
+      <name>Example Database</name>
+      <type>relational</type>
+      <version>1.0</version>
+    </database>
+  </databases>
+</technology_stack>

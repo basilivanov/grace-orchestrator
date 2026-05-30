@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- GRACE Development Plan -->
+<!-- Project: {{PROJECT_KEY}} -->
+
+<development_plan>
+  <metadata>
+    <project>{{PROJECT_KEY}}</project>
+    <version>1.0</version>
+    <last_updated></last_updated>
+  </metadata>
+
+  <phases>
+    <!-- Development phases and milestones -->
+    <phase id="PHASE-001">
+      <name>Initial Setup</name>
+      <description>Project initialization and setup</description>
+      <status>planned</status>
+      <start_date></start_date>
+      <end_date></end_date>
+      <deliverables>
+        <deliverable>Project structure</deliverable>
+        <deliverable>Development environment</deliverable>
+      </deliverables>
+    </phase>
+  </phases>
+
+  <features>
+    <!-- Feature roadmap -->
+    <feature id="FEAT-001">
+      <title>Example Feature</title>
+      <description>Description of the feature</description>
+      <priority>high</priority>
+      <status>planned</status>
+      <phase>PHASE-001</phase>
+    </feature>
+  </features>
+
+  <risks>
+    <!-- Project risks and mitigation strategies -->
+    <risk id="RISK-001">
+      <title>Example Risk</title>
+      <description>Description of the risk</description>
+      <probability>medium</probability>
+      <impact>high</impact>
+      <mitigation>Mitigation strategy</mitigation>
+    </risk>
+  </risks>
+</development_plan>

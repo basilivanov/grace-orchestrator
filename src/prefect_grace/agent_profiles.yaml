@@ -1,0 +1,57 @@
+version: 1
+codex:
+  binary: agy
+  workdir: /opt/astro-project
+  shared_model: gemini-3.5-flash
+  roles:
+    canon_digest:
+      reasoning: medium
+      sandbox: danger-full-access
+      approval: never
+      stall_timeout_seconds: 300
+      max_auto_resume_attempts: 1
+    architect:
+      model: gemini-3.1-pro
+      reasoning: xhigh
+      sandbox: danger-full-access
+      approval: never
+      resume_strategy: feature_role
+      stall_timeout_seconds: 300
+      max_auto_resume_attempts: 1
+    planner:
+      reasoning: xhigh
+      sandbox: danger-full-access
+      approval: never
+      resume_strategy: feature_role
+      stall_timeout_seconds: 300
+      max_auto_resume_attempts: 1
+    coder:
+      reasoning: high
+      sandbox: danger-full-access
+      approval: never
+    verifier:
+      reasoning: medium
+      sandbox: danger-full-access
+      approval: never
+    reviewer:
+      reasoning: xhigh
+      sandbox: danger-full-access
+      approval: never
+      resume_strategy: feature_role
+      stall_timeout_seconds: 300
+      max_auto_resume_attempts: 1
+verification:
+  backend_profiles:
+    backend_quick: docker exec astro-project-backend-1 python3 scripts/pipeline.py
+    grace_smoke: python3 -m py_compile prefect_grace/cli.py prefect_grace/tasks/prefect_submitter.py prefect_grace/tasks/prefect_runs.py
+  frontend_profiles:
+    frontend_quick: ./scripts/run_e2e.sh --last-failed
+  observability_profiles:
+    today-week: /opt/prefect/venv/bin/python -m gracectl.cli evidence review today-week --report-format json
+    read-only: /opt/prefect/venv/bin/python -m gracectl.cli evidence review read-only --report-format json
+    grace_smoke: python3 -c 'import json; print(json.dumps({"verdict":"PASS_CLEAN","flows":[{"flow_id":"prefect-grace-prod-smoke","status":"ok","sample_trace_id":"prefect-grace-prod-smoke-trace"}]}))'
+  default_artifact_globs:
+    - frontend/test-results/**/*
+    - test-results/**/*
+    - frontend/artifacts/**/*
+    - artifacts/**/*

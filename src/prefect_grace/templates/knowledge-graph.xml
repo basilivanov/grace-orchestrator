@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- GRACE Knowledge Graph -->
+<!-- Project: {{PROJECT_KEY}} -->
+
+<knowledge_graph>
+  <metadata>
+    <project>{{PROJECT_KEY}}</project>
+    <version>1.0</version>
+    <last_updated></last_updated>
+  </metadata>
+
+  <concepts>
+    <!-- Domain concepts and entities -->
+    <concept id="CONCEPT-001">
+      <name>Example Concept</name>
+      <description>Description of the concept</description>
+      <category>domain</category>
+      <attributes>
+        <attribute name="example_attr">Example value</attribute>
+      </attributes>
+    </concept>
+  </concepts>
+
+  <relationships>
+    <!-- Relationships between concepts -->
+    <relationship id="REL-001">
+      <source>CONCEPT-001</source>
+      <target>CONCEPT-002</target>
+      <type>depends_on</type>
+      <description>Description of the relationship</description>
+    </relationship>
+  </relationships>
+
+  <rules>
+    <!-- Business rules and constraints -->
+    <rule id="RULE-001">
+      <name>Example Rule</name>
+      <description>Description of the rule</description>
+      <condition>Condition for the rule</condition>
+      <action>Action when rule is triggered</action>
+    </rule>
+  </rules>
+</knowledge_graph>
