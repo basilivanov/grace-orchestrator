@@ -100,6 +100,27 @@ GRACE orchestrates multi-agent workflows with intelligent model selection:
    - Complex packets → claude-opus-4 (premium quality)
 5. **Reviewer**: Validates changes against contracts and approves/rejects
 
+### Supported Models
+
+GRACE supports the following AI models:
+
+**Anthropic Claude:**
+- `claude-opus-4` - Premium quality for complex tasks
+- `claude-opus-4-8` - Extended context variant
+- `claude-sonnet-4` - Balanced performance
+- `claude-sonnet-4-6` - Latest Sonnet variant
+- `claude-haiku-4` - Fast, lightweight tasks
+
+**Google Gemini:**
+- `gemini-3.5-flash` - Fast, cost-effective
+- `gemini-3.1-pro` - Balanced performance
+
+Configure models in `grace/agent_profiles.yaml` and set API keys:
+```bash
+export ANTHROPIC_API_KEY="sk-ant-..."
+export GOOGLE_API_KEY="..."
+```
+
 ### Workflow
 
 ```

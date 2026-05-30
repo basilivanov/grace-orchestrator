@@ -194,8 +194,17 @@ def _launch_codex_for_packet(
             "role": role
         })
     else:
-        # Fallback to shared_model from config
-        shared_model = str(config.get("codex", {}).get("shared_model") or "gpt-5.4")
+        # Fallback to shared_model from config or default executor
+        config_model = config.get("codex", {}).get("shared_model")
+        if not config_model:
+            # Get default model from agent profiles
+            default_executor = next(
+                (e for e in config.get("executors", []) if e.get("priority") == 1),
+                None
+            )
+            config_model = default_executor.get("model") if default_executor else "gemini-3.5-flash"
+
+        shared_model = str(config_model)
         logger.warning("EXECUTOR_FALLBACK", extra={
             "reason": executor_selection.reason if not executor_selection.ok else "no model specified",
             "fallback_model": shared_model,

@@ -32,8 +32,22 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 # Gemini API key
 export GOOGLE_API_KEY="..."
 
-# Verify keys
+# Verify keys are set
 python3 -c "import os; print('Claude:', 'OK' if os.getenv('ANTHROPIC_API_KEY') else 'MISSING'); print('Gemini:', 'OK' if os.getenv('GOOGLE_API_KEY') else 'MISSING')"
+
+# Or use the built-in validator
+python3 -c "from prefect_grace.platform.api_keys import validate_api_keys; print(validate_api_keys())"
+```
+
+**Supported Models:**
+
+- **Anthropic Claude**: claude-opus-4, claude-opus-4-8, claude-sonnet-4, claude-sonnet-4-6, claude-haiku-4
+- **Google Gemini**: gemini-3.5-flash, gemini-3.1-pro
+
+To list available models:
+
+```bash
+python3 -c "from prefect_grace.platform.model_validator import list_available_models; print('\n'.join(list_available_models()))"
 ```
 
 ### 3. Initialize Project
