@@ -14,12 +14,15 @@ from grace_control.db.schema import Packet, PacketState, Worker
 async def check_health() -> dict:
     with get_db() as db:
         workers = db.query(Worker).all()
-        active = [w for w in workers if w.status == "active"]
-        dead = [
-            w for w in workers
-            if w.last_heartbeat
-            and datetime.utcnow() - w.last_heartbeat > timedelta(minutes=5)
+        worker_data = [
+            {"id": w.id, "status": w.status, "packet": w.current_packet_id,
+             "heartbeat": w.last_heartbeat.isoformat() + "Z" if w.last_heartbeat else None}
+            for w in workers
         ]
+        active = [w for w in worker_data if w["status"] == "active"]
+        dead = [w for w in worker_data
+                if w["heartbeat"] and w["status"] == "active"
+                and (datetime.utcnow() - datetime.fromisoformat(w["heartbeat"].rstrip("Z")) > timedelta(minutes=5))]
         ready = db.query(Packet).filter_by(state=PacketState.READY.value).count()
         running = db.query(Packet).filter_by(state=PacketState.RUNNING.value).count()
 
@@ -31,7 +34,7 @@ async def check_health() -> dict:
 
     return {
         "status": status,
-        "workers": {"active": len(active), "idle": len([w for w in active if not w.current_packet_id]), "dead": len(dead)},
+        "workers": {"active": len(active), "idle": len([w for w in active if not w["packet"]]), "dead": len(dead)},
         "queue_depth": ready,
         "running": running,
         "timestamp": datetime.utcnow().isoformat() + "Z",
