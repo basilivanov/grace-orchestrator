@@ -1,508 +1,152 @@
-# grace-orchestrator
+# GRACE Control Plane
 
-[![PyPI version](https://badge.fury.io/py/grace-orchestrator.svg)](https://badge.fury.io/py/grace-orchestrator)
-[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+**LLM-driven autonomous development orchestrator** — packet-based, agent-driven, SQLite-backed.
 
-**GRACE** (Gated Release with Artifact-driven Continuous Evidence) is a verification orchestration framework that coordinates multi-agent AI workflows for software quality assurance.
+MVP-0 ready: API server + worker loop + state machine + GRACE Canon checker + structured logging.
 
-GRACE enables teams to define verification slices—cohesive units of testing, evidence collection, and quality gates—and orchestrate their execution across backend tests, frontend E2E tests, live traffic replay, and observability monitoring.
+## Architecture
 
-## Features
+```
+grace architect plan → packets in DB (READY)
+       ↓
+grace worker start → claim → execute → release → ACCEPTED → merge → MERGED
+       ↓
+grace packet list → Rich-formatted dashboard
+```
 
-- **Artifact-driven verification**: Define requirements, technology constraints, and development plans before coding
-- **Multi-agent orchestration**: Coordinate planner, worker, and reviewer agents through Prefect workflows
-- **Slice-based testing**: Group related verification tasks into cohesive slices with clear gates
-- **Evidence collection**: Automatically gather test results, logs, and quality metrics
-- **Live traffic replay**: Validate changes against real production patterns
-- **Observability integration**: Monitor verification flows and track quality over time
-- **CLI tooling**: `grace` command-line interface for slice verification and evidence management
+**Packages:**
+- `grace_control/` — new Control Plane (FastAPI, state machine, worker, CLI)
+- `prefect_grace/` — legacy execution engine (worktree isolation, agent launcher, git ops)
+- `prefect_grace/prefect_compat.py` — compatibility layer (no Prefect runtime required)
 
 ## Quick Start
-
-New to GRACE? See the [Quick Start Guide](docs/QUICKSTART.md) for a 5-minute introduction.
-
-### Installation
 
 ```bash
 pip install grace-orchestrator
 ```
 
-For Prefect worker support:
+```bash
+# Terminal 1: API server
+grace api start
+# → http://127.0.0.1:8042
+
+# Terminal 2: Worker
+grace worker start
+
+# Terminal 3: Create plan
+echo 'title: Auth
+waves:
+  - title: Foundation
+    packets:
+      - title: Add JWT utils
+        scope: src/auth/jwt.py' > feature.yaml
+grace architect plan feature.yaml
+
+# Check progress
+grace packet list
+grace health
+```
+
+## API Endpoints (9)
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | /api/features/ | List features |
+| GET | /api/features/{id} | Get feature |
+| GET | /api/packets/ | List packets (filter: ?state=ready) |
+| GET | /api/packets/{id} | Get packet + runs |
+| POST | /api/packets/claim | Worker claims packet (READY→RUNNING) |
+| POST | /api/packets/{id}/release | Worker releases (RUNNING→ACCEPTED/REJECTED/FAILED) |
+| POST | /api/packets/{id}/cancel | Cancel packet → CANCELLED |
+| POST | /api/packets/{id}/merge | Merge accepted → MERGED |
+| GET | /api/workers/ | List workers |
+| POST | /api/workers/register | Register worker |
+| POST | /api/workers/heartbeat | Worker heartbeat |
+| POST | /api/architect/plan | Create feature + waves + packets |
+| GET | /health | System health |
+
+## CLI Commands (6)
 
 ```bash
-pip install grace-orchestrator[prefect]
+grace architect plan <file>   # Create plan from YAML
+grace packet list              # Rich table with states
+grace packet get <id>          # Details + runs
+grace worker start             # Run worker loop
+grace api start                # Start API server
+grace health                   # System status
 ```
 
-### Configuration
+## State Machine (8 states)
 
-GRACE requires configuration files to run. Starting with v2.0, configuration is no longer bundled in the package and must be provided externally.
+```
+DRAFT → READY → RUNNING → ACCEPTED → MERGED
+                  ↓           ↓
+              REJECTED     MERGED (auto)
+                  ↓
+              READY (retry, max 3 attempts)
+```
 
-#### Quick Setup
+## DB Schema (7 tables)
+
+features, waves, packets, packet_runs, workers, leases, events — SQLite via SQLAlchemy.
+
+## Implemented Features
+
+- **MVP-0:** DB, state machine, adapter, API, worker, CLI, E2E
+- **Wave 1:** Auto-retry, cancellation, auto-merge
+- **Wave 3:** GRACE Canon checker, complexity router
+- **Wave 4:** DAG validator, scope conflict detector, parallel-safe claim
+- **Infra:** Structured JSONL logging, event audit trail, lease expiration checker
+
+## Tests
 
 ```bash
-# Create project-local configuration (recommended)
-mkdir -p grace
-cp examples/runtime.yaml.example grace/runtime.yaml
-cp examples/project.yaml.example grace/project.yaml
-
-# Edit configuration files with your project settings
-vim grace/runtime.yaml
-vim grace/project.yaml
-
-# Validate configuration
-grace validate-config
+pytest tests/ --asyncio-mode=auto
+# 38 tests, 8.8s
 ```
 
-#### Configuration File Locations
-
-GRACE searches for configuration in the following order (highest priority first):
-
-**For `runtime.yaml`:**
-1. Path in `GRACE_CONFIG_PATH` environment variable
-2. `<project-root>/grace/runtime.yaml` (recommended for projects)
-3. `~/.grace/runtime.yaml` (recommended for personal use)
-
-**For `project.yaml`:**
-1. `<project-root>/grace/project.yaml`
-2. `~/.grace/project.yaml`
-
-#### Minimal Configuration
-
-Create `grace/runtime.yaml`:
-
-```yaml
-api_url: http://127.0.0.1:4200/api
-work_pool_name: grace-process
-live_queue_name: grace-live
-monitoring_queue_name: grace-monitoring
-working_directory: /path/to/your/project
-```
-
-See `examples/` directory for complete annotated templates.
-
-#### Upgrading from v1.x
-
-If you're upgrading from GRACE v1.x, see the [Configuration Migration Guide](docs/CONFIGURATION_MIGRATION.md) for detailed migration instructions.
-
-### Initialize a Project
-
-```bash
-# Create grace configuration in your project
-grace init
-
-# This creates:
-# - grace/project.yaml          # Project configuration
-# - grace/agent_profiles.yaml   # Agent and executor configuration
-# - grace/requirements.xml      # System requirements
-# - grace/technology.xml        # Technology constraints
-# - grace/development-plan.xml  # Module structure and phases
-# - grace/knowledge-graph.xml   # Semantic code map
-```
-
-### Define a Verification Slice
-
-Edit `grace/project.yaml`:
-
-```yaml
-slices:
-  AUTH-FLOW:
-    title: "Authentication Flow"
-    description: "Login, logout, and session management"
-    gate: "Gate 2: backend + frontend smoke"
-    vm_ids:
-      - VM-AUTH-SECURITY
-      - VM-SESSION-LIFECYCLE
-    docs:
-      - docs/auth-design.md
-    commands:
-      backend:
-        - pytest tests/test_auth.py
-        - pytest tests/test_session.py
-      frontend:
-        - npm run test:e2e -- auth.spec.ts
-    evidence:
-      - test-results/auth-report.json
-```
-
-### Run Verification
-
-```bash
-# Verify a single slice
-grace slice verify AUTH-FLOW
-
-# Run all commands for a slice
-grace slice replay AUTH-FLOW
-
-# Watch for live traffic patterns
-grace watch start FLOW-AUTH
-```
-
-## Architecture
-
-GRACE orchestrates multi-agent workflows with intelligent model selection:
-
-1. **Architect**: Classifies packet complexity (simple/medium/complex)
-2. **Planner**: Analyzes requirements and creates work packets (optional for simple tasks)
-3. **Executor Selection**: Routes packets to appropriate models based on complexity
-4. **Executors**: Execute packets with cost-optimized model selection
-   - Simple packets → gemini-3.5-flash (cheap, fast)
-   - Medium packets → gemini-3.1-pro (balanced)
-   - Complex packets → claude-opus-4 (premium quality)
-5. **Reviewer**: Validates changes against contracts and approves/rejects
-
-### Supported Models
-
-GRACE supports the following AI models:
-
-**Anthropic Claude:**
-- `claude-opus-4` - Premium quality for complex tasks
-- `claude-opus-4-8` - Extended context variant
-- `claude-sonnet-4` - Balanced performance
-- `claude-sonnet-4-6` - Latest Sonnet variant
-- `claude-haiku-4` - Fast, lightweight tasks
-
-**Google Gemini:**
-- `gemini-3.5-flash` - Fast, cost-effective
-- `gemini-3.1-pro` - Balanced performance
-
-Configure models in `grace/agent_profiles.yaml` and set API keys:
-```bash
-export ANTHROPIC_API_KEY="sk-ant-..."
-export GOOGLE_API_KEY="..."
-```
-
-### Workflow
+## Project Structure
 
 ```
-┌─────────────┐
-│  Architect  │  Classifies complexity → Routes to executor
-└──────┬──────┘
-       │
-       ▼
-┌─────────────┐
-│   Planner   │  Analyzes requirements → Creates work packet (optional)
-└──────┬──────┘
-       │
-       ▼
-┌─────────────┐
-│  Executors  │  Implements changes → Runs tests → Collects evidence
-│  (3 tiers)  │  (Flash/Pro/Opus based on complexity)
-└──────┬──────┘
-       │
-       ▼
-┌─────────────┐
-│  Reviewer   │  Validates contracts → Reviews evidence → Gates release
-└─────────────┘
-```
+src/grace_control/
+├── db/schema.py              # 7 SQLAlchemy models
+├── core/
+│   ├── state_machine.py      # 8 states + transitions
+│   ├── packet_operations.py  # mark_ready/running/accepted/...
+│   ├── grace_canon.py        # Canon compliance checker
+│   ├── complexity_router.py  # FAST→CHEAP, STRICT→PREMIUM
+│   ├── dag_validator.py      # Cycle detection + scope conflicts
+│   ├── lease_manager.py      # Expired lease recovery
+│   ├── event_recorder.py     # Audit trail to events table
+│   ├── structured_logger.py  # JSONL logging + trace_context
+│   └── health.py             # System health check
+├── api/
+│   ├── main.py               # FastAPI app + lifespan + CORS
+│   └── routers/              # features, packets, workers, architect
+├── adapters/
+│   └── packet_executor.py    # DB packet → legacy run_e2e_packet
+├── worker/
+│   ├── api_client.py         # httpx-based API client
+│   └── worker.py             # claim→execute→release loop
+└── cli/main.py               # 6 CLI commands
 
-### Cost Optimization
+src/prefect_grace/            # Legacy execution engine (kept as-is)
+├── flows/                    # Prefect flows (compat-only)
+├── platform/                 # e2e_packet_runner, worktree_manager, etc.
+├── tasks/                    # codex_launcher, agent tools
+└── prefect_compat.py         # No-op decorators when Prefect unavailable
 
-GRACE uses **complexity routing** to optimize costs:
-
-- **87% cost savings** vs. using premium models for everything
-- **Automatic executor rotation** on failures
-- **Log-driven verification** instead of expensive end-to-end tests
-
-See [METRICS.md](docs/METRICS.md) for detailed cost analysis.
-
-### Prefect Integration
-
-GRACE uses Prefect for workflow orchestration:
-
-```python
-from grace_orchestrator import create_verification_flow
-
-flow = create_verification_flow(
-    slice_id="AUTH-FLOW",
-    project_config="grace/project.yaml"
-)
-
-flow.deploy(name="auth-verification", work_pool="default")
+grace/packets/                # 14 control packet specifications
+tests/                        # 38 tests across 7 test files
 ```
 
 ## Configuration
 
-### Project Configuration (`grace/project.yaml`)
-
-```yaml
-defaults:
-  report_path: test-results/grace-report.json
-  log_dir: logs/grace
-  repo_root: .
-
-slices:
-  SLICE-ID:
-    title: "Human-readable title"
-    description: "What this slice verifies"
-    gate: "Gate level and criteria"
-    vm_ids:
-      - VM-MODULE-1
-      - VM-MODULE-2
-    docs:
-      - path/to/design-doc.md
-    commands:
-      backend:
-        - command to run backend tests
-      frontend:
-        - command to run frontend tests
-      replay:
-        - command to replay live traffic
-    evidence:
-      - path/to/evidence-file
-
-watch:
-  flows:
-    - id: FLOW-ID
-      label: "Flow description"
-      script: path/to/watch-script.py
-      args:
-        --log: logs/app.jsonl
-        --window-minutes: 30
-      slices:
-        - SLICE-ID
-```
-
-### Agent Profiles (`grace/agent_profiles.yaml`)
-
-```yaml
-planner:
-  model: claude-opus-4
-  temperature: 0.7
-  max_tokens: 8000
-
-worker:
-  model: claude-sonnet-4
-  temperature: 0.3
-  max_tokens: 16000
-
-reviewer:
-  model: claude-opus-4
-  temperature: 0.5
-  max_tokens: 8000
-```
-
-## Docker Deployment
-
-### Worker Container
-
-```bash
-docker build -f docker/Dockerfile.worker -t grace-worker:latest .
-docker run -d \
-  -e PREFECT_API_URL=http://prefect-server:4200/api \
-  -e GRACE_PROJECT_CONFIG=/workspace/grace/project.yaml \
-  -v $(pwd):/workspace \
-  grace-worker:latest
-```
-
-### Docker Compose Integration
-
-Add to your project's `docker-compose.yml`:
-
-```yaml
-services:
-  grace-worker:
-    image: grace-orchestrator-worker:v0.1.0
-    environment:
-      PREFECT_API_URL: http://prefect-server:4200/api
-      GRACE_PROJECT_CONFIG: /workspace/grace/project.yaml
-      GRACE_WORK_POOL: ${GRACE_WORK_POOL:-default}
-      GRACE_LIVE_QUEUE: ${GRACE_LIVE_QUEUE:-grace-live}
-    volumes:
-      - .:/workspace
-      - grace-state:/var/lib/grace-orchestrator
-    working_dir: /workspace
-    networks:
-      - prefect
-
-volumes:
-  grace-state:
-
-networks:
-  prefect:
-    external: true
-```
-
-## CLI Reference
-
-### Production CLI: `grace`
-
-The main `grace` CLI provides production commands for packet submission, validation, and execution:
-
-```bash
-# Initialize a new project
-grace init
-
-# Submit packets for execution
-grace submit-packets --project grace/project.yaml
-
-# Validate project configuration
-grace validate-project --project grace/project.yaml
-
-# Validate a packet
-grace validate-packet path/to/packet.yaml
-
-# Run a managed packet with worktree isolation
-grace run-managed-packet --packet EXECUTION_PACKET.md --repo-root . --worktree-root /tmp/wt --project-key myproject --packet-id PKT-001 --attempt 1 --base-ref origin/master
-
-# Check packet status
-grace packet-status --project grace/project.yaml
-
-# Dump registry state
-grace registry-dump --project grace/project.yaml --json
-```
-
-### Development CLI: `grace-dev`
-
-The `grace-dev` CLI provides development tools, smoke tests, and pilot runs:
-
-```bash
-# Run smoke tests
-grace-dev smoke e2e-live --project-config grace/project.yaml --state-root /tmp/state --worktree-root /tmp/wt --packet-root /tmp/packets
-
-grace-dev smoke registry-apply-smoke --project grace/project.yaml --state-root /tmp/state
-
-# Run pilot tests
-grace-dev pilot single-packet --packet EXECUTION_PACKET.md --repo-root . --worktree-root /tmp/wt --project-key myproject --base-ref origin/master --target-branch master
-
-# Run nightly operations
-grace-dev nightly run --project grace/project.yaml
-grace-dev nightly preflight --project grace/project.yaml
-grace-dev nightly select --project grace/project.yaml
-```
-
-### Backward Compatibility
-
-For backward compatibility, the following deprecated commands are still available but will show warnings:
-
-- `prefect-grace` → Use `grace` instead
-- `gracectl` → Use `grace` instead
-
-These aliases will be removed in a future major version.
-
-## Development
-
-### Setup
-
-```bash
-git clone https://github.com/basilivanov/grace-orchestrator.git
-cd grace-orchestrator
-
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # or `venv\Scripts\activate` on Windows
-
-# Install in development mode
-pip install -e ".[dev,prefect]"
-
-# Run tests
-pytest
-```
-
-### Project Structure
-
-```
-grace-orchestrator/
-├── src/
-│   └── prefect_grace/
-│       ├── __init__.py
-│       ├── cli.py            # Main grace CLI entry point
-│       ├── cli_compat.py     # Backward compatibility aliases
-│       ├── cli_commands/     # CLI command implementations
-│       ├── devtools/         # grace-dev CLI and development tools
-│       ├── core/             # Core orchestration logic
-│       ├── agents/           # Planner, worker, reviewer agents
-│       ├── flows/            # Prefect flow definitions
-│       ├── templates/        # Project initialization templates
-│       └── utils/            # Shared utilities
-├── tests/
-├── docker/
-│   ├── Dockerfile.worker
-│   └── docker-compose.fragment.yaml
-├── docs/
-├── pyproject.toml
-├── README.md
-└── LICENSE
-```
-
-## Examples
-
-### Example 1: API Endpoint Verification
-
-```yaml
-slices:
-  USER-API:
-    title: "User API Endpoints"
-    description: "CRUD operations for user management"
-    gate: "Gate 2: unit + integration tests"
-    vm_ids:
-      - VM-USER-SERVICE
-      - VM-AUTH-MIDDLEWARE
-    commands:
-      backend:
-        - pytest tests/api/test_users.py -v
-        - pytest tests/integration/test_user_flow.py
-    evidence:
-      - test-results/user-api.xml
-```
-
-### Example 2: Frontend Feature Verification
-
-```yaml
-slices:
-  CHECKOUT-FLOW:
-    title: "Checkout Flow"
-    description: "Shopping cart to payment completion"
-    gate: "Gate 3: E2E + live traffic replay"
-    vm_ids:
-      - VM-CART-UI
-      - VM-PAYMENT-INTEGRATION
-    commands:
-      frontend:
-        - npm run test:e2e -- checkout.spec.ts
-      replay:
-        - python tools/replay_checkout.py --log logs/checkout.jsonl
-    evidence:
-      - test-results/checkout-e2e.json
-      - logs/checkout-replay-results.json
-```
-
-## Contributing
-
-Contributions are welcome! Please read our [Contributing Guide](CONTRIBUTING.md) for details on our code of conduct and the process for submitting pull requests.
+- `CANONICAL_DECISIONS.md` — single source of truth
+- `docs/API_CONTRACT.md` — canonical API endpoints
+- `tasks/README.md` — task specifications (REVISED)
+- Environment: `GRACE_DB_URL` (sqlite:///grace.db), `GRACE_API_PORT` (8042)
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Acknowledgments
-
-GRACE is built on the principles of artifact-driven development and multi-agent orchestration. It integrates with:
-
-- [Prefect](https://www.prefect.io/) for workflow orchestration
-- [Anthropic Claude](https://www.anthropic.com/) for AI agent capabilities
-- Standard testing frameworks (pytest, Jest, Playwright, etc.)
-
-## Support
-
-### Documentation
-
-- [Quick Start Guide](docs/QUICKSTART.md) - Get started in 5 minutes
-- [Log-Driven Verification](docs/LOG_DRIVEN_VERIFICATION.md) - Verification approach and cost savings
-- [Operations Runbook](docs/RUNBOOK.md) - Troubleshooting and operations guide
-- [Metrics Reference](docs/METRICS.md) - Complete metrics documentation
-- [Success Criteria](src/prefect_grace/docs/SUCCESS_CRITERIA.md) - Success definitions
-
-### Tools
-
-- `tools/verify_orchestrator.py` - Verify orchestrator health
-- `tools/aggregate_metrics.py` - Aggregate and analyze metrics
-- `tools/health_check.py` - Health monitoring
-- `tools/query_logs.sh` - Query execution logs
-- `tools/view_trace.py` - Visualize execution traces
-
-### Community
-
-- Documentation: [https://grace-orchestrator.readthedocs.io](https://grace-orchestrator.readthedocs.io)
-- Issues: [https://github.com/basilivanov/grace-orchestrator/issues](https://github.com/basilivanov/grace-orchestrator/issues)
-- Discussions: [https://github.com/basilivanov/grace-orchestrator/discussions](https://github.com/basilivanov/grace-orchestrator/discussions)
+MIT
