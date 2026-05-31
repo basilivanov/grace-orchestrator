@@ -352,7 +352,7 @@ test_tiers:
     name: "Touched scope tests"
     timeout_seconds: 300
     resolver: touched_scope  # Определяет какие тесты запускать
-    fallback: "pytest tests -k 'not slow'"
+    fallback: "pytest tests -k 'not slow'"  # Если нет touched tests
     fail_fast: true
 ```
 
@@ -367,7 +367,7 @@ def resolve_touched_tests(changed_files: list[str]) -> list[str]:
     tests = []
     
     for file in changed_files:
-        # Прямое соответствие
+        # Прямое соответствие: src/auth/jwt.py → tests/auth/test_jwt.py
         if file.startswith("src/"):
             test_file = file.replace("src/", "tests/").replace(".py", "_test.py")
             if Path(test_file).exists():
@@ -378,6 +378,12 @@ def resolve_touched_tests(changed_files: list[str]) -> list[str]:
         tests.extend(find_tests_importing(module))
     
     return tests
+```
+
+**Out of scope handling:**
+Если resolver не нашёл тесты (новый файл без тестов), запускается fallback:
+```bash
+pytest tests -k 'not slow'  # Быстрые тесты как safety net
 ```
 
 **Когда запускается:** Всегда (второй шаг acceptance)
@@ -442,7 +448,7 @@ test_tiers:
 
 ### Test execution strategy
 
-#### Параллельное выполнение тестов
+#### Параллельное выполнение тестов (pytest-xdist)
 ```yaml
 testing:
   parallel: true
@@ -452,7 +458,17 @@ testing:
   pytest_args: "-n 4 --dist loadscope"
 ```
 
-#### Retry failed tests
+**Преимущества:**
+- Тесты выполняются в 2-4 раза быстрее
+- Автоматическое распределение по CPU cores
+- Изоляция тестов
+
+**Установка:**
+```bash
+pip install pytest-xdist
+```
+
+#### Retry failed tests (pytest-rerunfailures)
 ```yaml
 testing:
   retry_failed: true
@@ -460,6 +476,11 @@ testing:
   
   # pytest-rerunfailures
   pytest_args: "--reruns 2 --reruns-delay 1"
+```
+
+**Установка:**
+```bash
+pip install pytest-rerunfailures
 ```
 
 #### Test isolation
@@ -643,29 +664,22 @@ trace_id_var.set(None)
 
 ## 📊 Monitoring & Observability
 
-### Metrics to track
+### Telemetry (опционально, не в MVP)
 
-**Worker metrics:**
-- Active workers count
-- Packets processed per worker
-- Average packet duration
-- Worker failures
+**Решение:** Пока без Prometheus/Grafana. Достаточно structured logs.
 
-**Packet metrics:**
-- Packets by state (READY, RUNNING, ACCEPTED, REJECTED)
-- Average attempts per packet
-- Acceptance rate by profile (FAST/NORMAL/STRICT)
-- Test tier pass rates
+**Что можно добавить позже:**
+- Prometheus metrics
+- Grafana dashboards
+- Alerting
 
-**Test metrics:**
-- T0/T1/T2 pass rates
-- Average test duration by tier
-- Flaky tests (fail then pass on retry)
+### Metrics через logs (MVP подход)
 
-**System metrics:**
-- API response times
-- DB query times
-- Queue depth
+**Анализ через structured logs:**
+- Worker metrics: grep по component=worker
+- Packet metrics: grep по trace_id
+- Test metrics: grep по component=acceptance
+- System metrics: агрегация duration_ms
 
 ### Log analysis queries
 
@@ -711,7 +725,14 @@ cat logs/grace.jsonl | jq 'select(.component == "worker" and .message == "Packet
 - ✅ Test artifacts (coverage, screenshots)
 - ✅ Visual regression для frontend
 
+**Финальные решения:**
+- ✅ Touched scope resolver с fallback (если нет тестов)
+- ✅ pytest-xdist для параллельного выполнения
+- ✅ pytest-rerunfailures для retry
+- ❌ Не логировать промпты/ответы агентов (слишком много данных)
+- ❌ Без телеметрии в MVP (только structured logs)
+
 **Время реализации:**
 - Logging infrastructure: 1 день
-- Testing infrastructure: 2 дня
+- Testing infrastructure (с touched scope resolver): 2 дня
 - **Итого: 3 дня**
