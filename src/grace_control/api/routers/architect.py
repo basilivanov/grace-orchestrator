@@ -23,6 +23,7 @@ from datetime import datetime
 
 from fastapi import APIRouter
 
+from grace_control.core.dag_validator import validate_dag
 from grace_control.db import get_db
 from grace_control.db.schema import Feature, Packet, PacketState, Wave
 
@@ -34,6 +35,29 @@ async def create_plan(request: dict) -> dict:
     spec = request["feature_spec"]
     slug = _slugify(spec["title"])
     feature_id = f"FEAT-{slug.upper()}"
+
+    # Build packet list for DAG validation
+    dag_packets = []
+    for i, wave_spec in enumerate(spec.get("waves", []), 1):
+        for j, pkt_spec in enumerate(wave_spec.get("packets", []), 1):
+            wave_slug = _slugify(wave_spec["title"])
+            wave_id = f"W{i:02d}-{wave_slug.upper()}"
+            action = _extract_action(pkt_spec["title"])
+            pid = f"{feature_id}-{wave_id}-P{j:02d}-{action}"
+            dag_packets.append({
+                "id": pid,
+                "depends_on": pkt_spec.get("depends_on", []),
+                "scope": pkt_spec.get("scope", []),
+            })
+
+    dag_result = validate_dag(dag_packets)
+    if not dag_result.valid:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=422, detail={
+            "errors": dag_result.errors,
+            "cycles": dag_result.cycles,
+            "conflicts": [[c.packet_a, c.packet_b, c.overlapping_files] for c in dag_result.conflicts],
+        })
 
     packets_created = []
 
