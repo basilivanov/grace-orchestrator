@@ -1,0 +1,240 @@
+# ############################################################################
+# AI_HEADER: packet_executor
+# ROLE: Bridge between DB packets and legacy run_e2e_packet. STATELESS.
+# ############################################################################
+
+# START_MODULE_CONTRACT
+# purpose: Materialize DB packet → markdown → call legacy runner → return structured result.
+# inputs: packet_id, worker_id, project_root, state_root, worktree_root.
+# returns: ExecutionResult (accepted, reason, evidence_path, duration_ms, domain_status).
+# side_effects: Creates PacketRun record. Does NOT change packet state.
+# emitted_logs: log_event for execution lifecycle.
+# error_behavior: Raises on DB/runtime failures. Does not mask exceptions.
+# END_MODULE_CONTRACT
+
+# START_MODULE_MAP
+# mapping:
+#   - class: ExecutionResult
+#   - class: PacketExecutionAdapter
+# END_MODULE_MAP
+
+from __future__ import annotations
+
+import asyncio
+import os
+import time
+from datetime import datetime
+from functools import partial
+from pathlib import Path
+
+import yaml
+from pydantic import BaseModel
+
+from grace_control.db import get_db
+from grace_control.db.schema import Packet, PacketRun
+
+#START_BLOCK_MODELS
+class ExecutionResult(BaseModel):
+    """Structured result returned by adapter. Worker uses this for release."""
+    accepted: bool
+    reason: str | None = None
+    evidence_path: str = ""
+    duration_ms: int = 0
+    domain_status: str = ""
+
+#END_BLOCK_MODELS
+
+#START_BLOCK_ADAPTER
+class PacketExecutionAdapter:
+    """
+    Bridge between DB packets and legacy run_e2e_packet.
+
+    STATELESS: does NOT call mark_running, mark_accepted, mark_rejected, mark_failed.
+    State ownership belongs to API endpoints (claim/release).
+    """
+
+    # START_FUNCTION_CONTRACT
+    # name: __init__
+    # purpose: Initialize adapter with filesystem paths.
+    # inputs: project_root, state_root, worktree_root.
+    # returns: None.
+    # side_effects: None.
+    # emitted_logs: None.
+    # error_behavior: None.
+    # END_FUNCTION_CONTRACT
+    def __init__(self, project_root: Path, state_root: Path, worktree_root: Path):
+        self.project_root = Path(project_root)
+        self.state_root = Path(state_root)
+        self.worktree_root = Path(worktree_root)
+
+    # START_FUNCTION_CONTRACT
+    # name: execute
+    # purpose: Execute a packet: load DB → materialize → call legacy runner → save evidence → return result.
+    # inputs:
+    #   packet_id: Packet ID string.
+    #   worker_id: Worker ID string.
+    # returns: ExecutionResult with accepted, evidence_path, etc.
+    # side_effects: Creates PacketRun record, writes evidence directory.
+    # emitted_logs: None (caller should log).
+    # error_behavior: Raises on packet not found, runtime failure.
+    # END_FUNCTION_CONTRACT
+    async def execute(self, packet_id: str, worker_id: str) -> ExecutionResult:
+        start_time = time.time()
+
+        with get_db() as db:
+            packet = db.query(Packet).filter_by(id=packet_id).first()
+            if not packet:
+                raise ValueError(f"Packet {packet_id} not found")
+
+            run_number = packet.attempt_count
+            run_id = f"{packet_id}-R{run_number:02d}"
+
+            packet_run = PacketRun(
+                id=run_id,
+                packet_id=packet_id,
+                run_number=run_number,
+                worker_id=worker_id,
+                status="running",
+                started_at=datetime.utcnow(),
+            )
+            db.add(packet_run)
+
+        try:
+            packet_path = self._materialize_packet(packet)
+            result = await self._call_legacy_runner(packet_path)
+            execution_result = self._parse_result(result)
+            evidence_path = self._save_evidence(packet_id, run_number, result.to_dict())
+            execution_result.evidence_path = evidence_path
+            execution_result.duration_ms = int((time.time() - start_time) * 1000)
+
+            with get_db() as db:
+                existing = db.query(PacketRun).filter_by(id=run_id).first()
+                if existing:
+                    existing.status = "accepted" if execution_result.accepted else "rejected"
+                    existing.result_json = result.to_dict()
+                    existing.evidence_path = evidence_path
+                    existing.finished_at = datetime.utcnow()
+                    existing.duration_ms = execution_result.duration_ms
+
+            return execution_result
+
+        except Exception:
+            with get_db() as db:
+                existing = db.query(PacketRun).filter_by(id=run_id).first()
+                if existing:
+                    existing.status = "failed"
+                    existing.finished_at = datetime.utcnow()
+                    existing.duration_ms = int((time.time() - start_time) * 1000)
+            raise
+
+    # START_FUNCTION_CONTRACT
+    # name: _materialize_packet
+    # purpose: Convert DB Packet into EXECUTION_PACKET.md file parseable by parse_packet_markdown.
+    # inputs: packet ORM object.
+    # returns: Path to created markdown file.
+    # side_effects: Writes file to state_root/packets/{id}/EXECUTION_PACKET.md.
+    # emitted_logs: None.
+    # error_behavior: Raises on filesystem error.
+    # END_FUNCTION_CONTRACT
+    def _materialize_packet(self, packet: Packet) -> Path:
+        packet_dir = self.state_root / "packets" / packet.id
+        packet_dir.mkdir(parents=True, exist_ok=True)
+
+        spec_str = yaml.dump(packet.spec_json or {}, default_flow_style=False)
+        content = f"""# Execution Packet: {packet.id}
+
+## Objective
+
+{packet.description or packet.title}
+
+## Slice
+
+- slice_id: `SLICE-{packet.slug.upper()}`
+- feature_id: `{packet.feature_id}`
+- packet_id: `{packet.id}`
+- wave_id: `{packet.wave_id}`
+- status: `{packet.state}`
+
+## Allowed Write Scope
+
+{chr(10).join(f'- {s}' for s in (packet.spec_json or {}).get('scope', [packet.spec_json.get('scope', 'src/')]) if isinstance(packet.spec_json, dict))}
+
+## Frozen Scope
+
+- src/prefect_grace/**
+
+## Acceptance Profile
+
+{packet.acceptance_profile}
+
+## Specification
+
+```yaml
+{spec_str}
+```
+"""
+        packet_file = packet_dir / "EXECUTION_PACKET.md"
+        packet_file.write_text(content)
+        return packet_file
+
+    # START_FUNCTION_CONTRACT
+    # name: _call_legacy_runner
+    # purpose: Call existing run_e2e_packet synchronously in executor thread.
+    # inputs: packet_path to EXECUTION_PACKET.md.
+    # returns: E2EPacketRunnerResult.
+    # side_effects: Creates git worktree, launches agents, runs verifier/reviewer.
+    # emitted_logs: None.
+    # error_behavior: Raises on runtime failure.
+    # END_FUNCTION_CONTRACT
+    async def _call_legacy_runner(self, packet_path: Path):
+        from prefect_grace.platform.e2e_packet_runner import run_e2e_packet
+
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None,
+            partial(
+                run_e2e_packet,
+                project_root=self.project_root,
+                packet_path=packet_path,
+                state_root=self.state_root,
+                worktree_root=self.worktree_root,
+                dry_run=False,
+                execute_agent=True,
+                timeout_seconds=int(os.environ.get("GRACE_AGENT_TIMEOUT", "3600")),
+            ),
+        )
+        return result
+
+    # START_FUNCTION_CONTRACT
+    # name: _parse_result
+    # purpose: Map E2EPacketRunnerResult to ExecutionResult.
+    # inputs: E2EPacketRunnerResult from legacy runner.
+    # returns: ExecutionResult.
+    # side_effects: None.
+    # emitted_logs: None.
+    # error_behavior: Never raises (safe mapping).
+    # END_FUNCTION_CONTRACT
+    def _parse_result(self, result) -> ExecutionResult:
+        accepted = result.ok and result.domain_status == "accepted"
+        reason = None
+        if not accepted:
+            reason = result.registry_reason or f"domain_status={result.domain_status}"
+        return ExecutionResult(
+            accepted=accepted,
+            reason=reason,
+            domain_status=result.domain_status,
+        )
+
+    # START_FUNCTION_CONTRACT
+    # name: _save_evidence
+    # purpose: Return evidence path string for PacketRun record.
+    # inputs: packet_id, run_number, result_dict.
+    # returns: Evidence directory path string.
+    # side_effects: None (path only, evidence saved by legacy runner).
+    # emitted_logs: None.
+    # error_behavior: Never raises.
+    # END_FUNCTION_CONTRACT
+    def _save_evidence(self, packet_id: str, run_number: int, result: dict) -> str:
+        return str(self.state_root / "packets" / packet_id / "runs" / f"R{run_number:02d}")
+
+#END_BLOCK_ADAPTER
