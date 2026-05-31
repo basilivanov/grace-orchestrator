@@ -52,13 +52,14 @@ class PacketStateMachine:
     # END_FUNCTION_CONTRACT
     VALID_TRANSITIONS: dict[PacketState, list[PacketState]] = {
         PacketState.DRAFT: [PacketState.READY],
-        PacketState.READY: [PacketState.RUNNING],
+        PacketState.READY: [PacketState.RUNNING, PacketState.CANCELLED],
         PacketState.RUNNING: [
             PacketState.ACCEPTED,
             PacketState.REJECTED,
             PacketState.FAILED,
+            PacketState.CANCELLED,
         ],
-        PacketState.REJECTED: [PacketState.READY],
+        PacketState.REJECTED: [PacketState.READY, PacketState.CANCELLED],
         PacketState.ACCEPTED: [PacketState.MERGED],
         PacketState.MERGED: [],
         PacketState.FAILED: [],

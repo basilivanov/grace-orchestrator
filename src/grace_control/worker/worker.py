@@ -60,10 +60,24 @@ class Worker:
 
                 result = await self.executor.execute(claim.packet_id, self.worker_id)
                 status = "accepted" if result.accepted else "rejected"
-                await self.api.release_packet(claim.packet_id, self.worker_id, status, result.model_dump())
+                release_resp = await self.api.release_packet(claim.packet_id, self.worker_id, status, result.model_dump())
+
+                if status == "accepted":
+                    await self.api.merge_packet(claim.packet_id)
+
+                if status == "rejected":
+                    self._handle_rejection(claim.packet_id)
 
             except Exception:
                 await asyncio.sleep(10)
+
+    def _handle_rejection(self, packet_id: str):
+        from grace_control.core.packet_operations import mark_failed, retry_packet
+        from grace_control.core.state_machine import StateTransitionError
+        try:
+            retry_packet(packet_id)
+        except StateTransitionError:
+            mark_failed(packet_id, "Max retry attempts reached")
 
     async def _heartbeat_loop(self):
         while self.running:

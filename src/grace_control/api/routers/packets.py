@@ -152,3 +152,57 @@ async def release_packet(packet_id: str, request: dict) -> dict:
             "data": {"packet_id": packet.id, "state": packet.state, "released": True},
             "timestamp": datetime.utcnow().isoformat() + "Z",
         }
+
+
+@router.post("/{packet_id}/cancel")
+async def cancel_packet(packet_id: str, request: dict) -> dict:
+    """Cancel packet: READY/RUNNING/REJECTED → CANCELLED. Releases lease if present."""
+    reason = request.get("reason", "No reason provided")
+
+    with get_db() as db:
+        packet = db.query(Packet).filter_by(id=packet_id).first()
+        if not packet:
+            raise HTTPException(status_code=404, detail="Packet not found")
+
+        current = PacketState(packet.state)
+        if current in (PacketState.MERGED, PacketState.FAILED, PacketState.CANCELLED):
+            raise HTTPException(status_code=400, detail=f"Cannot cancel terminal packet: {current.value}")
+
+        lease = db.query(Lease).filter_by(packet_id=packet_id).first()
+        if lease:
+            db.delete(lease)
+            worker = db.query(Worker).filter_by(id=lease.worker_id).first()
+            if worker:
+                worker.current_packet_id = None
+
+        _state_machine.transition(current, PacketState.CANCELLED)
+        packet.state = PacketState.CANCELLED.value
+
+        return {
+            "data": {"packet_id": packet.id, "state": packet.state, "reason": reason},
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+        }
+
+
+@router.post("/{packet_id}/merge")
+async def merge_packet(packet_id: str, request: dict) -> dict:
+    """Merge accepted packet: ACCEPTED → MERGED."""
+    commit_sha = request.get("commit_sha", "")
+
+    with get_db() as db:
+        packet = db.query(Packet).filter_by(id=packet_id).first()
+        if not packet:
+            raise HTTPException(status_code=404, detail="Packet not found")
+
+        current = PacketState(packet.state)
+        if current != PacketState.ACCEPTED:
+            raise HTTPException(status_code=400,
+                detail=f"Can only merge ACCEPTED packets, got {current.value}")
+
+        _state_machine.transition(current, PacketState.MERGED)
+        packet.state = PacketState.MERGED.value
+
+        return {
+            "data": {"packet_id": packet.id, "state": packet.state, "commit_sha": commit_sha},
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+        }
