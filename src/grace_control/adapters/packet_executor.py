@@ -140,7 +140,12 @@ class PacketExecutionAdapter:
         packet_dir = self.state_root / "packets" / packet.id
         packet_dir.mkdir(parents=True, exist_ok=True)
 
-        spec_str = yaml.dump(packet.spec_json or {}, default_flow_style=False)
+        spec_json = packet.spec_json if isinstance(packet.spec_json, dict) else {}
+        spec_str = yaml.dump(spec_json, default_flow_style=False, allow_unicode=True)
+        scope = spec_json.get("scope", "src/")
+        if isinstance(scope, str):
+            scope = [scope]
+        scope_lines = "\n".join(f"- {s}" for s in scope)
         content = f"""# Execution Packet: {packet.id}
 
 ## Objective
@@ -157,15 +162,39 @@ class PacketExecutionAdapter:
 
 ## Allowed Write Scope
 
-{chr(10).join(f'- {s}' for s in (packet.spec_json or {}).get('scope', [packet.spec_json.get('scope', 'src/')]) if isinstance(packet.spec_json, dict))}
+{scope_lines}
 
 ## Frozen Scope
 
 - src/prefect_grace/**
 
+## Must Preserve
+
+- Follow GRACE Canon contracts (AI_HEADER, MODULE_CONTRACT, FUNCTION_CONTRACT)
+- File ≤ 1000 lines, function ≤ 4000 tokens
+- Use log_event() for structured logging
+
 ## Acceptance Profile
 
 {packet.acceptance_profile}
+
+## Verification
+
+```bash
+pytest -v
+ruff check src/
+```
+
+## Expected Evidence
+
+- test results
+- lint output
+
+## Escalation Triggers
+
+- Tests fail
+- Lint errors
+- Scope violation
 
 ## Specification
 
