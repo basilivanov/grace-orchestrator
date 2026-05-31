@@ -1,0 +1,189 @@
+# ############################################################################
+# AI_HEADER: cli_main
+# ROLE: CLI entry point for GRACE Control Plane — thin wrapper over API.
+# ############################################################################
+
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+from pathlib import Path
+
+import click
+import httpx
+import uvicorn
+import yaml
+from rich.console import Console
+from rich.table import Table
+
+console = Console()
+DEFAULT_API_URL = "http://localhost:8042"
+
+
+@click.group()
+def cli():
+    """GRACE Control Plane CLI."""
+
+
+# ── Architect ────────────────────────────────────────────────────────────────
+@cli.group()
+def architect():
+    """Architect commands."""
+
+
+@architect.command("plan")
+@click.argument("feature_file", type=click.Path(exists=True))
+@click.option("--api-url", default=DEFAULT_API_URL, help="API URL")
+@click.option("--json", "json_out", is_flag=True, help="JSON output")
+def architect_plan(feature_file, api_url, json_out):
+    """Create execution plan from feature YAML."""
+    spec = yaml.safe_load(Path(feature_file).read_text())
+    try:
+        r = httpx.post(f"{api_url}/api/architect/plan", json={"feature_spec": spec}, timeout=10)
+        r.raise_for_status()
+        data = r.json()["data"]
+        if json_out:
+            click.echo(json.dumps({"ok": True, "result": data, "warnings": [], "errors": []}))
+        else:
+            console.print(f"\n[green]Plan created![/green]")
+            console.print(f"Feature: {data['feature_id']}  Waves: {data['waves_count']}  Packets: {data['packets_count']}")
+            for pid in data["packets"]:
+                console.print(f"  [cyan]• {pid}[/cyan]")
+    except httpx.HTTPError as e:
+        _handle_error(e, json_out)
+
+
+# ── Packet ───────────────────────────────────────────────────────────────────
+@cli.group()
+def packet():
+    """Packet commands."""
+
+
+@packet.command("list")
+@click.option("--state", default=None, help="Filter by state")
+@click.option("--feature", "feature_id", default=None, help="Filter by feature ID")
+@click.option("--api-url", default=DEFAULT_API_URL, help="API URL")
+@click.option("--json", "json_out", is_flag=True, help="JSON output")
+def packet_list(state, feature_id, api_url, json_out):
+    """List packets."""
+    params = {}
+    if state: params["state"] = state
+    if feature_id: params["feature_id"] = feature_id
+    try:
+        r = httpx.get(f"{api_url}/api/packets/", params=params, timeout=10)
+        r.raise_for_status()
+        data = r.json()["data"]
+        if json_out:
+            click.echo(json.dumps({"ok": True, "result": data, "warnings": [], "errors": []}))
+        else:
+            if not data:
+                console.print("[yellow]No packets found[/yellow]")
+                return
+            table = Table(title="Packets")
+            table.add_column("ID", style="cyan")
+            table.add_column("Title", style="white")
+            table.add_column("State", style="green")
+            table.add_column("Attempts", style="yellow")
+            colors = {"ready": "green", "running": "yellow", "accepted": "blue", "merged": "cyan", "rejected": "red", "failed": "red"}
+            for p in data:
+                table.add_row(p["id"], p["title"], f"[{colors.get(p['state'], 'white')}]{p['state']}[/{colors.get(p['state'], 'white')}]", f"{p['attempt_count']}/{p['max_attempts']}")
+            console.print(table)
+    except httpx.HTTPError as e:
+        _handle_error(e, json_out)
+
+
+@packet.command("get")
+@click.argument("packet_id")
+@click.option("--api-url", default=DEFAULT_API_URL, help="API URL")
+@click.option("--json", "json_out", is_flag=True, help="JSON output")
+def packet_get(packet_id, api_url, json_out):
+    """Get packet details."""
+    try:
+        r = httpx.get(f"{api_url}/api/packets/{packet_id}", timeout=10)
+        r.raise_for_status()
+        data = r.json()["data"]
+        if json_out:
+            click.echo(json.dumps({"ok": True, "result": data, "warnings": [], "errors": []}))
+        else:
+            console.print(f"\n[bold cyan]Packet: {data['id']}[/bold cyan]")
+            console.print(f"Title: {data['title']}")
+            console.print(f"State: {data['state']}  Feature: {data['feature_id']}  Wave: {data['wave_id']}")
+            console.print(f"Attempts: {data['attempt_count']}/{data['max_attempts']}")
+            if data["runs"]:
+                console.print("\n[bold]Runs:[/bold]")
+                for run in data["runs"]:
+                    console.print(f"  Run {run['run_number']}: {run['status']}  duration={run['duration_ms']}ms  evidence={run['evidence_path']}")
+    except httpx.HTTPError as e:
+        _handle_error(e, json_out)
+
+
+# ── Worker ───────────────────────────────────────────────────────────────────
+@cli.group()
+def worker():
+    """Worker commands."""
+
+
+@worker.command("start")
+@click.option("--worker-id", default=None, help="Worker ID")
+@click.option("--api-url", default=DEFAULT_API_URL, help="API URL")
+def worker_start(worker_id, api_url):
+    """Start worker."""
+    from grace_control.worker.worker import Worker
+    console.print(f"[green]Starting worker...[/green]")
+    if worker_id: console.print(f"Worker ID: {worker_id}")
+    console.print(f"API URL: {api_url}")
+    w = Worker(worker_id=worker_id, api_url=api_url)
+    try:
+        asyncio.run(w.start())
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Worker stopped[/yellow]")
+
+
+# ── API ──────────────────────────────────────────────────────────────────────
+@cli.group()
+def api():
+    """API server commands."""
+
+
+@api.command("start")
+@click.option("--host", default="127.0.0.1", help="Host to bind")
+@click.option("--port", default=8042, help="Port to bind")
+def api_start(host, port):
+    """Start API server."""
+    console.print(f"[green]Starting API server on {host}:{port}...[/green]")
+    os.environ.setdefault("GRACE_API_PORT", str(port))
+    uvicorn.run("grace_control.api.main:app", host=host, port=port)
+
+
+# ── Health ───────────────────────────────────────────────────────────────────
+@cli.command("health")
+@click.option("--api-url", default=DEFAULT_API_URL, help="API URL")
+@click.option("--json", "json_out", is_flag=True, help="JSON output")
+def health(api_url, json_out):
+    """Check system health."""
+    try:
+        r = httpx.get(f"{api_url}/health", timeout=10)
+        r.raise_for_status()
+        data = r.json()
+        if json_out:
+            click.echo(json.dumps({"ok": True, "result": data, "warnings": [], "errors": []}))
+        else:
+            colors = {"healthy": "green", "degraded": "yellow", "unhealthy": "red"}
+            console.print(f"\n[bold]System:[/bold] [{colors.get(data['status'], 'white')}]{data['status']}[/{colors.get(data['status'], 'white')}]")
+            console.print(f"Workers: active={data['workers']['active']} idle={data['workers']['idle']} dead={data['workers']['dead']}")
+            console.print(f"Queue: ready={data['queue_depth']} running={data['running']}")
+    except httpx.HTTPError as e:
+        _handle_error(e, json_out)
+
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+def _handle_error(e, json_out):
+    if json_out:
+        click.echo(json.dumps({"ok": False, "result": None, "warnings": [], "errors": [str(e)]}))
+    else:
+        console.print(f"[red]Error: {e}[/red]")
+
+
+if __name__ == "__main__":
+    cli()
