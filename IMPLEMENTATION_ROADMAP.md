@@ -1,6 +1,8 @@
 # GRACE Control Plane — Implementation Roadmap
 
-## 📅 Общий план: 4-5 недель до MVP
+## 📅 Общий план: 4.5 недель до MVP
+
+**Обновление:** Добавлены packet cancellation и health checks в MVP (+2 дня)
 
 ---
 
@@ -164,6 +166,24 @@
 
 ## Phase 3: UI & CLI (1 неделя)
 
+### Week 3, Day 3.5: Cancellation + Health Checks
+
+**Task #33: Packet Cancellation**
+- API endpoint: POST /api/packets/{packet_id}/cancel
+- Worker checks cancellation flag
+- Graceful shutdown
+- Cleanup worktree
+- State: RUNNING → CANCELLED
+
+**Task #34: Health Checks**
+- API endpoint: GET /api/health
+- Check workers, executors, DB, disk, queue
+- Structured health status
+
+**Deliverable:** Cancellation + health monitoring
+
+---
+
 ### Week 3, Days 4-5: Artifact Viewer
 
 **Task #19: JSON Artifacts**
@@ -324,7 +344,7 @@ Polish (2 дня)
 = 18 дней (3.5 недели)
 ```
 
-**С параллельной работой:** 4-5 недель
+**С параллельной работой:** 4.5 недель (обновлено: +2 дня на cancellation + health)
 
 ---
 
@@ -391,6 +411,8 @@ Polish (2 дня)
 - ✅ grace init working
 
 ### Week 5 Goals
+- ✅ Packet cancellation working
+- ✅ Health checks working
 - ✅ E2E test passing
 - ✅ Documentation complete
 - ✅ MVP ready to use
@@ -459,6 +481,11 @@ grace architect plan my-feature.yaml
 - [ ] JSON output для агентов
 - [ ] Telegram bot отправляет уведомления
 - [ ] grace init создаёт проект
+
+### Operations
+- [ ] Packet cancellation работает
+- [ ] Health checks работают
+- [ ] Graceful shutdown при cancellation
 
 ### Testing & Documentation
 - [ ] E2E test проходит
