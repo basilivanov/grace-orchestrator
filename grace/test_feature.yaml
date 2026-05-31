@@ -1,0 +1,19 @@
+title: Hello GRACE — Test Feature
+description: >
+  Minimal feature to verify the full GRACE Control Plane pipeline:
+  architect creates plan → worker claims + executes via adapter →
+  coder implements in worktree → verifier checks → reviewer accepts → merge.
+
+  This feature creates a single utility function and a corresponding test.
+  It exercises every component: DB, state machine, adapter, API, worker,
+  legacy runner, and auto-merge.
+
+waves:
+  - title: Foundation
+    packets:
+      - title: Create hello utility
+        description: Add a greet() function to src/hello_grace_test.py with test
+        scope:
+          - src/hello_grace_test.py
+          - tests/test_hello_grace_test.py
+        acceptance_profile: NORMAL

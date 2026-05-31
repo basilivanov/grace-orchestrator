@@ -57,6 +57,11 @@ def init_db(db_url: str | None = None) -> None:
         echo=False,
         connect_args={"check_same_thread": False} if "sqlite" in db_url else {},
     )
+    if "sqlite" in db_url:
+        from sqlalchemy import event
+        @event.listens_for(engine, "connect")
+        def _set_wal(dbapi_conn, _rec):
+            dbapi_conn.execute("PRAGMA journal_mode=WAL")
     SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
     Base.metadata.create_all(engine)
 

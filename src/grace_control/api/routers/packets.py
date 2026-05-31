@@ -119,6 +119,7 @@ async def claim_packet(request: dict) -> dict:
                 expires_at=datetime.utcnow() + timedelta(minutes=30),
             )
             db.add(lease)
+            db.flush()  # populate lease.id before return
 
             _state_machine.transition(PacketState(packet.state), PacketState.RUNNING)
             packet.state = PacketState.RUNNING.value

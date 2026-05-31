@@ -55,11 +55,12 @@ def check_expired_leases() -> int:
 
 #START_BLOCK_LOOP
 async def lease_expiration_loop(interval: int = CHECK_INTERVAL_SECONDS) -> None:
+    await asyncio.sleep(interval)  # first check after initial delay
     while True:
         try:
             expired = check_expired_leases()
             if expired > 0:
-                pass  # logged by caller
+                pass
         except Exception:
             pass
         await asyncio.sleep(interval)

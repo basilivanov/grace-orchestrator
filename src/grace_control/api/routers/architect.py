@@ -106,7 +106,9 @@ async def create_plan(request: dict) -> dict:
 
 
 def _slugify(text: str) -> str:
-    return text.lower().replace(" ", "-").replace("_", "-")
+    import re
+    text = re.sub(r'[^\w\s-]', '', text)
+    return text.lower().strip().replace(" ", "-").replace("_", "-")
 
 
 def _extract_action(title: str) -> str:
