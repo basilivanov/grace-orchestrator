@@ -1,55 +1,187 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- GRACE Technology Stack -->
-<!-- Project: {{PROJECT_KEY}} -->
+<!-- Project: grace-control-plane -->
+<!-- Canonical reference: CANONICAL_DECISIONS.md, pyproject.toml -->
 
 <technology_stack>
   <metadata>
-    <project>{{PROJECT_KEY}}</project>
-    <version>1.0</version>
-    <last_updated></last_updated>
+    <project>grace-control-plane</project>
+    <version>0.1.0</version>
+    <last_updated>2026-05-31</last_updated>
   </metadata>
 
   <languages>
-    <!-- Programming languages used in the project -->
     <language>
       <name>Python</name>
-      <version>3.12</version>
-      <purpose>Backend development</purpose>
+      <version>3.11+</version>
+      <purpose>Primary development language</purpose>
+      <note>pyproject.toml requires-python = "&gt;=3.11"</note>
     </language>
   </languages>
 
   <frameworks>
-    <!-- Frameworks and libraries -->
     <framework>
-      <name>Example Framework</name>
-      <version>1.0.0</version>
+      <name>FastAPI</name>
+      <version>0.109+</version>
       <category>web</category>
+      <purpose>REST API server (grace_control/api/)</purpose>
+      <note>9 canonical endpoints, bind 127.0.0.1:8042</note>
+    </framework>
+
+    <framework>
+      <name>SQLAlchemy</name>
+      <version>2.0+</version>
+      <category>orm</category>
+      <purpose>ORM for SQLite database (grace.db)</purpose>
+      <note>7 tables: features, waves, packets, packet_runs, workers, leases, events</note>
+    </framework>
+
+    <framework>
+      <name>Pydantic</name>
+      <version>2.5+</version>
+      <category>validation</category>
+      <purpose>Data models and request/response validation</purpose>
+    </framework>
+
+    <framework>
+      <name>click</name>
+      <version>8.1+</version>
+      <category>cli</category>
+      <purpose>CLI framework (grace_control/cli/)</purpose>
+      <note>6 commands: architect plan, packet list/get, worker start, api start, health</note>
+    </framework>
+
+    <framework>
+      <name>Rich</name>
+      <version>13.7+</version>
+      <category>cli</category>
+      <purpose>CLI formatting (tables, colors, progress)</purpose>
+    </framework>
+
+    <framework>
+      <name>httpx</name>
+      <version>0.26+</version>
+      <category>http</category>
+      <purpose>HTTP client: worker→API communication, CLI→API</purpose>
+    </framework>
+
+    <framework>
+      <name>Typer</name>
+      <version>0.12+</version>
+      <category>cli</category>
+      <purpose>CLI framework (prefect_grace legacy CLI)</purpose>
+      <note>Legacy dependency, new CLI uses click</note>
     </framework>
   </frameworks>
 
   <infrastructure>
-    <!-- Infrastructure and deployment -->
     <component>
-      <name>Example Infrastructure</name>
-      <type>cloud</type>
-      <description>Description of infrastructure component</description>
+      <name>SQLite</name>
+      <type>database</type>
+      <description>Embedded relational database, single file (grace.db), no server process</description>
+      <note>MVP-0 only. Post-MVP: PostgreSQL support via SQLAlchemy.</note>
+    </component>
+
+    <component>
+      <name>Git Worktrees</name>
+      <type>isolation</type>
+      <description>Per-packet isolated filesystem via git worktree on branch grace/{project_key}/{packet_id}/{attempt}</description>
+      <note>Managed by legacy prefect_grace/platform/worktree_manager.py</note>
+    </component>
+
+    <component>
+      <name>Prefect</name>
+      <type>orchestration</type>
+      <version>3.0+</version>
+      <description>Compatibility layer only (no-op decorators in prefect_compat.py). No new Prefect flows.</description>
+      <note>Transitional dependency. Legacy code keeps Prefect imports behind try/except.</note>
     </component>
   </infrastructure>
 
   <tools>
-    <!-- Development and build tools -->
     <tool>
-      <name>Example Tool</name>
-      <purpose>Development</purpose>
+      <name>hatchling</name>
+      <purpose>Build system (pyproject.toml build-backend)</purpose>
+      <note>NOT poetry. Project uses hatchling.</note>
+    </tool>
+
+    <tool>
+      <name>pytest</name>
+      <version>8.0+</version>
+      <purpose>Test runner</purpose>
+      <note>With pytest-asyncio (0.23+), pytest-cov (4.1+)</note>
+    </tool>
+
+    <tool>
+      <name>ruff</name>
+      <version>0.3+</version>
+      <purpose>Linter + formatter (replaces flake8, isort, pyupgrade)</purpose>
+      <note>Line length 120, target py311</note>
+    </tool>
+
+    <tool>
+      <name>mypy</name>
+      <version>1.9+</version>
+      <purpose>Static type checker</purpose>
+      <note>Strict mode for core modules</note>
+    </tool>
+
+    <tool>
+      <name>black</name>
+      <version>24.0+</version>
+      <purpose>Code formatter</purpose>
+      <note>Line length 120, complementary to ruff</note>
+    </tool>
+
+    <tool>
+      <name>uvicorn</name>
+      <version>0.27+</version>
+      <purpose>ASGI server for FastAPI</purpose>
+      <note>grace api start → uvicorn.run(app, host="127.0.0.1", port=8042)</note>
     </tool>
   </tools>
 
+  <ai_providers>
+    <provider>
+      <name>Anthropic Claude</name>
+      <models>
+        <model>claude-opus-4</model>
+        <model>claude-sonnet-4</model>
+        <model>claude-haiku-4</model>
+      </models>
+      <auth>ANTHROPIC_API_KEY env var</auth>
+      <purpose>AI agent execution (architect, coder, verifier, reviewer)</purpose>
+      <note>Configured in agent_profiles.yaml</note>
+    </provider>
+
+    <provider>
+      <name>Google Gemini</name>
+      <models>
+        <model>gemini-3.5-flash</model>
+        <model>gemini-3.1-pro</model>
+      </models>
+      <auth>GOOGLE_API_KEY env var</auth>
+      <purpose>Cost-optimized agent execution (simple/medium packets)</purpose>
+      <note>Complexity router post-MVP</note>
+    </provider>
+  </ai_providers>
+
   <databases>
-    <!-- Database systems -->
     <database>
-      <name>Example Database</name>
+      <name>SQLite</name>
       <type>relational</type>
-      <version>1.0</version>
+      <version>3.x</version>
+      <driver>sqlalchemy (aiosqlite for async)</driver>
+      <schema>
+        <table>features</table>
+        <table>waves</table>
+        <table>packets</table>
+        <table>packet_runs</table>
+        <table>workers</table>
+        <table>leases</table>
+        <table>events</table>
+      </schema>
+      <file>grace.db</file>
     </database>
   </databases>
 </technology_stack>

@@ -1,43 +1,353 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- GRACE Knowledge Graph -->
-<!-- Project: {{PROJECT_KEY}} -->
+<!-- Project: grace-control-plane -->
+<!-- Canonical reference: CANONICAL_DECISIONS.md -->
 
 <knowledge_graph>
   <metadata>
-    <project>{{PROJECT_KEY}}</project>
-    <version>1.0</version>
-    <last_updated></last_updated>
+    <project>grace-control-plane</project>
+    <version>0.1.0</version>
+    <last_updated>2026-05-31</last_updated>
   </metadata>
 
   <concepts>
-    <!-- Domain concepts and entities -->
-    <concept id="CONCEPT-001">
-      <name>Example Concept</name>
-      <description>Description of the concept</description>
+    <!-- ====== Core Domain Entities ====== -->
+    <concept id="CONCEPT-FEATURE">
+      <name>Feature</name>
+      <description>Top-level business feature. Has waves, packets. Status: NOT_STARTED, IN_PROGRESS, COMPLETED.</description>
       <category>domain</category>
+      <table>features</table>
       <attributes>
-        <attribute name="example_attr">Example value</attribute>
+        <attribute name="id">FEAT-USER-AUTH (hierarchical prefix)</attribute>
+        <attribute name="slug">user-auth</attribute>
+        <attribute name="title">Human-readable title</attribute>
+        <attribute name="spec_json">Full feature specification</attribute>
+        <attribute name="status">NOT_STARTED | IN_PROGRESS | COMPLETED</attribute>
       </attributes>
+    </concept>
+
+    <concept id="CONCEPT-WAVE">
+      <name>Wave</name>
+      <description>Logical group of packets executed sequentially. Each wave ends with architect gate_decision packet.</description>
+      <category>domain</category>
+      <table>waves</table>
+      <attributes>
+        <attribute name="id">W01-FOUNDATION</attribute>
+        <attribute name="feature_id">Parent feature</attribute>
+        <attribute name="order">Sequential order (1, 2, 3...)</attribute>
+        <attribute name="status">NOT_STARTED | IN_PROGRESS | COMPLETED</attribute>
+      </attributes>
+    </concept>
+
+    <concept id="CONCEPT-PACKET">
+      <name>Packet</name>
+      <description>Self-contained work unit: specification of WHAT to do. Has hierarchical ID, scope, acceptance profile, state.</description>
+      <category>domain</category>
+      <table>packets</table>
+      <attributes>
+        <attribute name="id">FEAT-X-W01-P01-ACTION</attribute>
+        <attribute name="state">DRAFT | READY | RUNNING | ACCEPTED | MERGED | REJECTED | FAILED | CANCELLED</attribute>
+        <attribute name="acceptance_profile">FAST | NORMAL | STRICT</attribute>
+        <attribute name="attempt_count">Current attempt (0..max_attempts)</attribute>
+        <attribute name="max_attempts">Max retry attempts (default 3)</attribute>
+        <attribute name="spec_json">Scope, requirements, dependencies</attribute>
+      </attributes>
+    </concept>
+
+    <concept id="CONCEPT-RUN">
+      <name>PacketRun</name>
+      <description>One execution attempt of a packet. Packet may have multiple runs (R01, R02, R03).</description>
+      <category>domain</category>
+      <table>packet_runs</table>
+      <attributes>
+        <attribute name="id">FEAT-X-W01-P01-ACTION-R01</attribute>
+        <attribute name="packet_id">Parent packet</attribute>
+        <attribute name="run_number">1, 2, 3...</attribute>
+        <attribute name="status">running | accepted | rejected | failed</attribute>
+        <attribute name="result_json">Full execution result</attribute>
+        <attribute name="evidence_path">Path to evidence directory</attribute>
+        <attribute name="duration_ms">Execution duration</attribute>
+      </attributes>
+    </concept>
+
+    <concept id="CONCEPT-WORKER">
+      <name>Worker</name>
+      <description>Execution agent: registers with API, claims packets, executes via adapter, releases result.</description>
+      <category>infrastructure</category>
+      <table>workers</table>
+      <attributes>
+        <attribute name="id">worker-abc123</attribute>
+        <attribute name="status">active | idle | dead</attribute>
+        <attribute name="current_packet_id">Currently executing packet</attribute>
+        <attribute name="last_heartbeat">Last heartbeat timestamp</attribute>
+      </attributes>
+    </concept>
+
+    <concept id="CONCEPT-LEASE">
+      <name>Lease</name>
+      <description>Exclusive claim on a packet by a worker. SQLite-safe (unique constraint on packet_id).</description>
+      <category>infrastructure</category>
+      <table>leases</table>
+      <attributes>
+        <attribute name="packet_id">Claimed packet (unique)</attribute>
+        <attribute name="worker_id">Claiming worker</attribute>
+        <attribute name="expires_at">Lease expiration (30 min from claim)</attribute>
+        <attribute name="heartbeat_at">Last heartbeat refresh</attribute>
+      </attributes>
+    </concept>
+
+    <concept id="CONCEPT-EVENT">
+      <name>Event</name>
+      <description>Audit log entry for state transitions and system events. Traceable via trace_id.</description>
+      <category>infrastructure</category>
+      <table>events</table>
+      <attributes>
+        <attribute name="event_type">state_transition | worker_heartbeat | packet_claimed | packet_released | error</attribute>
+        <attribute name="entity_type">packet | worker | feature | wave</attribute>
+        <attribute name="entity_id">ID of affected entity</attribute>
+        <attribute name="trace_id">Correlation ID for tracing</attribute>
+      </attributes>
+    </concept>
+
+    <!-- ====== Agent Roles ====== -->
+    <concept id="CONCEPT-ARCHITECT">
+      <name>Architect Agent</name>
+      <description>Creates features, waves, and packets from business specs. Packets created in READY state.</description>
+      <category>agent</category>
+      <model>claude-opus-4</model>
+      <reasoning>xhigh</reasoning>
+    </concept>
+
+    <concept id="CONCEPT-CODER">
+      <name>Coder Agent</name>
+      <description>Implements one packet within allowed write scope. Works in isolated git worktree.</description>
+      <category>agent</category>
+      <model>claude-sonnet-4</model>
+      <reasoning>high</reasoning>
+    </concept>
+
+    <concept id="CONCEPT-VERIFIER">
+      <name>Verifier Agent</name>
+      <description>Runs T0 (lint+canon) → T1 (touched tests) → T2 (full tests). Checks scope compliance. Collects evidence.</description>
+      <category>agent</category>
+      <model>gemini-3.1-pro</model>
+      <reasoning>medium</reasoning>
+    </concept>
+
+    <concept id="CONCEPT-REVIEWER">
+      <name>Reviewer Agent</name>
+      <description>Technical acceptance gate for STRICT packets. Verdicts: accepted, rework_required, blocked, escalate_to_architect.</description>
+      <category>agent</category>
+      <model>claude-opus-4</model>
+      <reasoning>xhigh</reasoning>
+    </concept>
+
+    <!-- ====== Execution Infrastructure ====== -->
+    <concept id="CONCEPT-ADAPTER">
+      <name>PacketExecutionAdapter</name>
+      <description>Bridge: DB packet → materialize markdown → call legacy run_e2e_packet → parse E2EPacketRunnerResult → return ExecutionResult. STATELESS: does NOT change packet state.</description>
+      <category>infrastructure</category>
+      <location>grace_control/adapters/packet_executor.py</location>
+    </concept>
+
+    <concept id="CONCEPT-SCOPE-GUARD">
+      <name>Scope Guard</name>
+      <description>Deterministic (non-LLM) validation: agent changes must respect Allowed Write Scope and Frozen Scope. Pattern-based file matching.</description>
+      <category>infrastructure</category>
+      <location>prefect_grace/platform/scope_guard.py</location>
+    </concept>
+
+    <concept id="CONCEPT-STATE-MACHINE">
+      <name>Packet State Machine</name>
+      <description>Validates transitions between 8 canonical states. CANCELLED reserved for post-MVP.</description>
+      <category>core</category>
+      <location>grace_control/core/state_machine.py</location>
     </concept>
   </concepts>
 
   <relationships>
-    <!-- Relationships between concepts -->
+    <!-- ====== Hierarchical Structure ====== -->
     <relationship id="REL-001">
-      <source>CONCEPT-001</source>
-      <target>CONCEPT-002</target>
+      <source>CONCEPT-FEATURE</source>
+      <target>CONCEPT-WAVE</target>
+      <type>contains</type>
+      <cardinality>1:N</cardinality>
+      <description>Feature contains one or more sequential waves</description>
+    </relationship>
+
+    <relationship id="REL-002">
+      <source>CONCEPT-WAVE</source>
+      <target>CONCEPT-PACKET</target>
+      <type>contains</type>
+      <cardinality>1:N</cardinality>
+      <description>Wave contains one or more packets</description>
+    </relationship>
+
+    <relationship id="REL-003">
+      <source>CONCEPT-PACKET</source>
+      <target>CONCEPT-RUN</target>
+      <type>has_attempts</type>
+      <cardinality>1:N</cardinality>
+      <description>Packet may have multiple execution attempts (runs)</description>
+    </relationship>
+
+    <!-- ====== Worker Lifecycle ====== -->
+    <relationship id="REL-004">
+      <source>CONCEPT-WORKER</source>
+      <target>CONCEPT-LEASE</target>
+      <type>creates</type>
+      <cardinality>1:1</cardinality>
+      <description>Worker creates a lease when claiming a packet</description>
+    </relationship>
+
+    <relationship id="REL-005">
+      <source>CONCEPT-LEASE</source>
+      <target>CONCEPT-PACKET</target>
+      <type>claims</type>
+      <cardinality>1:1</cardinality>
+      <description>Lease gives exclusive claim on a packet (READY → RUNNING)</description>
+    </relationship>
+
+    <relationship id="REL-006">
+      <source>CONCEPT-WORKER</source>
+      <target>CONCEPT-ADAPTER</target>
+      <type>delegates_to</type>
+      <cardinality>1:1</cardinality>
+      <description>Worker delegates execution to PacketExecutionAdapter</description>
+    </relationship>
+
+    <relationship id="REL-007">
+      <source>CONCEPT-ADAPTER</source>
+      <target>CONCEPT-RUN</target>
+      <type>produces</type>
+      <cardinality>1:1</cardinality>
+      <description>Adapter creates a PacketRun record with result + evidence</description>
+    </relationship>
+
+    <!-- ====== Agent Assignments ====== -->
+    <relationship id="REL-008">
+      <source>CONCEPT-ARCHITECT</source>
+      <target>CONCEPT-PACKET</target>
+      <type>creates</type>
+      <cardinality>1:N</cardinality>
+      <description>Architect creates packets in READY state from feature spec</description>
+    </relationship>
+
+    <relationship id="REL-009">
+      <source>CONCEPT-CODER</source>
+      <target>CONCEPT-PACKET</target>
+      <type>implements</type>
+      <cardinality>1:1</cardinality>
+      <description>Coder implements one packet in isolated worktree</description>
+    </relationship>
+
+    <relationship id="REL-010">
+      <source>CONCEPT-VERIFIER</source>
+      <target>CONCEPT-SCOPE-GUARD</target>
+      <type>uses</type>
+      <cardinality>1:1</cardinality>
+      <description>Verifier checks scope compliance via Scope Guard</description>
+    </relationship>
+
+    <relationship id="REL-011">
+      <source>CONCEPT-REVIEWER</source>
+      <target>CONCEPT-PACKET</target>
+      <type>accepts_or_rejects</type>
+      <cardinality>1:1</cardinality>
+      <description>Reviewer provides verdict: ACCEPTED | REWORK | BLOCKED (STRICT only)</description>
+    </relationship>
+
+    <!-- ====== State Machine ====== -->
+    <relationship id="REL-012">
+      <source>CONCEPT-PACKET</source>
+      <target>CONCEPT-STATE-MACHINE</target>
+      <type>governed_by</type>
+      <cardinality>N:1</cardinality>
+      <description>Packet state transitions are validated by state machine</description>
+    </relationship>
+
+    <relationship id="REL-013">
+      <source>CONCEPT-STATE-MACHINE</source>
+      <target>CONCEPT-EVENT</target>
+      <type>emits</type>
+      <cardinality>1:1</cardinality>
+      <description>Every state transition emits an Event for audit trail</description>
+    </relationship>
+
+    <!-- ====== Legacy Bridge ====== -->
+    <relationship id="REL-014">
+      <source>CONCEPT-ADAPTER</source>
+      <target>CONCEPT-CODER</target>
+      <type>triggers</type>
+      <cardinality>1:1</cardinality>
+      <description>Adapter calls legacy run_e2e_packet which launches coder agent</description>
+    </relationship>
+
+    <relationship id="REL-015">
+      <source>CONCEPT-ADAPTER</source>
+      <target>CONCEPT-VERIFIER</target>
+      <type>triggers</type>
+      <cardinality>1:1</cardinality>
+      <description>After coder, legacy runner launches verifier</description>
+    </relationship>
+
+    <!-- ====== Dependencies ====== -->
+    <relationship id="REL-016">
+      <source>CONCEPT-PACKET</source>
+      <target>CONCEPT-PACKET</target>
       <type>depends_on</type>
-      <description>Description of the relationship</description>
+      <cardinality>N:M</cardinality>
+      <description>Packets may depend on other packets (DAG validation). Post-MVP: parallel execution respects DAG.</description>
     </relationship>
   </relationships>
 
   <rules>
-    <!-- Business rules and constraints -->
     <rule id="RULE-001">
-      <name>Example Rule</name>
-      <description>Description of the rule</description>
-      <condition>Condition for the rule</condition>
-      <action>Action when rule is triggered</action>
+      <name>Architect Creates READY</name>
+      <description>POST /api/architect/plan creates packets in READY state (not DRAFT). Worker can claim immediately.</description>
+      <source>CANONICAL_DECISIONS.md §5</source>
+    </rule>
+
+    <rule id="RULE-002">
+      <name>Claim Owns READY→RUNNING</name>
+      <description>POST /api/packets/claim is the SOLE owner of the READY → RUNNING transition. Adapter does NOT change packet state.</description>
+      <source>CANONICAL_DECISIONS.md §5</source>
+    </rule>
+
+    <rule id="RULE-003">
+      <name>Adapter is Stateless</name>
+      <description>PacketExecutionAdapter does NOT call mark_running, mark_accepted, or any state transition. It only materializes packet, calls legacy runner, and returns ExecutionResult.</description>
+      <source>CANONICAL_DECISIONS.md §5</source>
+    </rule>
+
+    <rule id="RULE-004">
+      <name>Worker Releases via API</name>
+      <description>After adapter returns, worker calls POST /api/packets/{id}/release. Release endpoint transitions RUNNING → ACCEPTED/REJECTED/FAILED.</description>
+      <source>CANONICAL_DECISIONS.md §5</source>
+    </rule>
+
+    <rule id="RULE-005">
+      <name>Max 3 Attempts</name>
+      <description>Packets may be retried up to 3 times (max_attempts=3). After 3 failures, manual intervention required.</description>
+      <source>FINAL_DECISIONS.md §5</source>
+    </rule>
+
+    <rule id="RULE-006">
+      <name>No Parallel Conflicting Packets</name>
+      <description>Two packets that touch the same file (overlapping write scopes) must not execute in parallel.</description>
+      <source>FINAL_DECISIONS.md §3</source>
+    </rule>
+
+    <rule id="RULE-007">
+      <name>MVP-0 Ends at ACCEPTED</name>
+      <description>MVP-0 does not auto-merge. ACCEPTED → MERGED is post-MVP (Wave 1).</description>
+      <source>CANONICAL_DECISIONS.md §9</source>
+    </rule>
+
+    <rule id="RULE-008">
+      <name>Single Worker in MVP-0</name>
+      <description>Only one worker process in MVP-0. Multiple workers = post-MVP (Wave 4).</description>
+      <source>CANONICAL_DECISIONS.md §6</source>
     </rule>
   </rules>
 </knowledge_graph>
