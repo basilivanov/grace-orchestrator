@@ -98,7 +98,8 @@ async def get_packet(packet_id: str) -> dict:
 
 @router.post("/claim")
 async def claim_packet(request: dict) -> dict:
-    """Claim next READY packet. SOLE owner of READY→RUNNING transition."""
+    """Claim next READY packet. SOLE owner of READY→RUNNING transition.
+    Multi-worker safe: unique constraint on lease(packet_id) prevents duplicate claims."""
     worker_id = request["worker_id"]
 
     with get_db() as db:
