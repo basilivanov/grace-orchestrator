@@ -84,6 +84,7 @@ class Packet(Base):
     description = Column(Text)
     spec_json = Column(JSON, nullable=False)
     state = Column(SQLEnum(PacketState), nullable=False, default=PacketState.DRAFT, index=True)
+    # NOTE: Architect creates packets in READY, DRAFT is for manual creation via other paths
     acceptance_profile = Column(String, nullable=False, default="NORMAL")
     attempt_count = Column(Integer, default=0, nullable=False)
     max_attempts = Column(Integer, default=3, nullable=False)
@@ -396,23 +397,22 @@ class PacketStateMachine:
     REJECTED → READY (retry)
     ACCEPTED → MERGED
     
-    Any state → CANCELLED (manual cancellation)
+    CANCELLED transitions: reserved for post-MVP (no endpoint in MVP-0)
     """
     
     VALID_TRANSITIONS = {
         PacketState.DRAFT: [PacketState.READY],
-        PacketState.READY: [PacketState.RUNNING, PacketState.CANCELLED],
+        PacketState.READY: [PacketState.RUNNING],
         PacketState.RUNNING: [
             PacketState.ACCEPTED,
             PacketState.REJECTED,
             PacketState.FAILED,
-            PacketState.CANCELLED
         ],
-        PacketState.REJECTED: [PacketState.READY, PacketState.CANCELLED],
-        PacketState.ACCEPTED: [PacketState.MERGED],
+        PacketState.REJECTED: [PacketState.READY],
+        PacketState.ACCEPTED: [PacketState.MERGED],  # MERGED = post-MVP auto-merge
         PacketState.MERGED: [],  # Terminal
         PacketState.FAILED: [],  # Terminal
-        PacketState.CANCELLED: [],  # Terminal
+        PacketState.CANCELLED: [],  # Terminal, reserved for post-MVP
     }
     
     TERMINAL_STATES = {

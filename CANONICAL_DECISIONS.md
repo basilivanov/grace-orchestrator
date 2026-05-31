@@ -126,7 +126,7 @@ payload_json, trace_id
 ### Base URL
 
 ```
-http://localhost:8000/api
+http://localhost:8042/api
 ```
 
 ### Endpoints (MVP only)
@@ -350,13 +350,13 @@ app = FastAPI()
 uvicorn.run(
     app,
     host="127.0.0.1",  # НЕ 0.0.0.0
-    port=8000
+    port=8042
 )
 
 # CORS только для localhost
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:*"],  # НЕ "*"
+    allow_origin_regex=r"http://localhost:\d+",  # Regex по портам, НЕ "*"
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -378,7 +378,7 @@ app.add_middleware(
 
 ```
 1. grace architect plan feature.yaml
-   → Creates packets in DB (state: DRAFT → READY immediately)
+   → Creates packets in DB (state: READY — worker может забрать сразу)
 
 2. grace worker start
    → Claims packet (lease: READY → RUNNING)

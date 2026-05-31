@@ -59,7 +59,7 @@ def architect():
 @click.argument("feature_file", type=click.Path(exists=True))
 def architect_plan(feature_file):
     """Create execution plan from feature YAML file."""
-    url = "http://localhost:8000/api/architect/plan"
+    url = "http://localhost:8042/api/architect/plan"
 
     try:
         feature_spec = yaml.safe_load(Path(feature_file).read_text())
@@ -87,7 +87,7 @@ def packet():
 @click.option("--feature", help="Filter by feature ID")
 def packet_list(state, feature):
     """List packets."""
-    url = "http://localhost:8000/api/packets/"
+    url = "http://localhost:8042/api/packets/"
     params = {}
     if state:
         params["state"] = state
@@ -136,7 +136,7 @@ def packet_list(state, feature):
 @click.argument("packet_id")
 def packet_get(packet_id):
     """Get packet details."""
-    url = f"http://localhost:8000/api/packets/{packet_id}"
+    url = f"http://localhost:8042/api/packets/{packet_id}"
     
     try:
         response = httpx.get(url)
@@ -177,7 +177,7 @@ def worker():
 
 @worker.command("start")
 @click.option("--worker-id", help="Worker ID (auto-generated if not provided)")
-@click.option("--api-url", default="http://localhost:8000", help="API URL")
+@click.option("--api-url", default="http://localhost:8042", help="API URL")
 def worker_start(worker_id, api_url):
     """Start worker."""
     from grace_control.worker.worker import Worker
@@ -201,7 +201,7 @@ def api():
 
 @api.command("start")
 @click.option("--host", default="127.0.0.1", help="Host to bind")
-@click.option("--port", default=8000, help="Port to bind")
+@click.option("--port", default=8042, help="Port to bind")
 def api_start(host, port):
     """Start API server."""
     import uvicorn
@@ -215,7 +215,7 @@ def api_start(host, port):
 @cli.command("health")
 def health():
     """Check system health."""
-    url = "http://localhost:8000/health"
+    url = "http://localhost:8042/health"
     
     try:
         response = httpx.get(url)
@@ -397,14 +397,14 @@ async def api_server(tmp_path):
     def run_server():
         # Передаём DB через env, чтобы server + test использовали одну базу
         os.environ["GRACE_DB_URL"] = db_url
-        uvicorn.run(app, host="127.0.0.1", port=8001)
+        uvicorn.run(app, host="127.0.0.1", port=8043)
     
     server_process = Process(target=run_server)
     server_process.start()
     
     await asyncio.sleep(2)
     
-    yield "http://localhost:8001", db_url
+    yield "http://localhost:8043", db_url
     
     server_process.terminate()
     server_process.join()

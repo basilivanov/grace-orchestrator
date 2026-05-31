@@ -30,7 +30,7 @@ import asyncio
 import httpx
 from pathlib import Path
 
-API_BASE = "http://localhost:8000/api"
+API_BASE = "http://localhost:8042/api"
 
 @pytest.mark.e2e
 @pytest.mark.asyncio

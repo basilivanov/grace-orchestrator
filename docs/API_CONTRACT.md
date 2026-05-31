@@ -1,7 +1,7 @@
 # GRACE Control Plane - API Contract
 
 **Версия:** 1.0 MVP
-**Base URL:** `http://localhost:8000/api`
+**Base URL:** `http://localhost:8042/api`
 
 Этот документ — единственный источник правды для всех API endpoints.
 

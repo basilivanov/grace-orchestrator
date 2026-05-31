@@ -1,5 +1,7 @@
 # GRACE Control Plane — Technical Specification v2
 
+**СТАТУС: HISTORICAL.** Для MVP-0 актуальный канон → [CANONICAL_DECISIONS.md](CANONICAL_DECISIONS.md), ТЗ → [tasks/README.md](tasks/README.md).
+
 ## 1. Цель
 
 Заменить Prefect на собственный GRACE Control Plane, заточенный под AI-driven разработку.

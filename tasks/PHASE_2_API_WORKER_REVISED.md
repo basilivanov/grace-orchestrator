@@ -78,7 +78,7 @@ def main():
     uvicorn.run(
         "grace_control.api.main:app",
         host="127.0.0.1",  # localhost only (NOT 0.0.0.0)
-        port=8000,
+        port=8042,
         reload=True
     )
 
@@ -609,7 +609,7 @@ class PacketClaim(BaseModel):
 class WorkerAPIClient:
     """API client for worker to communicate with Control Plane."""
     
-    def __init__(self, base_url: str = "http://localhost:8000"):
+    def __init__(self, base_url: str = "http://localhost:8042"):
         self.base_url = base_url
         self.client = httpx.AsyncClient(base_url=base_url, timeout=30.0)
     
@@ -689,7 +689,7 @@ class Worker:
     def __init__(
         self,
         worker_id: Optional[str] = None,
-        api_url: str = "http://localhost:8000",
+        api_url: str = "http://localhost:8042",
         heartbeat_interval: int = 30,
         project_root: Optional[Path] = None,
         state_root: Optional[Path] = None,
