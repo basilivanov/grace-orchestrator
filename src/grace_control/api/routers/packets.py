@@ -1,7 +1,26 @@
 # ############################################################################
 # AI_HEADER: packets_router
-# ROLE: FastAPI router for /api/packets/ — list, get, claim, release.
+# ROLE: FastAPI router for /api/packets/ — list, get, claim, release, cancel, merge.
 # ############################################################################
+
+# START_MODULE_CONTRACT
+# purpose: Expose packet CRUD + lifecycle operations via REST API.
+# inputs: HTTP requests with JSON bodies.
+# returns: JSON responses with data/timestamp envelope.
+# side_effects: DB reads/writes, state transitions, lease management.
+# emitted_logs: None.
+# error_behavior: Returns 404/400/422 on invalid requests.
+# END_MODULE_CONTRACT
+
+# START_MODULE_MAP
+# mapping:
+#   - function: list_packets
+#   - function: get_packet
+#   - function: claim_packet
+#   - function: release_packet
+#   - function: cancel_packet
+#   - function: merge_packet
+# END_MODULE_MAP
 
 from __future__ import annotations
 

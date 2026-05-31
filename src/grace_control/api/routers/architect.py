@@ -3,6 +3,20 @@
 # ROLE: FastAPI router for /api/architect/plan — creates features/waves/packets in READY.
 # ############################################################################
 
+# START_MODULE_CONTRACT
+# purpose: Accept feature spec, generate hierarchical IDs, persist Feature+Wave+Packet in DB.
+# inputs: HTTP POST with feature_spec JSON.
+# returns: JSON with feature_id, waves_count, packets_count, packet_ids.
+# side_effects: DB inserts (3 tables).
+# emitted_logs: None.
+# error_behavior: Returns 422 on invalid spec structure.
+# END_MODULE_CONTRACT
+
+# START_MODULE_MAP
+# mapping:
+#   - function: create_plan
+# END_MODULE_MAP
+
 from __future__ import annotations
 
 from datetime import datetime
