@@ -31,6 +31,7 @@ from fastapi import APIRouter, HTTPException
 from grace_control.core.event_recorder import record_event
 from grace_control.core.state_machine import PacketStateMachine
 from grace_control.core.structured_logger import GraceLogger, trace_context
+from grace_control.core.telegram_notify import notify_event
 from grace_control.db import get_db
 from grace_control.db.schema import Lease, Packet, PacketRun, PacketState, Worker
 
@@ -131,6 +132,7 @@ async def claim_packet(request: dict) -> dict:
                        attempt=packet.attempt_count)
             record_event("packet_claimed", "packet", packet.id,
                          {"worker_id": worker_id, "attempt": packet.attempt_count})
+            await notify_event("packet_claimed", packet.id, worker_id=worker_id)
 
             return {
                 "data": {
@@ -180,6 +182,7 @@ async def release_packet(packet_id: str, request: dict) -> dict:
                    worker_id=worker_id)
         record_event("packet_released", "packet", packet.id,
                      {"worker_id": worker_id, "state": target.value})
+        await notify_event("packet_released", packet.id, worker_id=worker_id, state=target.value)
 
         return {
             "data": {"packet_id": packet.id, "state": packet.state, "released": True},
@@ -213,6 +216,7 @@ async def cancel_packet(packet_id: str, request: dict) -> dict:
 
         _log.info("packet_cancelled", packet_id=packet.id, reason=reason)
         record_event("packet_cancelled", "packet", packet.id, {"reason": reason})
+        await notify_event("packet_cancelled", packet.id, reason=reason)
 
         return {
             "data": {"packet_id": packet.id, "state": packet.state, "reason": reason},

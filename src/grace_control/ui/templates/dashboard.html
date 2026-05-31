@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GRACE Control Plane</title>
+<style>
+:root{--bg:#0d1117;--fg:#c9d1d9;--accent:#58a6ff;--green:#3fb950;--red:#f85149;--yellow:#d2991d;--blue:#58a6ff;--cyan:#39d353;--gray:#8b949e;--border:#30363d;--row:#161b22}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font:14px/1.5 -apple-system,BlinkMacSystemFont,sans-serif;background:var(--bg);color:var(--fg);padding:20px}
+h1{font-size:24px;margin-bottom:20px;color:var(--accent)}
+h2{font-size:16px;margin:24px 0 12px;color:var(--gray);text-transform:uppercase;letter-spacing:1px}
+.card{background:var(--row);border:1px solid var(--border);border-radius:6px;padding:16px;margin-bottom:16px}
+.stats{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:20px}
+.stat{padding:12px 16px;border-radius:6px;font-size:20px;font-weight:bold;min-width:120px}
+.stat .label{font-size:11px;font-weight:normal;color:var(--gray);text-transform:uppercase}
+.healthy{background:#1a3a1a;color:var(--green)}
+.degraded{background:#3a2a1a;color:var(--yellow)}
+.unhealthy{background:#3a1a1a;color:var(--red)}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{padding:6px 10px;text-align:left;border-bottom:1px solid var(--border)}
+th{color:var(--gray);font-weight:600;position:sticky;top:0;background:var(--row)}
+tr:hover{background:#1c2533}
+.state-ready{color:var(--green)}
+.state-running{color:var(--yellow)}
+.state-accepted{color:var(--blue)}
+.state-merged{color:var(--cyan)}
+.state-rejected{color:var(--red)}
+.state-failed{color:var(--red)}
+.state-cancelled{color:var(--gray)}
+.badge{padding:1px 6px;border-radius:3px;font-size:11px;font-weight:600}
+.badge-ready{background:#1a3a1a;color:var(--green)}
+.badge-running{background:#3a2a1a;color:var(--yellow)}
+.badge-accepted{background:#1a2a3a;color:var(--blue)}
+.badge-merged{background:#1a3a2a;color:var(--cyan)}
+.badge-rejected{background:#3a1a1a;color:var(--red)}
+.badge-failed{background:#3a1a1a;color:var(--red)}
+.badge-cancelled{background:#2a2a2a;color:var(--gray)}
+.footer{text-align:center;color:var(--gray);font-size:12px;margin-top:30px;padding:10px}
+.tick{font-family:monospace;color:var(--gray);font-size:11px}
+pre{background:#0d1117;padding:10px;border-radius:4px;overflow:auto;max-height:400px;font-size:12px;border:1px solid var(--border)}
+</style>
+</head>
+<body>
+<h1>GRACE Control Plane</h1>
+
+<div id="stats" class="stats"><div class="stat"><span id="s-status">—</span><div class="label">Status</div></div><div class="stat"><span id="s-workers">—</span><div class="label">Workers</div></div><div class="stat"><span id="s-ready">—</span><div class="label">Ready</div></div><div class="stat"><span id="s-running">—</span><div class="label">Running</div></div><div class="stat"><span id="s-accepted">—</span><div class="label">Accepted</div></div></div>
+
+<h2>Packets</h2>
+<div class="card">
+<table><thead><tr><th>ID</th><th>Title</th><th>State</th><th>Profile</th><th>Attempts</th><th>Feature</th></tr></thead><tbody id="packets-tbody"></tbody></table>
+</div>
+
+<h2>Workers</h2>
+<div class="card">
+<table><thead><tr><th>ID</th><th>Status</th><th>Current Packet</th><th>Last Heartbeat</th></tr></thead><tbody id="workers-tbody"></tbody></table>
+</div>
+
+<div class="footer"><span class="tick" id="tick">—</span></div>
+
+<script>
+async function fetchJSON(url) {const r=await fetch(url);return r.json()}
+
+async function refresh() {
+  try {
+    const [p, w, h] = await Promise.all([
+      fetchJSON('/api/packets/'),
+      fetchJSON('/api/workers/'),
+      fetchJSON('/health')
+    ]);
+
+    // Stats
+    const pp = p.data;
+    const counts = {};
+    pp.forEach(x => counts[x.state] = (counts[x.state]||0) + 1);
+    const status = h.status;
+    const statEl = document.getElementById('s-status');
+    statEl.textContent = status;
+    statEl.parentElement.className = 'stat ' + status;
+    document.getElementById('s-workers').textContent = h.workers.active;
+    document.getElementById('s-ready').textContent = counts.ready || 0;
+    document.getElementById('s-running').textContent = counts.running || 0;
+    document.getElementById('s-accepted').textContent = counts.accepted || 0;
+
+    // Packets
+    document.getElementById('packets-tbody').innerHTML = pp.map(p =>
+      `<tr><td style="font-family:monospace;font-size:11px">${p.id}</td><td>${p.title}</td><td><span class="badge badge-${p.state}">${p.state}</span></td><td>${p.acceptance_profile}</td><td>${p.attempt_count}/${p.max_attempts}</td><td style="font-family:monospace;font-size:11px">${p.feature_id}</td></tr>`
+    ).join('') || '<tr><td colspan="6" style="color:var(--gray)">No packets</td></tr>';
+
+    // Workers
+    document.getElementById('workers-tbody').innerHTML = w.data.map(w =>
+      `<tr><td style="font-family:monospace">${w.id}</td><td><span class="badge badge-${w.status==='active'?'ready':'cancelled'}">${w.status}</span></td><td style="font-family:monospace;font-size:11px">${w.current_packet_id || '—'}</td><td>${w.last_heartbeat || '—'}</td></tr>`
+    ).join('') || '<tr><td colspan="4" style="color:var(--gray)">No workers</td></tr>';
+
+    document.getElementById('tick').textContent = new Date().toISOString();
+  } catch(e) {
+    document.getElementById('tick').textContent = 'Error: ' + e.message;
+  }
+}
+refresh();
+setInterval(refresh, 2000);
+</script>
+</body>
+</html>
