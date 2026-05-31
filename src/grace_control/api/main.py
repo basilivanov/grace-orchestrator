@@ -22,6 +22,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -33,12 +34,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from grace_control.api.routers import architect, features, packets, workers
 from grace_control.db import init_db
 
+_lease_task = None
+
 #START_BLOCK_LIFESPAN
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global _lease_task
     db_url = os.environ.get("GRACE_DB_URL")
     init_db(db_url)
+    from grace_control.core.lease_manager import lease_expiration_loop
+    _lease_task = asyncio.create_task(lease_expiration_loop())
     yield
+    if _lease_task:
+        _lease_task.cancel()
 
 #END_BLOCK_LIFESPAN
 
