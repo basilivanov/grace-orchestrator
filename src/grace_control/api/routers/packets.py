@@ -1,0 +1,154 @@
+# ############################################################################
+# AI_HEADER: packets_router
+# ROLE: FastAPI router for /api/packets/ — list, get, claim, release.
+# ############################################################################
+
+from __future__ import annotations
+
+from datetime import datetime, timedelta
+
+from fastapi import APIRouter, HTTPException
+
+from grace_control.core.state_machine import PacketStateMachine
+from grace_control.db import get_db
+from grace_control.db.schema import Lease, Packet, PacketRun, PacketState, Worker
+
+router = APIRouter()
+_state_machine = PacketStateMachine()
+
+
+@router.get("/")
+async def list_packets(state: str | None = None, feature_id: str | None = None) -> dict:
+    with get_db() as db:
+        query = db.query(Packet)
+        if state:
+            query = query.filter_by(state=state)
+        if feature_id:
+            query = query.filter_by(feature_id=feature_id)
+        packets = query.all()
+        return {
+            "data": [
+                {
+                    "id": p.id, "feature_id": p.feature_id, "wave_id": p.wave_id,
+                    "slug": p.slug, "title": p.title, "state": p.state,
+                    "acceptance_profile": p.acceptance_profile,
+                    "attempt_count": p.attempt_count, "max_attempts": p.max_attempts,
+                    "created_at": p.created_at.isoformat() + "Z",
+                    "updated_at": p.updated_at.isoformat() + "Z",
+                }
+                for p in packets
+            ],
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+        }
+
+
+@router.get("/{packet_id}")
+async def get_packet(packet_id: str) -> dict:
+    with get_db() as db:
+        p = db.query(Packet).filter_by(id=packet_id).first()
+        if not p:
+            raise HTTPException(status_code=404, detail="Packet not found")
+        runs = db.query(PacketRun).filter_by(packet_id=packet_id).all()
+        return {
+            "data": {
+                "id": p.id, "feature_id": p.feature_id, "wave_id": p.wave_id,
+                "slug": p.slug, "title": p.title,
+                "description": p.description or "", "state": p.state,
+                "acceptance_profile": p.acceptance_profile,
+                "attempt_count": p.attempt_count, "max_attempts": p.max_attempts,
+                "spec_json": p.spec_json,
+                "runs": [
+                    {
+                        "id": r.id, "run_number": r.run_number, "status": r.status,
+                        "evidence_path": r.evidence_path,
+                        "started_at": r.started_at.isoformat() + "Z" if r.started_at else None,
+                        "finished_at": r.finished_at.isoformat() + "Z" if r.finished_at else None,
+                        "duration_ms": r.duration_ms,
+                    }
+                    for r in runs
+                ],
+                "created_at": p.created_at.isoformat() + "Z",
+                "updated_at": p.updated_at.isoformat() + "Z",
+            },
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+        }
+
+
+@router.post("/claim")
+async def claim_packet(request: dict) -> dict:
+    """Claim next READY packet. SOLE owner of READY→RUNNING transition."""
+    worker_id = request["worker_id"]
+
+    with get_db() as db:
+        ready = db.query(Packet).filter_by(state=PacketState.READY.value).all()
+
+        for packet in ready:
+            existing = db.query(Lease).filter_by(packet_id=packet.id).first()
+            if existing:
+                if existing.expires_at > datetime.utcnow():
+                    continue
+                db.delete(existing)
+
+            lease = Lease(
+                packet_id=packet.id,
+                worker_id=worker_id,
+                expires_at=datetime.utcnow() + timedelta(minutes=30),
+            )
+            db.add(lease)
+
+            _state_machine.transition(PacketState(packet.state), PacketState.RUNNING)
+            packet.state = PacketState.RUNNING.value
+            packet.attempt_count += 1
+
+            worker = db.query(Worker).filter_by(id=worker_id).first()
+            if worker:
+                worker.current_packet_id = packet.id
+
+            return {
+                "data": {
+                    "packet_id": packet.id,
+                    "spec": packet.spec_json,
+                    "lease_id": lease.id,
+                    "expires_at": lease.expires_at.isoformat() + "Z",
+                },
+                "timestamp": datetime.utcnow().isoformat() + "Z",
+            }
+
+        raise HTTPException(status_code=404, detail="No packets available")
+
+
+@router.post("/{packet_id}/release")
+async def release_packet(packet_id: str, request: dict) -> dict:
+    """Release packet after execution. RUNNING→ACCEPTED/REJECTED/FAILED."""
+    worker_id = request["worker_id"]
+    status = request["status"]
+    result = request.get("result", {})
+
+    with get_db() as db:
+        lease = db.query(Lease).filter_by(packet_id=packet_id).first()
+        if lease:
+            db.delete(lease)
+
+        packet = db.query(Packet).filter_by(id=packet_id).first()
+        if not packet:
+            raise HTTPException(status_code=404, detail="Packet not found")
+
+        if status == "accepted" and result.get("accepted"):
+            target = PacketState.ACCEPTED
+        elif status == "rejected":
+            target = PacketState.REJECTED
+        else:
+            target = PacketState.FAILED
+
+        _state_machine.transition(PacketState(packet.state), target)
+        packet.state = target.value
+
+        worker = db.query(Worker).filter_by(id=worker_id).first()
+        if worker:
+            worker.current_packet_id = None
+            worker.status = "idle"
+
+        return {
+            "data": {"packet_id": packet.id, "state": packet.state, "released": True},
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+        }
