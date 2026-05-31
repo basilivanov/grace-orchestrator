@@ -1,29 +1,169 @@
-You are the Canon Digest agent for a strict-GRACE project.
+# GRACE Canon Digest — Control Packet Reference
 
-Your job is to read the supplied GRACE canon and feature brief, then produce a compact, architect-ready digest. Do not plan waves, do not create packets, and do not make architecture decisions.
+Встраивается в секцию `## Source Of Truth` или `## Must Preserve` каждого EXECUTION_PACKET.md.
+Цель: дёшевый агент (Gemini Flash) пишет код, проходящий T0 (lint+canon) с первого раза.
 
-Output only Markdown with these sections:
+---
 
-## Project Canon Snapshot
-- Summarize stable project architecture, product invariants, and strict-GRACE rules relevant to future architecture work.
+## 1. AI_HEADER (первая строка файла)
 
-## Feature-Relevant Canon
-- List the canon areas likely relevant to the current feature.
-- Mention exact source paths and important anchors when available.
+```python
+# ############################################################################
+# AI_HEADER: <имя_модуля>
+# ROLE: <одно предложение — что делает модуль>
+# ############################################################################
+```
 
-## Known Boundaries
-- List frozen scopes, non-goals, safety rails, and behavior-preservation constraints.
+Пример:
+```python
+# AI_HEADER: db_schema
+# ROLE: SQLAlchemy models for GRACE Control Plane (7 tables).
+```
 
-## Verification And Evidence Map
-- Summarize relevant verification expectations, evidence paths, observability requirements, and reviewer gates.
+---
 
-## Architect Handoff Notes
-- Give short, concrete reminders the architect should use while slicing.
-- Keep this section bounded and actionable.
+## 2. MODULE_CONTRACT (сразу после AI_HEADER)
 
-Rules:
-- Prefer concise bullets over prose.
-- Do not copy long source excerpts.
-- Preserve exact filenames, module names, contract IDs, and GRACE anchors when they matter.
-- If the supplied canon is stale, ambiguous, or conflicting, call that out explicitly.
-- Target 8K-12K tokens maximum. Shorter is better if sufficient.
+```python
+# START_MODULE_CONTRACT
+# purpose: <что делает модуль>
+# inputs: <что принимает на вход>
+# returns: <что возвращает>
+# side_effects: <побочные эффекты или None>
+# emitted_logs: <какие логи пишет или None>
+# error_behavior: <как обрабатывает ошибки>
+# END_MODULE_CONTRACT
+```
+
+---
+
+## 3. MODULE_MAP (перечень экспортов)
+
+```python
+# START_MODULE_MAP
+# mapping:
+#   - class: <ClassName>
+#   - function: <function_name>
+# END_MODULE_MAP
+```
+
+---
+
+## 4. START_BLOCK / END_BLOCK (логические секции)
+
+Каждая функция/класс/группа внутри `#START_BLOCK_<NAME>` / `#END_BLOCK_<NAME>`.
+
+```python
+#START_BLOCK_MODELS
+@dataclass
+class Packet:
+    ...
+#END_BLOCK_MODELS
+
+#START_BLOCK_OPERATIONS
+def claim_packet(...):
+    ...
+#END_BLOCK_OPERATIONS
+```
+
+Правила:
+- Имена блоков — UPPER_SNAKE_CASE
+- Каждый START должен иметь парный END
+- Имена должны совпадать (START_BLOCK_FOO → END_BLOCK_FOO)
+- Блоки не вкладываются
+
+---
+
+## 5. FUNCTION_CONTRACT (перед каждой функцией)
+
+```python
+# START_FUNCTION_CONTRACT
+# name: <function_name>
+# purpose: <одно предложение>
+# inputs:
+#   param1: <описание>
+#   param2: <описание>
+# returns: <описание возврата>
+# side_effects: <побочные эффекты или None>
+# emitted_logs: <какие логи или None>
+# error_behavior: <как обрабатывает ошибки>
+# END_FUNCTION_CONTRACT
+def function_name(param1: str, param2: int) -> bool:
+    ...
+```
+
+---
+
+## 6. Лимиты (нарушение → REJECT на T0)
+
+| Правило | Лимит |
+|---------|-------|
+| Строк в файле | ≤ 1000 |
+| Токенов в функции | ≤ 4000 |
+| Изменений в пакете | ≤ 300 LOC |
+
+---
+
+## 7. Структурированное логирование (GraceLogger)
+
+```python
+from prefect_grace.platform.structured_logger import log_event, trace_context
+
+# Логирование с контекстом
+log_event("INFO", "packet_claimed", packet_id="PKT-001", worker_id="w1")
+log_event("ERROR", "execution_failed", packet_id="PKT-001", error=str(e))
+
+# Trace-контекст для сквозного trace_id
+with trace_context(trace_id=packet_id):
+    log_event("INFO", "execution_started")
+    # все логи внутри блока получают этот trace_id
+```
+
+Формат вывода — JSONL (одна строка JSON на событие):
+```json
+{"timestamp":"2026-05-31T10:00:00Z","level":"INFO","component":"worker","trace_id":"PKT-001","message":"Packet claimed","packet_id":"PKT-001"}
+```
+
+Правила:
+- НЕ использовать `print()` — только `log_event()`
+- НЕ использовать `logging.getLogger()` напрямую
+- Всегда указывать `packet_id` в параметрах лога
+- `trace_context` для всех операций внутри одного пакета
+
+---
+
+## 8. Контракты в новом коде (grace_control/)
+
+Новый модуль обязан иметь: AI_HEADER, MODULE_CONTRACT, MODULE_MAP.
+Новая функция обязана иметь: FUNCTION_CONTRACT, START_BLOCK/END_BLOCK.
+Новый файл: все функции внутри блоков, все блоки закрыты.
+
+---
+
+## 9. Проверка перед коммитом (T0)
+
+```bash
+ruff check src/grace_control/
+ruff format --check src/grace_control/
+mypy src/grace_control/
+python -m compileall -q src/grace_control/
+```
+
+Если любая команда падает → пакет не проходит T0 → REJECT.
+
+---
+
+## 10. Чеклист для кодера (перед handoff)
+
+- [ ] AI_HEADER с ROLE в каждом новом файле
+- [ ] START_MODULE_CONTRACT / END_MODULE_CONTRACT в каждом новом файле
+- [ ] MODULE_MAP со всеми публичными именами
+- [ ] START_FUNCTION_CONTRACT / END_FUNCTION_CONTRACT у каждой новой функции
+- [ ] START_BLOCK_*/END_BLOCK_* — все пары сходятся
+- [ ] Файл ≤ 1000 строк
+- [ ] Функция ≤ 4000 токенов
+- [ ] `ruff check` чисто
+- [ ] `mypy` чисто
+- [ ] `log_event()` вместо `print()`/`logging.getLogger()`
+- [ ] `trace_context(trace_id=packet_id)` обёрнут вокруг основного вызова
+- [ ] `packet_id` во всех log_event вызовах

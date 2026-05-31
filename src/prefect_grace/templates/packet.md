@@ -1,57 +1,78 @@
-# Packet: {{ packet_id }}
+# Execution Packet: {{ packet_id }}
 
-## Title
-{{ title }}
+## Objective
 
-## GRACE IDs
-{{ grace_ids }}
+{{ objective }}
 
-## Packet Type
-{{ packet_type }}
+## Slice
 
-## Summary
-{{ summary }}
+- slice_id: `{{ slice_id }}`
+- slice_slug: `{{ slice_slug }}`
+- feature_id: `{{ feature_id }}`
+- packet_id: `{{ packet_id }}`
+- wave_id: `{{ wave_id }}`
+- status: `{{ status }}`
+- phase: `{{ phase }}`
+- depends_on: `{{ depends_on }}`
+- feature_dir: `{{ feature_dir }}`
 
-## Wave
-{{ wave_id }}
+## Source Of Truth
 
-## Role
-{{ role }}
+{{ source_of_truth }}
 
-## Reasoning
-{{ reasoning }}
+## Impacted Modules
 
-## Parent Packet
-{{ parent_packet_id }}
+{{ impacted_modules }}
 
-## Review Target
-{{ review_target_packet_id }}
+## Allowed Write Scope
 
-## Write Scope
-{{ write_scope }}
+{{ allowed_write_scope }}
 
-## Inputs
-{{ inputs }}
+## Frozen Scope
+
+{{ frozen_scope }}
+
+## Must Preserve
+
+{{ must_preserve }}
+
+### GRACE Canon Compliance (обязательно)
+
+Весь новый код должен соответствовать GRACE Canon (полный текст: `prompts/canon_digest_prompt.md`). Кратко:
+
+- **AI_HEADER**: первая строка файла `# AI_HEADER: <имя>` + `# ROLE: <описание>`
+- **MODULE_CONTRACT**: `# START_MODULE_CONTRACT` / `# END_MODULE_CONTRACT` с purpose, inputs, returns, side_effects, error_behavior
+- **MODULE_MAP**: `# START_MODULE_MAP` с перечнем всех классов/функций
+- **FUNCTION_CONTRACT**: у каждой функции `# START_FUNCTION_CONTRACT` / `# END_FUNCTION_CONTRACT`
+- **Блоки**: `#START_BLOCK_<NAME>` / `#END_BLOCK_<NAME>` для логических секций
+- **Лимиты**: файл ≤ 1000 строк, функция ≤ 4000 токенов
+- **Логирование**: `log_event()` вместо `print()`, `trace_context()` для сквозного trace_id
+- **T0-проверка**: `ruff check`, `ruff format --check`, `mypy`, `compileall` — все должны проходить
+
+## Required Design Decisions
+
+{{ required_design_decisions }}
+
+## Implementation Requirements
+
+{{ implementation_requirements }}
 
 ## Acceptance Criteria
+
 {{ acceptance_criteria }}
 
-## Verification Profile
-{{ verification_profile }}
+## Verification
 
-## Execution Hints
-{{ execution_hints }}
+{{ verification }}
+
+## Expected Evidence
+
+{{ expected_evidence }}
+
+## Escalation Triggers
+
+{{ escalation_triggers }}
 
 ## Reviewer Gate
+
 {{ reviewer_gate }}
-
-## Dependencies
-{{ dependencies }}
-
-## Notes
-{{ notes }}
-
-## Contract JSON
-FINAL_PACKET_CONTRACT_JSON
-{{ contract_json }}
-END_FINAL_PACKET_CONTRACT_JSON
