@@ -139,7 +139,6 @@ GET    /api/features/{feature_id}
 # Packets
 GET    /api/packets/
 GET    /api/packets/{packet_id}
-POST   /api/packets/{packet_id}/cancel
 
 # Workers
 GET    /api/workers/
@@ -159,6 +158,7 @@ GET    /health
 
 ### Убрали из MVP
 
+- ❌ `/api/packets/{packet_id}/cancel` — cancellation = post-MVP
 - ❌ `/api/artifacts/*` — artifacts только через filesystem
 - ❌ `/api/system/*` — только `/health`
 - ❌ WebSocket — нет real-time updates в MVP
@@ -167,95 +167,136 @@ GET    /health
 
 ## 5. Canonical Execution Flow
 
+### State Ownership Rules (CRITICAL)
+
+**Один владелец на каждый переход состояния:**
+
+| Переход | Владелец | Когда |
+|---------|----------|-------|
+| DRAFT → READY | Architect endpoint (POST /api/architect/plan) или CLI `grace architect plan` | При создании плана (packets сразу READY) |
+| READY → RUNNING | claim endpoint (POST /api/packets/claim) | Worker забирает пакет |
+| RUNNING → ACCEPTED | release endpoint (POST /api/packets/{id}/release) | Worker завершил успешно |
+| RUNNING → REJECTED | release endpoint | Worker завершил, тесты провалены |
+| RUNNING → FAILED | release endpoint или adapter (exception) | Ошибка выполнения |
+| ACCEPTED → MERGED | **Post-MVP** (MVP-0 заканчивается на ACCEPTED) | — |
+| REJECTED → READY | packet_operations.retry_packet() | Ручной или автоматический retry |
+
+**Adapter НЕ меняет состояние пакета напрямую.** Adapter только:
+1. Материализует packet file из DB
+2. Вызывает run_e2e_packet()
+3. Парсит результат
+4. Сохраняет evidence + packet_run запись
+5. Возвращает результат worker'у, который вызывает release
+
 ### PacketExecutionAdapter
 
 ```python
 class PacketExecutionAdapter:
     """
     Bridge между DB packet и существующим run_e2e_packet.
-    
+
     Responsibilities:
     1. Load packet from DB
     2. Materialize packet file (EXECUTION_PACKET.md)
     3. Call existing run_e2e_packet(...)
-    4. Parse result
-    5. Save evidence
-    6. Update DB state
+    4. Parse E2EPacketRunnerResult
+    5. Save evidence + create packet_run record
+    6. Return result worker'у (worker вызывает release)
+
+    DOES NOT change packet state — worker/release endpoint owns state.
     """
-    
-    async def execute(self, packet_id: str) -> ExecutionResult:
+
+    async def execute(self, packet_id: str, worker_id: str) -> ExecutionResult:
         # 1. Load from DB
         packet = db.query(Packet).filter_by(id=packet_id).first()
-        
+
         # 2. Materialize packet file
         packet_path = self._materialize_packet(packet)
-        
-        # 3. Call existing runner
+
+        # 3. Call existing runner (CRITICAL: execute_agent=True!)
         from prefect_grace.platform.e2e_packet_runner import run_e2e_packet
-        
-        result = run_e2e_packet(
+
+        result: E2EPacketRunnerResult = run_e2e_packet(
             project_root=self.project_root,
             packet_path=packet_path,
             state_root=self.state_root,
             worktree_root=self.worktree_root,
-            dry_run=False,  # MVP: live execution
-            execute_agent=True,
-            merge_after_accept=True
+            dry_run=False,        # MUST be False
+            execute_agent=True,    # MUST be True for live agents
         )
-        
-        # 4. Parse result
+
+        # 4. Map result to ExecutionResult
         execution_result = self._parse_result(result)
-        
-        # 5. Save evidence
-        self._save_evidence(packet_id, result)
-        
-        # 6. Update DB
-        self._update_state(packet, execution_result)
-        
+
+        # 5. Save evidence + create packet_run record
+        self._save_evidence(packet_id, run_number, result)
+
+        # 6. Return to worker (worker calls release endpoint)
         return execution_result
 ```
+
+### Mapping E2EPacketRunnerResult → ExecutionResult
+
+```
+result.ok == True and result.domain_status == "accepted"
+  → ExecutionResult(accepted=True)
+
+result.domain_status in ("rework_required", "blocked", "scope_blocked")
+  → ExecutionResult(accepted=False, reason=result.registry_reason)
+
+result.domain_status in ("agent_failed", "verifier_failed",
+                          "reviewer_failed", "runner_error", "handoff_error")
+  → ExecutionResult(accepted=False, reason=f"Execution error: {result.registry_reason}")
+  → Worker вызывает release со status="failed"
+```
+
+### Architectural constraint: Adapter does NOT call mark_running/mark_accepted/etc.
+
+Состоянием владеет API (claim/release endpoints). Adapter — чистая функция преобразования DB packet → legacy runner → структурированный результат.
 
 ---
 
 ## 6. Canonical MVP Scope
 
-### В MVP (Phase 0-2)
+### В MVP (Phase 0-3)
 
 ✅ **Phase 0: Cleanup**
 - Добавить `prefect_compat.py`
 - НЕ удалять flows/platform/tasks
 - Создать структуру `grace_control/`
+- Prefect dependency — transitional (keep in pyproject.toml, no new flows)
 
 ✅ **Phase 1: Core**
 - DB schema (7 таблиц)
 - State machine (8 состояний)
-- PacketExecutionAdapter
-- Executors (только API providers)
-- Logging
+- PacketExecutionAdapter (bridge, не меняет состояние)
 
 ✅ **Phase 2: API & Worker**
-- FastAPI server (только API contract endpoints)
+- FastAPI server (canonical endpoints, без cancel)
 - Worker loop с lease
-- Architect integration
-- CLI (только `grace packet list/get`)
+- CORS через allow_origin_regex (не allow_origins с pattern)
+- Bind 127.0.0.1
+- Architect создаёт packets сразу в READY (не DRAFT)
+- claim endpoint: READY → RUNNING (единственный владелец перехода)
+- release endpoint: RUNNING → ACCEPTED/REJECTED/FAILED
 
-✅ **Phase 3: E2E Test**
-- Один E2E test: plan → execute → accept → merge
-- Verification
+✅ **Phase 3: CLI & E2E Test**
+- CLI: packet list/get, worker start, api start, health
+- CLI: `grace architect plan <file>` команда
+- E2E test: единая DB через GRACE_DB_URL env var
 
 ### НЕ в MVP (Post-MVP)
 
+❌ **Cancellation** — endpoint + логика (post-MVP)
+❌ **Auto-merge** — MVP-0 заканчивается на ACCEPTED
 ❌ **UI/Dashboard** — только CLI + JSON
 ❌ **Telegram** — только logs
 ❌ **WebSocket** — только polling
 ❌ **Image viewer** — только JSON artifacts
-❌ **Thumbnails** — только raw files
-❌ **Cancellation** — только в post-MVP
-❌ **Health checks** — только basic `/health`
-❌ **GRACE Canon checker** — только в post-MVP
+❌ **GRACE Canon checker** — только basic structural checks
 ❌ **Complexity router** — все packets NORMAL profile
 ❌ **Acceptance policies** — только simple policy
-❌ **Test infrastructure** — только basic pytest
+❌ **Multiple workers** — только один worker в MVP-0
 
 ---
 
@@ -337,31 +378,31 @@ app.add_middleware(
 
 ```
 1. grace architect plan feature.yaml
-   → Creates packets in DB (state: DRAFT → READY)
+   → Creates packets in DB (state: DRAFT → READY immediately)
 
 2. grace worker start
-   → Claims packet (lease)
+   → Claims packet (lease: READY → RUNNING)
    → PacketExecutionAdapter.execute()
-   → Calls existing run_e2e_packet()
-   → Saves evidence JSON
-   → Updates state (RUNNING → ACCEPTED/REJECTED)
-   → Auto-merge if ACCEPTED
+   → Calls existing run_e2e_packet(dry_run=False, execute_agent=True)
+   → Saves evidence + packet_run record
+   → Worker calls release (RUNNING → ACCEPTED/REJECTED/FAILED)
 
 3. grace packet list
    → Shows packet states
 
 4. grace packet get PKT-001
-   → Shows packet details + evidence path
+   → Shows packet details + evidence path + runs
+
+MVP-0 заканчивается на ACCEPTED. MERGED — post-MVP.
 ```
 
 ### Что НЕ в MVP-0
 
-- ❌ Parallel packets
-- ❌ Multiple workers
-- ❌ UI/Telegram
-- ❌ Cancellation
-- ❌ Health checks (кроме basic)
-- ❌ Retry logic (только manual)
+- ❌ Auto-merge (MVP-0 заканчивается на ACCEPTED)
+- ❌ Parallel packets / Multiple workers
+- ❌ UI/Telegram/WebSocket/Cancellation
+- ❌ GRACE Canon checker / Complexity router
+- ❌ Retry logic (только ручной через CLI)
 
 ---
 

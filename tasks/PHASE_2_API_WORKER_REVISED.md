@@ -52,10 +52,10 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# CORS - localhost only (MVP security)
+# CORS — localhost only (MVP security)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:*"],  # NOT "*"
+    allow_origin_regex=r"http://localhost:\d+",  # Regex для всех портов localhost
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -250,43 +250,43 @@ async def get_packet(packet_id: str) -> dict:
 async def claim_packet(request: dict) -> dict:
     """
     Claim next available packet (worker operation).
-    
-    SQLite-safe lease mechanism (no FOR UPDATE SKIP LOCKED).
+
+    State ownership: claim endpoint is the SOLE owner of READY → RUNNING transition.
+    Adapter does NOT change packet state.
+    SQLite-safe lease mechanism.
     """
     worker_id = request["worker_id"]
-    
+
     with get_db() as db:
         # Find READY packet without active lease
         ready_packets = db.query(Packet).filter_by(state=PacketState.READY).all()
-        
+
         for packet in ready_packets:
             # Check if already leased
             existing_lease = db.query(Lease).filter_by(packet_id=packet.id).first()
-            
+
             if existing_lease:
-                # Check if expired
                 if existing_lease.expires_at > datetime.utcnow():
                     continue  # Still active, skip
                 else:
-                    # Expired, remove
-                    db.delete(existing_lease)
-            
-            # Claim this packet
+                    db.delete(existing_lease)  # Expired, remove
+
+            # Claim this packet — единственный переход READY → RUNNING
             lease = Lease(
                 packet_id=packet.id,
                 worker_id=worker_id,
                 expires_at=datetime.utcnow() + timedelta(minutes=30)
             )
             db.add(lease)
-            
-            # Update packet state
-            packet.state = PacketState.RUNNING
-            
+
+            packet.state = PacketState.RUNNING  # Владелец перехода
+            packet.attempt_count += 1
+
             # Update worker
             worker = db.query(Worker).filter_by(id=worker_id).first()
             if worker:
                 worker.current_packet_id = packet.id
-            
+
             return {
                 "data": {
                     "packet_id": packet.id,
@@ -296,8 +296,7 @@ async def claim_packet(request: dict) -> dict:
                 },
                 "timestamp": datetime.utcnow().isoformat() + "Z"
             }
-        
-        # No packets available
+
         raise HTTPException(status_code=404, detail="No packets available")
 
 @router.post("/{packet_id}/release")
@@ -491,7 +490,7 @@ async def create_plan(request: dict) -> dict:
                     title=packet_spec["title"],
                     description=packet_spec.get("description", ""),
                     spec_json=packet_spec,
-                    state=PacketState.DRAFT,
+                    state=PacketState.READY,  # Сразу READY, чтобы worker мог забрать
                     acceptance_profile=packet_spec.get("acceptance_profile", "NORMAL")
                 )
                 db.add(packet)
@@ -586,6 +585,8 @@ async def check_health() -> dict:
 
 ### Описание
 Создать worker loop с lease mechanism и интеграцией с PacketExecutionAdapter.
+
+**Ключевое:** Adapter НЕ меняет состояние пакета. claim уже сделал READY→RUNNING. Worker вызывает adapter → получает ExecutionResult → вызывает release endpoint.
 
 ### Что делать
 
@@ -790,13 +791,14 @@ class Worker:
             await asyncio.sleep(self.heartbeat_interval)
     
     async def _execute_packet(self, claim):
-        """Execute packet via PacketExecutionAdapter."""
+        """Execute packet via PacketExecutionAdapter. Adapter is stateless."""
         logger.info("Starting packet execution", packet_id=claim.packet_id)
-        
+
         try:
+            # Adapter НЕ меняет состояние — только запускает runner и возвращает результат
             result = await self.executor.execute(claim.packet_id, self.worker_id)
             return result
-        
+
         except Exception as e:
             logger.error(
                 "Packet execution failed",

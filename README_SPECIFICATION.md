@@ -1,5 +1,12 @@
 # GRACE Control Plane — Complete Specification Summary
 
+**СТАТУС: HISTORICAL / DEPRECATED.** Этот документ описывает первоначальную архитектуру (v1) с UI, WebSocket, Telegram и 4.5-недельным планом.
+
+**Актуальный канон → [CANONICAL_DECISIONS.md](CANONICAL_DECISIONS.md).**
+**Актуальные ТЗ → [tasks/README.md](tasks/README.md).**
+
+Ниже — оригинальный текст для исторической справки. НЕ использовать для реализации MVP-0.
+
 ## 📚 Документация (7 основных документов)
 
 ### 1. **GRACE_CONTROL_PLANE_SPEC.md** (42 KB)

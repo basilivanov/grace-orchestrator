@@ -28,16 +28,20 @@
 GRACE Control Plane CLI.
 
 Commands:
+- grace architect plan <file>
 - grace packet list
 - grace packet get <packet_id>
 - grace worker start
 - grace api start
+- grace health
 """
 import click
 from rich.console import Console
 from rich.table import Table
 import httpx
 import asyncio
+import yaml
+from pathlib import Path
 
 console = Console()
 
@@ -45,6 +49,33 @@ console = Console()
 def cli():
     """GRACE Control Plane CLI."""
     pass
+
+@cli.group()
+def architect():
+    """Architect commands."""
+    pass
+
+@architect.command("plan")
+@click.argument("feature_file", type=click.Path(exists=True))
+def architect_plan(feature_file):
+    """Create execution plan from feature YAML file."""
+    url = "http://localhost:8000/api/architect/plan"
+
+    try:
+        feature_spec = yaml.safe_load(Path(feature_file).read_text())
+        response = httpx.post(url, json={"feature_spec": feature_spec})
+        response.raise_for_status()
+        data = response.json()["data"]
+
+        console.print(f"\n[green]Plan created![/green]")
+        console.print(f"[white]Feature:[/white] {data['feature_id']}")
+        console.print(f"[white]Waves:[/white] {data['waves_count']}")
+        console.print(f"[white]Packets:[/white] {data['packets_count']}")
+        for pid in data["packets"]:
+            console.print(f"  [cyan]• {pid}[/cyan]")
+
+    except httpx.HTTPError as e:
+        console.print(f"[red]Error: {e}[/red]")
 
 @cli.group()
 def packet():
@@ -298,6 +329,7 @@ def trace_context(trace_id: str):
 
 ### Критерии готовности
 - [ ] CLI main создан
+- [ ] `grace architect plan <file>` работает
 - [ ] `grace packet list` работает
 - [ ] `grace packet get <id>` работает
 - [ ] `grace worker start` работает
@@ -354,35 +386,41 @@ from grace_control.api.main import app
 from grace_control.worker.worker import Worker
 
 @pytest.fixture
-async def api_server():
-    """Start API server in background."""
+async def api_server(tmp_path):
+    """Start API server in background with shared test DB."""
     import uvicorn
     from multiprocessing import Process
+    import os
+    
+    db_url = f"sqlite:///{tmp_path}/test.db"
     
     def run_server():
+        # Передаём DB через env, чтобы server + test использовали одну базу
+        os.environ["GRACE_DB_URL"] = db_url
         uvicorn.run(app, host="127.0.0.1", port=8001)
     
-    # Start server
     server_process = Process(target=run_server)
     server_process.start()
     
-    # Wait for server to start
     await asyncio.sleep(2)
     
-    yield "http://localhost:8001"
+    yield "http://localhost:8001", db_url
     
-    # Stop server
     server_process.terminate()
     server_process.join()
 
 @pytest.mark.asyncio
 async def test_mvp0_vertical_slice(api_server, tmp_path):
     """Test MVP-0 vertical slice."""
-    # 1. Initialize DB
-    init_db(f"sqlite:///{tmp_path}/test.db")
+    api_base_url, db_url = api_server
     
-    # 2. Create feature plan via architect
-    async with httpx.AsyncClient(base_url=api_server) as client:
+    # 1. Initialize DB (shared between server and test)
+    os.environ["GRACE_DB_URL"] = db_url
+    from grace_control.db import init_db
+    init_db(db_url)
+    
+    # 2. Create feature plan via architect (packets сразу READY)
+    async with httpx.AsyncClient(base_url=api_base_url) as client:
         response = await client.post("/api/architect/plan", json={
             "feature_spec": {
                 "title": "Test Feature",
@@ -408,36 +446,29 @@ async def test_mvp0_vertical_slice(api_server, tmp_path):
         packet_id = data["packets"][0]
         
         print(f"✅ Feature created: {feature_id}")
-        print(f"✅ Packet created: {packet_id}")
+        print(f"✅ Packet created (READY): {packet_id}")
     
-    # 3. Mark packet as READY
-    from grace_control.core.packet_operations import mark_ready
-    mark_ready(packet_id)
-    print(f"✅ Packet marked as READY")
-    
-    # 4. Start worker (in background)
+    # 3. Start worker (in background)
     worker = Worker(
         worker_id="test-worker",
-        api_url=api_server,
+        api_url=api_base_url,
         project_root=tmp_path / "project",
         state_root=tmp_path / "state",
         worktree_root=tmp_path / "worktrees"
     )
     
-    # Create project structure
     (tmp_path / "project").mkdir()
     (tmp_path / "state").mkdir()
     (tmp_path / "worktrees").mkdir()
     
-    # Start worker in background
     worker_task = asyncio.create_task(worker.start())
     
-    # 5. Wait for packet to be executed
-    max_wait = 60  # 60 seconds
+    # 4. Wait for packet execution
+    max_wait = 60
     start_time = time.time()
     
     while time.time() - start_time < max_wait:
-        async with httpx.AsyncClient(base_url=api_server) as client:
+        async with httpx.AsyncClient(base_url=api_base_url) as client:
             response = await client.get(f"/api/packets/{packet_id}")
             data = response.json()["data"]
             
@@ -446,19 +477,17 @@ async def test_mvp0_vertical_slice(api_server, tmp_path):
         
         await asyncio.sleep(2)
     
-    # Stop worker
     worker.running = False
     worker_task.cancel()
     
-    # 6. Verify packet state
-    async with httpx.AsyncClient(base_url=api_server) as client:
+    # 5. Verify
+    async with httpx.AsyncClient(base_url=api_base_url) as client:
         response = await client.get(f"/api/packets/{packet_id}")
         data = response.json()["data"]
         
         print(f"✅ Packet state: {data['state']}")
         assert data["state"] == "accepted", f"Expected accepted, got {data['state']}"
         
-        # Verify runs
         assert len(data["runs"]) > 0, "No runs found"
         run = data["runs"][0]
         assert run["status"] == "accepted"
@@ -495,22 +524,9 @@ sleep 3
 echo "2️⃣ Checking health..."
 grace health
 
-# 3. Create test feature
+# 3. Create test feature (packets сразу READY)
 echo "3️⃣ Creating test feature..."
-curl -X POST http://localhost:8000/api/architect/plan \
-  -H "Content-Type: application/json" \
-  -d '{
-    "feature_spec": {
-      "title": "Test Feature",
-      "waves": [{
-        "title": "Wave 1",
-        "packets": [{
-          "title": "Add test",
-          "scope": "src/test.py"
-        }]
-      }]
-    }
-  }'
+grace architect plan test_feature.yaml
 
 # 4. List packets
 echo "4️⃣ Listing packets..."
@@ -552,7 +568,7 @@ echo "✅ MVP-0 verification complete!"
 - [ ] Task #20: E2E Test ✅
 
 ### Deliverables
-- ✅ CLI с основными командами
+- ✅ CLI с основными командами (включая architect plan)
 - ✅ E2E test для vertical slice
 - ✅ Verification script
 - ✅ Logging utilities
@@ -560,24 +576,26 @@ echo "✅ MVP-0 verification complete!"
 ### MVP-0 Complete! 🎉
 
 После Phase 3 у вас есть рабочий MVP-0:
-- ✅ API server
-- ✅ Worker loop
-- ✅ PacketExecutionAdapter
-- ✅ CLI
-- ✅ E2E test
+- ✅ API server (без cancel endpoint)
+- ✅ Worker loop (с lease mechanism)
+- ✅ PacketExecutionAdapter (stateless bridge)
+- ✅ CLI (architect plan + packet list/get + worker start + api start)
+- ✅ E2E test (единая DB через GRACE_DB_URL)
+- ✅ MVP-0 заканчивается на ACCEPTED (MERGED — post-MVP)
 
 ### Что НЕ в MVP-0
 - ❌ UI/Dashboard
 - ❌ Telegram
 - ❌ WebSocket
 - ❌ Cancellation
+- ❌ Auto-merge (MVP-0 заканчивается на ACCEPTED)
 - ❌ Multiple workers (parallel)
 - ❌ GRACE Canon checker
 - ❌ Complexity router
 
 ### Post-MVP Roadmap
 
-**Wave 1:** Retry + Cancellation (3 дня)
+**Wave 1:** Retry + Cancellation + Auto-merge (3 дня)
 **Wave 2:** UI + Telegram (1 неделя)
 **Wave 3:** GRACE Canon + Complexity Router (1 неделя)
 **Wave 4:** Parallel execution (1 неделя)

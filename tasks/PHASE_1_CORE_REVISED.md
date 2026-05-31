@@ -717,26 +717,29 @@ from grace_control.logging import GraceLogger
 logger = GraceLogger("packet_executor")
 
 class ExecutionResult(BaseModel):
-    """Execution result."""
+    """Execution result returned to worker."""
     accepted: bool
     reason: Optional[str]
     evidence_path: str
     duration_ms: int
-    tests: dict
+    domain_status: str
 
 class PacketExecutionAdapter:
     """
     Adapter between DB packets and legacy run_e2e_packet.
-    
+
+    CRITICAL: Adapter НЕ меняет состояние пакета.
+    Состоянием владеет API (claim/release endpoints).
+
     Flow:
     1. Load packet from DB
     2. Materialize packet file (EXECUTION_PACKET.md)
-    3. Call existing run_e2e_packet(...)
-    4. Parse result
-    5. Save evidence
-    6. Update DB state
+    3. Call existing run_e2e_packet(dry_run=False, execute_agent=True)
+    4. Parse E2EPacketRunnerResult
+    5. Save evidence + create packet_run record
+    6. Return ExecutionResult to worker
     """
-    
+
     def __init__(
         self,
         project_root: Path,
@@ -746,33 +749,25 @@ class PacketExecutionAdapter:
         self.project_root = project_root
         self.state_root = state_root
         self.worktree_root = worktree_root
-    
+
     async def execute(self, packet_id: str, worker_id: str) -> ExecutionResult:
         """
-        Execute packet.
-        
-        Args:
-            packet_id: Packet ID
-            worker_id: Worker ID
-        
-        Returns:
-            ExecutionResult
+        Execute packet. Adapter is stateless — no DB state changes here.
+
+        Returns ExecutionResult. Worker calls release endpoint afterwards.
         """
         logger.info("Starting packet execution", packet_id=packet_id, worker_id=worker_id)
-        
+
         # 1. Load packet from DB
         with get_db() as db:
             packet = db.query(Packet).filter_by(id=packet_id).first()
             if not packet:
                 raise ValueError(f"Packet {packet_id} not found")
-            
-            # Mark as running
-            mark_running(packet_id, worker_id)
-            
+
             # Create run record
-            run_number = packet.attempt_count
+            run_number = packet.attempt_count + 1
             run_id = f"{packet_id}-R{run_number:02d}"
-            
+
             packet_run = PacketRun(
                 id=run_id,
                 packet_id=packet_id,
@@ -782,22 +777,22 @@ class PacketExecutionAdapter:
                 started_at=datetime.utcnow()
             )
             db.add(packet_run)
-        
+
         try:
             # 2. Materialize packet file
             packet_path = self._materialize_packet(packet)
-            
-            # 3. Call existing runner
-            result = await self._call_legacy_runner(packet_path)
-            
+
+            # 3. Call legacy runner (CRITICAL: оба флага)
+            result: E2EPacketRunnerResult = await self._call_legacy_runner(packet_path)
+
             # 4. Parse result
             execution_result = self._parse_result(result)
-            
+
             # 5. Save evidence
-            evidence_path = self._save_evidence(packet_id, run_number, result)
+            evidence_path = self._save_evidence(packet_id, run_number, result.to_dict())
             execution_result.evidence_path = evidence_path
-            
-            # 6. Update DB state
+
+            # Update run record
             with get_db() as db:
                 packet_run = db.query(PacketRun).filter_by(id=run_id).first()
                 packet_run.status = "accepted" if execution_result.accepted else "rejected"
@@ -805,48 +800,39 @@ class PacketExecutionAdapter:
                 packet_run.evidence_path = evidence_path
                 packet_run.finished_at = datetime.utcnow()
                 packet_run.duration_ms = execution_result.duration_ms
-            
-            # Update packet state
-            if execution_result.accepted:
-                mark_accepted(packet_id, evidence_path)
-            else:
-                mark_rejected(packet_id, execution_result.reason)
-            
+
             logger.info(
                 "Packet execution completed",
                 packet_id=packet_id,
                 accepted=execution_result.accepted,
                 duration_ms=execution_result.duration_ms
             )
-            
+
             return execution_result
-        
+
         except Exception as e:
             logger.error("Packet execution failed", packet_id=packet_id, error=str(e))
-            
+
             # Update run record
             with get_db() as db:
                 packet_run = db.query(PacketRun).filter_by(id=run_id).first()
-                packet_run.status = "failed"
-                packet_run.finished_at = datetime.utcnow()
-            
-            # Mark packet as failed
-            mark_failed(packet_id, str(e))
-            
+                if packet_run:
+                    packet_run.status = "failed"
+                    packet_run.finished_at = datetime.utcnow()
+
             raise
-    
+
     def _materialize_packet(self, packet: Packet) -> Path:
         """
         Materialize packet file from DB spec.
-        
-        Creates EXECUTION_PACKET.md in state_root.
+
+        Creates EXECUTION_PACKET.md compatible с parse_packet_markdown.
         """
         packet_dir = self.state_root / "packets" / packet.id
         packet_dir.mkdir(parents=True, exist_ok=True)
-        
+
         packet_file = packet_dir / "EXECUTION_PACKET.md"
-        
-        # Convert spec_json to packet file format
+
         content = f"""# {packet.title}
 
 **ID:** {packet.id}
@@ -867,27 +853,27 @@ class PacketExecutionAdapter:
 
 {packet.acceptance_profile}
 """
-        
+
         packet_file.write_text(content)
         logger.debug("Packet file materialized", packet_id=packet.id, path=str(packet_file))
-        
+
         return packet_file
-    
-    async def _call_legacy_runner(self, packet_path: Path) -> dict:
+
+    async def _call_legacy_runner(self, packet_path: Path) -> E2EPacketRunnerResult:
         """
         Call existing run_e2e_packet.
-        
-        IMPORTANT: Existing runner is SYNCHRONOUS, so we run in executor.
+
+        IMPORTANT: Синхронный вызов, запускаем в executor.
+        dry_run=False + execute_agent=True обязательны для реального исполнения.
         """
         import asyncio
         from functools import partial
-        
+
         # Import legacy runner
-        from prefect_grace.platform.e2e_packet_runner import run_e2e_packet
-        
-        # Run in executor (blocking call)
+        from prefect_grace.platform.e2e_packet_runner import run_e2e_packet, E2EPacketRunnerResult
+
         loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
+        result: E2EPacketRunnerResult = await loop.run_in_executor(
             None,
             partial(
                 run_e2e_packet,
@@ -895,37 +881,33 @@ class PacketExecutionAdapter:
                 packet_path=packet_path,
                 state_root=self.state_root,
                 worktree_root=self.worktree_root,
-                dry_run=False,  # MVP: live execution
-                # Note: existing runner may not have these flags yet
-                # Will need to add them or handle via config
+                dry_run=False,        # Real execution
+                execute_agent=True,   # Live agents (not fake)
             )
         )
-        
+
         return result
-    
-    def _parse_result(self, result: dict) -> ExecutionResult:
-        """Parse legacy runner result."""
-        # Legacy runner returns dict with:
-        # - accepted: bool
-        # - reason: str
-        # - evidence_path: str
-        # - duration_ms: int
-        # - tests: dict
-        
+
+    def _parse_result(self, result: E2EPacketRunnerResult) -> ExecutionResult:
+        """Parse legacy E2EPacketRunnerResult to ExecutionResult.
+
+        Mapping:
+          result.ok and domain_status == "accepted" → accepted=True
+          domain_status in (rework_required, blocked, scope_blocked) → accepted=False
+          domain_status in (agent_failed, verifier_failed, ...) → accepted=False
+        """
+        accepted = result.ok and result.domain_status == "accepted"
+
         return ExecutionResult(
-            accepted=result.get("accepted", False),
-            reason=result.get("reason"),
-            evidence_path=result.get("evidence_path", ""),
-            duration_ms=result.get("duration_ms", 0),
-            tests=result.get("tests", {})
+            accepted=accepted,
+            reason=result.registry_reason if not accepted else None,
+            evidence_path="",  # filled after _save_evidence
+            duration_ms=0,     # filled after run completion
+            domain_status=result.domain_status,
         )
-    
+
     def _save_evidence(self, packet_id: str, run_number: int, result: dict) -> str:
-        """
-        Save evidence to .grace/packets/{packet_id}/runs/R{run_number}/.
-        
-        Evidence already saved by legacy runner, just return path.
-        """
+        """Save evidence to .grace/packets/{packet_id}/runs/R{run_number}/."""
         evidence_path = self.state_root / "packets" / packet_id / "runs" / f"R{run_number:02d}"
         return str(evidence_path)
 ```
@@ -960,7 +942,7 @@ def test_dirs(tmp_path):
 
 @pytest.mark.asyncio
 async def test_materialize_packet(test_db, test_dirs):
-    """Test packet materialization."""
+    """Test packet materialization compatible with parse_packet_markdown."""
     project_root, state_root, worktree_root = test_dirs
     
     # Create packet
@@ -973,7 +955,7 @@ async def test_materialize_packet(test_db, test_dirs):
             title="Test Packet",
             description="Test description",
             spec_json={"scope": "src/test.py"},
-            state=PacketState.READY
+            state=PacketState.RUNNING  # Already claimed by worker
         )
         db.add(packet)
     
@@ -984,11 +966,20 @@ async def test_materialize_packet(test_db, test_dirs):
         packet = db.query(Packet).filter_by(id="PKT-001").first()
         packet_file = adapter._materialize_packet(packet)
     
-    # Check file created
+    # Check file created and parseable
     assert packet_file.exists()
     content = packet_file.read_text()
     assert "Test Packet" in content
     assert "PKT-001" in content
+    # Verify old parser can read it
+    from prefect_grace.platform.packet_parser import parse_packet_markdown
+    parsed = parse_packet_markdown(packet_file)
+    assert parsed is not None
+
+@pytest.mark.asyncio
+async def test_adapter_does_not_change_state(test_db, test_dirs):
+    """Verify adapter is stateless — does not call mark_running/mark_accepted."""
+    pass  # Structural test: verify adapter has no state transition calls
 ```
 
 ### Критерии готовности
