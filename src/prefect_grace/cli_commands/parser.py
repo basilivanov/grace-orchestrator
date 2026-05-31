@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import argparse
+import warnings
 from pathlib import Path
 
 from prefect_grace.models import (
@@ -120,6 +121,9 @@ from prefect_grace.cli_commands.prefect_worker_binding import (
 from prefect_grace.cli_commands.brief_intake import (
     _cmd_dynamic_plan,
 )
+from prefect_grace.cli_commands.validate_config import (
+    _cmd_validate_config,
+)
 
 
 class NoDryRunAction(argparse.Action):
@@ -136,40 +140,92 @@ def _audit_limit(value: str) -> int:
     return parsed
 
 
+def _deprecated_command_wrapper(func, old_name: str, new_suggestion: str):
+    """Wrap a command function with a deprecation warning."""
+    def wrapper(args):
+        warnings.warn(
+            f"The '{old_name}' command is deprecated. {new_suggestion}",
+            DeprecationWarning,
+            stacklevel=2
+        )
+        return func(args)
+    return wrapper
+
+
 def _register_legacy_feature_commands(subparsers) -> None:
-    feature = subparsers.add_parser("feature")
+    """Register legacy feature commands with deprecation warnings."""
+
+    feature = subparsers.add_parser(
+        "feature",
+        help="[DEPRECATED] Use 'grace submit-packets' instead"
+    )
     feature.add_argument("feature_id")
     feature.add_argument("title")
     feature.add_argument("summary")
-    feature.set_defaults(func=_cmd_feature)
+    feature.set_defaults(func=_deprecated_command_wrapper(
+        _cmd_feature,
+        "grace feature",
+        "Use 'grace submit-packets' instead."
+    ))
 
-    mark_feature = subparsers.add_parser("mark-feature")
+    mark_feature = subparsers.add_parser(
+        "mark-feature",
+        help="[DEPRECATED] Use registry commands instead"
+    )
     mark_feature.add_argument("feature_id")
     mark_feature.add_argument("status", choices=[item.value for item in FeatureStatus])
-    mark_feature.set_defaults(func=_cmd_mark_feature)
+    mark_feature.set_defaults(func=_deprecated_command_wrapper(
+        _cmd_mark_feature,
+        "grace mark-feature",
+        "Use registry commands instead."
+    ))
 
-    packet = subparsers.add_parser("packet")
+    packet = subparsers.add_parser(
+        "packet",
+        help="[DEPRECATED] Use 'grace submit-packets' instead"
+    )
     packet.add_argument("feature_id")
     packet.add_argument("wave_id")
     packet.add_argument("title")
     packet.add_argument("summary")
     packet.add_argument("--role", default="coder")
     packet.add_argument("--reasoning", choices=[item.value for item in ReasoningProfile], default=ReasoningProfile.HIGH.value)
-    packet.set_defaults(func=_cmd_packet)
+    packet.set_defaults(func=_deprecated_command_wrapper(
+        _cmd_packet,
+        "grace packet",
+        "Use 'grace submit-packets' instead."
+    ))
 
-    run_codex = subparsers.add_parser("run-codex")
+    run_codex = subparsers.add_parser(
+        "run-codex",
+        help="[DEPRECATED] Use 'grace run-managed-packet' or 'grace run-e2e-packet' instead"
+    )
     run_codex.add_argument("packet_id")
     run_codex.add_argument("--dry-run", action="store_true")
     run_codex.add_argument("--timeout-seconds", type=int, default=3600)
-    run_codex.set_defaults(func=_cmd_run_codex)
+    run_codex.set_defaults(func=_deprecated_command_wrapper(
+        _cmd_run_codex,
+        "grace run-codex",
+        "Use 'grace run-managed-packet' or 'grace run-e2e-packet' instead."
+    ))
 
-    run_verifier = subparsers.add_parser("run-verifier")
+    run_verifier = subparsers.add_parser(
+        "run-verifier",
+        help="[DEPRECATED] Use 'grace run-handoff' instead"
+    )
     run_verifier.add_argument("packet_id")
     run_verifier.add_argument("--dry-run", action="store_true")
     run_verifier.add_argument("--timeout-seconds", type=int, default=3600)
-    run_verifier.set_defaults(func=_cmd_run_verifier)
+    run_verifier.set_defaults(func=_deprecated_command_wrapper(
+        _cmd_run_verifier,
+        "grace run-verifier",
+        "Use 'grace run-handoff' instead."
+    ))
 
-    test_feature = subparsers.add_parser("test-feature")
+    test_feature = subparsers.add_parser(
+        "test-feature",
+        help="[DEPRECATED] Use 'grace-dev smoke' commands instead"
+    )
     test_feature.add_argument("feature_id")
     test_feature.add_argument("title")
     test_feature.add_argument("summary")
@@ -228,9 +284,16 @@ def _register_legacy_feature_commands(subparsers) -> None:
     test_feature.add_argument("--parse-agent-output", action="store_true")
     test_feature.add_argument("--timeout-seconds", type=int, default=3600)
     test_feature.add_argument("--execute", action="store_true")
-    test_feature.set_defaults(func=_cmd_test_feature)
+    test_feature.set_defaults(func=_deprecated_command_wrapper(
+        _cmd_test_feature,
+        "grace test-feature",
+        "Use 'grace-dev smoke' commands instead."
+    ))
 
-    submit_feature = subparsers.add_parser("submit-feature")
+    submit_feature = subparsers.add_parser(
+        "submit-feature",
+        help="[DEPRECATED] Use 'grace submit-packets' instead"
+    )
     submit_feature.add_argument("feature_id")
     submit_feature.add_argument("title")
     submit_feature.add_argument("summary")
@@ -259,24 +322,56 @@ def _register_legacy_feature_commands(subparsers) -> None:
     submit_feature.add_argument("--scheduled-for")
     submit_feature.add_argument("--delay-minutes", type=int)
     submit_feature.add_argument("--execute", action="store_true")
-    submit_feature.set_defaults(func=_cmd_submit_feature)
+    submit_feature.set_defaults(func=_deprecated_command_wrapper(
+        _cmd_submit_feature,
+        "grace submit-feature",
+        "Use 'grace submit-packets' instead."
+    ))
 
-    submit_brief = subparsers.add_parser("submit-brief")
+    submit_brief = subparsers.add_parser(
+        "submit-brief",
+        help="[DEPRECATED] Use 'grace dynamic-plan' instead"
+    )
     submit_brief.add_argument("path")
     submit_brief.add_argument("--scheduled-for")
     submit_brief.add_argument("--delay-minutes", type=int)
-    submit_brief.set_defaults(func=_cmd_submit_brief)
+    submit_brief.set_defaults(func=_deprecated_command_wrapper(
+        _cmd_submit_brief,
+        "grace submit-brief",
+        "Use 'grace dynamic-plan' instead."
+    ))
 
-    print_brief_template = subparsers.add_parser("print-brief-template")
-    print_brief_template.set_defaults(func=_cmd_print_brief_template)
+    print_brief_template = subparsers.add_parser(
+        "print-brief-template",
+        help="[DEPRECATED] Use 'grace dynamic-plan' instead"
+    )
+    print_brief_template.set_defaults(func=_deprecated_command_wrapper(
+        _cmd_print_brief_template,
+        "grace print-brief-template",
+        "Use 'grace dynamic-plan' instead."
+    ))
 
-    queue = subparsers.add_parser("queue")
+    queue = subparsers.add_parser(
+        "queue",
+        help="[DEPRECATED] Use 'grace packet-status' or 'grace registry-dump' instead"
+    )
     queue.add_argument("--limit", type=int, default=20)
-    queue.set_defaults(func=_cmd_queue)
+    queue.set_defaults(func=_deprecated_command_wrapper(
+        _cmd_queue,
+        "grace queue",
+        "Use 'grace packet-status' or 'grace registry-dump' instead."
+    ))
 
-    dashboard = subparsers.add_parser("dashboard")
+    dashboard = subparsers.add_parser(
+        "dashboard",
+        help="[DEPRECATED] Use 'grace registry-dump --json' instead"
+    )
     dashboard.add_argument("--json", action="store_true")
-    dashboard.set_defaults(func=_cmd_dashboard)
+    dashboard.set_defaults(func=_deprecated_command_wrapper(
+        _cmd_dashboard,
+        "grace dashboard",
+        "Use 'grace registry-dump --json' instead."
+    ))
 
 
 def _register_project_registry_commands(subparsers) -> None:
@@ -599,59 +694,10 @@ def _register_packet_execution_commands(subparsers) -> None:
     run_handoff.add_argument("--json", action="store_true", help="JSON output")
     run_handoff.set_defaults(func=_cmd_run_handoff)
 
-    run_single_live_packet_pilot = subparsers.add_parser("run-single-live-packet-pilot", help="Run single live packet pilot with managed runner and Git mutation gate")
-    run_single_live_packet_pilot.add_argument("--packet", type=Path, required=True, help="Path to EXECUTION_PACKET.md")
-    run_single_live_packet_pilot.add_argument("--repo-root", type=Path, required=True, help="Repository root")
-    run_single_live_packet_pilot.add_argument("--worktree-root", type=Path, required=True, help="Worktree root directory")
-    run_single_live_packet_pilot.add_argument("--project-key", required=True, help="Project key")
-    run_single_live_packet_pilot.add_argument("--attempt", type=int, default=1, help="Attempt number (default: 1)")
-    run_single_live_packet_pilot.add_argument("--base-ref", required=True, help="Base git ref")
-    run_single_live_packet_pilot.add_argument("--target-branch", required=True, help="Target branch for merge (not used in pilot)")
-    run_single_live_packet_pilot.add_argument("--remote", default="origin", help="Remote name for push (default: origin)")
-    run_single_live_packet_pilot.add_argument("--dry-run", action="store_true", default=True, help="Dry run mode (no agent execution, no Git mutations, default)")
-    run_single_live_packet_pilot.add_argument("--no-dry-run", dest="dry_run", action=NoDryRunAction, nargs=0, help="Disable dry run (required with --execute-agent)")
-    run_single_live_packet_pilot.add_argument("--execute-agent", action="store_true", help="Explicitly allow live agent execution")
-    run_single_live_packet_pilot.add_argument("--i-understand-live-agent", action="store_true", help="Required acknowledgement for live agent execution")
-    run_single_live_packet_pilot.add_argument("--commit", action="store_true", help="Request guarded commit")
-    run_single_live_packet_pilot.add_argument("--push", action="store_true", help="Request guarded push")
-    run_single_live_packet_pilot.add_argument("--merge", action="store_true", help="Request guarded merge to target branch")
-    run_single_live_packet_pilot.add_argument("--apply-git-mutations", action="store_true", help="Allow Git mutations to be applied (requires evidence and review)")
-    run_single_live_packet_pilot.add_argument("--timeout-seconds", type=int, default=3600, help="Agent timeout in seconds (default: 3600)")
-    run_single_live_packet_pilot.add_argument("--json", action="store_true", help="JSON output")
-    run_single_live_packet_pilot.set_defaults(func=_cmd_run_single_live_packet_pilot)
-
-    run_single_live_prefect_packet_pilot = subparsers.add_parser(
-        "run-single-live-prefect-packet-pilot",
-        help="Run one synthetic scratch packet through managed Prefect submission",
-    )
-    run_single_live_prefect_packet_pilot.add_argument("--project", required=True, help="Project config path")
-    run_single_live_prefect_packet_pilot.add_argument("--state-root", type=Path, required=True, help="Pilot state root")
-    run_single_live_prefect_packet_pilot.add_argument("--worktree-root", type=Path, required=True, help="Pilot worktree root")
-    run_single_live_prefect_packet_pilot.add_argument("--packet-root", type=Path, required=True, help="Synthetic packet root")
-    run_single_live_prefect_packet_pilot.add_argument("--dry-run", action="store_true", default=True, help="Plan only, default")
-    run_single_live_prefect_packet_pilot.add_argument("--no-dry-run", dest="dry_run", action=NoDryRunAction, nargs=0, help="Disable dry run")
-    run_single_live_prefect_packet_pilot.add_argument("--execute-agent", action="store_true", help="Allow live managed runner agent execution")
-    run_single_live_prefect_packet_pilot.add_argument("--i-understand-live-agent", action="store_true", help="Required live-agent acknowledgement gate")
-    run_single_live_prefect_packet_pilot.add_argument("--timeout-seconds", type=int, default=1800, help="Submission/status timeout seconds")
-    run_single_live_prefect_packet_pilot.add_argument("--json", action="store_true", help="JSON output")
-    run_single_live_prefect_packet_pilot.set_defaults(func=_cmd_run_single_live_prefect_packet_pilot)
-
-    run_single_astro_packet_pilot = subparsers.add_parser(
-        "run-single-astro-packet-pilot",
-        help="Run one low-risk Astro packet through managed Prefect submission",
-    )
-    run_single_astro_packet_pilot.add_argument("--project", required=True, help="Project config path")
-    run_single_astro_packet_pilot.add_argument("--state-root", type=Path, required=True, help="Pilot state root")
-    run_single_astro_packet_pilot.add_argument("--worktree-root", type=Path, required=True, help="Pilot worktree root")
-    run_single_astro_packet_pilot.add_argument("--packet-root", type=Path, required=True, help="Pilot packet temp root")
-    run_single_astro_packet_pilot.add_argument("--packet", help="Explicit packet ID to select")
-    run_single_astro_packet_pilot.add_argument("--dry-run", action="store_true", default=True, help="Plan only, default")
-    run_single_astro_packet_pilot.add_argument("--no-dry-run", dest="dry_run", action=NoDryRunAction, nargs=0, help="Disable dry run")
-    run_single_astro_packet_pilot.add_argument("--execute-agent", action="store_true", help="Allow live managed runner agent execution")
-    run_single_astro_packet_pilot.add_argument("--i-understand-live-agent", action="store_true", help="Required live-agent acknowledgement gate")
-    run_single_astro_packet_pilot.add_argument("--timeout-seconds", type=int, default=1800, help="Submission/status timeout seconds")
-    run_single_astro_packet_pilot.add_argument("--json", action="store_true", help="JSON output")
-    run_single_astro_packet_pilot.set_defaults(func=_cmd_run_single_astro_packet_pilot)
+    # Pilot commands moved to grace-dev CLI
+    # - run-single-live-packet-pilot
+    # - run-single-live-prefect-packet-pilot
+    # - run-single-astro-packet-pilot
 
 
 def _register_evidence_commands(subparsers) -> None:
@@ -952,6 +998,12 @@ def _register_init_commands(subparsers) -> None:
     init.set_defaults(func=_cmd_init)
 
 
+def _register_validate_config_commands(subparsers) -> None:
+    """Register validate-config command for configuration validation."""
+    validate_config = subparsers.add_parser("validate-config", help="Validate GRACE configuration")
+    validate_config.set_defaults(func=_cmd_validate_config)
+
+
 # START_FUNCTION_CONTRACT
 # name: build_parser
 # purpose: Assemble and return the complete argument parser.
@@ -962,13 +1014,14 @@ def _register_init_commands(subparsers) -> None:
 # error_behavior: None.
 # END_FUNCTION_CONTRACT
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="prefect-grace")
+    parser = argparse.ArgumentParser(prog="grace")
     subparsers = parser.add_subparsers(required=True)
 
     _register_legacy_feature_commands(subparsers)
     _register_project_registry_commands(subparsers)
     _register_packet_submission_commands(subparsers)
-    _register_prefect_smokes_commands(subparsers)
+    # Smoke/pilot commands moved to grace-dev CLI
+    # _register_prefect_smokes_commands(subparsers)
     _register_worktrees_commands(subparsers)
     _register_packet_execution_commands(subparsers)
     _register_evidence_commands(subparsers)
@@ -978,6 +1031,7 @@ def build_parser() -> argparse.ArgumentParser:
     _register_dynamic_planning_commands(subparsers)
     _register_git_sync_commands(subparsers)
     _register_init_commands(subparsers)
+    _register_validate_config_commands(subparsers)
 
     _register_queue_watcher_commands(subparsers)
     return parser

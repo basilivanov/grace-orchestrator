@@ -19,6 +19,7 @@ import yaml
 
 from prefect_grace.models import ReasoningProfile
 from prefect_grace.platform.executor_registry import select_executor_for_packet
+from prefect_grace.platform.project_adapter import load_project_adapter
 from prefect_grace.platform.state_store import PacketRegistryStore, ExecutorHistoryStore
 from prefect_grace.tasks.agent_output_parser import read_agent_message
 from prefect_grace.tasks.codex_launcher_helpers import process_runner as _process_runner
@@ -151,6 +152,19 @@ def _launch_codex_for_packet(
     effective_stall_timeout_seconds = _resolve_stall_timeout_seconds(packet, role_defaults, stall_timeout_seconds)
     max_auto_resume_attempts = _resolve_max_auto_resume_attempts(packet, role_defaults)
     codex_binary = str(config.get("codex", {}).get("binary") or "codex1")
+
+    # Load project config for policy checks
+    project_config = None
+    try:
+        project_adapter = load_project_adapter(
+            config_path=registry_project_root,
+            overrides=None
+        )
+        project_config = project_adapter.to_dict()
+    except Exception as e:
+        if logger:
+            logger.warning("Failed to load project config for policy checks: %s", e)
+        project_config = None
 
     # Try executor registry first
     requested_executor = execution_hints.get("requested_executor") if execution_hints else None
@@ -331,6 +345,8 @@ def _launch_codex_for_packet(
                 sandbox=sandbox,
                 thread_id=resumed_from_thread_id,
                 last_message_path=last_message_path,
+                packet_id=packet_id,
+                project_config=project_config,
             )
         else:
             command = _build_exec_command(
@@ -341,6 +357,8 @@ def _launch_codex_for_packet(
                 approval=approval,
                 sandbox=sandbox,
                 last_message_path=last_message_path,
+                packet_id=packet_id,
+                project_config=project_config,
             )
 
         started_at = datetime.now(timezone.utc).isoformat()

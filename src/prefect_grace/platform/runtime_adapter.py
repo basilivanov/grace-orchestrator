@@ -30,6 +30,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from prefect_grace.runtime import PrefectAPIContext
+from prefect_grace.runtime.async_helpers import run_async_safe
+
 #START_BLOCK_RUNTIME_INTERFACE
 @dataclass
 class WorkflowRuntime(ABC):
@@ -68,7 +71,27 @@ class WorkflowRuntime(ABC):
 
     # START_FUNCTION_CONTRACT
     # name: read_run_status
-    # purpose: Read current status of a workflow run.
+    # purpose: Read current status of a workflow run (sync version).
+    # inputs:
+    #   run_ref: dict with run reference.
+    # returns: dict with status, state, timestamps.
+    # side_effects: May query external runtime API.
+    # emitted_logs: None.
+    # error_behavior: Returns error dict if run not found or called from async context.
+    # END_FUNCTION_CONTRACT
+    @abstractmethod
+    def read_run_status(self, run_ref: dict[str, Any]) -> dict[str, Any]:
+        """
+        Read run status from a synchronous context.
+
+        Use this method when calling from sync code.
+        If you're in an async context, use read_run_status_async() instead.
+        """
+        pass
+
+    # START_FUNCTION_CONTRACT
+    # name: read_run_status_async
+    # purpose: Read current status of a workflow run (async version).
     # inputs:
     #   run_ref: dict with run reference.
     # returns: dict with status, state, timestamps.
@@ -77,7 +100,13 @@ class WorkflowRuntime(ABC):
     # error_behavior: Returns error dict if run not found.
     # END_FUNCTION_CONTRACT
     @abstractmethod
-    def read_run_status(self, run_ref: dict[str, Any]) -> dict[str, Any]:
+    async def read_run_status_async(self, run_ref: dict[str, Any]) -> dict[str, Any]:
+        """
+        Read run status from an asynchronous context.
+
+        Use this method when calling from async code.
+        If you're in a sync context, use read_run_status() instead.
+        """
         pass
 
 #END_BLOCK_RUNTIME_INTERFACE
@@ -109,6 +138,13 @@ class DryRunRuntime(WorkflowRuntime):
         self.artifacts.append(artifact)
 
     def read_run_status(self, run_ref: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "run_id": run_ref.get("run_id"),
+            "state": "DRY_RUN",
+            "status": "simulated",
+        }
+
+    async def read_run_status_async(self, run_ref: dict[str, Any]) -> dict[str, Any]:
         return {
             "run_id": run_ref.get("run_id"),
             "state": "DRY_RUN",
@@ -204,6 +240,13 @@ class PrefectRuntimeAdapter(WorkflowRuntime):
         )
 
     def read_run_status(self, run_ref: dict[str, Any]) -> dict[str, Any]:
+        """
+        Read run status from a synchronous context.
+
+        This method uses run_async_safe() which will raise a clear error
+        if called from within an async context. In that case, use
+        read_run_status_async() instead.
+        """
         run_id = run_ref.get("run_id")
         if not run_id:
             return {"error": "run_id missing"}
@@ -223,8 +266,42 @@ class PrefectRuntimeAdapter(WorkflowRuntime):
                 }
 
         try:
-            import asyncio
-            return asyncio.run(_fetch())
+            return run_async_safe(_fetch())
+        except RuntimeError as e:
+            # If called from async context, return error dict with guidance
+            if "event loop" in str(e).lower():
+                return {
+                    "error": "Cannot call sync method from async context",
+                    "guidance": "Use read_run_status_async() instead",
+                    "details": str(e),
+                }
+            return {"error": str(e)}
+        except Exception as e:
+            return {"error": str(e)}
+
+    async def read_run_status_async(self, run_ref: dict[str, Any]) -> dict[str, Any]:
+        """
+        Read run status from an asynchronous context.
+
+        Use this method when calling from async code.
+        """
+        run_id = run_ref.get("run_id")
+        if not run_id:
+            return {"error": "run_id missing"}
+
+        try:
+            from prefect.client.orchestration import get_client
+        except ImportError as e:
+            raise RuntimeError(f"Prefect client unavailable: {e}")
+
+        try:
+            async with get_client() as client:
+                flow_run = await client.read_flow_run(run_id)
+                return {
+                    "run_id": str(flow_run.id),
+                    "state": flow_run.state.name if flow_run.state else "UNKNOWN",
+                    "status": flow_run.state.type.value if flow_run.state else "UNKNOWN",
+                }
         except Exception as e:
             return {"error": str(e)}
 
@@ -274,20 +351,19 @@ class FeatureSubmitter:
         )
 
         # Execute Prefect submission
-        os.environ["PREFECT_API_URL"] = request["api_url"]
-
-        with get_client(sync_client=True) as client:
-            deployment = client.read_deployment_by_name(request["deployment_name"])
-            flow_run = client.create_flow_run_from_deployment(
-                deployment_id=deployment.id,
-                parameters=request["parameters"],
-                state=Scheduled(scheduled_time=request["scheduled_time"]),
-                name=request["flow_run_name"],
-                work_queue_name=request["work_queue_name"],
-                idempotency_key=request["idempotency_key"],
-                labels=request["labels"],
-                tags=request["tags"],
-            )
+        with PrefectAPIContext(request["api_url"]):
+            with get_client(sync_client=True) as client:
+                deployment = client.read_deployment_by_name(request["deployment_name"])
+                flow_run = client.create_flow_run_from_deployment(
+                    deployment_id=deployment.id,
+                    parameters=request["parameters"],
+                    state=Scheduled(scheduled_time=request["scheduled_time"]),
+                    name=request["flow_run_name"],
+                    work_queue_name=request["work_queue_name"],
+                    idempotency_key=request["idempotency_key"],
+                    labels=request["labels"],
+                    tags=request["tags"],
+                )
 
         return {
             "flow_run_id": str(flow_run.id),
@@ -348,20 +424,19 @@ class E2EPacketSubmitter:
             deployment_name=self.deployment_name or E2E_PACKET_DEPLOYMENT_NAME,
         )
 
-        os.environ["PREFECT_API_URL"] = request["api_url"]
-
-        with get_client(sync_client=True) as client:
-            deployment = client.read_deployment_by_name(request["deployment_name"])
-            flow_run = client.create_flow_run_from_deployment(
-                deployment_id=deployment.id,
-                parameters=request["parameters"],
-                state=Scheduled(scheduled_time=request["scheduled_time"]),
-                name=request["flow_run_name"],
-                work_queue_name=request["work_queue_name"],
-                idempotency_key=request["idempotency_key"],
-                labels=request["labels"],
-                tags=request["tags"],
-            )
+        with PrefectAPIContext(request["api_url"]):
+            with get_client(sync_client=True) as client:
+                deployment = client.read_deployment_by_name(request["deployment_name"])
+                flow_run = client.create_flow_run_from_deployment(
+                    deployment_id=deployment.id,
+                    parameters=request["parameters"],
+                    state=Scheduled(scheduled_time=request["scheduled_time"]),
+                    name=request["flow_run_name"],
+                    work_queue_name=request["work_queue_name"],
+                    idempotency_key=request["idempotency_key"],
+                    labels=request["labels"],
+                    tags=request["tags"],
+                )
 
         return {
             "flow_run_id": str(flow_run.id),
@@ -425,20 +500,19 @@ class ManagedPacketSubmitter:
         )
 
         # Execute Prefect submission
-        os.environ["PREFECT_API_URL"] = request["api_url"]
-
-        with get_client(sync_client=True) as client:
-            deployment = client.read_deployment_by_name(request["deployment_name"])
-            flow_run = client.create_flow_run_from_deployment(
-                deployment_id=deployment.id,
-                parameters=request["parameters"],
-                state=Scheduled(scheduled_time=request["scheduled_time"]),
-                name=request["flow_run_name"],
-                work_queue_name=request["work_queue_name"],
-                idempotency_key=request["idempotency_key"],
-                labels=request["labels"],
-                tags=request["tags"],
-            )
+        with PrefectAPIContext(request["api_url"]):
+            with get_client(sync_client=True) as client:
+                deployment = client.read_deployment_by_name(request["deployment_name"])
+                flow_run = client.create_flow_run_from_deployment(
+                    deployment_id=deployment.id,
+                    parameters=request["parameters"],
+                    state=Scheduled(scheduled_time=request["scheduled_time"]),
+                    name=request["flow_run_name"],
+                    work_queue_name=request["work_queue_name"],
+                    idempotency_key=request["idempotency_key"],
+                    labels=request["labels"],
+                    tags=request["tags"],
+                )
 
         return {
             "flow_run_id": str(flow_run.id),
@@ -627,9 +701,7 @@ def apply_managed_packet_deployment_helper(
         )
 
         # Set API URL and apply
-        old_api_url = os.environ.get("PREFECT_API_URL")
-        try:
-            os.environ["PREFECT_API_URL"] = api_url
+        with PrefectAPIContext(api_url):
             deployment_id = str(deployment.apply(work_pool_name=work_pool_name))
 
             # Update deployment with working directory
@@ -662,11 +734,6 @@ def apply_managed_packet_deployment_helper(
                 working_directory_not_inspectable=True,  # Prefect API does not reliably expose working_directory
                 errors=[],
             )
-        finally:
-            if old_api_url is not None:
-                os.environ["PREFECT_API_URL"] = old_api_url
-            else:
-                os.environ.pop("PREFECT_API_URL", None)
 
     except Exception as e:
         return DeploymentApplyResult(

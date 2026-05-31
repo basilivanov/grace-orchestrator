@@ -25,7 +25,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-import yaml
+from prefect_grace.storage.file_backend import read_yaml, locked_update_yaml
 
 #START_BLOCK_PACKETS_STORE
 class PacketRegistryStore:
@@ -42,22 +42,8 @@ class PacketRegistryStore:
     def __init__(self, state_root: Path | str):
         self.file_path = Path(state_root) / "packet_registry.yaml"
 
-    def _load_all(self) -> dict[str, dict[str, Any]]:
-        if not self.file_path.exists():
-            return {}
-        try:
-            with open(self.file_path, "r", encoding="utf-8") as f:
-                return yaml.safe_load(f) or {}
-        except Exception:
-            return {}
-
-    def _save_all(self, data: dict[str, dict[str, Any]]) -> None:
-        self.file_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.file_path, "w", encoding="utf-8") as f:
-            yaml.safe_dump(data, f, default_flow_style=False, allow_unicode=True)
-
     def load_packet(self, packet_id: str) -> dict[str, Any] | None:
-        data = self._load_all()
+        data = read_yaml(self.file_path)
         return data.get(packet_id)
 
     # START_FUNCTION_CONTRACT
@@ -74,11 +60,14 @@ class PacketRegistryStore:
         packet_id = packet.get("packet_id")
         if not packet_id:
             raise ValueError("packet_id is required")
-        data = self._load_all()
-        existing = data.get(packet_id, {})
-        merged = {**existing, **packet}
-        data[packet_id] = merged
-        self._save_all(data)
+
+        def mutator(data: dict[str, Any]) -> dict[str, Any]:
+            existing = data.get(packet_id, {})
+            merged = {**existing, **packet}
+            data[packet_id] = merged
+            return data
+
+        locked_update_yaml(self.file_path, mutator)
 
     # START_FUNCTION_CONTRACT
     # name: update_resume_state
@@ -92,11 +81,13 @@ class PacketRegistryStore:
     # error_behavior: Raises ValueError if packet not found in registry.
     # END_FUNCTION_CONTRACT
     def update_resume_state(self, packet_id: str, **kwargs: Any) -> None:
-        data = self._load_all()
-        if packet_id not in data:
-            raise ValueError(f"Packet {packet_id} not found in registry")
-        data[packet_id].update(kwargs)
-        self._save_all(data)
+        def mutator(data: dict[str, Any]) -> dict[str, Any]:
+            if packet_id not in data:
+                raise ValueError(f"Packet {packet_id} not found in registry")
+            data[packet_id].update(kwargs)
+            return data
+
+        locked_update_yaml(self.file_path, mutator)
 
     # START_FUNCTION_CONTRACT
     # name: list_packets
@@ -109,7 +100,7 @@ class PacketRegistryStore:
     # error_behavior: none.
     # END_FUNCTION_CONTRACT
     def list_packets(self, project_key: str | None = None) -> list[dict[str, Any]]:
-        data = self._load_all()
+        data = read_yaml(self.file_path)
         return list(data.values())
 
 #END_BLOCK_PACKETS_STORE
@@ -117,20 +108,6 @@ class PacketRegistryStore:
 class RunStore:
     def __init__(self, state_root: Path | str):
         self.file_path = Path(state_root) / "runs.yaml"
-
-    def _load_all(self) -> dict[str, dict[str, Any]]:
-        if not self.file_path.exists():
-            return {}
-        try:
-            with open(self.file_path, "r", encoding="utf-8") as f:
-                return yaml.safe_load(f) or {}
-        except Exception:
-            return {}
-
-    def _save_all(self, data: dict[str, dict[str, Any]]) -> None:
-        self.file_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.file_path, "w", encoding="utf-8") as f:
-            yaml.safe_dump(data, f, default_flow_style=False, allow_unicode=True)
 
     # START_FUNCTION_CONTRACT
     # name: create_run
@@ -144,11 +121,14 @@ class RunStore:
     # END_FUNCTION_CONTRACT
     def create_run(self, record: dict[str, Any]) -> str:
         run_id = record.get("run_id") or str(uuid.uuid4())
-        data = self._load_all()
-        record_copy = dict(record)
-        record_copy["run_id"] = run_id
-        data[run_id] = record_copy
-        self._save_all(data)
+
+        def mutator(data: dict[str, Any]) -> dict[str, Any]:
+            record_copy = dict(record)
+            record_copy["run_id"] = run_id
+            data[run_id] = record_copy
+            return data
+
+        locked_update_yaml(self.file_path, mutator)
         return run_id
 
     # START_FUNCTION_CONTRACT
@@ -163,11 +143,13 @@ class RunStore:
     # error_behavior: Raises ValueError if run_id is missing or doesn't exist.
     # END_FUNCTION_CONTRACT
     def update_run(self, run_id: str, patch: dict[str, Any]) -> None:
-        data = self._load_all()
-        if run_id not in data:
-            raise ValueError(f"Run {run_id} not found")
-        data[run_id].update(patch)
-        self._save_all(data)
+        def mutator(data: dict[str, Any]) -> dict[str, Any]:
+            if run_id not in data:
+                raise ValueError(f"Run {run_id} not found")
+            data[run_id].update(patch)
+            return data
+
+        locked_update_yaml(self.file_path, mutator)
 
     # START_FUNCTION_CONTRACT
     # name: get_run
@@ -180,7 +162,7 @@ class RunStore:
     # error_behavior: none.
     # END_FUNCTION_CONTRACT
     def get_run(self, run_id: str) -> dict[str, Any] | None:
-        return self._load_all().get(run_id)
+        return read_yaml(self.file_path).get(run_id)
 
     # START_FUNCTION_CONTRACT
     # name: list_runs
@@ -192,27 +174,13 @@ class RunStore:
     # error_behavior: none.
     # END_FUNCTION_CONTRACT
     def list_runs(self) -> list[dict[str, Any]]:
-        return list(self._load_all().values())
+        return list(read_yaml(self.file_path).values())
 
 #END_BLOCK_RUNS_STORE
 #START_BLOCK_HISTORY_STORE
 class ExecutorHistoryStore:
     def __init__(self, state_root: Path | str):
         self.file_path = Path(state_root) / "executor_history.yaml"
-
-    def _load_all(self) -> list[dict[str, Any]]:
-        if not self.file_path.exists():
-            return []
-        try:
-            with open(self.file_path, "r", encoding="utf-8") as f:
-                return yaml.safe_load(f) or []
-        except Exception:
-            return []
-
-    def _save_all(self, data: list[dict[str, Any]]) -> None:
-        self.file_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.file_path, "w", encoding="utf-8") as f:
-            yaml.safe_dump(data, f, default_flow_style=False, allow_unicode=True)
 
     # START_FUNCTION_CONTRACT
     # name: append_execution
@@ -225,9 +193,14 @@ class ExecutorHistoryStore:
     # error_behavior: none.
     # END_FUNCTION_CONTRACT
     def append_execution(self, record: dict[str, Any]) -> None:
-        data = self._load_all()
-        data.append(record)
-        self._save_all(data)
+        def mutator(data: list[dict[str, Any]] | dict[str, Any]) -> list[dict[str, Any]]:
+            # Handle both list and dict formats (dict format for compatibility)
+            if isinstance(data, dict):
+                data = []
+            data.append(record)
+            return data
+
+        locked_update_yaml(self.file_path, mutator)
 
     # START_FUNCTION_CONTRACT
     # name: list_executions
@@ -239,6 +212,10 @@ class ExecutorHistoryStore:
     # error_behavior: none.
     # END_FUNCTION_CONTRACT
     def list_executions(self) -> list[dict[str, Any]]:
-        return self._load_all()
+        data = read_yaml(self.file_path)
+        # Handle both list and dict formats
+        if isinstance(data, list):
+            return data
+        return []
 
 #END_BLOCK_HISTORY_STORE

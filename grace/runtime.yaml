@@ -1,0 +1,8 @@
+api_url: http://127.0.0.1:4200/api
+work_pool_name: grace-test-process
+live_queue_name: grace-test-live
+live_queue_limit: 1
+monitoring_queue_name: grace-test-monitoring
+monitoring_queue_limit: 1
+monitoring_interval_seconds: 300
+working_directory: /tmp/grace-orchestrator-export

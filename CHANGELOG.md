@@ -112,6 +112,6 @@ This is the first public release of grace-orchestrator, extracted from a product
 
 ---
 
-[Unreleased]: https://github.com/yourusername/grace-orchestrator/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/yourusername/grace-orchestrator/releases/tag/v0.1.0
-[0.0.1]: https://github.com/yourusername/grace-orchestrator/releases/tag/v0.0.1
+[Unreleased]: https://github.com/basilivanov/grace-orchestrator/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/basilivanov/grace-orchestrator/releases/tag/v0.1.0
+[0.0.1]: https://github.com/basilivanov/grace-orchestrator/releases/tag/v0.0.1

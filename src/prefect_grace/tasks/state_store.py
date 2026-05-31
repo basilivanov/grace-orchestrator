@@ -2,51 +2,23 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
-import yaml
-import fcntl
 
-
-def _read_yaml(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        return {}
-    return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-
-
-def _write_yaml(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(yaml.safe_dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8")
-
-
-def _locked_update_yaml(path: Path, mutator: Any) -> dict[str, Any]:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if not path.exists():
-        path.write_text(yaml.safe_dump({}, allow_unicode=True, sort_keys=False), encoding="utf-8")
-    with path.open("r+", encoding="utf-8") as handle:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-        raw = handle.read()
-        payload = yaml.safe_load(raw) or {}
-        updated = mutator(dict(payload))
-        handle.seek(0)
-        handle.truncate()
-        yaml.safe_dump(updated, handle, allow_unicode=True, sort_keys=False)
-        handle.flush()
-        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-        return updated
+from prefect_grace.storage.file_backend import read_yaml, write_yaml, locked_update_yaml
 
 
 def load_state(name: str, *, state_root: Path | str) -> dict[str, Any]:
     state_dir = Path(state_root)
-    return _read_yaml(state_dir / f"{name}.yaml")
+    return read_yaml(state_dir / f"{name}.yaml")
 
 
 def save_state(name: str, payload: dict[str, Any], *, state_root: Path | str) -> None:
     state_dir = Path(state_root)
-    _write_yaml(state_dir / f"{name}.yaml", payload)
+    write_yaml(state_dir / f"{name}.yaml", payload)
 
 
 def update_state(name: str, mutator: Any, *, state_root: Path | str) -> dict[str, Any]:
     state_dir = Path(state_root)
-    return _locked_update_yaml(state_dir / f"{name}.yaml", mutator)
+    return locked_update_yaml(state_dir / f"{name}.yaml", mutator)
 
 
 def append_record(name: str, key: str, record: dict[str, Any], *, state_root: Path | str) -> dict[str, Any]:
@@ -57,7 +29,7 @@ def append_record(name: str, key: str, record: dict[str, Any], *, state_root: Pa
         payload[key] = items
         return payload
 
-    _locked_update_yaml(state_dir / f"{name}.yaml", mutator)
+    locked_update_yaml(state_dir / f"{name}.yaml", mutator)
     return record
 
 
@@ -76,7 +48,7 @@ def update_record(name: str, key: str, id_field: str, id_value: str, updates: di
                 return payload
         raise KeyError(f"No {name}.{key} record with {id_field}={id_value}")
 
-    _locked_update_yaml(state_dir / f"{name}.yaml", mutator)
+    locked_update_yaml(state_dir / f"{name}.yaml", mutator)
     return updated_record
 
 
@@ -103,7 +75,7 @@ def find_packet_from_registry(
     if runtime_state_root:
         registry_path = Path(runtime_state_root) / "state" / "packet_registry.yaml"
         if registry_path.exists():
-            data = _read_yaml(registry_path)
+            data = read_yaml(registry_path)
             if packet_id in data:
                 packet_data = dict(data[packet_id])
                 # Add packet_path from 'path' field if present
@@ -140,5 +112,5 @@ def upsert_record(name: str, key: str, id_field: str, record: dict[str, Any], *,
         payload[key] = items
         return payload
 
-    _locked_update_yaml(state_dir / f"{name}.yaml", mutator)
+    locked_update_yaml(state_dir / f"{name}.yaml", mutator)
     return stored_record

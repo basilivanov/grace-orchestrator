@@ -16,7 +16,7 @@ GRACE enables teams to define verification slices—cohesive units of testing, e
 - **Evidence collection**: Automatically gather test results, logs, and quality metrics
 - **Live traffic replay**: Validate changes against real production patterns
 - **Observability integration**: Monitor verification flows and track quality over time
-- **CLI tooling**: `gracectl` command-line interface for slice verification and evidence management
+- **CLI tooling**: `grace` command-line interface for slice verification and evidence management
 
 ## Quick Start
 
@@ -33,6 +33,57 @@ For Prefect worker support:
 ```bash
 pip install grace-orchestrator[prefect]
 ```
+
+### Configuration
+
+GRACE requires configuration files to run. Starting with v2.0, configuration is no longer bundled in the package and must be provided externally.
+
+#### Quick Setup
+
+```bash
+# Create project-local configuration (recommended)
+mkdir -p grace
+cp examples/runtime.yaml.example grace/runtime.yaml
+cp examples/project.yaml.example grace/project.yaml
+
+# Edit configuration files with your project settings
+vim grace/runtime.yaml
+vim grace/project.yaml
+
+# Validate configuration
+grace validate-config
+```
+
+#### Configuration File Locations
+
+GRACE searches for configuration in the following order (highest priority first):
+
+**For `runtime.yaml`:**
+1. Path in `GRACE_CONFIG_PATH` environment variable
+2. `<project-root>/grace/runtime.yaml` (recommended for projects)
+3. `~/.grace/runtime.yaml` (recommended for personal use)
+
+**For `project.yaml`:**
+1. `<project-root>/grace/project.yaml`
+2. `~/.grace/project.yaml`
+
+#### Minimal Configuration
+
+Create `grace/runtime.yaml`:
+
+```yaml
+api_url: http://127.0.0.1:4200/api
+work_pool_name: grace-process
+live_queue_name: grace-live
+monitoring_queue_name: grace-monitoring
+working_directory: /path/to/your/project
+```
+
+See `examples/` directory for complete annotated templates.
+
+#### Upgrading from v1.x
+
+If you're upgrading from GRACE v1.x, see the [Configuration Migration Guide](docs/CONFIGURATION_MIGRATION.md) for detailed migration instructions.
 
 ### Initialize a Project
 
@@ -78,13 +129,13 @@ slices:
 
 ```bash
 # Verify a single slice
-gracectl slice verify AUTH-FLOW
+grace slice verify AUTH-FLOW
 
 # Run all commands for a slice
-gracectl slice replay AUTH-FLOW
+grace slice replay AUTH-FLOW
 
 # Watch for live traffic patterns
-gracectl watch start FLOW-AUTH
+grace watch start FLOW-AUTH
 ```
 
 ## Architecture
@@ -177,7 +228,7 @@ flow.deploy(name="auth-verification", work_pool="default")
 ```yaml
 defaults:
   report_path: test-results/grace-report.json
-  log_dir: logs/gracectl
+  log_dir: logs/grace
   repo_root: .
 
 slices:
@@ -274,61 +325,67 @@ networks:
 
 ## CLI Reference
 
-### `gracectl slice`
+### Production CLI: `grace`
+
+The main `grace` CLI provides production commands for packet submission, validation, and execution:
 
 ```bash
-# Verify a slice (run all commands and collect evidence)
-gracectl slice verify SLICE-ID
+# Initialize a new project
+grace init
 
-# Replay a slice (run commands without full verification)
-gracectl slice replay SLICE-ID
+# Submit packets for execution
+grace submit-packets --project grace/project.yaml
 
-# List all slices
-gracectl slice list
+# Validate project configuration
+grace validate-project --project grace/project.yaml
+
+# Validate a packet
+grace validate-packet path/to/packet.yaml
+
+# Run a managed packet with worktree isolation
+grace run-managed-packet --packet EXECUTION_PACKET.md --repo-root . --worktree-root /tmp/wt --project-key myproject --packet-id PKT-001 --attempt 1 --base-ref origin/master
+
+# Check packet status
+grace packet-status --project grace/project.yaml
+
+# Dump registry state
+grace registry-dump --project grace/project.yaml --json
 ```
 
-### `gracectl watch`
+### Development CLI: `grace-dev`
+
+The `grace-dev` CLI provides development tools, smoke tests, and pilot runs:
 
 ```bash
-# Start watching a flow
-gracectl watch start FLOW-ID
+# Run smoke tests
+grace-dev smoke e2e-live --project-config grace/project.yaml --state-root /tmp/state --worktree-root /tmp/wt --packet-root /tmp/packets
 
-# Stop watching a flow
-gracectl watch stop FLOW-ID
+grace-dev smoke registry-apply-smoke --project grace/project.yaml --state-root /tmp/state
 
-# List active watches
-gracectl watch list
+# Run pilot tests
+grace-dev pilot single-packet --packet EXECUTION_PACKET.md --repo-root . --worktree-root /tmp/wt --project-key myproject --base-ref origin/master --target-branch master
+
+# Run nightly operations
+grace-dev nightly run --project grace/project.yaml
+grace-dev nightly preflight --project grace/project.yaml
+grace-dev nightly select --project grace/project.yaml
 ```
 
-### `gracectl evidence`
+### Backward Compatibility
 
-```bash
-# Collect evidence for a slice
-gracectl evidence collect SLICE-ID
+For backward compatibility, the following deprecated commands are still available but will show warnings:
 
-# Show evidence summary
-gracectl evidence show SLICE-ID
+- `prefect-grace` → Use `grace` instead
+- `gracectl` → Use `grace` instead
 
-# Export evidence to file
-gracectl evidence export SLICE-ID --output evidence.json
-```
-
-### `gracectl env`
-
-```bash
-# Show environment configuration
-gracectl env show
-
-# Validate environment setup
-gracectl env validate
-```
+These aliases will be removed in a future major version.
 
 ## Development
 
 ### Setup
 
 ```bash
-git clone https://github.com/yourusername/grace-orchestrator.git
+git clone https://github.com/basilivanov/grace-orchestrator.git
 cd grace-orchestrator
 
 # Create virtual environment
@@ -347,9 +404,12 @@ pytest
 ```
 grace-orchestrator/
 ├── src/
-│   └── grace_orchestrator/
+│   └── prefect_grace/
 │       ├── __init__.py
-│       ├── cli/              # gracectl command-line interface
+│       ├── cli.py            # Main grace CLI entry point
+│       ├── cli_compat.py     # Backward compatibility aliases
+│       ├── cli_commands/     # CLI command implementations
+│       ├── devtools/         # grace-dev CLI and development tools
 │       ├── core/             # Core orchestration logic
 │       ├── agents/           # Planner, worker, reviewer agents
 │       ├── flows/            # Prefect flow definitions
@@ -444,5 +504,5 @@ GRACE is built on the principles of artifact-driven development and multi-agent 
 ### Community
 
 - Documentation: [https://grace-orchestrator.readthedocs.io](https://grace-orchestrator.readthedocs.io)
-- Issues: [https://github.com/yourusername/grace-orchestrator/issues](https://github.com/yourusername/grace-orchestrator/issues)
-- Discussions: [https://github.com/yourusername/grace-orchestrator/discussions](https://github.com/yourusername/grace-orchestrator/discussions)
+- Issues: [https://github.com/basilivanov/grace-orchestrator/issues](https://github.com/basilivanov/grace-orchestrator/issues)
+- Discussions: [https://github.com/basilivanov/grace-orchestrator/discussions](https://github.com/basilivanov/grace-orchestrator/discussions)

@@ -58,7 +58,7 @@ pip install grace-orchestrator[all]
 ### Option 2: Install from source
 
 ```bash
-git clone https://github.com/yourusername/grace-orchestrator.git
+git clone https://github.com/basilivanov/grace-orchestrator.git
 cd grace-orchestrator
 pip install -e ".[dev,prefect]"
 ```
@@ -421,6 +421,6 @@ python -c "import grace_orchestrator; print(grace_orchestrator.__version__)"
 
 ## Getting Help
 
-- GitHub Issues: https://github.com/yourusername/grace-orchestrator/issues
-- Discussions: https://github.com/yourusername/grace-orchestrator/discussions
+- GitHub Issues: https://github.com/basilivanov/grace-orchestrator/issues
+- Discussions: https://github.com/basilivanov/grace-orchestrator/discussions
 - Documentation: https://grace-orchestrator.readthedocs.io

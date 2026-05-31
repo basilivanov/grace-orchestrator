@@ -862,9 +862,9 @@ These should be preserved in the new docker-compose.grace-worker.yml.
 
 ## Support
 
-- GitHub Issues: https://github.com/yourusername/grace-orchestrator/issues
+- GitHub Issues: https://github.com/basilivanov/grace-orchestrator/issues
 - Documentation: https://grace-orchestrator.readthedocs.io
-- Discussions: https://github.com/yourusername/grace-orchestrator/discussions
+- Discussions: https://github.com/basilivanov/grace-orchestrator/discussions
 
 ## Appendix: Quick Reference
 

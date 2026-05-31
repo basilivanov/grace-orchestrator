@@ -212,8 +212,8 @@ See [CONTRIBUTING.md](../CONTRIBUTING.md) for contribution guidelines.
 
 ## Support
 
-- **Issues**: [GitHub Issues](https://github.com/yourusername/grace-orchestrator/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/yourusername/grace-orchestrator/discussions)
+- **Issues**: [GitHub Issues](https://github.com/basilivanov/grace-orchestrator/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/basilivanov/grace-orchestrator/discussions)
 - **Documentation**: This site
 
 ## License

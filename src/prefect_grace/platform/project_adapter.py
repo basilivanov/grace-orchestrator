@@ -138,7 +138,26 @@ def _flatten_nested_config(data: Mapping[str, Any]) -> dict[str, Any]:
 
 def _apply_defaults(data: Mapping[str, Any]) -> dict[str, Any]:
     config = _flatten_nested_config(data)
-    project_key = str(config.get("project_key") or "project").strip()
+
+    # Validate required fields
+    project_key = config.get("project_key")
+    if not project_key or not str(project_key).strip():
+        raise ValueError(
+            "project_key is required in project.yaml.\n"
+            "Set project.key in your configuration.\n"
+            "Run 'grace init' to create a template."
+        )
+    project_key = str(project_key).strip()
+
+    repo_root = config.get("repo_root")
+    if not repo_root or not str(repo_root).strip():
+        raise ValueError(
+            "repo_root is required in project.yaml.\n"
+            "Set project.root in your configuration.\n"
+            "Run 'grace init' to create a template."
+        )
+    repo_root = str(repo_root).strip()
+
     state_root = f"/var/lib/grace-orchestrator/{project_key}"
 
     # Preserve the version from the original data
@@ -147,7 +166,7 @@ def _apply_defaults(data: Mapping[str, Any]) -> dict[str, Any]:
     defaults: dict[str, Any] = {
         "version": version,
         "project_key": project_key,
-        "repo_root": str(Path.cwd()),
+        "repo_root": repo_root,
         "default_branch": "main",
         "grace_dir": "grace",
         "packets_dir": "grace/packets",
@@ -166,6 +185,47 @@ def _apply_defaults(data: Mapping[str, Any]) -> dict[str, Any]:
         },
     }
     return _deep_merge(defaults, config)
+
+
+def _validate_paths(config: dict[str, Any]) -> None:
+    """Validate that required paths exist and are accessible.
+
+    Args:
+        config: Configuration dictionary with repo_root and other paths
+
+    Raises:
+        ValueError: If repo_root doesn't exist or is not a directory
+
+    Warnings:
+        Logs warnings if grace_dir or packets_dir don't exist
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    repo_root = Path(config["repo_root"])
+
+    # Validate repo_root exists
+    if not repo_root.exists():
+        raise ValueError(
+            f"repo_root does not exist: {repo_root}\n"
+            "Ensure project.root points to your repository directory."
+        )
+
+    # Validate repo_root is a directory
+    if not repo_root.is_dir():
+        raise ValueError(
+            f"repo_root is not a directory: {repo_root}"
+        )
+
+    # Warn if grace_dir doesn't exist (non-fatal)
+    grace_dir = repo_root / config.get("grace_dir", "grace")
+    if not grace_dir.exists():
+        logger.warning(f"grace_dir does not exist: {grace_dir}")
+
+    # Warn if packets_dir doesn't exist (non-fatal)
+    packets_dir = repo_root / config.get("packets_dir", "grace/packets")
+    if not packets_dir.exists():
+        logger.warning(f"packets_dir does not exist: {packets_dir}")
 
 
 def _resolve_config_path(config_path: Path | str | None) -> Path:
@@ -278,6 +338,7 @@ class ProjectAdapterConfig:
     workflow_runtime: str
     prefect: PrefectConfig
     agent_executor: AgentExecutorConfig
+    security: dict[str, Any] | None = None
 
     # START_FUNCTION_CONTRACT
     # name: from_dict
@@ -302,6 +363,8 @@ class ProjectAdapterConfig:
 
         prefect_data = _required_mapping(data, "prefect", "project")
         agent_executor_data = _required_mapping(data, "agent_executor", "project")
+        security = data.get("security")
+
         return cls(
             version=version,
             project_key=_required_string(data, "project_key", "project"),
@@ -315,6 +378,7 @@ class ProjectAdapterConfig:
             workflow_runtime=_required_string(data, "workflow_runtime", "project"),
             prefect=PrefectConfig.from_dict(prefect_data),
             agent_executor=AgentExecutorConfig.from_dict(agent_executor_data),
+            security=security,
         )
 
     # START_FUNCTION_CONTRACT
@@ -327,7 +391,7 @@ class ProjectAdapterConfig:
     # error_behavior: none.
     # END_FUNCTION_CONTRACT
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result = {
             "version": self.version,
             "project_key": self.project_key,
             "repo_root": self.repo_root,
@@ -341,6 +405,9 @@ class ProjectAdapterConfig:
             "prefect": self.prefect.to_dict(),
             "agent_executor": self.agent_executor.to_dict(),
         }
+        if self.security is not None:
+            result["security"] = self.security
+        return result
 
 #END_BLOCK_DATA_MODELS
 #START_BLOCK_CONFIG_LOADER
@@ -362,12 +429,16 @@ def load_project_adapter(
     config_path = _resolve_config_path(config_path)
 
     if not config_path.exists():
-        raise FileNotFoundError(f"Project configuration file not found at {config_path}")
+        raise FileNotFoundError(
+            f"Project configuration file not found at {config_path}\n"
+            "Run 'grace init' to create a template configuration."
+        )
 
     with open(config_path, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
 
     data = _apply_defaults(data)
+    _validate_paths(data)
 
     if overrides:
         data = _deep_merge(data, overrides)

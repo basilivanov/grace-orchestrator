@@ -82,8 +82,9 @@ def _cmd_init(args: argparse.Namespace) -> None:
             # Load template content
             template_content = load_template(template_name)
 
-            # Substitute project key
+            # Substitute placeholders
             content = template_content.replace("{{PROJECT_KEY}}", project_key)
+            content = content.replace("{{REPO_ROOT}}", str(root))
 
             # Write to destination
             dst.write_text(content, encoding="utf-8")

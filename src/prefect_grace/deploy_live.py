@@ -10,6 +10,7 @@ from prefect.client.schemas.actions import DeploymentUpdate
 from prefect.deployments.runner import RunnerDeployment
 
 from prefect_grace.platform.project_adapter import load_project_adapter
+from prefect_grace.runtime import PrefectAPIContext
 from prefect_grace.runtime_config import load_runtime_config
 
 
@@ -68,22 +69,22 @@ def _apply_deployment(
         concurrency_limit=concurrency_limit,
         interval=interval,
     )
-    os.environ["PREFECT_API_URL"] = api_url
-    deployment_id = str(deployment.apply(work_pool_name=work_pool_name))
-    with get_client(sync_client=True) as client:
-        client.update_deployment(
-            deployment_id=deployment_id,
-            deployment=DeploymentUpdate(
-                pull_steps=[
-                    {
-                        "prefect.deployments.steps.set_working_directory": {
-                            "directory": working_directory,
+    with PrefectAPIContext(api_url):
+        deployment_id = str(deployment.apply(work_pool_name=work_pool_name))
+        with get_client(sync_client=True) as client:
+            client.update_deployment(
+                deployment_id=deployment_id,
+                deployment=DeploymentUpdate(
+                    pull_steps=[
+                        {
+                            "prefect.deployments.steps.set_working_directory": {
+                                "directory": working_directory,
+                            }
                         }
-                    }
-                ],
-                path=None,
-            ),
-        )
+                    ],
+                    path=None,
+                ),
+            )
     return deployment_id
 
 
@@ -151,19 +152,19 @@ def deploy_flows() -> dict[str, str]:
 
 def main() -> None:
     runtime = load_runtime_config()
-    os.environ["PREFECT_API_URL"] = runtime.api_url
-    ensure_work_pool_and_queues(
-        api_url=runtime.api_url,
-        working_directory=runtime.working_directory,
-        work_pool_name=runtime.work_pool_name,
-        queues=[
-            (runtime.live_queue_name, runtime.live_queue_limit),
-            (runtime.monitoring_queue_name, runtime.monitoring_queue_limit),
-        ],
-    )
-    deployments = deploy_flows()
-    for name, deployment_id in deployments.items():
-        print(f"{name}={deployment_id}")
+    with PrefectAPIContext(runtime.api_url):
+        ensure_work_pool_and_queues(
+            api_url=runtime.api_url,
+            working_directory=runtime.working_directory,
+            work_pool_name=runtime.work_pool_name,
+            queues=[
+                (runtime.live_queue_name, runtime.live_queue_limit),
+                (runtime.monitoring_queue_name, runtime.monitoring_queue_limit),
+            ],
+        )
+        deployments = deploy_flows()
+        for name, deployment_id in deployments.items():
+            print(f"{name}={deployment_id}")
 
 
 if __name__ == "__main__":

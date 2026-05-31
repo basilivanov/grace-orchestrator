@@ -1,32 +1,49 @@
 # GRACE Project Configuration
 # Project: {{PROJECT_KEY}}
 
+# REQUIRED: Unique identifier for this project
 project_key: "{{PROJECT_KEY}}"
+
+# REQUIRED: Absolute path to repository root
+# This should be the absolute path to your project's repository
+repo_root: "{{REPO_ROOT}}"
+
+# Optional: Project display name
 project_name: "{{PROJECT_KEY}}"
+
+# Optional: Project description
 description: "Project description goes here"
 
-# Repository configuration
-repository:
-  url: ""
-  default_branch: "main"
+# Optional: Default branch (defaults to "main")
+default_branch: "main"
 
-# Agent configuration
-agents:
-  default_profile: "standard"
-  timeout_seconds: 3600
+# Optional: GRACE directory relative to repo_root (defaults to "grace")
+grace_dir: "grace"
 
-# Verification settings
-verification:
-  require_tests: true
-  require_review: true
-  require_scope_check: true
+# Optional: Packets directory relative to repo_root (defaults to "grace/packets")
+packets_dir: "grace/packets"
 
-# Packet management
-packets:
-  root: "./grace/packets"
-  template: "standard"
+# Optional: Workflow runtime (defaults to "prefect")
+workflow_runtime: "prefect"
 
-# State management
-state:
-  root: "./.grace-state"
-  retention_days: 30
+# Prefect configuration (required if workflow_runtime is "prefect")
+prefect:
+  work_pool: "{{PROJECT_KEY}}-process"
+  live_queue: "{{PROJECT_KEY}}-live"
+  monitoring_queue: "{{PROJECT_KEY}}-monitoring"
+
+# Agent executor configuration
+agent_executor:
+  default: "codex-cli"
+  command: "codex1"
+
+# Security policies
+security:
+  # Allow dangerous sandbox bypass (danger-full-access)
+  # WARNING: Grants full filesystem access without approval prompts
+  # Default: false
+  allow_sandbox_bypass: false
+
+  # Audit log location for sandbox bypass attempts
+  # Default: /var/lib/grace-orchestrator/audit/sandbox_bypass.jsonl
+  sandbox_bypass_audit_log: "/var/lib/grace-orchestrator/audit/sandbox_bypass.jsonl"

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import os
 from pathlib import Path
 from typing import Mapping, Any
+import warnings
 
 import yaml
 
@@ -43,6 +44,68 @@ def _first_non_empty(*values: object) -> object | None:
     return None
 
 
+def _get_config_search_paths() -> list[Path]:
+    """Get config file search paths in priority order.
+
+    Priority:
+    1. Explicit GRACE_CONFIG_PATH environment variable
+    2. Project-local grace/runtime.yaml
+    3. User home ~/.grace/runtime.yaml
+    4. Package-local (deprecated, for backward compatibility)
+    """
+    paths = []
+
+    # 1. Explicit env var (highest priority)
+    env_path = os.environ.get("GRACE_CONFIG_PATH")
+    if env_path:
+        path = Path(env_path)
+        if path.exists():
+            paths.append(path)
+
+    # 2. Project-local grace/runtime.yaml
+    cwd_grace = Path.cwd() / "grace" / "runtime.yaml"
+    if cwd_grace.exists():
+        paths.append(cwd_grace)
+
+    # 3. User home config
+    home_config = Path.home() / ".grace" / "runtime.yaml"
+    if home_config.exists():
+        paths.append(home_config)
+
+    # 4. Package-local (deprecated, for backward compat)
+    if DEFAULT_CONFIG_PATH.exists():
+        warnings.warn(
+            f"Loading config from package-local {DEFAULT_CONFIG_PATH} is deprecated. "
+            f"Move config to grace/runtime.yaml or ~/.grace/runtime.yaml",
+            DeprecationWarning,
+            stacklevel=3
+        )
+        paths.append(DEFAULT_CONFIG_PATH)
+
+    return paths
+
+
+def _get_project_config_search_paths() -> list[Path]:
+    """Get project.yaml search paths in priority order."""
+    paths = []
+
+    # 1. Project-local grace/project.yaml
+    cwd_grace = Path.cwd() / "grace" / "project.yaml"
+    if cwd_grace.exists():
+        paths.append(cwd_grace)
+
+    # 2. User home config
+    home_config = Path.home() / ".grace" / "project.yaml"
+    if home_config.exists():
+        paths.append(home_config)
+
+    # 3. Package-local (deprecated)
+    if DEFAULT_PROJECT_CONFIG_PATH.exists():
+        paths.append(DEFAULT_PROJECT_CONFIG_PATH)
+
+    return paths
+
+
 def load_runtime_config(
     *,
     config_path: Path | None = None,
@@ -50,43 +113,55 @@ def load_runtime_config(
 ) -> PrefectGraceRuntimeConfig:
     env_map = dict(os.environ if env is None else env)
 
-    # Try to load from runtime.yaml first, then fall back to project.yaml
-    if config_path is None:
-        config_path = DEFAULT_CONFIG_PATH
+    raw = {}
 
-    raw = _load_yaml(config_path)
+    # If explicit config_path provided, use it
+    if config_path is not None:
+        raw = _load_yaml(config_path)
+    else:
+        # Search for runtime.yaml in priority order
+        search_paths = _get_config_search_paths()
+        for path in search_paths:
+            raw = _load_yaml(path)
+            if raw:
+                break
 
     # If runtime.yaml doesn't exist or is empty, try loading from project.yaml v2
-    if not raw and config_path == DEFAULT_CONFIG_PATH:
-        project_raw = _load_yaml(DEFAULT_PROJECT_CONFIG_PATH)
-        if project_raw and project_raw.get("version") == 2:
-            # Extract runtime config from v2 project.yaml
-            workflow_runtime = project_raw.get("workflow_runtime", {})
-            if isinstance(workflow_runtime, dict):
-                raw = {
-                    "api_url": workflow_runtime.get("api_url"),
-                    "public_ui_url": workflow_runtime.get("public_ui_url"),
-                    "work_pool_name": workflow_runtime.get("work_pool"),
-                    "monitoring_interval_seconds": workflow_runtime.get("monitoring_interval_seconds"),
-                }
+    if not raw:
+        project_search_paths = _get_project_config_search_paths()
+        for project_path in project_search_paths:
+            project_raw = _load_yaml(project_path)
+            if project_raw and project_raw.get("version") == 2:
+                # Extract runtime config from v2 project.yaml
+                workflow_runtime = project_raw.get("workflow_runtime", {})
+                if isinstance(workflow_runtime, dict):
+                    raw = {
+                        "api_url": workflow_runtime.get("api_url"),
+                        "public_ui_url": workflow_runtime.get("public_ui_url"),
+                        "work_pool_name": workflow_runtime.get("work_pool"),
+                        "monitoring_interval_seconds": workflow_runtime.get("monitoring_interval_seconds"),
+                    }
 
-                queues = workflow_runtime.get("queues", {})
-                if isinstance(queues, dict):
-                    live_queue = queues.get("live", {})
-                    monitoring_queue = queues.get("monitoring", {})
+                    queues = workflow_runtime.get("queues", {})
+                    if isinstance(queues, dict):
+                        live_queue = queues.get("live", {})
+                        monitoring_queue = queues.get("monitoring", {})
 
-                    if isinstance(live_queue, dict):
-                        raw["live_queue_name"] = live_queue.get("name")
-                        raw["live_queue_limit"] = live_queue.get("concurrency_limit")
+                        if isinstance(live_queue, dict):
+                            raw["live_queue_name"] = live_queue.get("name")
+                            raw["live_queue_limit"] = live_queue.get("concurrency_limit")
 
-                    if isinstance(monitoring_queue, dict):
-                        raw["monitoring_queue_name"] = monitoring_queue.get("name")
-                        raw["monitoring_queue_limit"] = monitoring_queue.get("concurrency_limit")
+                        if isinstance(monitoring_queue, dict):
+                            raw["monitoring_queue_name"] = monitoring_queue.get("name")
+                            raw["monitoring_queue_limit"] = monitoring_queue.get("concurrency_limit")
 
-                # Get working_directory from project.root
-                project_section = project_raw.get("project", {})
-                if isinstance(project_section, dict):
-                    raw["working_directory"] = project_section.get("root")
+                    # Get working_directory from project.root
+                    project_section = project_raw.get("project", {})
+                    if isinstance(project_section, dict):
+                        raw["working_directory"] = project_section.get("root")
+
+                if raw:
+                    break
 
     api_url = str(
         _first_non_empty(
@@ -105,7 +180,7 @@ def load_runtime_config(
         _first_non_empty(
             env_map.get("PREFECT_GRACE_WORK_POOL"),
             raw.get("work_pool_name"),
-            "astro-process",
+            "grace-process",
         )
     )
     live_queue_name = str(

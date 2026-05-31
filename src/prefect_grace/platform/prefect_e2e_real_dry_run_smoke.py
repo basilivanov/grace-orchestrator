@@ -311,6 +311,7 @@ def _extract_payload(state: Any) -> dict[str, Any]:
 def _read_prefect_flow_run_status(flow_run_id: str) -> dict[str, Any]:
     try:
         get_client = importlib.import_module("prefect.client.orchestration").get_client
+        from prefect_grace.runtime.async_helpers import run_async_safe
     except ImportError as e:
         return {"error": f"Prefect client unavailable: {e}"}
 
@@ -327,8 +328,7 @@ def _read_prefect_flow_run_status(flow_run_id: str) -> dict[str, Any]:
             }
 
     try:
-        import asyncio
-        return asyncio.run(_fetch())
+        return run_async_safe(_fetch())
     except Exception as e:
         return {"error": str(e)}
 

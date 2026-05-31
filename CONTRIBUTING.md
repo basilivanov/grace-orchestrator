@@ -14,7 +14,7 @@ This project adheres to a code of conduct that all contributors are expected to 
 2. Clone your fork locally:
 
 ```bash
-git clone https://github.com/yourusername/grace-orchestrator.git
+git clone https://github.com/basilivanov/grace-orchestrator.git
 cd grace-orchestrator
 ```
 
@@ -82,7 +82,7 @@ mypy src/
 
 Before creating a bug report:
 
-1. Check the [existing issues](https://github.com/yourusername/grace-orchestrator/issues)
+1. Check the [existing issues](https://github.com/basilivanov/grace-orchestrator/issues)
 2. Verify you're using the latest version
 3. Collect relevant information (version, OS, error messages, logs)
 
@@ -277,7 +277,7 @@ Maintainers handle releases:
 
 ## Questions?
 
-- Open a [Discussion](https://github.com/yourusername/grace-orchestrator/discussions)
+- Open a [Discussion](https://github.com/basilivanov/grace-orchestrator/discussions)
 - Join our community chat (link TBD)
 - Email maintainers (see README.md)
 

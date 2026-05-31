@@ -1,0 +1,53 @@
+# GRACE Runtime Configuration Template
+# Copy this file to one of the following locations (in priority order):
+#   1. Path specified in GRACE_CONFIG_PATH environment variable
+#   2. <project-root>/grace/runtime.yaml
+#   3. ~/.grace/runtime.yaml
+#
+# This is a simplified runtime config. For full project configuration,
+# use project.yaml (see project.yaml.example).
+
+# Prefect API URL (required)
+# Default: http://127.0.0.1:4200/api
+api_url: http://127.0.0.1:4200/api
+
+# Public UI URL for linking to Prefect UI (optional)
+# Default: derived from api_url
+public_ui_url: http://127.0.0.1:4200
+
+# Prefect work pool name (required)
+# This should match a work pool configured in your Prefect server
+# Default: grace-process
+work_pool_name: grace-process
+
+# Live queue name for interactive agent runs (required)
+# Default: grace-live
+live_queue_name: grace-live
+
+# Live queue concurrency limit (optional)
+# Default: 1
+live_queue_limit: 1
+
+# Monitoring queue name for background monitoring tasks (optional)
+# Default: grace-monitoring
+monitoring_queue_name: grace-monitoring
+
+# Monitoring queue concurrency limit (optional)
+# Default: 1
+monitoring_queue_limit: 1
+
+# Monitoring interval in seconds (optional)
+# How often monitoring tasks check for updates
+# Default: 300
+monitoring_interval_seconds: 300
+
+# Working directory for agent execution (required)
+# This should be the root of your project repository
+# Can use environment variables: ${HOME}, ${USER}, etc.
+working_directory: /path/to/your/project
+
+# Environment variables (optional)
+# These will be available to all GRACE agent runs
+# environment:
+#   CUSTOM_VAR: value
+#   ANOTHER_VAR: value

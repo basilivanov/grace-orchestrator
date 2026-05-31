@@ -1,0 +1,188 @@
+# GRACE Project Configuration Template (v2)
+# Copy this file to one of the following locations (in priority order):
+#   1. <project-root>/grace/project.yaml
+#   2. ~/.grace/project.yaml
+#
+# This is the full project configuration format. For simpler runtime-only config,
+# see runtime.yaml.example.
+
+version: 2
+
+# Project identification and paths
+project:
+  # Unique project identifier (required)
+  # Used for state isolation and artifact organization
+  key: my-project
+
+  # Project repository root (required)
+  # Absolute path to your project's git repository
+  root: /path/to/your/project
+
+  # Default git branch (optional)
+  # Default: master or main (auto-detected)
+  default_branch: main
+
+  # GRACE configuration directory (optional)
+  # Relative to project root
+  # Default: grace
+  grace_dir: grace
+
+  # Packets directory for GRACE work artifacts (optional)
+  # Relative to project root
+  # Default: prefect_grace/packets
+  packets_dir: prefect_grace/packets
+
+# Runtime state and artifact storage
+runtime:
+  # Root directory for GRACE runtime state (required)
+  # This stores agent execution state, logs, and metadata
+  state_root: /var/lib/grace-orchestrator/my-project
+
+  # Artifact storage directory (optional)
+  # Default: <state_root>/artifacts
+  artifact_root: /var/lib/grace-orchestrator/my-project/artifacts
+
+  # Worktree directory for isolated git worktrees (optional)
+  # Default: <state_root>/worktrees
+  worktree_root: /var/lib/grace-orchestrator/my-project/worktrees
+
+# Workflow runtime configuration (Prefect)
+workflow_runtime:
+  # Workflow engine type (required)
+  # Currently only 'prefect' is supported
+  type: prefect
+
+  # Prefect API URL (required)
+  api_url: http://127.0.0.1:4200/api
+
+  # Public UI URL for linking (optional)
+  public_ui_url: http://127.0.0.1:4200
+
+  # Prefect work pool name (required)
+  # Must match a work pool in your Prefect server
+  work_pool: grace-process
+
+  # Queue configuration
+  queues:
+    live:
+      name: grace-live
+      concurrency_limit: 1
+    monitoring:
+      name: grace-monitoring
+      concurrency_limit: 1
+
+  # Monitoring interval in seconds (optional)
+  # Default: 300
+  monitoring_interval_seconds: 300
+
+# Executor configuration
+executors:
+  # Default executor ID (required)
+  default: codex-cli
+
+  # Default command for agent execution (required)
+  # This should be the CLI command for your AI agent
+  command: agy
+
+  # Available executor configurations
+  items:
+    - id: codex-cli
+      command: agy
+      mode: live
+
+# Verification profiles (optional)
+# Define test and verification commands for different components
+verification:
+  # Backend verification profiles
+  backend_profiles:
+    backend_quick: pytest tests/ -k "not slow"
+    backend_full: pytest tests/
+
+  # Frontend verification profiles
+  frontend_profiles:
+    frontend_quick: npm test -- --run
+    frontend_full: npm test
+
+  # Observability/monitoring profiles
+  observability_profiles:
+    health_check: curl -f http://localhost:8000/health
+
+  # Artifact collection patterns (optional)
+  # Glob patterns for collecting test artifacts
+  default_artifact_globs:
+    - test-results/**/*
+    - artifacts/**/*
+    - coverage/**/*
+
+# GRACE agent configuration
+grace:
+  # Canon version (required)
+  # Default: 1
+  canon_version: 1
+
+  # Prompt pack to use (optional)
+  # Default: default
+  prompt_pack: default
+
+  # Policy pack for agent behavior (optional)
+  # Options: strict, permissive
+  # Default: strict
+  policy_pack: strict
+
+  # Overrides directory (optional)
+  # For custom prompts, roles, and policies
+  # Default: grace/overrides
+  overrides_dir: grace/overrides
+
+# Codex agent configuration (optional)
+# Configure AI agent behavior and model selection
+codex:
+  # Agent binary/command (optional)
+  # Default: agy
+  binary: agy
+
+  # Working directory for agent execution (optional)
+  # Default: project.root
+  workdir: /path/to/your/project
+
+  # Shared model for most agent roles (optional)
+  # Default: claude-sonnet-4-6
+  shared_model: claude-sonnet-4-6
+
+  # Role-specific configurations (optional)
+  # Override model, reasoning level, sandbox, approval for specific roles
+  roles:
+    architect:
+      model: claude-opus-4-8
+      reasoning: xhigh
+      sandbox: danger-full-access
+      approval: never
+      resume_strategy: feature_role
+      stall_timeout_seconds: 300
+      max_auto_resume_attempts: 1
+
+    planner:
+      reasoning: xhigh
+      sandbox: danger-full-access
+      approval: never
+      resume_strategy: feature_role
+      stall_timeout_seconds: 300
+      max_auto_resume_attempts: 1
+
+    coder:
+      reasoning: high
+      sandbox: danger-full-access
+      approval: never
+
+    verifier:
+      reasoning: medium
+      sandbox: danger-full-access
+      approval: never
+
+    reviewer:
+      reasoning: xhigh
+      sandbox: danger-full-access
+      approval: never
+      resume_strategy: feature_role
+      stall_timeout_seconds: 300
+      max_auto_resume_attempts: 1

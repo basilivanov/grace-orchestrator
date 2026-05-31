@@ -407,7 +407,7 @@ def run_prefect_worker_binding_preflight(
         work_pool_name = runtime_config.work_pool_name
     except Exception as e:
         api_url = ""
-        work_pool_name = "astro-process"
+        work_pool_name = "grace-process"
         warnings.append(f"Failed to load runtime config: {e}")
 
     # Required queues

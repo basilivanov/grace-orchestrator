@@ -38,7 +38,7 @@ jobs:
 
     - name: Check coverage threshold
       run: |
-        coverage report --fail-under=60
+        coverage report --fail-under=75
 
   lint:
     runs-on: ubuntu-latest
@@ -80,7 +80,7 @@ jobs:
         pip install -e ".[dev]"
 
     - name: Run mypy
-      run: mypy src/prefect_grace --ignore-missing-imports
+      run: mypy src/prefect_grace
 
   verification:
     runs-on: ubuntu-latest

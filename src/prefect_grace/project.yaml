@@ -16,7 +16,7 @@ workflow_runtime:
   type: prefect
   api_url: http://127.0.0.1:4200/api
   public_ui_url: https://prefect.vasiliy-ivanov.ru
-  work_pool: astro-process
+  work_pool: grace-process
   queues:
     live:
       name: grace-live
