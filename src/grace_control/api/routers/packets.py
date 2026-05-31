@@ -28,12 +28,15 @@ from datetime import datetime, timedelta
 
 from fastapi import APIRouter, HTTPException
 
+from grace_control.core.event_recorder import record_event
 from grace_control.core.state_machine import PacketStateMachine
+from grace_control.core.structured_logger import GraceLogger, trace_context
 from grace_control.db import get_db
 from grace_control.db.schema import Lease, Packet, PacketRun, PacketState, Worker
 
 router = APIRouter()
 _state_machine = PacketStateMachine()
+_log = GraceLogger("packets")
 
 
 @router.get("/")
@@ -123,6 +126,11 @@ async def claim_packet(request: dict) -> dict:
             if worker:
                 worker.current_packet_id = packet.id
 
+            _log.info("packet_claimed", packet_id=packet.id, worker_id=worker_id,
+                       attempt=packet.attempt_count)
+            record_event("packet_claimed", "packet", packet.id,
+                         {"worker_id": worker_id, "attempt": packet.attempt_count})
+
             return {
                 "data": {
                     "packet_id": packet.id,
@@ -167,6 +175,11 @@ async def release_packet(packet_id: str, request: dict) -> dict:
             worker.current_packet_id = None
             worker.status = "idle"
 
+        _log.info("packet_released", packet_id=packet.id, state=target.value,
+                   worker_id=worker_id)
+        record_event("packet_released", "packet", packet.id,
+                     {"worker_id": worker_id, "state": target.value})
+
         return {
             "data": {"packet_id": packet.id, "state": packet.state, "released": True},
             "timestamp": datetime.utcnow().isoformat() + "Z",
@@ -197,6 +210,9 @@ async def cancel_packet(packet_id: str, request: dict) -> dict:
         _state_machine.transition(current, PacketState.CANCELLED)
         packet.state = PacketState.CANCELLED.value
 
+        _log.info("packet_cancelled", packet_id=packet.id, reason=reason)
+        record_event("packet_cancelled", "packet", packet.id, {"reason": reason})
+
         return {
             "data": {"packet_id": packet.id, "state": packet.state, "reason": reason},
             "timestamp": datetime.utcnow().isoformat() + "Z",
@@ -220,6 +236,9 @@ async def merge_packet(packet_id: str, request: dict) -> dict:
 
         _state_machine.transition(current, PacketState.MERGED)
         packet.state = PacketState.MERGED.value
+
+        _log.info("packet_merged", packet_id=packet.id, commit_sha=commit_sha)
+        record_event("packet_merged", "packet", packet.id, {"commit_sha": commit_sha})
 
         return {
             "data": {"packet_id": packet.id, "state": packet.state, "commit_sha": commit_sha},
