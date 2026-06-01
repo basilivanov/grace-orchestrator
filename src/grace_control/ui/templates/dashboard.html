@@ -280,7 +280,7 @@ async function renderInspector(pid){
       h+='<button class=tab'+isAct+' data-tab='+tnames[ti]+' data-pid='+pid+'>'+tlabels[ti]+'</button>';
     }
     h+='</div>';
-    h+=`<div class="tc" id=tc-ov>${renderOverview(d)}</div>`;
+    h+=`<div class="tc" id=tc-ov>${renderOverview(d,s)}</div>`;
     h+=`<div class="tc hidden" id=tc-runs>${renderRuns(d)}</div>`;
     h+=`<div class="tc hidden" id=tc-events><div class=empt>Loading...</div></div>`;
     h+=`<div class="tc hidden" id=tc-arts><div class=empt>Select a run to view artifacts</div></div>`;
