@@ -52,23 +52,32 @@ class Worker:
 
     async def _main_loop(self):
         while self.running:
+            claim = None
             try:
                 claim = await self.api.claim_packet(self.worker_id)
                 if not claim:
                     await asyncio.sleep(5)
                     continue
 
-                result = await self.executor.execute(claim.packet_id, self.worker_id)
-                status = "accepted" if result.accepted else "rejected"
-                release_resp = await self.api.release_packet(claim.packet_id, self.worker_id, status, result.model_dump())
+                try:
+                    result = await self.executor.execute(claim.packet_id, self.worker_id)
+                    status = "accepted" if result.accepted else "rejected"
+                    release_resp = await self.api.release_packet(claim.packet_id, self.worker_id, status, result.model_dump())
 
-                if status == "accepted":
-                    await self.api.merge_packet(claim.packet_id,
-                        worktree_path=result.worktree_path,
-                        branch_name=result.branch_name)
+                    if status == "accepted":
+                        await self.api.merge_packet(claim.packet_id,
+                            worktree_path=result.worktree_path,
+                            branch_name=result.branch_name)
 
-                if status == "rejected":
-                    self._handle_rejection(claim.packet_id)
+                    if status == "rejected":
+                        self._handle_rejection(claim.packet_id)
+
+                except Exception:
+                    # Release as FAILED immediately — no need to wait for lease timeout
+                    try:
+                        await self.api.release_packet(claim.packet_id, self.worker_id, "failed", {"accepted": False})
+                    except Exception:
+                        pass
 
             except Exception:
                 await asyncio.sleep(10)

@@ -26,8 +26,8 @@ from datetime import datetime, timedelta
 from grace_control.db import get_db
 from grace_control.db.schema import Lease, Packet, PacketState, Worker
 
-LEASE_TIMEOUT_MINUTES = 30
-CHECK_INTERVAL_SECONDS = 60
+LEASE_TIMEOUT_MINUTES = 5
+CHECK_INTERVAL_SECONDS = 30
 
 #START_BLOCK_CHECKER
 def check_expired_leases() -> int:

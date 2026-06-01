@@ -116,7 +116,7 @@ async def claim_packet(request: dict) -> dict:
             lease = Lease(
                 packet_id=packet.id,
                 worker_id=worker_id,
-                expires_at=datetime.utcnow() + timedelta(minutes=30),
+                expires_at=datetime.utcnow() + timedelta(minutes=5),
             )
             db.add(lease)
             db.flush()  # populate lease.id before return
