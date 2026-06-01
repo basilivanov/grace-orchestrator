@@ -32,10 +32,14 @@ class Worker:
         self.running = False
         self.log = GraceLogger("worker")
 
+        self._base_project_root = project_root or Path.cwd()
+        self._base_state_root = state_root or Path.cwd() / ".grace"
+        self._base_worktree_root = worktree_root or Path.cwd() / ".grace/worktrees"
+        # Use base paths for executor — adapter will use temp dirs per attempt
         self.executor = PacketExecutionAdapter(
-            project_root=project_root or Path.cwd(),
-            state_root=state_root or Path.cwd() / ".grace",
-            worktree_root=worktree_root or Path.cwd() / ".grace/worktrees",
+            project_root=self._base_project_root,
+            state_root=self._base_state_root,
+            worktree_root=self._base_worktree_root,
         )
 
     async def start(self):

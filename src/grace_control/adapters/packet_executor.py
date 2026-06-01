@@ -87,6 +87,13 @@ class PacketExecutionAdapter:
         start_time = time.time()
         _log.info("adapter_execute_start", packet_id=packet_id, worker_id=worker_id)
 
+        # Use temp directories per attempt — avoids state accumulation
+        import tempfile as _tf
+        _tmp = _tf.TemporaryDirectory()
+        _state_root = Path(_tmp.name) / "state"
+        _worktree_root = Path(_tmp.name) / "worktrees"
+        _state_root.mkdir(); _worktree_root.mkdir()
+
         with get_db() as db:
             packet = db.query(Packet).filter_by(id=packet_id).first()
             if not packet:
@@ -134,14 +141,17 @@ class PacketExecutionAdapter:
         packet_data["_tier"] = tier.value
 
         try:
-            packet_path = self._materialize_packet(packet_data)
+            packet_path = self._materialize_packet(packet_data, _state_root)
             _log.debug("packet_materialized", packet_id=packet_id, path=str(packet_path))
-            result = await self._call_legacy_runner(packet_path)
+            result = await self._call_legacy_runner(packet_path, _state_root, _worktree_root)
             _log.debug("legacy_runner_completed", packet_id=packet_id,
-                ok=result.ok, domain=result.domain_status)
-
-            # Save raw agent output for analysis
-            self._save_agent_log(packet_id, run_number, result)
+                ok=result.ok, domain=result.domain_status,
+                errors=result.errors[:3], blocker=getattr(result, 'registry_reason', '')[:200])
+            execution_result = self._parse_result(result)
+            evidence_path = self._save_evidence(packet_id, run_number, result.to_dict(), _state_root)
+            execution_result.evidence_path = evidence_path
+            execution_result.duration_ms = int((time.time() - start_time) * 1000)
+            self._save_agent_log(packet_id, run_number, result, _state_root)
             execution_result = self._parse_result(result)
             evidence_path = self._save_evidence(packet_id, run_number, result.to_dict())
             execution_result.evidence_path = evidence_path
@@ -159,11 +169,13 @@ class PacketExecutionAdapter:
 
             _log.info("adapter_execute_done", packet_id=packet_id,
                 accepted=execution_result.accepted, duration_ms=execution_result.duration_ms)
+            _tmp.cleanup()  # Clean temp dirs
 
             return execution_result
 
         except Exception:
             _log.error("adapter_execute_failed", packet_id=packet_id)
+            _tmp.cleanup()  # Clean temp dirs on error too
             with get_db() as db:
                 existing = db.query(PacketRun).filter_by(id=run_id).first()
                 if existing:
@@ -181,9 +193,9 @@ class PacketExecutionAdapter:
     # emitted_logs: None.
     # error_behavior: Raises on filesystem error.
     # END_FUNCTION_CONTRACT
-    def _materialize_packet(self, packet_data: dict) -> Path:
+    def _materialize_packet(self, packet_data: dict, state_root: Path) -> Path:
         packet_id = packet_data["id"]
-        packet_dir = self.state_root / "packets" / packet_id
+        packet_dir = state_root / "packets" / packet_id
         packet_dir.mkdir(parents=True, exist_ok=True)
 
         spec_json = packet_data["spec_json"] if isinstance(packet_data["spec_json"], dict) else {}
@@ -262,42 +274,13 @@ ruff check src/
     # emitted_logs: None.
     # error_behavior: Raises on runtime failure.
     # END_FUNCTION_CONTRACT
-    async def _call_legacy_runner(self, packet_path: Path):
+    async def _call_legacy_runner(self, packet_path: Path, state_root: Path, worktree_root: Path):
         from prefect_grace.platform.e2e_packet_runner import run_e2e_packet
 
         packet_id = packet_path.parent.name
 
-        # Clean ALL state for this packet from previous attempts
-        import subprocess as _sp
-        import shutil
-
-        # 1. Remove stale git worktrees
-        for wt_dir in sorted(self.worktree_root.glob(f"{packet_id}*")):
-            try:
-                _sp.run(["git", "worktree", "remove", str(wt_dir), "--force"],
-                        cwd=self.project_root, capture_output=True, timeout=10)
-            except Exception:
-                pass
-            try:
-                shutil.rmtree(wt_dir, ignore_errors=True)
-            except Exception:
-                pass
-        try:
-            _sp.run(["git", "worktree", "prune"], cwd=self.project_root,
-                    capture_output=True, timeout=10)
-        except Exception:
-            pass
-
-        # 2. Clean packet state dir from previous runs
-        pkt_state = self.state_root / "packets" / packet_id
-        if pkt_state.exists():
-            try:
-                shutil.rmtree(pkt_state, ignore_errors=True)
-            except Exception:
-                pass
-
-        # 3. Create fresh registry entry
-        reg_dir = self.state_root / "state"
+        # Create fresh registry
+        reg_dir = state_root / "state"
         reg_dir.mkdir(parents=True, exist_ok=True)
         reg_file = reg_dir / "packet_registry.yaml"
         try:
@@ -325,8 +308,8 @@ ruff check src/
                 run_e2e_packet,
                 project_root=self.project_root,
                 packet_path=packet_path,
-                state_root=self.state_root,
-                worktree_root=self.worktree_root,
+                state_root=state_root,
+                worktree_root=worktree_root,
                 dry_run=False,
                 execute_agent=True,
                 keep_worktree=False,
@@ -366,12 +349,12 @@ ruff check src/
     # emitted_logs: None.
     # error_behavior: Never raises.
     # END_FUNCTION_CONTRACT
-    def _save_evidence(self, packet_id: str, run_number: int, result: dict) -> str:
-        return str(self.state_root / "packets" / packet_id / "runs" / f"R{run_number:02d}")
+    def _save_evidence(self, packet_id: str, run_number: int, result: dict, state_root: Path) -> str:
+        return str(state_root / "packets" / packet_id / "runs" / f"R{run_number:02d}")
 
-    def _save_agent_log(self, packet_id: str, run_number: int, result) -> None:
+    def _save_agent_log(self, packet_id: str, run_number: int, result, state_root: Path) -> None:
         try:
-            log_dir = self.state_root / "packets" / packet_id / "runs" / f"R{run_number:02d}"
+            log_dir = state_root / "packets" / packet_id / "runs" / f"R{run_number:02d}"
             log_dir.mkdir(parents=True, exist_ok=True)
             agent_log = log_dir / "agent_output.log"
 
