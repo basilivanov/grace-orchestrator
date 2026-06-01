@@ -66,11 +66,12 @@ def test_click_packet_shows_inspector(page):
     page.wait_for_selector(".pcard", timeout=5000)
     page.click(".pcard:first-child")
     page.wait_for_selector(".insp", timeout=5000)
-    # Should NOT show "Error loading packet"
-    html = page.content()
-    assert "Error loading packet" not in html, "renderInspector failed"
-    # Should show state badge
-    assert "State:" in html or "state-badge" in html or "Merged" in html or "Accepted" in html or "Ready" in html, "No state info in inspector"
+    # Should NOT show "Error loading" in visible inspector
+    insp = page.query_selector(".insp")
+    assert insp, "Inspector not found"
+    insp_html = insp.inner_html()
+    assert "Error loading" not in insp_html, f"Inspector error: {insp_html[:200]}"
+    assert "state-badge" in insp_html, "No state badge"
     print("  OK: inspector renders without error")
 
 def test_tabs_have_content(page):
