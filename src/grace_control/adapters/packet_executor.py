@@ -265,8 +265,38 @@ ruff check src/
     async def _call_legacy_runner(self, packet_path: Path):
         from prefect_grace.platform.e2e_packet_runner import run_e2e_packet
 
-        # Register packet in legacy file-based registry
         packet_id = packet_path.parent.name
+
+        # Clean ALL state for this packet from previous attempts
+        import subprocess as _sp
+        import shutil
+
+        # 1. Remove stale git worktrees
+        for wt_dir in sorted(self.worktree_root.glob(f"{packet_id}*")):
+            try:
+                _sp.run(["git", "worktree", "remove", str(wt_dir), "--force"],
+                        cwd=self.project_root, capture_output=True, timeout=10)
+            except Exception:
+                pass
+            try:
+                shutil.rmtree(wt_dir, ignore_errors=True)
+            except Exception:
+                pass
+        try:
+            _sp.run(["git", "worktree", "prune"], cwd=self.project_root,
+                    capture_output=True, timeout=10)
+        except Exception:
+            pass
+
+        # 2. Clean packet state dir from previous runs
+        pkt_state = self.state_root / "packets" / packet_id
+        if pkt_state.exists():
+            try:
+                shutil.rmtree(pkt_state, ignore_errors=True)
+            except Exception:
+                pass
+
+        # 3. Create fresh registry entry
         reg_dir = self.state_root / "state"
         reg_dir.mkdir(parents=True, exist_ok=True)
         reg_file = reg_dir / "packet_registry.yaml"
@@ -286,25 +316,6 @@ ruff check src/
             pass
 
         os.environ.setdefault("GRACE_ALLOW_SANDBOX_BYPASS", "true")
-
-        # Clean up stale worktrees from previous attempts
-        import subprocess as _sp
-        import shutil
-        for wt_dir in sorted(self.worktree_root.glob(f"{packet_id}*")):
-            try:
-                _sp.run(["git", "worktree", "remove", str(wt_dir), "--force"],
-                        cwd=self.project_root, capture_output=True, timeout=10)
-            except Exception:
-                pass
-            try:
-                shutil.rmtree(wt_dir, ignore_errors=True)
-            except Exception:
-                pass
-        try:
-            _sp.run(["git", "worktree", "prune"], cwd=self.project_root,
-                    capture_output=True, timeout=10)
-        except Exception:
-            pass
 
         timeout = int(os.environ.get("GRACE_AGENT_TIMEOUT", "600"))
         loop = asyncio.get_event_loop()
