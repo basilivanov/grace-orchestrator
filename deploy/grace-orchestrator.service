@@ -1,0 +1,18 @@
+[Unit]
+Description=GRACE Control Plane — Autonomous Agent Orchestrator
+After=network.target
+
+[Service]
+Type=simple
+User=astro
+WorkingDirectory=/tmp/canonical_target
+Environment="GRACE_ALLOW_SANDBOX_BYPASS=true"
+Environment="GRACE_DB_URL=sqlite:////tmp/canonical_target/grace.db"
+ExecStart=/tmp/grace-orchestrator-export/.venv/bin/grace up --watch --project /tmp/canonical_target
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

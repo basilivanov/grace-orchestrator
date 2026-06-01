@@ -30,8 +30,9 @@ def cli():
 @click.option("--port", default=8042, help="API port")
 @click.option("--worker-id", default="agy1", help="Worker ID")
 @click.option("--project", default=".", help="Project root for worker")
-def up(port, worker_id, project):
-    """Start API server + worker (all-in-one)."""
+@click.option("--watch", is_flag=True, help="Auto-submit new features from grace/features/")
+def up(port, worker_id, project, watch):
+    """Start API server + worker. With --watch, auto-submits new YAML files."""
     import asyncio
     import threading
     import uvicorn
@@ -41,8 +42,10 @@ def up(port, worker_id, project):
     project_root = Path(project).resolve()
     state_root = project_root / ".grace" / "state"
     worktree_root = project_root / ".grace" / "worktrees"
+    features_dir = project_root / "grace" / "features"
     state_root.mkdir(parents=True, exist_ok=True)
     worktree_root.mkdir(parents=True, exist_ok=True)
+    features_dir.mkdir(parents=True, exist_ok=True)
 
     os.environ.setdefault("GRACE_DB_URL", f"sqlite:///{project_root / 'grace.db'}")
     os.environ.setdefault("GRACE_ALLOW_SANDBOX_BYPASS", "true")
@@ -50,15 +53,41 @@ def up(port, worker_id, project):
     from grace_control.db import init_db
     init_db()
 
-    console.print(f"[green]GRACE Control Plane starting on http://127.0.0.1:{port}[/green]")
-    console.print(f"[white]Project: {project_root}[/white]")
-    console.print(f"[white]Worker: {worker_id}[/white]")
+    console.print(f"[green]GRACE Control Plane[/green]")
+    console.print(f"  API:  http://127.0.0.1:{port}")
+    console.print(f"  Dashboard: http://127.0.0.1:{port}/")
+    console.print(f"  Project: {project_root}")
+    console.print(f"  Worker: {worker_id}")
+    if watch:
+        console.print(f"  Watch: {features_dir} [yellow](auto-submit)[/yellow]")
 
     def run_api():
         from grace_control.api.main import app
         uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
 
     threading.Thread(target=run_api, daemon=True).start()
+
+    async def feature_watcher():
+        if not watch:
+            return
+        await asyncio.sleep(3)
+        import httpx, yaml
+        seen = set()
+        while True:
+            try:
+                for yf in sorted(features_dir.glob("*.yaml")):
+                    if yf.name in seen:
+                        continue
+                    seen.add(yf.name)
+                    spec = yaml.safe_load(yf.read_text())
+                    async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}", timeout=10) as c:
+                        r = await c.post("/api/architect/plan", json={"feature_spec": spec})
+                        if r.status_code == 200:
+                            data = r.json()["data"]
+                            console.print(f"[cyan]Auto-submitted: {data['feature_id']} ({data['packets_count']} packets)[/cyan]")
+            except Exception:
+                pass
+            await asyncio.sleep(10)
 
     async def run_worker():
         await asyncio.sleep(2)
@@ -67,8 +96,11 @@ def up(port, worker_id, project):
                         worktree_root=worktree_root)
         await worker.start()
 
+    async def main():
+        await asyncio.gather(feature_watcher(), run_worker())
+
     try:
-        asyncio.run(run_worker())
+        asyncio.run(main())
     except KeyboardInterrupt:
         console.print("\n[yellow]Shutting down...[/yellow]")
 
