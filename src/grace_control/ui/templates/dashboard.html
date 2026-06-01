@@ -1,267 +1,330 @@
 <!doctype html><html lang=en><meta charset=UTF-8><meta name=viewport content="width=device-width,initial-scale=1">
-<title>GRACE Control Plane</title>
+<title>GRACE — Operator Dashboard</title>
 <style>
-:root{--bg:#0d1117;--fg:#c9d1d9;--accent:#58a6ff;--green:#3fb950;--red:#f85149;--yellow:#d2991d;--blue:#58a6ff;--cyan:#39d353;--gray:#8b949e;--border:#30363d;--card:#161b22;--hover:#1c2533}
-*{box-sizing:border-box;margin:0;padding:0}
-body{font:14px/1.5 -apple-system,BlinkMacSystemFont,sans-serif;background:var(--bg);color:var(--fg);overflow:hidden;height:100vh}
-.header{display:flex;justify-content:space-between;align-items:center;padding:8px 16px;background:var(--card);border-bottom:1px solid var(--border);min-height:48px}
-.header h1{font-size:16px;color:var(--accent)}
-.header .stats-bar{display:flex;gap:10px;font-size:12px}
-.header .stats-bar span{padding:2px 6px;border-radius:3px}
-.ws-dot{width:6px;height:6px;border-radius:50%;display:inline-block;margin-right:4px;vertical-align:middle}
-.dashboard{display:grid;grid-template-columns:260px 1fr 400px;height:calc(100vh - 49px);overflow:hidden}
-.panel{overflow-y:auto;border-right:1px solid var(--border);padding:0}
-.panel:last-child{border-right:none}
-.feature-item,.wave-header,.packet-item{padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:6px;min-height:44px}
-.feature-item:hover,.packet-item:hover{background:var(--hover)}
-.feature-item .title{font-weight:600;font-size:13px;flex:1}
-.feature-item .stat{font-size:11px;color:var(--gray)}
-.wave-header{background:var(--card);font-size:12px;font-weight:600;color:var(--gray);text-transform:uppercase;letter-spacing:.5px;cursor:default}
-.packet-item .state-icon{font-size:16px;width:20px;text-align:center}
-.packet-item .info{flex:1;min-width:0}
-.packet-item .id{font-family:monospace;font-size:10px;color:var(--gray);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.packet-item .title{font-size:13px}
-.detail-empty{color:var(--gray);padding:40px 20px;text-align:center}
-.detail-panel{padding:12px 16px}
-.detail-panel h2{font-size:14px;margin-bottom:8px}
-.detail-panel .meta{font-size:12px;color:var(--gray);margin-bottom:12px;line-height:1.8}
-.detail-panel .meta b{color:var(--fg)}
-.timeline{display:flex;align-items:center;gap:0;margin:8px 0 16px;overflow-x:auto}
-.timeline-step{display:flex;flex-direction:column;align-items:center;min-width:56px;font-size:10px}
-.timeline-step .dot{width:14px;height:14px;border-radius:50%;margin:4px 0}
-.timeline-step .line{width:100%;height:2px;background:var(--border)}
-.timeline-step.active .dot{background:var(--green);box-shadow:0 0 6px var(--green)}
-.timeline-step.past .dot{background:var(--gray)}
-.timeline-step.future .dot{border:2px solid var(--border);background:transparent}
-.tabs{display:flex;gap:0;border-bottom:1px solid var(--border);margin-bottom:12px}
-.tab{padding:6px 12px;font-size:12px;cursor:pointer;border:none;background:none;color:var(--gray);border-bottom:2px solid transparent;min-height:44px;display:flex;align-items:center}
-.tab.active{color:var(--accent);border-bottom-color:var(--accent)}
-.events-list{font-size:12px;max-height:300px;overflow-y:auto}
-.events-list .event{padding:4px 0;border-bottom:1px solid var(--border);display:flex;gap:8px}
-.events-list .time{color:var(--gray);font-family:monospace;white-space:nowrap}
-.events-list .type{color:var(--accent);font-weight:600;white-space:nowrap}
-.artifact-item{display:flex;align-items:center;gap:6px;padding:6px 0;border-bottom:1px solid var(--border);font-size:12px;cursor:pointer;min-height:44px}
-.artifact-item:hover{background:var(--hover)}
-.log-view{background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:10px;font-family:monospace;font-size:11px;max-height:400px;overflow:auto;white-space:pre-wrap}
-.runs-list{font-size:12px}
-.runs-list .run{padding:6px 0;border-bottom:1px solid var(--border);cursor:pointer;min-height:44px}
-.runs-list .run:hover{background:var(--hover)}
-.mobile-nav{display:none;align-items:center;gap:8px;padding:6px 12px;background:var(--card);border-bottom:1px solid var(--border);font-size:12px;min-height:44px}
-.mobile-nav button{background:var(--border);border:none;color:var(--fg);padding:4px 10px;border-radius:4px;cursor:pointer;font-size:11px;min-height:36px}
-.empty-state{color:var(--gray);text-align:center;padding:20px;font-size:13px}
-@media (max-width:899px){
-  .dashboard{display:block;height:auto;overflow:visible}
-  .panel{display:none;border-right:none}
-  .panel.active{display:block}
-  .mobile-nav{display:flex}
-  .detail-panel{max-height:none}
+/* ===== Tokens ===== */
+:root{
+  --bg:#0d1117;--fg:#c9d1d9;--accent:#58a6ff;
+  --g:#3fb950;--r:#f85149;--y:#d2991d;--b:#58a6ff;--c:#39d353;
+  --gr:#8b949e;--bd:#30363d;--card:#161b22;--hvr:#1c2533;--dt:#21262d;
+  --ready:#238636;--running:#9e6a03;--accepted:#1f6feb;--merged:#2ea043;
+  --rejected:#da3633;--failed:#f85149;--cancelled:#6e7681;
+  --font:-apple-system,BlinkMacSystemFont,sans-serif;
+  --mono:SFMono-Regular,Consolas,monospace;
 }
+*{box-sizing:border-box;margin:0;padding:0}
+body{font:14px/1.5 var(--font);background:var(--bg);color:var(--fg);overflow:hidden;height:100vh}
+
+/* ===== Header ===== */
+.hdr{display:flex;align-items:center;padding:6px 16px;background:var(--card);border-bottom:1px solid var(--bd);min-height:44px;gap:12px;flex-wrap:wrap}
+.hdr .logo{font-weight:700;font-size:15px;color:var(--accent);white-space:nowrap}
+.hdr .stat{font-size:11px;padding:3px 7px;border-radius:4px;white-space:nowrap;display:flex;align-items:center;gap:4px}
+.hdr .stat .dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.hdr .stat .val{font-weight:600}
+.hdr .ws{font-size:11px;margin-left:auto;display:flex;align-items:center;gap:4px}
+.hdr .ws .ws-dot{width:7px;height:7px;border-radius:50%}
+.hdr .time{font-size:11px;color:var(--gr)}
+
+/* ===== Layout ===== */
+.dash{display:grid;grid-template-columns:300px minmax(520px,1fr) minmax(460px,34vw);height:calc(100vh - 49px);overflow:hidden}
+@media(max-width:1099px){.dash{grid-template-columns:300px minmax(400px,1fr) minmax(360px,30vw)}}
+@media(max-width:899px){.dash{grid-template-columns:320px 1fr}.dash .panel-r{display:none}}
+@media(max-width:699px){.dash{display:block;height:auto;overflow:visible}.dash .panel-l,.dash .panel-c,.dash .panel-r{display:none}.dash .panel{display:none}.dash .panel.active{display:block}}
+.panel{overflow-y:auto;border-right:1px solid var(--bd)}.panel:last-child{border-right:none}
+
+/* ===== Left: Features ===== */
+.fcard{cursor:pointer;padding:10px 14px;border-bottom:1px solid var(--bd);min-height:44px;transition:background .15s}
+.fcard:hover{background:var(--hvr)}.fcard.sel{background:var(--dt);border-left:2px solid var(--accent)}
+.fcard .ftitle{font-weight:600;font-size:13px;margin-bottom:2px}
+.fcard .fmeta{font-size:11px;color:var(--gr);display:flex;gap:8px;flex-wrap:wrap}
+.fcard .fstats{display:flex;gap:5px;margin-top:3px;flex-wrap:wrap}
+.fcard .fstat{font-size:10px;padding:1px 5px;border-radius:3px;font-weight:500}
+.fcard .needs-attn{border:1px solid var(--r);color:var(--r);padding:1px 5px;border-radius:3px;font-size:10px;margin-top:3px;display:inline-block}
+.empt{color:var(--gr);text-align:center;padding:30px 15px;font-size:13px}
+
+/* ===== Center: Waves + Packets ===== */
+.ctr-hdr{padding:10px 14px;border-bottom:1px solid var(--bd);background:var(--card);position:sticky;top:0;z-index:2}
+.ctr-hdr .fname{font-weight:600;font-size:14px}
+.ctr-hdr .fid{font-family:var(--mono);font-size:10px;color:var(--gr)}
+.ctr-hdr .fsum{font-size:11px;color:var(--gr);margin-top:2px}
+.wcard{margin:8px 12px;border:1px solid var(--bd);border-radius:6px;overflow:hidden}
+.whead{padding:8px 12px;background:var(--card);font-size:12px;font-weight:600;color:var(--gr);display:flex;justify-content:space-between;align-items:center}
+.whead .wname{text-transform:uppercase;letter-spacing:.5px}
+.pcard{cursor:pointer;padding:8px 12px;border-bottom:1px solid var(--bd);min-height:44px;display:flex;align-items:center;gap:8px;transition:background .15s}
+.pcard:last-child{border-bottom:none}
+.pcard:hover{background:var(--hvr)}.pcard.sel{background:var(--dt)}
+.pcard .pdot{width:12px;height:12px;border-radius:50%;flex-shrink:0}
+.pcard .pinfo{flex:1;min-width:0}
+.pcard .ptitle{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pcard .pmeta{font-size:10px;color:var(--gr);font-family:var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pcard .pbadge{font-size:10px;padding:2px 6px;border-radius:3px;font-weight:600;white-space:nowrap;min-width:60px;text-align:center}
+
+/* ===== Right: Inspector ===== */
+.insp{padding:12px 16px}
+.insp h3{font-size:15px;margin-bottom:6px}
+.insp .meta{font-size:12px;color:var(--gr);margin-bottom:12px;line-height:1.8}
+.insp .meta b{color:var(--fg)}
+.insp .state-badge{display:inline-block;padding:3px 8px;border-radius:4px;font-size:12px;font-weight:600;margin-bottom:6px}
+.insp .copy-btn{background:var(--bd);border:none;color:var(--accent);font-size:10px;padding:2px 6px;border-radius:3px;cursor:pointer;margin-left:4px}
+
+/* Timeline */
+.tl{display:flex;align-items:flex-start;gap:0;margin:12px 0 16px;overflow-x:auto;padding-bottom:4px}
+.tl-step{display:flex;flex-direction:column;align-items:center;min-width:64px;font-size:10px;text-align:center}
+.tl-step .tl-dot{width:16px;height:16px;border-radius:50%;margin:4px 0;flex-shrink:0}
+.tl-step .tl-label{white-space:nowrap}
+.tl-step.done .tl-dot{background:var(--g)}
+.tl-step.done .tl-label{color:var(--g)}
+.tl-step.now .tl-dot{background:var(--y);box-shadow:0 0 8px var(--y);animation:pulse 1.5s infinite}
+.tl-step.now .tl-label{color:var(--y);font-weight:600}
+.tl-step.next .tl-dot{border:2px solid var(--bd);background:transparent}
+.tl-step.next .tl-label{color:var(--gr)}
+.tl-step.fail .tl-dot{background:var(--r)}
+.tl-step.fail .tl-label{color:var(--r)}
+@keyframes pulse{0%,100%{box-shadow:0 0 4px var(--y)}50%{box-shadow:0 0 14px var(--y)}}
+@media(max-width:699px){.tl{flex-direction:column;gap:2px}.tl-step{flex-direction:row;min-width:0;gap:8px;text-align:left}}
+
+/* Tabs */
+.tabs{display:flex;gap:0;border-bottom:1px solid var(--bd);margin:12px 0}
+.tab{flex:1;padding:8px 4px;font-size:11px;cursor:pointer;border:none;background:none;color:var(--gr);border-bottom:2px solid transparent;min-height:40px;text-align:center;transition:color .15s}
+.tab:hover{color:var(--fg)}
+.tab.act{color:var(--accent);border-bottom-color:var(--accent);font-weight:600}
+
+/* Tab content */
+.ev-list{font-size:12px;max-height:340px;overflow-y:auto}
+.ev-item{padding:6px 0;border-bottom:1px solid var(--bd);display:flex;gap:8px;align-items:flex-start}
+.ev-item .ev-time{color:var(--gr);font-family:var(--mono);font-size:11px;white-space:nowrap}
+.ev-item .ev-type{font-weight:600;color:var(--accent);white-space:nowrap}
+.ev-item .ev-detail{font-size:11px;color:var(--fg);flex:1}
+.ev-item .ev-raw{font-size:10px;color:var(--gr)}
+.run-card{padding:6px 0;border-bottom:1px solid var(--bd);cursor:pointer;min-height:40px}
+.run-card:hover{background:var(--hvr)}
+.art-item{display:flex;align-items:center;gap:6px;padding:6px 0;border-bottom:1px solid var(--bd);font-size:12px;cursor:pointer;min-height:40px}
+.art-item:hover{background:var(--hvr)}
+.log-box{background:var(--bg);border:1px solid var(--bd);border-radius:4px;padding:10px;font-family:var(--mono);font-size:11px;max-height:400px;overflow:auto;white-space:pre-wrap;line-height:1.4}
+.copy-btn-lg{display:block;margin:8px 0;background:var(--bd);border:none;color:var(--accent);padding:4px 10px;border-radius:4px;cursor:pointer;font-size:11px}
+
+/* Legend */
+.legend{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--card);border:1px solid var(--bd);border-radius:8px;padding:20px;z-index:100;display:none;max-width:340px;width:90%}
+.legend.open{display:block}
+.legend .leg-item{display:flex;align-items:center;gap:8px;padding:4px 0;font-size:12px}
+.legend .leg-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+.legend .leg-close{float:right;background:none;border:none;color:var(--fg);font-size:18px;cursor:pointer}
+.overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:99;display:none}.overlay.open{display:block}
+
+/* Mobile */
+.mnav{display:none;align-items:center;gap:8px;padding:6px 12px;background:var(--card);border-bottom:1px solid var(--bd);font-size:12px;min-height:40px}
+.mnav button{background:var(--bd);border:none;color:var(--fg);padding:4px 10px;border-radius:4px;cursor:pointer;font-size:11px;min-height:36px}
+.mnav .crumb{font-size:12px;color:var(--gr);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media(max-width:699px){.mnav{display:flex}}
+.pulse{animation:pulse 1.5s infinite}
 </style>
-<div class=header>
-  <h1>GRACE</h1>
-  <div class=stats-bar id=stats-bar>
-    <span id=ws-indicator><span class=ws-dot style=background:var(--yellow)></span>connecting</span>
-    <span id=tick></span>
-  </div>
+
+<div class=hdr>
+  <span class=logo>GRACE</span>
+  <span class=stat id=s-ready><span class=dot style=background:var(--ready)></span><span class=val>0</span> Ready</span>
+  <span class=stat id=s-running><span class=dot style=background:var(--running)></span><span class=val>0</span> Running</span>
+  <span class=stat id=s-merged><span class=dot style=background:var(--merged)></span><span class=val>0</span> Merged</span>
+  <span class=stat id=s-failed><span class=dot style=background:var(--rejected)></span><span class=val>0</span> Failed</span>
+  <span class=stat id=s-workers>👷 <span class=val>0</span> Workers</span>
+  <span class=ws id=ws-stat><span class=ws-dot style=background:var(--y)></span>connecting</span>
+  <span class=time id=tick></span>
+  <span style="font-size:11px;color:var(--accent);cursor:pointer" onclick=toggleLegend()>Legend</span>
 </div>
-<div class=mobile-nav id=mnav>
+<div class=mnav id=mnav>
   <button onclick=navBack()>← Back</button>
-  <span id=mnav-title>Features</span>
+  <span class=crumb id=crumb>Features</span>
 </div>
-<div class=dashboard id=dash>
-  <!-- Left: Features -->
-  <div class="panel active" id=panel-features></div>
-  <!-- Center: Waves+Packets -->
-  <div class=panel id=panel-packs></div>
-  <!-- Right: Detail -->
-  <div class=panel id=panel-detail></div>
+<div class=dash id=d>
+  <div class="panel panel-l active" id=pl></div>
+  <div class="panel panel-c" id=pc></div>
+  <div class="panel panel-r" id=pr></div>
 </div>
+<div class=overlay id=ov onclick=toggleLegend()></div>
+<div class=legend id=leg>
+  <button class=leg-close onclick=toggleLegend()>×</button>
+  <h3 style=margin-bottom:8px>Status Legend</h3>
+  <div class=leg-item><span class=leg-dot style=background:var(--ready)></span> Ready — waiting to start</div>
+  <div class=leg-item><span class=leg-dot style=background:var(--running)></span> Running — executing now</div>
+  <div class=leg-item><span class=leg-dot style=background:var(--accepted)></span> Accepted — passed acceptance</div>
+  <div class=leg-item><span class=leg-dot style=background:var(--merged)></span> Merged — changes merged</div>
+  <div class=leg-item><span class=leg-dot style=background:var(--rejected)></span> Rejected — didn't pass</div>
+  <div class=leg-item><span class=leg-dot style=background:var(--failed)></span> Failed — execution error</div>
+  <div class=leg-item><span class=leg-dot style=background:var(--cancelled)></span> Cancelled — stopped</div>
+</div>
+
 <script>
-const S={ready:{icon:'⚪',color:'var(--green)'},running:{icon:'🔄',color:'var(--yellow)'},accepted:{icon:'✅',color:'var(--blue)'},merged:{icon:'✅',color:'var(--cyan)'},rejected:{icon:'🔴',color:'var(--red)'},failed:{icon:'💥',color:'var(--red)'},cancelled:{icon:'❌',color:'var(--gray)'}};
-let data={features:[],workers:[],stats:{}};
-let ws,isMobile=window.innerWidth<900;
-let navStack=[],selectedFeature=null,selectedPacket=null;
+const STY={ready:{bg:'var(--ready)',label:'Ready'},running:{bg:'var(--running)',label:'Running'},accepted:{bg:'var(--accepted)',label:'Accepted'},merged:{bg:'var(--merged)',label:'Merged'},rejected:{bg:'var(--rejected)',label:'Rejected'},failed:{bg:'var(--failed)',label:'Failed'},cancelled:{bg:'var(--cancelled)',label:'Cancelled'}};
+let data={features:[],workers:[],stats:{}},selFid=null,selPid=null,ws,mobile=window.innerWidth<700;
 
 function $(id){return document.getElementById(id)}
-
 async function load(){
   const r=await fetch('/api/dashboard');data=await r.json();
-  renderFeatures();renderStats();if(selectedFeature)renderPacks(selectedFeature);
-  if(selectedPacket)renderDetail(selectedPacket);
+  updateStats();renderFeatures();
+  if(selFid){renderWaves(selFid);updateMobileCrumb(2)}
+  if(selPid){renderInspector(selPid);updateMobileCrumb(3)}
 }
-function renderStats(){
+function updateStats(){
   const s=data.stats;
-  $('stats-bar').innerHTML=`
-    <span style="background:#1a3a1a;color:var(--green)">✅ ${s.merged||0}</span>
-    <span style="background:#3a2a1a;color:var(--yellow)">🔄 ${s.running||0}</span>
-    <span style="background:#1a2a3a;color:var(--blue)">ready ${s.ready||0}</span>
-    <span style="background:#3a1a1a;color:var(--red)">💥 ${(s.failed||0)+(s.rejected||0)}</span>
-    <span>👷 ${s.workers||0}</span>
-    <span id=tick style=color:var(--gray)>${new Date().toLocaleTimeString()}</span>`;
+  $('s-ready').querySelector('.val').textContent=s.ready||0;
+  $('s-running').querySelector('.val').textContent=s.running||0;
+  $('s-merged').querySelector('.val').textContent=s.merged||0;
+  $('s-failed').querySelector('.val').textContent=(s.failed||0)+(s.rejected||0);
+  $('s-workers').querySelector('.val').textContent=s.workers||0;
+  $('tick').textContent=new Date().toLocaleTimeString();
 }
 
 function renderFeatures(){
-  const el=$('panel-features');
-  el.innerHTML=data.features.map(f=>{
-    const waves=f.waves||[];let running=0,merged=0,failed=0;
-    waves.forEach(w=>w.packets.forEach(p=>{
-      if(p.state==='running')running++;if(p.state==='merged')merged++;if(p.state==='failed')failed++;
-    }));
-    return `<div class=feature-item onclick="selectFeature('${f.id}')">
-      <span class=title>${f.title}</span>
-      <span class=stat>${merged>0?`✅${merged}`:''} ${running>0?`🔄${running}`:''} ${failed>0?`💥${failed}`:''} ${waves.length}w</span>
-    </div>`;
-  }).join('')||'<div class=empty-state>No features. Run: grace architect plan feature.yaml</div>';
+  $('pl').innerHTML=data.features.length
+    ?data.features.map(f=>{
+      const st={};let bad=0;
+      (f.waves||[]).forEach(w=>w.packets.forEach(p=>{st[p.state]=(st[p.state]||0)+1;if(p.state==='failed'||p.state==='rejected')bad++}));
+      const wcnt=f.waves.length,pcnt=(f.waves||[]).reduce((a,w)=>a+w.packets.length,0);
+      return `<div class="fcard${f.id===selFid?' sel':''}" onclick="selFeature('${f.id}')">
+        <div class=ftitle>${f.title}</div>
+        <div class=fmeta>${wcnt} waves · ${pcnt} packets</div>
+        <div class=fstats>${Object.entries(st).map(([k,v])=>{
+          const s=STY[k]||{bg:'var(--gr)'};
+          return`<span class=fstat style="background:${s.bg}20;color:${s.bg};border:1px solid ${s.bg}40">${s.label}: ${v}</span>`
+        }).join('')}</div>
+        ${bad>0?`<span class=needs-attn>Needs attention: ${bad} failed</span>`:''}
+      </div>`;
+    }).join('')
+    :'<div class=empt>No features. Run: grace architect plan feature.yaml</div>';
 }
 
-function selectFeature(fid){
-  selectedFeature=fid;selectedPacket=null;
-  if(isMobile){navStack=['features'];updateMobileNav('Waves')}
-  renderPacks(fid);
-  $('panel-features').classList.remove('active');
-  $('panel-packs').classList.add('active');
-  $('panel-detail').classList.remove('active');
+function selFeature(fid){
+  selFid=fid;selPid=null;
+  if(mobile){navStack=['features'];updateMobileCrumb(2)}
+  renderFeatures();renderWaves(fid);
+  $('pc').classList.add('active');$('pr').innerHTML='';
+  if(mobile){$('pl').classList.remove('active');$('pc').classList.add('active');$('pr').classList.remove('active')}
 }
-
-function renderPacks(fid){
+function renderWaves(fid){
   const f=data.features.find(x=>x.id===fid);
-  if(!f)return;
-  let html=`<div style="padding:8px 12px;font-weight:600;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
-    <span>${f.title}</span><span style="font-size:11px;color:var(--gray)">${f.waves.length} waves</span></div>`;
+  if(!f){$('pc').innerHTML='<div class=empt>Feature not found</div>';return}
+  const pcnt=(f.waves||[]).reduce((a,w)=>a+w.packets.length,0);
+  let h=`<div class=ctr-hdr><div class=fname>${f.title}</div><div class=fid>${f.id}</div><div class=fsum>${f.waves.length} waves · ${pcnt} packets</div></div>`;
   f.waves.forEach(w=>{
-    html+=`<div class=wave-header>Wave ${w.order}: ${w.title} (${w.packets.length} packets)</div>`;
+    h+=`<div class=wcard><div class=whead><span class=wname>Wave ${w.order}: ${w.title}</span><span style=font-size:11px;color:var(--gr)>${w.packets.length} pkt</span></div>`;
     w.packets.forEach(p=>{
-      const s=S[p.state]||{icon:'❓',color:'var(--gray)'};
-      html+=`<div class=packet-item onclick="selectPacket('${p.id}')">
-        <span class=state-icon>${s.icon}</span>
-        <div class=info><div class=title>${p.title||p.id.slice(-30)}</div>
-        <div class=id>${p.id}</div></div>
-        <span style="font-size:11px;color:${s.color}">${p.state} ${p.attempt_count}/${p.max_attempts}</span></div>`;
+      const s=STY[p.state]||{bg:'var(--gr)',label:p.state};
+      h+=`<div class="pcard${p.id===selPid?' sel':''}" onclick="selPacket('${p.id}')">
+        <span class=pdot style=background:${s.bg}></span>
+        <div class=pinfo><div class=ptitle>${p.title||p.id.slice(-30)}</div><div class=pmeta>${p.id}</div></div>
+        <span class=pbadge style="background:${s.bg}20;color:${s.bg};border:1px solid ${s.bg}40">${s.label} ${p.attempt_count}/${p.max_attempts}</span>
+      </div>`;
     });
+    h+='</div>';
   });
-  $('panel-packs').innerHTML=html||'<div class=empty-state>No waves</div>';
+  $('pc').innerHTML=h;
 }
-
-async function selectPacket(pid){
-  selectedPacket=pid;
-  if(isMobile){navStack.push('packs');updateMobileNav('Packet')}
-  $('panel-detail').classList.add('active');
-  if(isMobile){$('panel-packs').classList.remove('active')}
-  await renderDetail(pid);
+function selPacket(pid){
+  selPid=pid;
+  if(mobile){navStack=['features','waves'];updateMobileCrumb(3)}
+  renderWaves(selFid);renderInspector(pid);
+  if(mobile){$('pc').classList.remove('active');$('pr').classList.add('active')}
 }
-
-async function renderDetail(pid){
-  const el=$('panel-detail');
+async function renderInspector(pid){
+  let h='<div class=insp>';
   try{
     const r=await fetch(`/api/packets/${pid}`);const d=(await r.json()).data;
-    const s=S[d.state]||{icon:'❓',color:'var(--gray)'};
-    el.innerHTML=`
-      <div class=detail-panel>
-        <h2>${s.icon} ${d.title||d.id.slice(-30)}</h2>
-        <div class=meta>
-          <b>State:</b> <span style=color:${s.color}>${d.state}</span> &nbsp;
-          <b>Attempt:</b> ${d.attempt_count}/${d.max_attempts} &nbsp;
-          <b>Profile:</b> ${d.acceptance_profile}<br>
-          <b>Feature:</b> <span style=font-family:monospace;font-size:10px>${d.feature_id}</span> &nbsp;
-          <b>Wave:</b> <span style=font-family:monospace;font-size:10px>${d.wave_id}</span>
-        </div>
-        <div class=timeline id=pkt-timeline></div>
-        <div class=tabs>
-          <button class="tab active" onclick="switchTab('runs',this)">Runs</button>
-          <button class=tab onclick="switchTab('events',this)">Events</button>
-          <button class=tab onclick="switchTab('artifacts',this)">Artifacts</button>
-        </div>
-        <div id=tab-runs class=tab-content>${renderRuns(d)}</div>
-        <div id=tab-events class=tab-content style=display:none>Loading...</div>
-        <div id=tab-artifacts class=tab-content style=display:none></div>
-      </div>`;
+    const s=STY[d.state]||{bg:'var(--gr)',label:d.state};
+    h+=`<h3>${d.title||'Packet'}</h3>
+    <span class=state-badge style="background:${s.bg}20;color:${s.bg};border:1px solid ${s.bg}40">${s.label}</span>
+    <div class=meta>
+      <b>Attempt:</b> ${d.attempt_count}/${d.max_attempts} &nbsp; <b>Profile:</b> ${d.acceptance_profile}<br>
+      <b>Feature:</b> <span style=font-family:var(--mono);font-size:10px>${d.feature_id}</span> <button class=copy-btn onclick="navigator.clipboard.writeText('${d.feature_id}')">copy</button><br>
+      <b>Wave:</b> <span style=font-family:var(--mono);font-size:10px>${d.wave_id}</span>
+    </div>`;
+
     // Timeline
-    const states=['ready','running','accepted','merged'];
-    const currentIdx=states.indexOf(d.state);
-    $('pkt-timeline').innerHTML=states.map((st,i)=>{
-      const cls=i<currentIdx?'past':i===currentIdx?'active':'future';
-      return `<div class=timeline-step><div class="dot ${cls}"></div><span>${st}</span></div>`;
-    }).join('');
-  }catch(e){el.innerHTML=`<div class=detail-empty>Error loading packet</div>`}
-}
+    const phases=['ready','claimed','running','evidence','accepted','merged'];
+    const idx=phases.indexOf(d.state);
+    const activeIdx=idx>=0?idx:(d.state==='rejected'||d.state==='cancelled'?4:d.state==='failed'?3:0);
+    h+='<div class=tl>';
+    phases.forEach((ph,i)=>{
+      let cls='next';
+      if(i<activeIdx&&d.state!=='failed'&&d.state!=='rejected'&&d.state!=='cancelled')cls='done';
+      if(i===activeIdx&&d.state!=='failed'&&d.state!=='rejected'&&d.state!=='cancelled')cls='now';
+      if((d.state==='failed'||d.state==='rejected'||d.state==='cancelled')&&i===activeIdx)cls='fail';
+      h+=`<div class="tl-step ${cls}"><span class=tl-dot></span><span class=tl-label>${ph}</span></div>`;
+    });
+    h+='</div>';
 
-function renderRuns(d){
-  if(!d.runs||!d.runs.length)return'<div class=empty-state>No runs</div>';
-  return `<div class=runs-list>${d.runs.map(r=>`
-    <div class=run onclick="loadRunArtifacts('${d.id}','${r.id}')">
-      <b>R${r.run_number}</b> <span style=color:${S[r.status]?.color||'var(--gray)'}>${r.status}</span>
-      ${r.duration_ms?`· ${(r.duration_ms/1000).toFixed(1)}s`:''}
-      ${r.evidence_path?`<br><span style=font-size:10px;color:var(--gray)>ev: ${r.evidence_path}</span>`:''}
-    </div>`).join('')}</div>`;
-}
+    // Tabs
+    h+=`<div class=tabs><button class="tab act" onclick="swTab(event,'ov')">Overview</button><button class=tab onclick="swTab(event,'runs')">Runs</button><button class=tab onclick="swTab(event,'events','${pid}')">Events</button><button class=tab onclick="swTab(event,'arts','${pid}')">Artifacts</button></div>`;
 
-async function switchTab(name,btn){
-  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
-  btn.classList.add('active');
-  document.querySelectorAll('.tab-content').forEach(t=>t.style.display='none');
-  const el=$(`tab-${name}`);el.style.display='block';
-  if(name==='events'&&selectedPacket){
-    el.innerHTML='Loading...';
-    const r=await fetch(`/api/events?entity_type=packet&entity_id=${selectedPacket}`);
-    const events=(await r.json()).data;
-    el.innerHTML=events.length?`<div class=events-list>${events.map(e=>`
-      <div class=event><span class=time>${new Date(e.timestamp).toLocaleTimeString()}</span>
-      <span class=type>${e.event_type}</span>
-      <span>${JSON.stringify(e.payload||{}).slice(0,80)}</span></div>`).join('')}</div>`:'<div class=empty-state>No events</div>';
-  }
-  if(name==='artifacts'&&selectedPacket){
-    const d=(await(await fetch(`/api/packets/${selectedPacket}`)).json()).data;
-    if(d.runs&&d.runs.length){
-      loadRunArtifacts(d.id,d.runs[0].id);
-    }else{el.innerHTML='<div class=empty-state>No runs</div>'}
-  }
+    // Overview
+    const lr=d.runs&&d.runs.length?d.runs[d.runs.length-1]:null;
+    h+=`<div class=tc id=tc-ov><div style=font-size:12px;line-height:2>
+      <b>Status:</b> <span style=color:${s.bg}>${s.label}</span><br>
+      ${lr?`<b>Last run:</b> ${lr.status} · ${lr.duration_ms?`${(lr.duration_ms/1000).toFixed(1)}s`:''}<br>`:''}
+      ${lr&&lr.evidence_path?`<b>Evidence:</b> <span style=font-family:var(--mono);font-size:10px>${lr.evidence_path}</span><br>`:''}
+      <b>Runs:</b> ${d.runs?d.runs.length:0} &nbsp; <b>Next:</b> ${d.state==='ready'?'Worker claim':d.state==='running'?'Agent executing':d.state==='accepted'?'Auto-merge':d.state==='failed'?'Manual retry':d.state==='rejected'?'Auto-retry':'Complete'}
+    </div></div>`;
+    h+=`<div class=tc id=tc-runs style=display:none>${(d.runs||[]).length?d.runs.map(r=>`<div class=run-card onclick="loadRunArts('${pid}','${r.id}')">
+      <b>Run ${r.run_number}</b> <span style=color:${STY[r.status]?.bg||'var(--gr)'}>${r.status}</span>
+      ${r.duration_ms?` · ${(r.duration_ms/1000).toFixed(1)}s`:''}
+      ${r.evidence_path?`<br><span style=font-size:10px;color:var(--gr)>${r.evidence_path}</span>`:''}
+    </div>`).join(''):'<div class=empt>No runs</div>'}</div>`;
+    h+=`<div class=tc id=tc-events style=display:none><div class=empt>Loading...</div></div>`;
+    h+=`<div class=tc id=tc-arts style=display:none><div class=empt>Select a run to view artifacts</div></div>`;
+  }catch(e){h+='<div class=empt>Error loading packet</div>'}
+  h+='</div>';$('pr').innerHTML=h;
 }
-
-async function loadRunArtifacts(pid,runId){
-  const el=$('tab-artifacts');
+async function swTab(e,name,pid){
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('act'));
+  e.target.classList.add('act');
+  document.querySelectorAll('.tc').forEach(t=>t.style.display='none');
+  const el=document.getElementById(`tc-${name}`);if(el)el.style.display='block';
+  if(name==='events'&&pid){await loadEvents(pid)}
+  if(name==='arts'&&pid){const d=(await(await fetch(`/api/packets/${pid}`)).json()).data;if(d.runs&&d.runs.length)loadRunArts(pid,d.runs[0].id)}
+}
+async function loadEvents(pid){
+  const el=$('tc-events');el.innerHTML='Loading...';
+  const r=await fetch(`/api/events?entity_type=packet&entity_id=${pid}`);
+  const evs=(await r.json()).data;
+  el.innerHTML=evs.length?`<div class=ev-list>${evs.map(e=>`<div class=ev-item><span class=ev-time>${new Date(e.timestamp).toLocaleTimeString()}</span><span class=ev-type>${e.event_type}</span><div><span class=ev-detail>${JSON.stringify(e.payload||{}).slice(0,120)}</span><br><span class=ev-raw>${e.trace_id||''}</span></div></div>`).join('')}</div>`:'<div class=empt>No events yet</div>';
+}
+async function loadRunArts(pid,runId){
+  const el=$('tc-arts');el.style.display='block';
   try{
     const r=await fetch(`/api/packets/${pid}/runs/${runId}/artifacts`);
     const files=(await r.json()).data;
-    el.style.display='block';
-    if(!files.length){el.innerHTML='<div class=empty-state>No artifacts</div>';return}
-    el.innerHTML=`<div>${files.map(f=>`
-      <div class=artifact-item onclick="viewArtifact('${pid}','${runId}','${f.name}','${f.type}')">
-        ${f.type==='image'?'🖼':f.type==='log'?'📄':'📋'} ${f.name}
-        <span style="color:var(--gray);font-size:10px">${(f.size/1024).toFixed(1)}KB</span>
-      </div>`).join('')}</div>`;
-  }catch(e){el.innerHTML='<div class=empty-state>Error loading artifacts</div>'}
+    if(!files.length){el.innerHTML='<div class=empt>No artifacts</div>';return}
+    el.innerHTML=`<div>${files.map(f=>`<div class=art-item onclick="viewArt('${pid}','${runId}','${f.name}')">${f.type==='image'?'🖼':f.type==='log'?'📄':'📋'} ${f.name} <span style=color:var(--gr);font-size:10px>${(f.size/1024).toFixed(1)}KB</span></div>`).join('')}</div>`;
+  }catch(e){el.innerHTML='<div class=empt>Error</div>'}
 }
-
-async function viewArtifact(pid,runId,path,type){
+async function viewArt(pid,runId,path){
   const r=await fetch(`/api/packets/${pid}/runs/${runId}/artifacts/file?path=${encodeURIComponent(path)}&tail=200`);
-  const content=await r.text();
-  const el=$('tab-artifacts');
-  el.innerHTML=`<div style="position:sticky;top:0;background:var(--card);padding:4px 0;margin-bottom:8px;font-size:11px;color:var(--gray)">
-    📄 ${path} · ${content.split('\\n').length} lines · <a href="#" onclick="switchTab('artifacts',document.querySelector('.tab:nth-child(3)'))" style="color:var(--accent)">← back</a></div>
-    <div class=log-view>${escapeHtml(content)}</div>`;
+  const c=await r.text();
+  $('tc-arts').innerHTML=`<div style="font-size:11px;color:var(--gr);margin-bottom:8px">📄 ${path} · ${c.split('\\n').length} lines <a href="#" onclick="swTab({target:document.querySelector('.tab:nth-child(4)')},'arts','${pid}');loadRunArts('${pid}','${runId}')" style=color:var(--accent)>← back</a></div><div class=log-box>${c.replace(/&/g,'&amp;').replace(/</g,'&lt;')}</div><button class=copy-btn-lg onclick="navigator.clipboard.writeText(this.previousSibling.textContent)">Copy</button>`;
 }
-
-function escapeHtml(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
-
+let navStack=[];
 function navBack(){
-  if(navStack.length<=1){navStack=[];selectedFeature=null;selectedPacket=null;
-    document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
-    $('panel-features').classList.add('active');updateMobileNav('Features');return}
+  if(navStack.length<=1){navStack=[];selFid=null;selPid=null;resetMobile();return}
   navStack.pop();
-  if(navStack[navStack.length-1]==='features'){selectedFeature=null;selectedPacket=null;
-    document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
-    $('panel-features').classList.add('active');updateMobileNav('Features')}
-  else{selectedPacket=null;$('panel-detail').classList.remove('active');
-    $('panel-packs').classList.add('active');updateMobileNav('Packets')}
+  if(navStack.length===1){selFid=null;selPid=null;resetMobile()}
+  else if(navStack.length===2){selPid=null;$('pc').classList.add('active');$('pr').classList.remove('active');$('pr').innerHTML='';updateMobileCrumb(2)}
 }
-function updateMobileNav(t){$('mnav-title').textContent=t}
+function resetMobile(){
+  document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+  $('pl').classList.add('active');$('pc').innerHTML='';$('pr').innerHTML='';updateMobileCrumb(1);
+}
+function updateMobileCrumb(lvl){
+  if(!mobile)return;
+  if(!selFid){$('crumb').textContent='Features';return}
+  const f=data.features.find(x=>x.id===selFid);
+  if(!selPid){$('crumb').textContent=`Features / ${f?.title||'...'}`;return}
+  const fp=f?.waves?.flatMap(w=>w.packets).find(p=>p.id===selPid);
+  $('crumb').textContent=`${f?.title||'...'} / ${fp?.title||'...'}`;
+}
+function toggleLegend(){$('leg').classList.toggle('open');$('ov').classList.toggle('open')}
 function connectWS(){
   ws=new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/ws`);
-  ws.onopen=()=>{$('ws-indicator').innerHTML='<span class=ws-dot style=background:var(--green)></span>live'};
-  ws.onmessage=(e)=>{const m=JSON.parse(e.data);if(m.type==='state_change')load()};
-  ws.onclose=()=>{setTimeout(connectWS,2000);$('ws-indicator').innerHTML='<span class=ws-dot style=background:var(--red)></span>offline'};
+  ws.onopen=()=>{$('ws-stat').innerHTML='<span class=ws-dot style=background:var(--g)></span>Live'};
+  ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.type==='state_change')load()};
+  ws.onclose=()=>{setTimeout(connectWS,2000);$('ws-stat').innerHTML='<span class=ws-dot style=background:var(--r)></span>Offline'};
 }
-// Init
 load();connectWS();setInterval(load,5000);
-window.addEventListener('resize',()=>{isMobile=window.innerWidth<900});
+window.addEventListener('resize',()=>{mobile=window.innerWidth<700});
 </script>

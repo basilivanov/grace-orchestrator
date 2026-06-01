@@ -102,4 +102,4 @@ async def test_e2e_health(api_client):
 async def test_dashboard(api_client):
     r = await api_client.get("/")
     assert r.status_code == 200
-    assert "GRACE Control Plane" in r.text
+    assert "GRACE" in r.text
