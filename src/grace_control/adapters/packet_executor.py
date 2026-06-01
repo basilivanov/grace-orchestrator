@@ -342,21 +342,29 @@ ruff check src/
             log_dir.mkdir(parents=True, exist_ok=True)
             agent_log = log_dir / "agent_output.log"
 
-            lines = []
             mr = result.managed_runner_result
             if isinstance(mr, dict):
                 agent = mr.get("agent_result", {})
                 if isinstance(agent, dict):
-                    stdout = agent.get("stdout", "")
-                    stderr = agent.get("stderr", "")
-                    if stdout:
-                        lines.append(f"=== AGENT STDOUT ===\n{stdout}")
-                    if stderr:
-                        lines.append(f"=== AGENT STDERR ===\n{stderr}")
+                    # Try paths first (legacy writes to files)
+                    for key in ("stdout_path", "stderr_path"):
+                        path = agent.get(key, "")
+                        if path:
+                            p = Path(path)
+                            if p.exists():
+                                content = p.read_text()
+                                with agent_log.open("a") as f:
+                                    f.write(f"=== {key} ===\n{content}\n")
+                    # Also check inline stdout/stderr
+                    for key in ("stdout", "stderr"):
+                        content = agent.get(key, "")
+                        if content:
+                            with agent_log.open("a") as f:
+                                f.write(f"=== AGENT {key.upper()} ===\n{content}\n")
 
-            if lines:
-                agent_log.write_text("".join(lines))
-                _log.debug("agent_log_saved", packet_id=packet_id, path=str(agent_log))
+            if agent_log.exists() and agent_log.stat().st_size > 0:
+                _log.info("agent_log_saved", packet_id=packet_id, path=str(agent_log),
+                    size=agent_log.stat().st_size)
         except Exception:
             pass
 
