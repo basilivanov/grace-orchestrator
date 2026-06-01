@@ -280,11 +280,12 @@ async function renderInspector(pid){
     h+=`<div class="tc hidden" id=tc-runs>${renderRuns(d)}</div>`;
     h+=`<div class="tc hidden" id=tc-events><div class=empt>Loading...</div></div>`;
     h+=`<div class="tc hidden" id=tc-arts><div class=empt>Select a run to view artifacts</div></div>`;
-    // Show active tab
-    const atc=document.getElementById('tc-'+actTab);
-    if(atc)atc.classList.remove('hidden');
   }catch(e){h+='<div class=empt>Error loading packet</div>'}
-  h+='</div>';$('pr').innerHTML=h;restoreTab();
+  h+='</div>';$('pr').innerHTML=h;
+  // Show active tab after DOM is populated
+  const atc=document.getElementById('tc-'+actTab);
+  if(atc)atc.classList.remove('hidden');
+  restoreTab();
 }
 async function swTab(e,name,pid){
   actTab=name;
