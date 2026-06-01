@@ -89,6 +89,21 @@ class PacketExecutionAdapter:
             run_number = packet.attempt_count
             run_id = f"{packet_id}-R{run_number:02d}"
 
+            # Eagerly read all attributes before session closes
+            packet_data = {
+                "id": packet.id,
+                "feature_id": packet.feature_id,
+                "wave_id": packet.wave_id,
+                "slug": packet.slug,
+                "title": packet.title,
+                "description": packet.description,
+                "spec_json": packet.spec_json,
+                "state": packet.state,
+                "acceptance_profile": packet.acceptance_profile,
+                "attempt_count": packet.attempt_count,
+                "max_attempts": packet.max_attempts,
+            }
+
             packet_run = PacketRun(
                 id=run_id,
                 packet_id=packet_id,
@@ -100,7 +115,7 @@ class PacketExecutionAdapter:
             db.add(packet_run)
 
         try:
-            packet_path = self._materialize_packet(packet)
+            packet_path = self._materialize_packet(packet_data)
             result = await self._call_legacy_runner(packet_path)
             execution_result = self._parse_result(result)
             evidence_path = self._save_evidence(packet_id, run_number, result.to_dict())
@@ -136,29 +151,31 @@ class PacketExecutionAdapter:
     # emitted_logs: None.
     # error_behavior: Raises on filesystem error.
     # END_FUNCTION_CONTRACT
-    def _materialize_packet(self, packet: Packet) -> Path:
-        packet_dir = self.state_root / "packets" / packet.id
+    def _materialize_packet(self, packet_data: dict) -> Path:
+        packet_id = packet_data["id"]
+        packet_dir = self.state_root / "packets" / packet_id
         packet_dir.mkdir(parents=True, exist_ok=True)
 
-        spec_json = packet.spec_json if isinstance(packet.spec_json, dict) else {}
+        spec_json = packet_data["spec_json"] if isinstance(packet_data["spec_json"], dict) else {}
         spec_str = yaml.dump(spec_json, default_flow_style=False, allow_unicode=True)
         scope = spec_json.get("scope", "src/")
         if isinstance(scope, str):
             scope = [scope]
         scope_lines = "\n".join(f"- {s}" for s in scope)
-        content = f"""# Execution Packet: {packet.id}
+        pd = packet_data
+        content = f"""# Execution Packet: {pd['id']}
 
 ## Objective
 
-{packet.description or packet.title}
+{pd.get('description') or pd.get('title', '')}
 
 ## Slice
 
-- slice_id: `SLICE-{packet.slug.upper()}`
-- feature_id: `{packet.feature_id}`
-- packet_id: `{packet.id}`
-- wave_id: `{packet.wave_id}`
-- status: `{packet.state}`
+- slice_id: `SLICE-{pd.get('slug', '').upper()}`
+- feature_id: `{pd.get('feature_id', '')}`
+- packet_id: `{pd['id']}`
+- wave_id: `{pd.get('wave_id', '')}`
+- status: `{pd.get('state', '')}`
 
 ## Allowed Write Scope
 
@@ -176,7 +193,7 @@ class PacketExecutionAdapter:
 
 ## Acceptance Profile
 
-{packet.acceptance_profile}
+{pd.get('acceptance_profile', 'NORMAL')}
 
 ## Verification
 

@@ -1,4 +1,4 @@
-title: Hello GRACE — Test Feature
+title: Hello GRACE Test Feature
 description: >
   Minimal feature to verify the full GRACE Control Plane pipeline:
   architect creates plan → worker claims + executes via adapter →
