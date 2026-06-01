@@ -160,10 +160,18 @@ function $(id){return document.getElementById(id)}
 async function load(){
   try{
     const r=await fetch('/api/dashboard');data=await r.json();
-    console.log('dashboard loaded',data.stats);
     updateStats();renderFeatures();
-    if(selFid){renderWaves(selFid);updateMobileCrumb(2)}
-    if(selPid){renderInspector(selPid);updateMobileCrumb(3)}
+    if(selFid)renderWaves(selFid);
+    // Only re-render inspector if packet state changed
+    if(selPid){
+      const pr=await fetch('/api/packets/'+selPid);
+      const pd=(await pr.json()).data;
+      var k=selPid;
+      if(!lastPktState[k]||lastPktState[k].state!==pd.state||lastPktState[k].att!==pd.attempt_count){
+        lastPktState[k]={state:pd.state,att:pd.attempt_count};
+        renderInspector(selPid);
+      }
+    }
   }catch(e){console.error('load failed',e)}
 }
 function updateStats(){
