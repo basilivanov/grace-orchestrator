@@ -87,6 +87,21 @@ class PacketExecutionAdapter:
         start_time = time.time()
         _log.info("adapter_execute_start", packet_id=packet_id, worker_id=worker_id)
 
+        # Clean git state BEFORE anything — stale branches from previous attempts
+        import subprocess as _sp
+        try:
+            _sp.run(["git", "-C", str(self.project_root), "worktree", "prune"],
+                    capture_output=True, timeout=10)
+            result = _sp.run(["git", "-C", str(self.project_root), "branch", "--list", f"agent/default/{packet_id}/*"],
+                           capture_output=True, text=True, timeout=10)
+            for line in result.stdout.splitlines():
+                branch = line.strip().lstrip("* ")
+                if branch:
+                    _sp.run(["git", "-C", str(self.project_root), "branch", "-D", branch],
+                           capture_output=True, timeout=10)
+        except Exception:
+            pass
+
         # Ensure DB is initialized in this process
         try:
             from grace_control.db import init_db as _init_db
@@ -280,45 +295,7 @@ ruff check src/
     async def _call_legacy_runner(self, packet_path: Path, state_root: Path, worktree_root: Path):
         from prefect_grace.platform.e2e_packet_runner import run_e2e_packet
 
-        packet_id = packet_path.parent.name
-
-        # Prune stale git worktree metadata AND delete old branches
-        import subprocess as _sp
-        try:
-            _sp.run(["git", "-C", str(self.project_root), "worktree", "prune"],
-                    capture_output=True, timeout=10)
-        except Exception:
-            pass
-        # Delete leftover agent branches from previous runs (prevents branch conflict)
-        try:
-            result = _sp.run(["git", "-C", str(self.project_root), "branch"],
-                           capture_output=True, text=True, timeout=10)
-            for line in result.stdout.splitlines():
-                branch = line.strip().lstrip("* ")
-                if f"agent/default/{packet_id}" in branch:
-                    _sp.run(["git", "-C", str(self.project_root), "branch", "-D", branch],
-                           capture_output=True, timeout=10)
-        except Exception:
-            pass
-
-        # Create fresh registry
-        reg_dir = state_root / "state"
-        reg_dir.mkdir(parents=True, exist_ok=True)
-        reg_file = reg_dir / "packet_registry.yaml"
-        try:
-            existing = {}
-            if reg_file.exists():
-                existing = yaml.safe_load(reg_file.read_text()) or {}
-            existing[packet_id] = {
-                "packet_id": packet_id,
-                "feature_id": packet_id.split("-W")[0] if "-W" in packet_id else "unknown",
-                "wave_id": "W01", "status": "ready", "phase": "PHASE-TEST",
-                "packet_path": str(packet_path),
-                "allowed_write_scope": [], "frozen_scope": [], "depends_on": [],
-            }
-            reg_file.write_text(yaml.dump(existing, default_flow_style=False))
-        except Exception:
-            pass
+         packet_id = packet_path.parent.name
 
         os.environ.setdefault("GRACE_ALLOW_SANDBOX_BYPASS", "true")
 
