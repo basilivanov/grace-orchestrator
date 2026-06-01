@@ -159,10 +159,6 @@ class PacketExecutionAdapter:
             execution_result.evidence_path = evidence_path
             execution_result.duration_ms = int((time.time() - start_time) * 1000)
             self._save_agent_log(packet_id, run_number, result, _state_root)
-            execution_result = self._parse_result(result)
-            evidence_path = self._save_evidence(packet_id, run_number, result.to_dict())
-            execution_result.evidence_path = evidence_path
-            execution_result.duration_ms = int((time.time() - start_time) * 1000)
 
             with get_db() as db:
                 existing = db.query(PacketRun).filter_by(id=run_id).first()
@@ -286,6 +282,25 @@ ruff check src/
 
         packet_id = packet_path.parent.name
 
+        # Prune stale git worktree metadata AND delete old branches
+        import subprocess as _sp
+        try:
+            _sp.run(["git", "-C", str(self.project_root), "worktree", "prune"],
+                    capture_output=True, timeout=10)
+        except Exception:
+            pass
+        # Delete leftover agent branches from previous runs (prevents branch conflict)
+        try:
+            result = _sp.run(["git", "-C", str(self.project_root), "branch"],
+                           capture_output=True, text=True, timeout=10)
+            for line in result.stdout.splitlines():
+                branch = line.strip().lstrip("* ")
+                if f"agent/default/{packet_id}" in branch:
+                    _sp.run(["git", "-C", str(self.project_root), "branch", "-D", branch],
+                           capture_output=True, timeout=10)
+        except Exception:
+            pass
+
         # Create fresh registry
         reg_dir = state_root / "state"
         reg_dir.mkdir(parents=True, exist_ok=True)
@@ -320,6 +335,7 @@ ruff check src/
                 dry_run=False,
                 execute_agent=True,
                 keep_worktree=False,
+                runtime_state_root=state_root,
                 timeout_seconds=timeout,
             ),
         )
