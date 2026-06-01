@@ -99,17 +99,19 @@ class Worker:
                             self.log.warn("packet_rejected", packet_id=packet_id, reason=result.reason)
                             self._handle_rejection(packet_id)
 
+                    except asyncio.TimeoutError:
+                        self.log.error("execution_timed_out", packet_id=packet_id,
+                            timeout_s=agent_timeout)
+                        try:
+                            await self.api.release_packet(packet_id, self.worker_id, "failed", {"accepted": False, "reason": "timeout"})
+                        except Exception:
+                            pass
                     except Exception:
                         self.log.error("execution_failed", packet_id=packet_id,
                             error=traceback.format_exc()[:500])
                         try:
                             await self.api.release_packet(packet_id, self.worker_id, "failed", {"accepted": False})
                             self.log.info("released_as_failed", packet_id=packet_id)
-                    except asyncio.TimeoutError:
-                        self.log.error("execution_timed_out", packet_id=packet_id,
-                            timeout_s=agent_timeout)
-                        try:
-                            await self.api.release_packet(packet_id, self.worker_id, "failed", {"accepted": False, "reason": "timeout"})
                         except Exception:
                             pass
                     except Exception:
