@@ -59,7 +59,9 @@ class WorkerAPIClient:
     async def close(self):
         await self.client.aclose()
 
-    async def merge_packet(self, packet_id: str, commit_sha: str = "") -> dict:
-        r = await self.client.post(f"/api/packets/{packet_id}/merge", json={"commit_sha": commit_sha})
+    async def merge_packet(self, packet_id: str, commit_sha: str = "", worktree_path: str = "", branch_name: str = "") -> dict:
+        r = await self.client.post(f"/api/packets/{packet_id}/merge", json={
+            "commit_sha": commit_sha, "worktree_path": worktree_path, "branch_name": branch_name,
+        })
         r.raise_for_status()
         return r.json()

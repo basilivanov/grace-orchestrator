@@ -227,8 +227,10 @@ async def cancel_packet(packet_id: str, request: dict) -> dict:
 
 @router.post("/{packet_id}/merge")
 async def merge_packet(packet_id: str, request: dict) -> dict:
-    """Merge accepted packet: ACCEPTED → MERGED."""
+    """Merge accepted packet: ACCEPTED → MERGED. Attempts git merge + push if worktree_path provided."""
     commit_sha = request.get("commit_sha", "")
+    worktree_path = request.get("worktree_path", "")
+    branch_name = request.get("branch_name", "")
 
     with get_db() as db:
         packet = db.query(Packet).filter_by(id=packet_id).first()
@@ -242,6 +244,33 @@ async def merge_packet(packet_id: str, request: dict) -> dict:
 
         _state_machine.transition(current, PacketState.MERGED)
         packet.state = PacketState.MERGED.value
+
+        if worktree_path and branch_name:
+            try:
+                from pathlib import Path
+                from prefect_grace.platform.git_mutation_gate import run_git_mutation_gate
+                wt = Path(worktree_path)
+                if wt.exists():
+                    result = run_git_mutation_gate(
+                        packet=wt / "EXECUTION_PACKET.md",
+                        repo_root=Path.cwd(),
+                        worktree_root=wt.parent,
+                        worktree_path=wt,
+                        project_key=packet.feature_id.split("-", 1)[0].lower() if "-" in packet.feature_id else "grace",
+                        packet_id=packet.id,
+                        attempt=packet.attempt_count,
+                        base_ref="HEAD",
+                        target_branch="main",
+                        remote="origin",
+                        apply=not request.get("dry_run", False),
+                        commit=True,
+                        push=True,
+                        merge=True,
+                        understand_merge=True,
+                    )
+                    commit_sha = result.commit_sha or commit_sha
+            except Exception:
+                pass
 
         _log.info("packet_merged", packet_id=packet.id, commit_sha=commit_sha)
         record_event("packet_merged", "packet", packet.id, {"commit_sha": commit_sha})

@@ -63,7 +63,9 @@ class Worker:
                 release_resp = await self.api.release_packet(claim.packet_id, self.worker_id, status, result.model_dump())
 
                 if status == "accepted":
-                    await self.api.merge_packet(claim.packet_id)
+                    await self.api.merge_packet(claim.packet_id,
+                        worktree_path=result.worktree_path,
+                        branch_name=result.branch_name)
 
                 if status == "rejected":
                     self._handle_rejection(claim.packet_id)

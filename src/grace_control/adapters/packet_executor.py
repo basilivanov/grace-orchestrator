@@ -41,6 +41,8 @@ class ExecutionResult(BaseModel):
     evidence_path: str = ""
     duration_ms: int = 0
     domain_status: str = ""
+    worktree_path: str = ""
+    branch_name: str = ""
 
 #END_BLOCK_MODELS
 
@@ -269,6 +271,8 @@ ruff check src/
             accepted=accepted,
             reason=reason,
             domain_status=result.domain_status,
+            worktree_path=result.worktree_path or "",
+            branch_name=result.branch_name or "",
         )
 
     # START_FUNCTION_CONTRACT
