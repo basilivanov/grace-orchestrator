@@ -63,3 +63,5 @@ src/prefect_grace/state/
 src/prefect_grace/packets/
 src/prefect_grace/briefs/
 *.log
+prefect_grace/state/state/
+prefect_grace/state/packets.yaml
