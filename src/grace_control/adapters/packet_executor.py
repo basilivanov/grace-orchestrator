@@ -299,19 +299,23 @@ ruff check src/
 
         os.environ.setdefault("GRACE_ALLOW_SANDBOX_BYPASS", "true")
 
-        # Clean stale git branches from previous attempts
+        # Clean stale git worktrees + branches from previous attempts
         import subprocess as _sp
+        import shutil
         try:
+            # First prune dead worktrees
             _sp.run(["git", "-C", str(self.project_root), "worktree", "prune"],
                     capture_output=True, timeout=10)
-            result = _sp.run(["git", "-C", str(self.project_root), "branch", "--list",
-                            f"agent/default/{packet_id}/*"],
-                           capture_output=True, text=True, timeout=10)
-            for line in result.stdout.splitlines():
-                branch = line.strip().lstrip("* ")
-                if branch:
-                    _sp.run(["git", "-C", str(self.project_root), "branch", "-D", branch],
-                           capture_output=True, timeout=10)
+            # Then remove the worktree directory if it exists
+            wt_path = worktree_root / f"{packet_id}-attempt-0001"
+            if wt_path.exists():
+                _sp.run(["git", "-C", str(self.project_root), "worktree", "remove", str(wt_path), "--force"],
+                       capture_output=True, timeout=10)
+                shutil.rmtree(wt_path, ignore_errors=True)
+            # Delete the branch if it still exists
+            branch = f"agent/default/{packet_id}/attempt-0001"
+            _sp.run(["git", "-C", str(self.project_root), "branch", "-D", branch],
+                   capture_output=True, timeout=10)
         except Exception:
             pass
 
