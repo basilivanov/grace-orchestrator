@@ -135,6 +135,9 @@ class PacketExecutionAdapter:
             result = await self._call_legacy_runner(packet_path)
             _log.debug("legacy_runner_completed", packet_id=packet_id,
                 ok=result.ok, domain=result.domain_status)
+
+            # Save raw agent output for analysis
+            self._save_agent_log(packet_id, run_number, result)
             execution_result = self._parse_result(result)
             evidence_path = self._save_evidence(packet_id, run_number, result.to_dict())
             execution_result.evidence_path = evidence_path
@@ -332,5 +335,29 @@ ruff check src/
     # END_FUNCTION_CONTRACT
     def _save_evidence(self, packet_id: str, run_number: int, result: dict) -> str:
         return str(self.state_root / "packets" / packet_id / "runs" / f"R{run_number:02d}")
+
+    def _save_agent_log(self, packet_id: str, run_number: int, result) -> None:
+        try:
+            log_dir = self.state_root / "packets" / packet_id / "runs" / f"R{run_number:02d}"
+            log_dir.mkdir(parents=True, exist_ok=True)
+            agent_log = log_dir / "agent_output.log"
+
+            lines = []
+            mr = result.managed_runner_result
+            if isinstance(mr, dict):
+                agent = mr.get("agent_result", {})
+                if isinstance(agent, dict):
+                    stdout = agent.get("stdout", "")
+                    stderr = agent.get("stderr", "")
+                    if stdout:
+                        lines.append(f"=== AGENT STDOUT ===\n{stdout}")
+                    if stderr:
+                        lines.append(f"=== AGENT STDERR ===\n{stderr}")
+
+            if lines:
+                agent_log.write_text("".join(lines))
+                _log.debug("agent_log_saved", packet_id=packet_id, path=str(agent_log))
+        except Exception:
+            pass
 
 #END_BLOCK_ADAPTER
