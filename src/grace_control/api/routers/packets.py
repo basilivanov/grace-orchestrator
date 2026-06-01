@@ -269,6 +269,13 @@ async def merge_packet(packet_id: str, request: dict) -> dict:
                         understand_merge=True,
                     )
                     commit_sha = result.commit_sha or commit_sha
+                    # Clean up worktree after successful merge
+                    try:
+                        import shutil
+                        if wt.exists():
+                            shutil.rmtree(wt)
+                    except Exception:
+                        pass
             except Exception:
                 pass
 

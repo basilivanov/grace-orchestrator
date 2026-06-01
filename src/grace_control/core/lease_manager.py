@@ -42,6 +42,16 @@ def check_expired_leases() -> int:
             if packet and PacketState(packet.state) == PacketState.RUNNING:
                 packet.state = PacketState.READY.value
 
+                # Clean up orphaned worktree
+                try:
+                    import shutil
+                    from pathlib import Path
+                    wt = Path(f"/tmp/grace_worktrees/grace/{packet.id}/{packet.attempt_count}")
+                    if wt.exists():
+                        shutil.rmtree(wt)
+                except Exception:
+                    pass
+
             worker = db.query(Worker).filter_by(id=lease.worker_id).first()
             if worker:
                 worker.current_packet_id = None

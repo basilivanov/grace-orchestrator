@@ -248,6 +248,7 @@ ruff check src/
                 worktree_root=self.worktree_root,
                 dry_run=False,
                 execute_agent=True,
+                keep_worktree=False,  # Clean up on failure, keep only on success
                 timeout_seconds=int(os.environ.get("GRACE_AGENT_TIMEOUT", "3600")),
             ),
         )
