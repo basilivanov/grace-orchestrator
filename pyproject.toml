@@ -51,15 +51,15 @@ dev = [
 ]
 
 [project.scripts]
-grace = "prefect_grace.cli:main"
+grace = "grace_control.cli.main:cli"
 grace-dev = "prefect_grace.devtools.cli:main"
 
-# Backward compatibility (deprecated)
+# Legacy entry point (backward compat)
 prefect-grace = "prefect_grace.cli_compat:prefect_grace_main"
 gracectl = "prefect_grace.cli_compat:gracectl_main"
 
 [tool.hatch.build]
-packages = ["src/prefect_grace"]
+packages = ["src/prefect_grace", "src/grace_control"]
 
 [project.urls]
 Homepage = "https://github.com/basilivanov/grace-orchestrator"
