@@ -27,6 +27,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import JSONResponse
 
 from grace_control.core.event_recorder import record_event
 from grace_control.core.state_machine import PacketStateMachine
@@ -197,35 +198,43 @@ async def release_packet(packet_id: str, request: dict) -> dict:
 @router.post("/{packet_id}/cancel")
 async def cancel_packet(packet_id: str, request: dict) -> dict:
     """Cancel packet: READY/RUNNING/REJECTED → CANCELLED. Releases lease if present."""
-    reason = request.get("reason", "No reason provided")
+    try:
+        reason = request.get("reason", "No reason provided")
 
-    with get_db() as db:
-        packet = db.query(Packet).filter_by(id=packet_id).first()
-        if not packet:
-            raise HTTPException(status_code=404, detail="Packet not found")
+        with get_db() as db:
+            packet = db.query(Packet).filter_by(id=packet_id).first()
+            if not packet:
+                raise HTTPException(status_code=404, detail="Packet not found")
 
-        current = PacketState(packet.state)
-        if current in (PacketState.MERGED, PacketState.FAILED, PacketState.CANCELLED):
-            raise HTTPException(status_code=400, detail=f"Cannot cancel terminal packet: {current.value}")
+            current = PacketState(packet.state)
+            if current in (PacketState.MERGED, PacketState.FAILED, PacketState.CANCELLED):
+                raise HTTPException(status_code=400, detail=f"Cannot cancel terminal packet: {current.value}")
 
-        lease = db.query(Lease).filter_by(packet_id=packet_id).first()
-        if lease:
-            db.delete(lease)
-            worker = db.query(Worker).filter_by(id=lease.worker_id).first()
-            if worker:
-                worker.current_packet_id = None
+            lease = db.query(Lease).filter_by(packet_id=packet_id).first()
+            if lease:
+                db.delete(lease)
+                worker = db.query(Worker).filter_by(id=lease.worker_id).first()
+                if worker:
+                    worker.current_packet_id = None
 
-        _state_machine.transition(current, PacketState.CANCELLED)
-        packet.state = PacketState.CANCELLED.value
+            _state_machine.transition(current, PacketState.CANCELLED)
+            packet.state = PacketState.CANCELLED.value
 
-        _log.info("packet_cancelled", packet_id=packet.id, reason=reason)
-        record_event("packet_cancelled", "packet", packet.id, {"reason": reason})
-        await notify_event("packet_cancelled", packet.id, reason=reason)
+            _log.info("packet_cancelled", packet_id=packet.id, reason=reason)
+            record_event("packet_cancelled", "packet", packet.id, {"reason": reason})
+            await notify_event("packet_cancelled", packet.id, reason=reason)
 
-        return {
-            "data": {"packet_id": packet.id, "state": packet.state, "reason": reason},
-            "timestamp": datetime.utcnow().isoformat() + "Z",
-        }
+            return {
+                "data": {"packet_id": packet.id, "state": packet.state, "reason": reason},
+                "timestamp": datetime.utcnow().isoformat() + "Z",
+            }
+    except HTTPException:
+        raise
+    except Exception:
+        return JSONResponse(
+            {"error": {"code": "INTERNAL_ERROR", "message": "Cancel failed"}},
+            status_code=500,
+        )
 
 
 @router.post("/{packet_id}/merge")

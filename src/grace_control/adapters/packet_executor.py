@@ -261,10 +261,7 @@ ruff check src/
     async def _call_legacy_runner(self, packet_path: Path):
         from prefect_grace.platform.e2e_packet_runner import run_e2e_packet
 
-        # Allow sandbox bypass — control plane assumes responsibility
-        os.environ.setdefault("GRACE_ALLOW_SANDBOX_BYPASS", "true")
-
-        # Bridge: register packet in legacy file-based registry (new format)
+        # Register packet in legacy file-based registry
         packet_id = packet_path.parent.name
         reg_dir = self.state_root / "state"
         reg_dir.mkdir(parents=True, exist_ok=True)
@@ -284,22 +281,60 @@ ruff check src/
         except Exception:
             pass
 
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            None,
-            partial(
-                run_e2e_packet,
-                project_root=self.project_root,
-                packet_path=packet_path,
-                state_root=self.state_root,
-                worktree_root=self.worktree_root,
-                dry_run=False,
-                execute_agent=True,
-                keep_worktree=False,
-                runtime_state_root=self.state_root,
-                timeout_seconds=int(os.environ.get("GRACE_AGENT_TIMEOUT", "3600")),
-            ),
-        )
+        # Allow sandbox bypass — control plane assumes responsibility
+        os.environ.setdefault("GRACE_ALLOW_SANDBOX_BYPASS", "true")
+
+        # Run in separate process for hard kill support
+        timeout = int(os.environ.get("GRACE_AGENT_TIMEOUT", "600"))
+        import multiprocessing
+
+        def _runner(result_queue, **kwargs):
+            try:
+                r = run_e2e_packet(**kwargs)
+                result_queue.put(("ok", r))
+            except Exception as e:
+                result_queue.put(("error", str(e)))
+
+        queue: multiprocessing.Queue = multiprocessing.Queue()
+        proc = multiprocessing.Process(target=_runner, args=(queue,), kwargs={
+            "project_root": self.project_root,
+            "packet_path": packet_path,
+            "state_root": self.state_root,
+            "worktree_root": self.worktree_root,
+            "dry_run": False,
+            "execute_agent": True,
+            "keep_worktree": False,
+            "timeout_seconds": timeout,
+        })
+        proc.start()
+        proc.join(timeout=timeout)
+
+        if proc.is_alive():
+            proc.terminate()
+            proc.join(timeout=5)
+            if proc.is_alive():
+                proc.kill()
+            from prefect_grace.platform.e2e_packet_runner import E2EPacketRunnerResult
+            return E2EPacketRunnerResult(
+                ok=False, packet_id=packet_id, attempt=1,
+                runtime_status="failed", domain_status="runner_error",
+                registry_status="blocked", registry_reason="agent_timeout",
+                registry_transition={}, worktree_path=None, branch_name=None,
+                executor_id=None, managed_runner_result={}, handoff_result=None,
+                artifact_paths=[], errors=[f"Agent timed out after {timeout}s"],
+            )
+
+        status, result = queue.get(timeout=5)
+        if status == "error":
+            from prefect_grace.platform.e2e_packet_runner import E2EPacketRunnerResult
+            return E2EPacketRunnerResult(
+                ok=False, packet_id=packet_id, attempt=1,
+                runtime_status="failed", domain_status="runner_error",
+                registry_status="blocked", registry_reason=str(result)[:200],
+                registry_transition={}, worktree_path=None, branch_name=None,
+                executor_id=None, managed_runner_result={}, handoff_result=None,
+                artifact_paths=[], errors=[str(result)[:500]],
+            )
         return result
 
     # START_FUNCTION_CONTRACT

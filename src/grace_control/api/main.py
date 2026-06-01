@@ -83,6 +83,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Global exception handler — API survives any runtime error
+from fastapi import Request
+from fastapi.responses import JSONResponse as _JSONResponse
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    return _JSONResponse(
+        status_code=500,
+        content={"error": {"code": "INTERNAL_ERROR", "message": str(exc)[:200]}},
+    )
+
 app.include_router(features.router, prefix="/api/features", tags=["features"])
 app.include_router(packets.router, prefix="/api/packets", tags=["packets"])
 app.include_router(workers.router, prefix="/api/workers", tags=["workers"])
