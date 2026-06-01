@@ -91,6 +91,16 @@ async def dashboard():
         return HTMLResponse(template.read_text())
     return HTMLResponse("<h1>GRACE Control Plane</h1><p>Dashboard template not found.</p>")
 
+#START_BLOCK_WS
+from fastapi import WebSocket
+from grace_control.api.ws_broadcast import handle_websocket
+
+@app.websocket("/ws")
+async def websocket_endpoint(ws: WebSocket):
+    await handle_websocket(ws)
+
+#END_BLOCK_WS
+
 
 @app.get("/api/artifacts/{packet_id}/{run_id:path}")
 async def get_artifact(packet_id: str, run_id: str):
