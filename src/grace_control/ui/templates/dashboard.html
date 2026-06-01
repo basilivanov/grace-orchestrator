@@ -246,11 +246,6 @@ async function renderInspector(pid){
   let h='<div class=insp>';
   try{
     const r=await fetch(`/api/packets/${pid}`);const d=(await r.json()).data;
-    // Skip re-render if nothing changed (prevents tab reset)
-    if(lastPktState[pid]&&lastPktState[pid].state===d.state&&lastPktState[pid].att===d.attempt_count){
-      restoreTab();return
-    }
-    lastPktState[pid]={state:d.state,att:d.attempt_count};
     const s=STY[d.state]||{bg:'var(--gr)',label:d.state};
     h+=`<h3>${d.title||'Packet'}</h3>
     <span class=state-badge style="background:${s.bg}20;color:${s.bg};border:1px solid ${s.bg}40">${s.label}</span>
@@ -275,7 +270,12 @@ async function renderInspector(pid){
     h+='</div>';
 
     // Tabs + content
-    h+=`<div class=tabs>${[['ov','Overview'],['runs','Runs'],['events','Events'],['arts','Artifacts']].map(([n,l])=>`<button class="tab${actTab===n?' act':''}" onclick="swTab(event,'${n}','${pid}')">${l}</button>`).join('')}</div>`;
+    var tabs=['ov','runs','events','arts'];var tlabels=['Overview','Runs','Events','Artifacts'];
+    h+='<div class=tabs>';
+    for(var ti=0;ti<tabs.length;ti++){
+      h+='<button class=\"tab'+(actTab===tabs[ti]?' act':'')+'\" onclick=\"swTab(event,\\''+tabs[ti]+'\\',\\''+pid+'\\')\">'+tlabels[ti]+'</button>';
+    }
+    h+='</div>';
     h+=`<div class="tc" id=tc-ov>${renderOverview(d)}</div>`;
     h+=`<div class="tc hidden" id=tc-runs>${renderRuns(d)}</div>`;
     h+=`<div class="tc hidden" id=tc-events><div class=empt>Loading...</div></div>`;
