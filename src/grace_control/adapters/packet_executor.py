@@ -299,6 +299,25 @@ ruff check src/
 
         os.environ.setdefault("GRACE_ALLOW_SANDBOX_BYPASS", "true")
 
+        # Write packet to legacy registry (required by agent launcher)
+        reg_dir = state_root / "state"
+        reg_dir.mkdir(parents=True, exist_ok=True)
+        reg_file = reg_dir / "packet_registry.yaml"
+        try:
+            existing = {}
+            if reg_file.exists():
+                existing = yaml.safe_load(reg_file.read_text()) or {}
+            existing[packet_id] = {
+                "packet_id": packet_id,
+                "feature_id": packet_id.split("-W")[0] if "-W" in packet_id else "unknown",
+                "wave_id": "W01", "status": "ready", "phase": "PHASE-TEST",
+                "packet_path": str(packet_path),
+                "allowed_write_scope": [], "frozen_scope": [], "depends_on": [],
+            }
+            reg_file.write_text(yaml.dump(existing, default_flow_style=False))
+        except Exception:
+            pass
+
         # Clean stale git worktrees + branches from previous attempts
         import subprocess as _sp
         import shutil
