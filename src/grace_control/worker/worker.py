@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import uuid
 import traceback
 from pathlib import Path
@@ -57,6 +58,7 @@ class Worker:
             self.log.info("worker_stopped", worker_id=self.worker_id)
 
     async def _main_loop(self):
+        agent_timeout = int(os.environ.get("GRACE_AGENT_TIMEOUT", "600"))
         while self.running:
             claim = None
             try:
@@ -71,8 +73,11 @@ class Worker:
 
                 with trace_context(packet_id):
                     try:
-                        self.log.info("execution_started", packet_id=packet_id)
-                        result = await self.executor.execute(packet_id, self.worker_id)
+                        self.log.info("execution_started", packet_id=packet_id, timeout_s=agent_timeout)
+                        result = await asyncio.wait_for(
+                            self.executor.execute(packet_id, self.worker_id),
+                            timeout=agent_timeout,
+                        )
                         self.log.info("execution_completed",
                             packet_id=packet_id, accepted=result.accepted,
                             domain_status=result.domain_status,
@@ -100,7 +105,14 @@ class Worker:
                         try:
                             await self.api.release_packet(packet_id, self.worker_id, "failed", {"accepted": False})
                             self.log.info("released_as_failed", packet_id=packet_id)
+                    except asyncio.TimeoutError:
+                        self.log.error("execution_timed_out", packet_id=packet_id,
+                            timeout_s=agent_timeout)
+                        try:
+                            await self.api.release_packet(packet_id, self.worker_id, "failed", {"accepted": False, "reason": "timeout"})
                         except Exception:
+                            pass
+                    except Exception:
                             self.log.error("release_failed_on_error", packet_id=packet_id)
 
             except Exception:

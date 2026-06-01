@@ -91,10 +91,15 @@ def up(port, worker_id, project, watch):
 
     async def run_worker():
         await asyncio.sleep(2)
-        worker = Worker(worker_id=worker_id, api_url=f"http://127.0.0.1:{port}",
-                        project_root=project_root, state_root=state_root,
-                        worktree_root=worktree_root)
-        await worker.start()
+        while True:
+            try:
+                worker = Worker(worker_id=worker_id, api_url=f"http://127.0.0.1:{port}",
+                                project_root=project_root, state_root=state_root,
+                                worktree_root=worktree_root)
+                await worker.start()
+            except Exception:
+                console.print(f"[red]Worker crashed, restarting in 3s...[/red]")
+                await asyncio.sleep(3)
 
     async def main():
         await asyncio.gather(feature_watcher(), run_worker())
