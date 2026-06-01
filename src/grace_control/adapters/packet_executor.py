@@ -295,7 +295,7 @@ ruff check src/
     async def _call_legacy_runner(self, packet_path: Path, state_root: Path, worktree_root: Path):
         from prefect_grace.platform.e2e_packet_runner import run_e2e_packet
 
-         packet_id = packet_path.parent.name
+        packet_id = packet_path.parent.name
 
         os.environ.setdefault("GRACE_ALLOW_SANDBOX_BYPASS", "true")
 
