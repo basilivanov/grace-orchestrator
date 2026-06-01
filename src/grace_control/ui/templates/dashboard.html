@@ -284,7 +284,7 @@ async function renderInspector(pid){
     h+=`<div class="tc hidden" id=tc-runs>${renderRuns(d)}</div>`;
     h+=`<div class="tc hidden" id=tc-events><div class=empt>Loading...</div></div>`;
     h+=`<div class="tc hidden" id=tc-arts><div class=empt>Select a run to view artifacts</div></div>`;
-  }catch(e){h+='<div class=empt>Error loading packet</div>'}
+  }catch(e){h+='<div class=empt>Error loading packet: '+e.message+'</div>'}
   h+='</div>';$('pr').innerHTML=h;
   // Show active tab after DOM is populated
   const atc=document.getElementById('tc-'+actTab);
