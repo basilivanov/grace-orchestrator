@@ -110,6 +110,29 @@ async def dashboard():
     return HTMLResponse("<h1>GRACE Control Plane</h1><p>Dashboard template not found.</p>")
 
 
+@app.get("/test")
+async def test_page():
+    """Minimal test page to verify basic rendering."""
+    from grace_control.db import get_db as _gdb
+    from grace_control.db.schema import Feature, Packet
+    with _gdb() as db:
+        fcount = db.query(Feature).count()
+        pcount = db.query(Packet).count()
+    return HTMLResponse(f"""<!doctype html><html><head><meta charset=UTF-8><title>GRACE Test</title></head>
+<body style="font-family:sans-serif;background:#0d1117;color:#c9d1d9;padding:20px">
+<h1 style=color:#58a6ff>GRACE Control Plane</h1>
+<p>Server is running. API is healthy.</p>
+<ul>
+<li>Features: {fcount}</li>
+<li>Packets: {pcount}</li>
+<li>API: <a href=/api/dashboard style=color:#58a6ff>/api/dashboard</a></li>
+<li>Health: <a href=/health style=color:#58a6ff>/health</a></li>
+</ul>
+<p style=color:#8b949e;font-size:12px>If you can see this, the problem is in dashboard.html JavaScript.</p>
+<p style=color:#8b949e;font-size:12px>If you CANNOT see this, the problem is network/browser.</p>
+</body></html>""")
+
+
 @app.get("/api/dashboard")
 async def dashboard_data():
     """Aggregated view: features → waves → packets + workers + stats."""
