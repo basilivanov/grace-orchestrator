@@ -201,7 +201,8 @@ def _launch_codex_for_packet(
 
     if executor_selection.ok and executor_selection.selected and executor_selection.selected.model:
         shared_model = executor_selection.selected.model
-        logger.info("EXECUTOR_SELECTED", extra={
+        if logger:
+            logger.info("EXECUTOR_SELECTED", extra={
             "executor_id": executor_selection.selected.executor_id,
             "model": shared_model,
             "packet_id": packet.get("id"),
@@ -219,7 +220,8 @@ def _launch_codex_for_packet(
             config_model = default_executor.get("model") if default_executor else "gemini-3.5-flash"
 
         shared_model = str(config_model)
-        logger.warning("EXECUTOR_FALLBACK", extra={
+        if logger:
+            logger.warning("EXECUTOR_FALLBACK", extra={
             "reason": executor_selection.reason if not executor_selection.ok else "no model specified",
             "fallback_model": shared_model,
             "packet_id": packet.get("id")

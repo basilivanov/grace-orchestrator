@@ -52,7 +52,9 @@ def update_record(name: str, key: str, id_field: str, id_value: str, updates: di
     return updated_record
 
 
-def find_record(name: str, key: str, id_field: str, id_value: str, *, state_root: Path | str) -> dict[str, Any]:
+def find_record(name: str, key: str, id_field: str, id_value: str, *, state_root: Path | str | None = None) -> dict[str, Any]:
+    if state_root is None:
+        state_root = Path(__file__).resolve().parents[1] / "state"
     payload = load_state(name, state_root=state_root)
     for item in payload.get(key, []) or []:
         if str(item.get(id_field)) == id_value:

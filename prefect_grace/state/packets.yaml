@@ -1,0 +1,12 @@
+packets:
+- dependencies: []
+  feature_id: FX
+  packet_id: FX-W01-P01-T8
+  packet_path: /tmp/tmp9zz9j2o4/s/packets/FX-W01-P01-T8/EXECUTION_PACKET.md
+  parent_packet_id: null
+  phase: PHASE-TEST
+  reasoning: high
+  role: coder
+  status: ready
+  title: Control plane packet
+  wave_id: W01

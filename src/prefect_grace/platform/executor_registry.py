@@ -123,16 +123,33 @@ def load_executor_specs(project: Any) -> list[ExecutorSpec]:
     """
     Load executor specs from project config with backward compatibility.
 
+    Accepts ProjectAdapterConfig object or dict from project config.
     If project.agent_executor has 'executors' list, parse it.
     Otherwise synthesize single codex-cli spec from default/command.
     Validates each spec, fails closed on invalid enabled executors.
     """
-    agent_executor = project.agent_executor
+    if project is None:
+        return [_default_executor_spec()]
 
-    # Check if new executors list exists
-    if hasattr(agent_executor, 'executors') and agent_executor.executors is not None:
+    if isinstance(project, dict):
+        agent_executor = project.get("agent_executor", {})
+        if isinstance(agent_executor, dict):
+            executor_list = agent_executor.get("executors", [])
+            default = agent_executor.get("default", "codex-cli")
+            command = agent_executor.get("command", "codex1")
+        else:
+            executor_list = getattr(agent_executor, "executors", None) or []
+            default = getattr(agent_executor, "default", "codex-cli")
+            command = getattr(agent_executor, "command", "codex1")
+    else:
+        agent_executor = project.agent_executor
+        executor_list = getattr(agent_executor, "executors", None) or []
+        default = getattr(agent_executor, "default", "codex-cli")
+        command = getattr(agent_executor, "command", "codex1")
+
+    if executor_list:
         specs = []
-        for idx, raw_spec in enumerate(agent_executor.executors):
+        for idx, raw_spec in enumerate(executor_list):
             if not isinstance(raw_spec, dict):
                 raise ValueError(f"Executor spec at index {idx} must be a dict")
 
@@ -188,9 +205,9 @@ def load_executor_specs(project: Any) -> list[ExecutorSpec]:
     # Backward compatibility: synthesize from default/command
     return [
         ExecutorSpec(
-            executor_id=agent_executor.default,
+            executor_id=default,
             kind="codex",
-            command=agent_executor.command,
+            command=command,
             model=None,
             reasoning=None,
             roles=[],

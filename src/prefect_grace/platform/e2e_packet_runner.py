@@ -361,6 +361,7 @@ def run_e2e_packet(
     fake_reviewer_output: Path | None = None,
     timeout_seconds: int = 3600,
     keep_worktree: bool = True,
+    runtime_state_root: str | Path | None = None,
 ) -> E2EPacketRunnerResult:
     """
     Run end-to-end packet execution flow.
@@ -418,7 +419,8 @@ def run_e2e_packet(
             timeout_seconds=timeout_seconds,
             keep_worktree=keep_worktree,
             launcher=None,  # Use default launcher
-            project=None,  # No project config for now
+            project=None,
+            runtime_state_root=runtime_state_root,
         )
     except Exception as e:
         domain_status = DomainStatus.RUNNER_ERROR.value
