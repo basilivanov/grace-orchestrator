@@ -261,7 +261,7 @@ ruff check src/
     async def _call_legacy_runner(self, packet_path: Path):
         from prefect_grace.platform.e2e_packet_runner import run_e2e_packet
 
-        # Register packet in legacy file-based registry (required by managed runner)
+        # Register packet in legacy file-based registry
         packet_id = packet_path.parent.name
         reg_dir = self.state_root / "state"
         reg_dir.mkdir(parents=True, exist_ok=True)
@@ -281,8 +281,15 @@ ruff check src/
         except Exception:
             pass
 
-        # Allow sandbox bypass — control plane assumes responsibility
         os.environ.setdefault("GRACE_ALLOW_SANDBOX_BYPASS", "true")
+
+        # Clean up stale worktrees from previous attempts (prevents git conflicts)
+        import shutil
+        for wt_dir in self.worktree_root.glob(f"{packet_id}*"):
+            try:
+                shutil.rmtree(wt_dir, ignore_errors=True)
+            except Exception:
+                pass
 
         timeout = int(os.environ.get("GRACE_AGENT_TIMEOUT", "600"))
         loop = asyncio.get_event_loop()
