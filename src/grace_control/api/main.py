@@ -83,11 +83,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Serve static files
-_static_dir = _UI_DIR / "static"
-if _static_dir.exists():
-    app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
-
 # Global exception handler — API survives any runtime error
 from fastapi import Request
 from fastapi.responses import JSONResponse as _JSONResponse
