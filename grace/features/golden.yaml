@@ -1,0 +1,16 @@
+title: Golden Fullstack Test
+description: "Two-wave golden test for this project."
+waves:
+  - title: Backend
+    packets:
+      - title: Add date utility
+        scope:
+          - src/date_util.py
+          - tests/test_date_util.py
+        acceptance_profile: NORMAL
+  - title: Frontend
+    packets:
+      - title: Add status page
+        scope:
+          - frontend/status.html
+        acceptance_profile: NORMAL

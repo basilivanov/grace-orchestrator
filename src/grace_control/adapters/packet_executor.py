@@ -30,8 +30,11 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel
 
+from grace_control.core.structured_logger import GraceLogger
 from grace_control.db import get_db
 from grace_control.db.schema import Packet, PacketRun
+
+_log = GraceLogger("adapter")
 
 #START_BLOCK_MODELS
 class ExecutionResult(BaseModel):
@@ -82,6 +85,7 @@ class PacketExecutionAdapter:
     # END_FUNCTION_CONTRACT
     async def execute(self, packet_id: str, worker_id: str) -> ExecutionResult:
         start_time = time.time()
+        _log.info("adapter_execute_start", packet_id=packet_id, worker_id=worker_id)
 
         with get_db() as db:
             packet = db.query(Packet).filter_by(id=packet_id).first()
@@ -127,7 +131,10 @@ class PacketExecutionAdapter:
 
         try:
             packet_path = self._materialize_packet(packet_data)
+            _log.debug("packet_materialized", packet_id=packet_id, path=str(packet_path))
             result = await self._call_legacy_runner(packet_path)
+            _log.debug("legacy_runner_completed", packet_id=packet_id,
+                ok=result.ok, domain=result.domain_status)
             execution_result = self._parse_result(result)
             evidence_path = self._save_evidence(packet_id, run_number, result.to_dict())
             execution_result.evidence_path = evidence_path
@@ -143,9 +150,13 @@ class PacketExecutionAdapter:
                     existing.duration_ms = execution_result.duration_ms
                     existing.executor_id = executor.get("executor_id", "")
 
+            _log.info("adapter_execute_done", packet_id=packet_id,
+                accepted=execution_result.accepted, duration_ms=execution_result.duration_ms)
+
             return execution_result
 
         except Exception:
+            _log.error("adapter_execute_failed", packet_id=packet_id)
             with get_db() as db:
                 existing = db.query(PacketRun).filter_by(id=run_id).first()
                 if existing:

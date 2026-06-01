@@ -19,8 +19,11 @@
 
 from __future__ import annotations
 
+from grace_control.core.structured_logger import GraceLogger
 from grace_control.db import get_db
 from grace_control.db.schema import Packet, PacketState, Wave
+
+_log = GraceLogger("wave_gate")
 
 
 def check_wave_gates() -> int:
@@ -59,6 +62,10 @@ def check_wave_gates() -> int:
                         for p in drafts:
                             p.state = PacketState.READY.value
                             gated += 1
+                        if gated > 0:
+                            _log.info("wave_gate_opened", feature_id=fid,
+                                from_wave=current_wave.id, to_wave=next_wave.id,
+                                packets_gated=gated)
                         next_wave.status = "IN_PROGRESS"
 
         return gated

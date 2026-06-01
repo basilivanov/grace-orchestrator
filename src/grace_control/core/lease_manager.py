@@ -23,8 +23,11 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timedelta
 
+from grace_control.core.structured_logger import GraceLogger
 from grace_control.db import get_db
 from grace_control.db.schema import Lease, Packet, PacketState, Worker
+
+_log = GraceLogger("lease_manager")
 
 LEASE_TIMEOUT_MINUTES = 5
 CHECK_INTERVAL_SECONDS = 30
@@ -41,6 +44,7 @@ def check_expired_leases() -> int:
             packet = db.query(Packet).filter_by(id=lease.packet_id).first()
             if packet and PacketState(packet.state) == PacketState.RUNNING:
                 packet.state = PacketState.READY.value
+                _log.warn("lease_expired", packet_id=packet.id, worker_id=lease.worker_id)
 
                 # Clean up orphaned worktree
                 try:

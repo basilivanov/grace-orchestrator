@@ -1,15 +1,17 @@
 # ############################################################################
 # AI_HEADER: worker
-# ROLE: Worker loop — claim→execute→release with heartbeat.
+# ROLE: Worker loop — claim→execute→release with heartbeat and full observability.
 # ############################################################################
 
 from __future__ import annotations
 
 import asyncio
 import uuid
+import traceback
 from pathlib import Path
 
 from grace_control.adapters.packet_executor import PacketExecutionAdapter
+from grace_control.core.structured_logger import GraceLogger, trace_context
 from grace_control.worker.api_client import WorkerAPIClient
 
 
@@ -27,6 +29,7 @@ class Worker:
         self.api = WorkerAPIClient(api_url)
         self.heartbeat_interval = heartbeat_interval
         self.running = False
+        self.log = GraceLogger("worker")
 
         self.executor = PacketExecutionAdapter(
             project_root=project_root or Path.cwd(),
@@ -35,7 +38,9 @@ class Worker:
         )
 
     async def start(self):
+        self.log.info("worker_starting", worker_id=self.worker_id)
         await self.api.register(self.worker_id)
+        self.log.info("worker_registered", worker_id=self.worker_id)
         self.running = True
 
         heartbeat_task = asyncio.create_task(self._heartbeat_loop())
@@ -49,6 +54,7 @@ class Worker:
             except asyncio.CancelledError:
                 pass
             await self.api.close()
+            self.log.info("worker_stopped", worker_id=self.worker_id)
 
     async def _main_loop(self):
         while self.running:
@@ -56,30 +62,50 @@ class Worker:
             try:
                 claim = await self.api.claim_packet(self.worker_id)
                 if not claim:
+                    self.log.debug("no_packets_available", worker_id=self.worker_id)
                     await asyncio.sleep(5)
                     continue
 
-                try:
-                    result = await self.executor.execute(claim.packet_id, self.worker_id)
-                    status = "accepted" if result.accepted else "rejected"
-                    release_resp = await self.api.release_packet(claim.packet_id, self.worker_id, status, result.model_dump())
+                packet_id = claim.packet_id
+                self.log.info("packet_claimed", worker_id=self.worker_id, packet_id=packet_id)
 
-                    if status == "accepted":
-                        await self.api.merge_packet(claim.packet_id,
-                            worktree_path=result.worktree_path,
-                            branch_name=result.branch_name)
-
-                    if status == "rejected":
-                        self._handle_rejection(claim.packet_id)
-
-                except Exception:
-                    # Release as FAILED immediately — no need to wait for lease timeout
+                with trace_context(packet_id):
                     try:
-                        await self.api.release_packet(claim.packet_id, self.worker_id, "failed", {"accepted": False})
+                        self.log.info("execution_started", packet_id=packet_id)
+                        result = await self.executor.execute(packet_id, self.worker_id)
+                        self.log.info("execution_completed",
+                            packet_id=packet_id, accepted=result.accepted,
+                            domain_status=result.domain_status,
+                            duration_ms=result.duration_ms)
+
+                        status = "accepted" if result.accepted else "rejected"
+                        await self.api.release_packet(packet_id, self.worker_id, status, result.model_dump())
+                        self.log.info("packet_released", packet_id=packet_id, status=status)
+
+                        if status == "accepted":
+                            self.log.info("merging", packet_id=packet_id,
+                                worktree=result.worktree_path, branch=result.branch_name)
+                            await self.api.merge_packet(packet_id,
+                                worktree_path=result.worktree_path,
+                                branch_name=result.branch_name)
+                            self.log.info("merged", packet_id=packet_id)
+
+                        if status == "rejected":
+                            self.log.warn("packet_rejected", packet_id=packet_id, reason=result.reason)
+                            self._handle_rejection(packet_id)
+
                     except Exception:
-                        pass
+                        self.log.error("execution_failed", packet_id=packet_id,
+                            error=traceback.format_exc()[:500])
+                        try:
+                            await self.api.release_packet(packet_id, self.worker_id, "failed", {"accepted": False})
+                            self.log.info("released_as_failed", packet_id=packet_id)
+                        except Exception:
+                            self.log.error("release_failed_on_error", packet_id=packet_id)
 
             except Exception:
+                self.log.error("main_loop_error", worker_id=self.worker_id,
+                    error=traceback.format_exc()[:500])
                 await asyncio.sleep(10)
 
     def _handle_rejection(self, packet_id: str):
@@ -87,15 +113,18 @@ class Worker:
         from grace_control.core.state_machine import StateTransitionError
         try:
             retry_packet(packet_id)
+            self.log.info("packet_retried", packet_id=packet_id)
         except StateTransitionError:
             mark_failed(packet_id, "Max retry attempts reached")
+            self.log.warn("max_retries_reached", packet_id=packet_id)
 
     async def _heartbeat_loop(self):
         while self.running:
             try:
                 await self.api.heartbeat(self.worker_id)
+                self.log.debug("heartbeat_sent", worker_id=self.worker_id)
             except Exception:
-                pass
+                self.log.warn("heartbeat_failed", worker_id=self.worker_id)
             await asyncio.sleep(self.heartbeat_interval)
 
 

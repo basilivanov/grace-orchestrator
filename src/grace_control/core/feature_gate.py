@@ -5,8 +5,11 @@
 
 from __future__ import annotations
 
+from grace_control.core.structured_logger import GraceLogger
 from grace_control.db import get_db
 from grace_control.db.schema import Feature, Packet, PacketState
+
+_log = GraceLogger("feature_gate")
 
 
 def check_feature_completion() -> int:
@@ -25,6 +28,7 @@ def check_feature_completion() -> int:
                 if all_done:
                     f.status = "COMPLETED"
                     completed += 1
+                    _log.info("feature_completed", feature_id=f.id, packets=len(packets))
         return completed
     except Exception:
         return 0
