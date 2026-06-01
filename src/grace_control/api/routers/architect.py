@@ -38,17 +38,29 @@ async def create_plan(request: dict) -> dict:
 
     # Build packet list for DAG validation
     dag_packets = []
+    action_to_id: dict[str, str] = {}
     for i, wave_spec in enumerate(spec.get("waves", []), 1):
         for j, pkt_spec in enumerate(wave_spec.get("packets", []), 1):
             wave_slug = _slugify(wave_spec["title"])
             wave_id = f"W{i:02d}-{wave_slug.upper()}"
             action = _extract_action(pkt_spec["title"])
             pid = f"{feature_id}-{wave_id}-P{j:02d}-{action}"
+            action_to_id[action] = pid  # for depends_on resolution
             dag_packets.append({
                 "id": pid,
                 "depends_on": pkt_spec.get("depends_on", []),
                 "scope": pkt_spec.get("scope", []),
             })
+
+    # Resolve depends_on references (short names → full IDs)
+    for dp in dag_packets:
+        resolved = []
+        for dep in dp["depends_on"]:
+            if dep in action_to_id:
+                resolved.append(action_to_id[dep])
+            else:
+                resolved.append(dep)  # keep as-is if not found
+        dp["depends_on"] = resolved
 
     dag_result = validate_dag(dag_packets)
     if not dag_result.valid:
