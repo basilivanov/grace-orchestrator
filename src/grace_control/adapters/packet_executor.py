@@ -95,6 +95,20 @@ class PacketExecutionAdapter:
             run_number = packet.attempt_count
             run_id = f"{packet_id}-R{run_number:02d}"
 
+            # Check if run already exists (from a previous worker crash)
+            existing_run = db.query(PacketRun).filter_by(id=run_id).first()
+            if existing_run:
+                _log.debug("run_already_exists", packet_id=packet_id, run_id=run_id)
+                # Still update status to running
+                existing_run.status = "running"
+                existing_run.started_at = datetime.utcnow()
+            else:
+                packet_run = PacketRun(
+                    id=run_id, packet_id=packet_id, run_number=run_number,
+                    worker_id=worker_id, status="running", started_at=datetime.utcnow(),
+                )
+                db.add(packet_run)
+
             # Eagerly read all attributes before session closes
             packet_data = {
                 "id": packet.id,
@@ -109,16 +123,6 @@ class PacketExecutionAdapter:
                 "attempt_count": packet.attempt_count,
                 "max_attempts": packet.max_attempts,
             }
-
-            packet_run = PacketRun(
-                id=run_id,
-                packet_id=packet_id,
-                run_number=run_number,
-                worker_id=worker_id,
-                status="running",
-                started_at=datetime.utcnow(),
-            )
-            db.add(packet_run)
 
         # Select executor with escalation
         from grace_control.core.complexity_router import route_packet
@@ -283,13 +287,24 @@ ruff check src/
 
         os.environ.setdefault("GRACE_ALLOW_SANDBOX_BYPASS", "true")
 
-        # Clean up stale worktrees from previous attempts (prevents git conflicts)
+        # Clean up stale worktrees from previous attempts
+        import subprocess as _sp
         import shutil
-        for wt_dir in self.worktree_root.glob(f"{packet_id}*"):
+        for wt_dir in sorted(self.worktree_root.glob(f"{packet_id}*")):
+            try:
+                _sp.run(["git", "worktree", "remove", str(wt_dir), "--force"],
+                        cwd=self.project_root, capture_output=True, timeout=10)
+            except Exception:
+                pass
             try:
                 shutil.rmtree(wt_dir, ignore_errors=True)
             except Exception:
                 pass
+        try:
+            _sp.run(["git", "worktree", "prune"], cwd=self.project_root,
+                    capture_output=True, timeout=10)
+        except Exception:
+            pass
 
         timeout = int(os.environ.get("GRACE_AGENT_TIMEOUT", "600"))
         loop = asyncio.get_event_loop()
