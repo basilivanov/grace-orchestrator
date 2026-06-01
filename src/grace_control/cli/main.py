@@ -214,17 +214,23 @@ def eval_run(feature_file, workers, api_url, timeout, report):
         c.post("/api/workers/register", json={"worker_id": f"eval-w{i}"})
 
     procs = []
+    project_root = str(Path.cwd())
     for i in range(workers):
         p = subprocess.Popen([sys.executable, "-c", f"""
-import os, asyncio
-os.environ["GRACE_DB_URL"]=os.environ.get("GRACE_DB_URL","")
-os.environ["GRACE_ALLOW_SANDBOX_BYPASS"]="true"
+import os, sys, asyncio
+sys.path.insert(0, "{project_root}/src")
+os.environ["GRACE_ALLOW_SANDBOX_BYPASS"] = "true"
 from pathlib import Path
+from grace_control.db import init_db
 from grace_control.worker.worker import Worker
-w=Worker(worker_id="eval-w{i}",api_url="{api_url}",project_root=Path.cwd())
-async def m():await w.start()
+init_db()
+w = Worker(worker_id="eval-w{i}", api_url="{api_url}",
+           project_root=Path("{project_root}"),
+           state_root=Path("{project_root}/.grace_state"),
+           worktree_root=Path("{project_root}/.grace_worktrees"))
+async def m(): await w.start()
 asyncio.run(m())
-"""])
+"""], env={**os.environ, "PYTHONPATH": f"{project_root}/src", "GRACE_DB_URL": os.environ.get("GRACE_DB_URL", f"sqlite:///{project_root}/grace.db")})
         procs.append(p)
 
     start = time.time()
