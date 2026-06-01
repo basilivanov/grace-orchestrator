@@ -153,7 +153,7 @@ body{font:14px/1.5 var(--font);background:var(--bg);color:var(--fg);overflow:hid
 
 <script>
 const STY={ready:{bg:'var(--ready)',label:'Ready'},running:{bg:'var(--running)',label:'Running'},accepted:{bg:'var(--accepted)',label:'Accepted'},merged:{bg:'var(--merged)',label:'Merged'},rejected:{bg:'var(--rejected)',label:'Rejected'},failed:{bg:'var(--failed)',label:'Failed'},cancelled:{bg:'var(--cancelled)',label:'Cancelled'}};
-let data={features:[],workers:[],stats:{}},selFid=null,selPid=null,ws,mobile=window.innerWidth<700;
+let data={features:[],workers:[],stats:{}},selFid=null,selPid=null,actTab='ov',lastPktState={},ws,mobile=window.innerWidth<700;
 
 function $(id){return document.getElementById(id)}
 async function load(){
@@ -227,6 +227,11 @@ async function renderInspector(pid){
   let h='<div class=insp>';
   try{
     const r=await fetch(`/api/packets/${pid}`);const d=(await r.json()).data;
+    // Skip re-render if nothing changed (prevents tab reset)
+    if(lastPktState[pid]&&lastPktState[pid].state===d.state&&lastPktState[pid].att===d.attempt_count){
+      restoreTab();return
+    }
+    lastPktState[pid]={state:d.state,att:d.attempt_count};
     const s=STY[d.state]||{bg:'var(--gr)',label:d.state};
     h+=`<h3>${d.title||'Packet'}</h3>
     <span class=state-badge style="background:${s.bg}20;color:${s.bg};border:1px solid ${s.bg}40">${s.label}</span>
@@ -251,7 +256,9 @@ async function renderInspector(pid){
     h+='</div>';
 
     // Tabs
-    h+=`<div class=tabs><button class="tab act" onclick="swTab(event,'ov')">Overview</button><button class=tab onclick="swTab(event,'runs')">Runs</button><button class=tab onclick="swTab(event,'events','${pid}')">Events</button><button class=tab onclick="swTab(event,'arts','${pid}')">Artifacts</button></div>`;
+    h+=`<div class=tabs>${[
+      ['ov','Overview'],['runs','Runs'],['events','Events'],['arts','Artifacts']
+    ].map(([n,label])=>`<button class="tab${actTab===n?' act':''}" onclick="swTab(event,'${n}','${pid}')">${label}</button>`).join('')}</div>`;
 
     // Overview
     const lr=d.runs&&d.runs.length?d.runs[d.runs.length-1]:null;
@@ -261,17 +268,14 @@ async function renderInspector(pid){
       ${lr&&lr.evidence_path?`<b>Evidence:</b> <span style=font-family:var(--mono);font-size:10px>${lr.evidence_path}</span><br>`:''}
       <b>Runs:</b> ${d.runs?d.runs.length:0} &nbsp; <b>Next:</b> ${d.state==='ready'?'Worker claim':d.state==='running'?'Agent executing':d.state==='accepted'?'Auto-merge':d.state==='failed'?'Manual retry':d.state==='rejected'?'Auto-retry':'Complete'}
     </div></div>`;
-    h+=`<div class=tc id=tc-runs style=display:none>${(d.runs||[]).length?d.runs.map(r=>`<div class=run-card onclick="loadRunArts('${pid}','${r.id}')">
-      <b>Run ${r.run_number}</b> <span style=color:${STY[r.status]?.bg||'var(--gr)'}>${r.status}</span>
-      ${r.duration_ms?` · ${(r.duration_ms/1000).toFixed(1)}s`:''}
-      ${r.evidence_path?`<br><span style=font-size:10px;color:var(--gr)>${r.evidence_path}</span>`:''}
-    </div>`).join(''):'<div class=empt>No runs</div>'}</div>`;
-    h+=`<div class=tc id=tc-events style=display:none><div class=empt>Loading...</div></div>`;
-    h+=`<div class=tc id=tc-arts style=display:none><div class=empt>Select a run to view artifacts</div></div>`;
+    h+=`<div class=tc id=tc-runs${actTab!=='runs'?' style=display:none':''}>${(d.runs||[]).length?d.runs.map(r=>`<div class=run-card onclick="loadRunArts('${pid}','${r.id}')">
+    h+=`<div class=tc id=tc-events${actTab!=='events'?' style=display:none':''}><div class=empt>Loading...</div></div>`;
+    h+=`<div class=tc id=tc-arts${actTab!=='arts'?' style=display:none':''}><div class=empt>Select a run to view artifacts</div></div>`;
   }catch(e){h+='<div class=empt>Error loading packet</div>'}
-  h+='</div>';$('pr').innerHTML=h;
+  h+='</div>';$('pr').innerHTML=h;restoreTab();
 }
 async function swTab(e,name,pid){
+  actTab=name;
   document.querySelectorAll('.tab').forEach(t=>t.classList.remove('act'));
   e.target.classList.add('act');
   document.querySelectorAll('.tc').forEach(t=>t.style.display='none');
@@ -298,6 +302,13 @@ async function viewArt(pid,runId,path){
   const r=await fetch(`/api/packets/${pid}/runs/${runId}/artifacts/file?path=${encodeURIComponent(path)}&tail=200`);
   const c=await r.text();
   $('tc-arts').innerHTML=`<div style="font-size:11px;color:var(--gr);margin-bottom:8px">📄 ${path} · ${c.split('\\n').length} lines <a href="#" onclick="swTab({target:document.querySelector('.tab:nth-child(4)')},'arts','${pid}');loadRunArts('${pid}','${runId}')" style=color:var(--accent)>← back</a></div><div class=log-box>${c.replace(/&/g,'&amp;').replace(/</g,'&lt;')}</div><button class=copy-btn-lg onclick="navigator.clipboard.writeText(this.previousSibling.textContent)">Copy</button>`;
+}
+function restoreTab(){
+  if(actTab==='events'&&selPid)loadEvents(selPid);
+  if(actTab==='arts'&&selPid){
+    const tc=document.getElementById('tc-arts');
+    if(tc&&tc.innerHTML.includes('empt'))tc.innerHTML='<div class=empt>Select a run</div>';
+  }
 }
 let navStack=[];
 function navBack(){
