@@ -33,9 +33,9 @@ def cli():
 def up(port, worker_id, project):
     """Start API server + worker (all-in-one)."""
     import asyncio
+    import threading
     import uvicorn
     from pathlib import Path
-    from grace_control.api.main import app
     from grace_control.worker.worker import Worker
 
     project_root = Path(project).resolve()
@@ -50,25 +50,25 @@ def up(port, worker_id, project):
     from grace_control.db import init_db
     init_db()
 
-    worker = Worker(worker_id=worker_id, api_url=f"http://127.0.0.1:{port}",
-                    project_root=project_root, state_root=state_root,
-                    worktree_root=worktree_root)
+    console.print(f"[green]GRACE Control Plane starting on http://127.0.0.1:{port}[/green]")
+    console.print(f"[white]Project: {project_root}[/white]")
+    console.print(f"[white]Worker: {worker_id}[/white]")
 
-    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
-    server = uvicorn.Server(config)
+    def run_api():
+        from grace_control.api.main import app
+        uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
 
-    async def start_worker():
-        await asyncio.sleep(2)  # wait for server
+    threading.Thread(target=run_api, daemon=True).start()
+
+    async def run_worker():
+        await asyncio.sleep(2)
+        worker = Worker(worker_id=worker_id, api_url=f"http://127.0.0.1:{port}",
+                        project_root=project_root, state_root=state_root,
+                        worktree_root=worktree_root)
         await worker.start()
 
-    async def main():
-        console.print(f"[green]GRACE Control Plane starting on http://127.0.0.1:{port}[/green]")
-        console.print(f"[white]Project: {project_root}[/white]")
-        console.print(f"[white]Worker: {worker_id}[/white]")
-        await asyncio.gather(server.serve(), start_worker())
-
     try:
-        asyncio.run(main())
+        asyncio.run(run_worker())
     except KeyboardInterrupt:
         console.print("\n[yellow]Shutting down...[/yellow]")
 
