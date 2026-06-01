@@ -1,0 +1,15 @@
+title: Feature Beta Isolation
+waves:
+  - title: Beta
+    packets:
+      - title: Add beta module
+        scope:
+          - sandbox/beta/__init__.py
+          - sandbox/beta/module.py
+          - sandbox/beta/tests/__init__.py
+          - sandbox/beta/tests/test_module.py
+        acceptance_profile: FAST
+        description: >
+          Create sandbox/beta/module.py with get_beta() returning "beta".
+          Write sandbox/beta/tests/test_module.py with assert get_beta() == "beta".
+          Initialize sandbox/beta/__init__.py and sandbox/beta/tests/__init__.py.

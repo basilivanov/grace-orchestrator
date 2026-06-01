@@ -1,0 +1,17 @@
+title: Strict Profile Reviewer Test
+waves:
+  - title: Auth
+    packets:
+      - title: Implement JWT validator
+        scope:
+          - sandbox/__init__.py
+          - sandbox/jwt_validator.py
+          - sandbox/tests/__init__.py
+          - sandbox/tests/test_jwt.py
+        acceptance_profile: STRICT
+        description: >
+          Implement validate_jwt(token: str, secret: str) -> dict in sandbox/jwt_validator.py.
+          Verify: HMAC-SHA256 signature, exp field (expiration), alg field only "HS256".
+          Raise InvalidTokenError on any failure. Write comprehensive tests in sandbox/tests/test_jwt.py.
+          Reviewer must verify security best practices: algorithm check, expiration handling,
+          constant-time comparison, no key leakage in error messages.

@@ -11,10 +11,12 @@ API = "http://localhost:8042"
 
 
 def _extract_js(html: str) -> str:
-    m = re.search(r"<script>(.*?)</script>", html, re.DOTALL)
-    if not m:
+    scripts = list(re.finditer(r"<script>(.*?)</script>", html, re.DOTALL))
+    if len(scripts) > 1:
+        return scripts[-1].group(1)
+    if not scripts:
         raise ValueError("No <script> tag found in HTML")
-    return m.group(1)
+    return scripts[0].group(1)
 
 
 def test_html_has_script_tag():
@@ -92,6 +94,8 @@ def test_all_functions_defined():
         "function load(", "function renderFeatures(", "function renderWaves(",
         "function renderInspector(", "function selFeature(", "function selPacket(",
         "function connectWS(", "function swTab(", "function navBack(",
+        "function toggleTheme(", "function toggleSelfEvolve(",
+        "function loadSESessions(", "function launchSelfEvolve(", "function cancelSESession(",
     ]
     for fn in required:
         assert fn in js, f"Missing function: {fn}"

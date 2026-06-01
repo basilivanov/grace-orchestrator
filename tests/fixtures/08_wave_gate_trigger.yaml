@@ -1,0 +1,28 @@
+title: Wave Gate Trigger Test
+waves:
+  - title: Foundation
+    packets:
+      - title: Add base module
+        scope:
+          - sandbox/__init__.py
+          - sandbox/base.py
+          - sandbox/tests/__init__.py
+          - sandbox/tests/test_base.py
+        acceptance_profile: FAST
+        description: >
+          Create sandbox/base.py with a function get_base_value() that returns "base".
+          Create sandbox/tests/test_base.py that imports get_base_value and asserts it returns "base".
+  - title: Extension
+    packets:
+      - title: Add extension module
+        scope:
+          - sandbox/__init__.py
+          - sandbox/extension.py
+          - sandbox/tests/__init__.py
+          - sandbox/tests/test_extension.py
+        acceptance_profile: FAST
+        description: >
+          Create sandbox/extension.py with a function extend() that imports get_base_value
+          from sandbox.base and returns get_base_value() + "_extended".
+          Create sandbox/tests/test_extension.py that asserts extend() == "base_extended".
+          If base.py does not exist when wave gate fails, this test will fail at import time.

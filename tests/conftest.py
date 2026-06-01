@@ -14,6 +14,7 @@ from grace_control.db.schema import Feature, Lease, Packet, PacketRun, PacketSta
 @pytest.fixture
 def db():
     """In-memory SQLite database."""
+    os.environ["GRACE_CONTEXT_DISABLED"] = "true"
     init_db("sqlite:///:memory:")
     yield
 
@@ -21,6 +22,7 @@ def db():
 @pytest.fixture
 def e2e_db(tmp_path):
     """File-based SQLite for API tests."""
+    os.environ["GRACE_CONTEXT_DISABLED"] = "true"
     db_url = f"sqlite:///{tmp_path}/test.db"
     os.environ["GRACE_DB_URL"] = db_url
     init_db(db_url)
@@ -30,6 +32,7 @@ def e2e_db(tmp_path):
 @pytest_asyncio.fixture
 async def api(tmp_path):
     """ASGI client with per-test unique DB."""
+    os.environ["GRACE_CONTEXT_DISABLED"] = "true"
     db_url = f"sqlite:///{tmp_path}/test.db"
     os.environ["GRACE_DB_URL"] = db_url
     init_db(db_url)

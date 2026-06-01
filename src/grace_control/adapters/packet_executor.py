@@ -169,6 +169,27 @@ class PacketExecutionAdapter:
             _log.debug("legacy_runner_completed", packet_id=packet_id,
                 ok=result.ok, domain=result.domain_status,
                 errors=result.errors[:3], blocker=getattr(result, 'registry_reason', '')[:200])
+
+            # Self-evolution guard check
+            spec = packet_data.get("spec_json") or {}
+            if isinstance(spec, dict) and spec.get("origin") == "self_evolution":
+                _log.info("self_evolution_guard_check", packet_id=packet_id)
+                from grace_control.core.self_evolution_guard import SelfEvolutionGuard
+                guard = SelfEvolutionGuard()
+                changed = _collect_changed_files(worktree_root)
+                guard_result = guard.check(changed, session_id=spec.get("session_id", ""))
+                if not guard_result.passed:
+                    _log.warn("self_evolution_guard_blocked", packet_id=packet_id,
+                        errors=guard_result.errors)
+                    execution_result = ExecutionResult(
+                        accepted=False, domain_status="rejected",
+                        errors=guard_result.errors, evidence_path=None,
+                        duration_ms=int((time.time() - start_time) * 1000),
+                    )
+                    _tmp.cleanup()
+                    return execution_result
+                _log.info("self_evolution_guard_passed", packet_id=packet_id)
+
             execution_result = self._parse_result(result)
             evidence_path = self._save_evidence(packet_id, run_number, result.to_dict(), state_root)
             execution_result.evidence_path = evidence_path
@@ -422,5 +443,20 @@ ruff check src/
                     size=agent_log.stat().st_size)
         except Exception:
             pass
+
+
+def _collect_changed_files(worktree_root: Path) -> list[Path]:
+    changed = []
+    src = worktree_root / "src" / "grace_control"
+    if src.exists():
+        for f in src.rglob("*.py"):
+            if "__pycache__" not in str(f):
+                changed.append(f)
+    ui_dir = worktree_root / "src" / "grace_control" / "ui"
+    if ui_dir.exists():
+        for f in ui_dir.rglob("*"):
+            if f.is_file() and "__pycache__" not in str(f):
+                changed.append(f)
+    return changed
 
 #END_BLOCK_ADAPTER

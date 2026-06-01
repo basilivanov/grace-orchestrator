@@ -21,7 +21,7 @@ async def test_plan_packet_ids_format(api):
     r = await api.post("/api/architect/plan", json={
         "feature_spec": {"title": "Auth", "waves": [{"title": "Foundation", "packets": [{"title": "Add login", "scope": ["x.py"]}]}]}})
     pid = r.json()["data"]["packets"][0]
-    assert "FEAT-AUTH-W01-FOUNDATION-P01-ADD" in pid
+    assert "FEAT-AUTH-AUTH-W01-P01" in pid
 
 
 @pytest.mark.asyncio
@@ -70,8 +70,12 @@ async def test_plan_multiwave_wave2_starts_draft(api):
 
 
 @pytest.mark.asyncio
-@pytest.mark.asyncio
 async def test_plan_idempotent_feature_id(api):
-    """Known: second plan with same title returns 500 (UNIQUE constraint).
-    NOTE: ASGI transport bypasses exception middleware — skip for now."""
-    pytest.skip("ASGI transport bypasses global exception handler")
+    """Second plan with same title returns same feature_id (idempotent)."""
+    r1 = await api.post("/api/architect/plan", json={
+        "feature_spec": {"title": "IdempotentTest", "waves": [{"title": "W1", "packets": [{"title": "P1", "scope": ["x.py"]}]}]}})
+    fid1 = r1.json()["data"]["feature_id"]
+    r2 = await api.post("/api/architect/plan", json={
+        "feature_spec": {"title": "IdempotentTest", "waves": [{"title": "W1", "packets": [{"title": "P1", "scope": ["x.py"]}]}]}})
+    assert r2.status_code == 200
+    assert r2.json()["data"]["feature_id"] == fid1

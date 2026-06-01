@@ -29,6 +29,7 @@ _log = GraceLogger("wave_gate")
 def check_wave_gates() -> int:
     gated = 0
     try:
+        _log.debug("wave_gate_check_start")
         with get_db() as db:
             features = db.execute(
                 db.query(Wave.feature_id).distinct()

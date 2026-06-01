@@ -134,7 +134,7 @@ async def claim_packet(request: dict) -> dict:
             _log.info("packet_claimed", packet_id=packet.id, worker_id=worker_id,
                        attempt=packet.attempt_count)
             record_event("packet_claimed", "packet", packet.id,
-                         {"worker_id": worker_id, "attempt": packet.attempt_count})
+                         {"worker_id": worker_id, "attempt": packet.attempt_count}, db=db)
             await notify_event("packet_claimed", packet.id, worker_id=worker_id)
             await broadcast_event("state_change", {"packet_id": packet.id, "state": "running", "worker_id": worker_id})
 
@@ -148,6 +148,8 @@ async def claim_packet(request: dict) -> dict:
                 "timestamp": datetime.utcnow().isoformat() + "Z",
             }
 
+        from grace_control.core.wave_gate import check_wave_gates
+        check_wave_gates()
         raise HTTPException(status_code=404, detail="No packets available")
 
 
@@ -185,7 +187,7 @@ async def release_packet(packet_id: str, request: dict) -> dict:
         _log.info("packet_released", packet_id=packet.id, state=target.value,
                    worker_id=worker_id)
         record_event("packet_released", "packet", packet.id,
-                     {"worker_id": worker_id, "state": target.value})
+                     {"worker_id": worker_id, "state": target.value}, db=db)
         await notify_event("packet_released", packet.id, worker_id=worker_id, state=target.value)
         await broadcast_event("state_change", {"packet_id": packet.id, "state": target.value})
 
@@ -221,7 +223,7 @@ async def cancel_packet(packet_id: str, request: dict) -> dict:
             packet.state = PacketState.CANCELLED.value
 
             _log.info("packet_cancelled", packet_id=packet.id, reason=reason)
-            record_event("packet_cancelled", "packet", packet.id, {"reason": reason})
+            record_event("packet_cancelled", "packet", packet.id, {"reason": reason}, db=db)
             await notify_event("packet_cancelled", packet.id, reason=reason)
 
             return {
@@ -260,12 +262,26 @@ async def merge_packet(packet_id: str, request: dict) -> dict:
         if worktree_path and branch_name:
             try:
                 from pathlib import Path
+                import subprocess as _sp
                 from prefect_grace.platform.git_mutation_gate import run_git_mutation_gate
                 wt = Path(worktree_path)
                 if wt.exists():
+                    repo = Path.cwd()
+                    # Stash dirty tree so merge can proceed cleanly
+                    stashed = False
+                    stash_pop_failed = False
+                    try:
+                        s = _sp.run(["git", "stash", "--include-untracked"],
+                                    cwd=str(repo), capture_output=True, text=True, timeout=10)
+                        if s.returncode == 0 and "No local changes" not in s.stdout:
+                            stashed = True
+                            _log.debug("merge_stashed", packet_id=packet.id)
+                    except Exception:
+                        pass
+
                     result = run_git_mutation_gate(
                         packet=wt / "EXECUTION_PACKET.md",
-                        repo_root=Path.cwd(),
+                        repo_root=repo,
                         worktree_root=wt.parent,
                         worktree_path=wt,
                         project_key=packet.feature_id.split("-", 1)[0].lower() if "-" in packet.feature_id else "grace",
@@ -281,6 +297,21 @@ async def merge_packet(packet_id: str, request: dict) -> dict:
                         understand_merge=True,
                     )
                     commit_sha = result.commit_sha or commit_sha
+
+                    if stashed:
+                        try:
+                            pop = _sp.run(["git", "stash", "pop"],
+                                          cwd=str(repo), capture_output=True, text=True, timeout=10)
+                            if pop.returncode != 0:
+                                stash_pop_failed = True
+                                _log.warn("merge_stash_pop_failed", packet_id=packet.id,
+                                    stderr=pop.stderr[:200])
+                                # Restore from HEAD to get clean state
+                                _sp.run(["git", "checkout", "--", "."], cwd=str(repo), timeout=10)
+                                _sp.run(["git", "stash", "pop"], cwd=str(repo), timeout=10)
+                        except Exception:
+                            stash_pop_failed = True
+
                     # Clean up worktree after successful merge
                     try:
                         import shutil
@@ -292,7 +323,7 @@ async def merge_packet(packet_id: str, request: dict) -> dict:
                 pass
 
         _log.info("packet_merged", packet_id=packet.id, commit_sha=commit_sha)
-        record_event("packet_merged", "packet", packet.id, {"commit_sha": commit_sha})
+        record_event("packet_merged", "packet", packet.id, {"commit_sha": commit_sha}, db=db)
 
         return {
             "data": {"packet_id": packet.id, "state": packet.state, "commit_sha": commit_sha},

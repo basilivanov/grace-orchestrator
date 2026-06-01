@@ -31,9 +31,10 @@ def record_event(
     entity_id: str,
     payload: dict | None = None,
     trace_id: str | None = None,
+    db=None,
 ) -> None:
     try:
-        with get_db() as db:
+        if db is not None:
             db.add(Event(
                 timestamp=datetime.now(timezone.utc),
                 event_type=event_type,
@@ -42,5 +43,15 @@ def record_event(
                 payload_json=payload,
                 trace_id=trace_id,
             ))
+        else:
+            with get_db() as db2:
+                db2.add(Event(
+                    timestamp=datetime.now(timezone.utc),
+                    event_type=event_type,
+                    entity_type=entity_type,
+                    entity_id=entity_id,
+                    payload_json=payload,
+                    trace_id=trace_id,
+                ))
     except Exception:
         pass

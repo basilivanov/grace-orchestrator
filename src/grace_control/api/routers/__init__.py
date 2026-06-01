@@ -1,3 +1,3 @@
-from . import architect, features, packets, workers
+from . import architect, features, packets, self_evolution, workers
 
-__all__ = ["architect", "features", "packets", "workers"]
+__all__ = ["architect", "features", "packets", "self_evolution", "workers"]

@@ -1,0 +1,16 @@
+title: Max Retries Terminal Test
+waves:
+  - title: Impossible Task
+    packets:
+      - title: Sort in log-n time
+        scope:
+          - sandbox/__init__.py
+          - sandbox/impossible.py
+          - sandbox/tests/__init__.py
+          - sandbox/tests/test_impossible.py
+        acceptance_profile: STRICT
+        description: >
+          Implement sort_in_ologn(arr) that sorts an arbitrary array in O(log n) time.
+          Write a test that checks correctness on 10000 elements and measures execution time.
+          This is algorithmically impossible — all attempts are expected to fail or be rejected.
+          This validates that the max_retries mechanism eventually reaches FAILED state (terminal).

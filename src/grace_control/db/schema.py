@@ -1,6 +1,6 @@
 # ############################################################################
 # AI_HEADER: db_schema
-# ROLE: SQLAlchemy models for GRACE Control Plane — 7 tables, 8 states.
+# ROLE: SQLAlchemy models for GRACE Control Plane — 8 tables, 8 states.
 # ############################################################################
 
 # START_MODULE_CONTRACT
@@ -23,6 +23,7 @@
 #   - class: Worker
 #   - class: Lease
 #   - class: Event
+#   - class: SelfEvolutionSession
 # END_MODULE_MAP
 
 from __future__ import annotations
@@ -156,5 +157,23 @@ class Event(Base):
     entity_id = Column(String, nullable=False, index=True)
     payload_json = Column(JSON)
     trace_id = Column(String, index=True)
+
+
+class SelfEvolutionSession(Base):
+    """SelfEvolution session table — tracks self-modification runs."""
+
+    __tablename__ = "self_evolution_sessions"
+
+    id = Column(String, primary_key=True)
+    title = Column(String, nullable=False)
+    description = Column(Text)
+    status = Column(String, nullable=False, default="pending")
+    feature_id = Column(String, nullable=True)
+    context_json = Column(JSON, nullable=True)
+    constraints_json = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    finished_at = Column(DateTime, nullable=True)
+    error = Column(Text, nullable=True)
 
 # END_BLOCK_TABLES

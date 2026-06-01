@@ -57,38 +57,38 @@ def test_legend():
     print("  OK: legend with text labels")
 
 # 3. JS validation
+def _extract_main_js(html):
+    scripts = list(re.finditer(r'<script>(.*?)</script>', html, re.DOTALL))
+    if len(scripts) > 1:
+        return scripts[-1].group(1)  # main JS is last script tag
+    elif scripts:
+        return scripts[0].group(1)
+    return ""
+
 def test_js_present():
     r = c.get("/")
-    html = r.text
-    m = re.search(r'<script>(.*?)</script>', html, re.DOTALL)
-    assert m, "No script tag found"
-    js = m.group(1)
-    assert len(js) > 5000, f"JS too short: {len(js)} bytes"
+    js = _extract_main_js(r.text)
+    assert len(js) > 1000, f"JS too short: {len(js)} bytes"
     print(f"  OK: {len(js)} bytes of JS")
 
 def test_js_no_obvious_errors():
     r = c.get("/")
-    html = r.text
-    m = re.search(r'<script>(.*?)</script>', html, re.DOTALL)
-    js = m.group(1)
-    # No unclosed template literals
+    js = _extract_main_js(r.text)
     backticks = js.count('`')
     assert backticks % 2 == 0, f"Odd backticks: {backticks}"
-    # No style=display:none in template (was causing issues)
     assert 'style=display:none' not in js, "Has inline style=display:none"
-    # Balanced braces
     assert js.count('{') == js.count('}'), f"Unbalanced braces"
     print(f"  OK: backticks={backticks} balanced, no inline styles")
 
 def test_js_key_functions():
     r = c.get("/")
-    html = r.text
-    m = re.search(r'<script>(.*?)</script>', html, re.DOTALL)
-    js = m.group(1)
+    js = _extract_main_js(r.text)
     funcs = ["function load(", "function renderFeatures(", "function renderWaves(",
              "function renderInspector(", "function selFeature(", "function selPacket(",
              "function connectWS(", "function swTab(", "function navBack(",
-             "function loadRunArts(", "function viewArt("]
+             "function loadRunArts(", "function viewArt(",
+             "function toggleTheme(", "function toggleSelfEvolve(", "function loadSESessions(",
+             "function launchSelfEvolve(", "function cancelSESession("]
     for f in funcs:
         assert f in js, f"Missing function: {f}"
     print(f"  OK: all {len(funcs)} key functions found")

@@ -191,7 +191,9 @@ def eval():
 @click.option("--api-url", default=DEFAULT_API_URL, help="API URL")
 @click.option("--timeout", default=600, help="Max wait per packet (seconds)")
 @click.option("--report", default=None, help="Save JSON report")
-def eval_run(feature_file, workers, api_url, timeout, report):
+@click.option("--with-playwright", is_flag=True, help="Run Playwright screenshot verification")
+@click.option("--validate", is_flag=True, help="Expect plan rejection (422 = success)")
+def eval_run(feature_file, workers, api_url, timeout, report, with_playwright, validate):
     """Run a feature through the pipeline and collect metrics."""
     import asyncio, json, subprocess, sys, time
     import httpx, yaml
@@ -201,6 +203,22 @@ def eval_run(feature_file, workers, api_url, timeout, report):
     c = httpx.Client(base_url=api_url, timeout=10)
 
     r = c.post("/api/architect/plan", json={"feature_spec": spec})
+    if validate:
+        if r.status_code == 422:
+            detail = ""
+            try:
+                detail = r.json().get("detail", "")
+            except Exception:
+                detail = r.text[:200]
+            console.print(f"[green]✅ PASSED: Plan correctly rejected (422)[/green]")
+            if detail:
+                console.print(f"  {detail}")
+            return
+        else:
+            console.print(f"[red]❌ FAILED: Expected 422 validation error, got {r.status_code}[/red]")
+            console.print(f"  {r.text[:300]}")
+            raise SystemExit(1)
+
     if r.status_code != 200:
         console.print(f"[red]Plan failed: {r.status_code} {r.text[:200]}[/red]")
         return
@@ -265,10 +283,20 @@ asyncio.run(m())
     for r in results:
         console.print(f"  {r['state']:10s} {r['packet_id'][-40:]} ({r['attempt_count']}/{r['max_attempts']})")
 
+    playwright_results = {}
+    if with_playwright:
+        playwright_results = _run_playwright_checks(Path(feature_file).stem)
+
     if report:
-        Path(report).write_text(json.dumps({"feature_id": fid, "feature_file": feature_file,
+        report_data = {"feature_id": fid, "feature_file": feature_file,
             "workers": workers, "passed": passed, "total_duration_s": int(time.time()-start),
-            "results": results}, indent=2, default=str))
+            "results": results}
+        if playwright_results:
+            report_data["playwright"] = playwright_results
+            pw_fail = any(not v["passed"] for v in playwright_results.values())
+            if pw_fail:
+                console.print("[red]Playwright checks FAILED[/red]")
+        Path(report).write_text(json.dumps(report_data, indent=2, default=str))
         console.print(f"[green]Report: {report}[/green]")
 
 
@@ -471,6 +499,81 @@ def health(api_url, json_out):
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
+def _run_playwright_checks(feature_name):
+    """Run Playwright screenshot verification on sandbox artifacts."""
+    results = {}
+    sandbox_dir = Path("sandbox")
+    if not sandbox_dir.exists():
+        console.print("[yellow]No sandbox/ directory for Playwright checks[/yellow]")
+        return results
+
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        console.print("[yellow]Playwright not installed, skipping visual checks[/yellow]")
+        return results
+
+    html_files = list(sandbox_dir.glob("*.html"))
+    if not html_files:
+        console.print("[yellow]No HTML files in sandbox/ for Playwright[/yellow]")
+        return results
+
+    console.print(f"[cyan]Playwright: checking {len(html_files)} HTML file(s)...[/cyan]")
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True, args=["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"])
+        for html_file in html_files:
+            file_results = {"file": str(html_file), "passed": True, "checks": []}
+            try:
+                page = browser.new_page()
+                page.on("console", lambda msg: None)
+                file_url = f"file://{html_file.resolve()}"
+                page.goto(file_url, timeout=10000)
+
+                errors = []
+                page.on("pageerror", lambda err: errors.append(str(err)))
+                page.wait_for_timeout(1000)
+
+                title = page.title()
+                body_text = page.inner_text("body") if page.locator("body").count() > 0 else ""
+
+                doc_type_check = "DOCTYPE" in html_file.read_text().upper()
+                file_results["checks"].append({"check": "DOCTYPE present", "ok": doc_type_check})
+                if not doc_type_check:
+                    file_results["passed"] = False
+
+                has_content = len(body_text.strip()) > 0
+                file_results["checks"].append({"check": "body has content", "ok": has_content})
+                if not has_content:
+                    file_results["passed"] = False
+
+                if errors:
+                    file_results["passed"] = False
+                    file_results["checks"].append({"check": "no JS errors", "ok": False, "errors": errors})
+                else:
+                    file_results["checks"].append({"check": "no JS errors", "ok": True})
+
+                file_results["title"] = title
+                file_results["body_preview"] = body_text[:200]
+
+                screenshot_path = Path(f"/tmp/playwright_{feature_name}_{html_file.stem}.png")
+                page.screenshot(path=str(screenshot_path))
+                file_results["screenshot"] = str(screenshot_path)
+
+                page.close()
+            except Exception as e:
+                file_results["passed"] = False
+                file_results["error"] = str(e)
+            results[html_file.stem] = file_results
+        browser.close()
+
+    for name, r in results.items():
+        icon = "✅" if r["passed"] else "❌"
+        console.print(f"  {icon} {name}: {'PASS' if r['passed'] else 'FAIL'} ({r.get('title', '')})")
+        if r.get("screenshot"):
+            console.print(f"     screenshot: {r['screenshot']}")
+    return results
+
+
 def _handle_error(e, json_out):
     if json_out:
         click.echo(json.dumps({"ok": False, "result": None, "warnings": [], "errors": [str(e)]}))

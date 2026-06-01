@@ -1,0 +1,14 @@
+title: Worker Crash Recovery
+waves:
+  - title: Recovery
+    packets:
+      - title: Add resilient module
+        scope:
+          - sandbox/__init__.py
+          - sandbox/resilient.py
+          - sandbox/tests/__init__.py
+          - sandbox/tests/test_resilient.py
+        acceptance_profile: FAST
+        description: >
+          Create sandbox/resilient.py with is_resilient() returning True.
+          Write sandbox/tests/test_resilient.py verifying is_resilient() == True.

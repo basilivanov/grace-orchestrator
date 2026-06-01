@@ -1,0 +1,15 @@
+title: Feature Alpha Isolation
+waves:
+  - title: Alpha
+    packets:
+      - title: Add alpha module
+        scope:
+          - sandbox/alpha/__init__.py
+          - sandbox/alpha/module.py
+          - sandbox/alpha/tests/__init__.py
+          - sandbox/alpha/tests/test_module.py
+        acceptance_profile: FAST
+        description: >
+          Create sandbox/alpha/module.py with get_alpha() returning "alpha".
+          Write sandbox/alpha/tests/test_module.py with assert get_alpha() == "alpha".
+          Initialize sandbox/alpha/__init__.py and sandbox/alpha/tests/__init__.py.

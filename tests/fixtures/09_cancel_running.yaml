@@ -1,0 +1,31 @@
+title: Cancel Running Packet Test
+waves:
+  - title: Batch
+    packets:
+      - title: Add slow module
+        scope:
+          - sandbox/__init__.py
+          - sandbox/slow_module.py
+          - sandbox/README.md
+          - sandbox/tests/__init__.py
+          - sandbox/tests/test_slow.py
+        acceptance_profile: STRICT
+        description: >
+          Implement sandbox/slow_module.py with a class DataPipeline that: reads a CSV string,
+          parses it with csv module, filters rows where column "score" > 50 as float,
+          sorts by score descending, and returns the first 10 rows as list[dict].
+          Also write a README.md explaining usage. Create comprehensive tests in
+          sandbox/tests/test_slow.py with at least 5 test cases covering edge cases:
+          empty CSV, single row, all rows filtered, ties in score, and exact 10 rows.
+          Use pytest.mark.parametrize for the test cases.
+      - title: Add fast util
+        scope:
+          - sandbox/__init__.py
+          - sandbox/fast_util.py
+          - sandbox/tests/__init__.py
+          - sandbox/tests/test_fast.py
+        acceptance_profile: FAST
+        description: >
+          Create sandbox/fast_util.py with format_name(name: str) -> str
+          returning name.upper(). Write sandbox/tests/test_fast.py
+          verifying format_name("hello") == "HELLO".

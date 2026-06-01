@@ -34,7 +34,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from grace_control.api.routers import architect, features, packets, workers
+from grace_control.api.routers import architect, features, packets, workers, self_evolution
 from grace_control.db import init_db
 
 _lease_task = None
@@ -98,6 +98,7 @@ app.include_router(features.router, prefix="/api/features", tags=["features"])
 app.include_router(packets.router, prefix="/api/packets", tags=["packets"])
 app.include_router(workers.router, prefix="/api/workers", tags=["workers"])
 app.include_router(architect.router, prefix="/api/architect", tags=["architect"])
+app.include_router(self_evolution.router, prefix="/api/self", tags=["self-evolution"])
 
 #END_BLOCK_APP
 

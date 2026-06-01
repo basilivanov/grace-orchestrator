@@ -1,0 +1,18 @@
+title: Frontend Screenshot Test
+waves:
+  - title: Frontend
+    packets:
+      - title: Build dashboard screen
+        scope:
+          - sandbox/__init__.py
+          - sandbox/index.html
+          - sandbox/app.js
+          - sandbox/tests/__init__.py
+          - sandbox/tests/test_frontend.py
+        acceptance_profile: STRICT
+        description: >
+          Create a simple system health dashboard as pure HTML+JS (no build tools).
+          sandbox/index.html must contain DOCTYPE, a <h1> with text "System Healthy",
+          and a <div id="status">. sandbox/app.js should set #status text to "All systems operational"
+          on DOMContentLoaded. sandbox/tests/test_frontend.py should verify the HTML file exists
+          and contains "System Healthy" and "<!DOCTYPE".

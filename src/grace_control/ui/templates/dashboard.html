@@ -1,5 +1,9 @@
 <!doctype html><html lang=en><meta charset=UTF-8><meta name=viewport content="width=device-width,initial-scale=1">
 <title>GRACE</title>
+<script>
+  let currentTheme = localStorage.getItem('grace-theme') || 'dark';
+  if (currentTheme === 'light') document.documentElement.setAttribute('data-theme', 'light');
+</script>
 <style>
 /* ===== Tokens ===== */
 :root{
@@ -10,6 +14,13 @@
   --rejected:#da3633;--failed:#f85149;--cancelled:#6e7681;
   --font:-apple-system,BlinkMacSystemFont,sans-serif;
   --mono:SFMono-Regular,Consolas,monospace;
+}
+:root[data-theme="light"]{
+  --bg:#ffffff;--fg:#24292f;--accent:#0969da;
+  --g:#1a7f37;--r:#cf222e;--y:#9a6700;--b:#0969da;--c:#1a7f37;
+  --gr:#57606a;--bd:#d0d7de;--card:#f6f8fa;--hvr:#eaeef2;--dt:#ddf4ff;
+  --ready:#2da44e;--running:#bf8700;--accepted:#0969da;--merged:#2da44e;
+  --rejected:#cf222e;--failed:#cf222e;--cancelled:#57606a;
 }
 *{box-sizing:border-box;margin:0;padding:0}
 body{font:14px/1.5 var(--font);background:var(--bg);color:var(--fg);overflow:hidden;height:100vh}
@@ -129,6 +140,8 @@ body{font:14px/1.5 var(--font);background:var(--bg);color:var(--fg);overflow:hid
   <span class=ws id=ws-stat><span class=ws-dot style=background:var(--y)></span>connecting</span>
   <span class=time id=tick></span>
   <span style="font-size:11px;color:var(--accent);cursor:pointer" onclick=toggleLegend()>Legend</span>
+  <span style="font-size:11px;color:var(--c);cursor:pointer" onclick=toggleSelfEvolve()>🧬 Self</span>
+  <span style="font-size:14px;cursor:pointer;user-select:none" id="theme-toggle" onclick="toggleTheme()"></span>
 </div>
 <div class=mnav id=mnav>
   <button onclick=navBack()>← Back</button>
@@ -138,6 +151,25 @@ body{font:14px/1.5 var(--font);background:var(--bg);color:var(--fg);overflow:hid
   <div class="panel panel-l active" id=pl></div>
   <div class="panel panel-c" id=pc></div>
   <div class="panel panel-r" id=pr></div>
+</div>
+<div style=display:none id=se-panel>
+  <div style=padding:16px;max-width:800px;margin:0 auto>
+    <h2 style=color:var(--c);margin-bottom:16px>🧬 Self-Evolution</h2>
+    <div id=se-form style=background:var(--card);padding:16px;border-radius:8px;border:1px solid var(--bd);margin-bottom:16px>
+      <input id=se-title placeholder="Title" style="width:100%;background:var(--bg);border:1px solid var(--bd);color:var(--fg);padding:8px;border-radius:4px;font-size:14px;margin-bottom:8px">
+      <textarea id=se-desc placeholder="Description" rows=3 style="width:100%;background:var(--bg);border:1px solid var(--bd);color:var(--fg);padding:8px;border-radius:4px;font-size:12px;margin-bottom:8px;resize:vertical"></textarea>
+      <div style=display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px>
+        <select id=se-profile style="background:var(--bg);border:1px solid var(--bd);color:var(--fg);padding:4px 8px;border-radius:4px;font-size:12px">
+          <option value=FAST>FAST</option><option value=NORMAL selected>NORMAL</option><option value=STRICT>STRICT</option></select>
+        <input id=se-maxfiles placeholder="Max files" value=5 type=number min=1 max=20 style="background:var(--bg);border:1px solid var(--bd);color:var(--fg);padding:4px 8px;border-radius:4px;font-size:12px;width:80px">
+      </div>
+      <button onclick=launchSelfEvolve() style="background:var(--c);color:#000;border:none;padding:8px 20px;border-radius:6px;font-size:14px;font-weight:600;cursor:pointer">🚀 Launch Self-Evolution</button>
+    </div>
+    <div id=se-sessions style=background:var(--card);padding:16px;border-radius:8px;border:1px solid var(--bd)>
+      <h3 style=margin-bottom:8px>Active Sessions</h3>
+      <div id=se-list class=empt>Loading...</div>
+    </div>
+  </div>
 </div>
 <div class=overlay id=ov onclick=toggleLegend()></div>
 <div class=legend id=leg>
@@ -153,6 +185,19 @@ body{font:14px/1.5 var(--font);background:var(--bg);color:var(--fg);overflow:hid
 </div>
 
 <script>
+document.getElementById('theme-toggle').textContent = currentTheme === 'light' ? '🌙' : '☀️';
+function toggleTheme() {
+  currentTheme = currentTheme === 'dark' ? 'light' : 'dark';
+  if (currentTheme === 'light') {
+    document.documentElement.setAttribute('data-theme', 'light');
+    document.getElementById('theme-toggle').textContent = '🌙';
+  } else {
+    document.documentElement.removeAttribute('data-theme');
+    document.getElementById('theme-toggle').textContent = '☀️';
+  }
+  localStorage.setItem('grace-theme', currentTheme);
+}
+
 const STY={ready:{bg:'var(--ready)',label:'Ready'},running:{bg:'var(--running)',label:'Running'},accepted:{bg:'var(--accepted)',label:'Accepted'},merged:{bg:'var(--merged)',label:'Merged'},rejected:{bg:'var(--rejected)',label:'Rejected'},failed:{bg:'var(--failed)',label:'Failed'},cancelled:{bg:'var(--cancelled)',label:'Cancelled'}};
 let data={features:[],workers:[],stats:{}},selFid=null,selPid=null,actTab='ov',lastPktState={},ws,mobile=window.innerWidth<700;
 
@@ -359,10 +404,54 @@ function updateMobileCrumb(lvl){
   $('crumb').textContent=`${f?.title||'...'} / ${fp?.title||'...'}`;
 }
 function toggleLegend(){$('leg').classList.toggle('open');$('ov').classList.toggle('open')}
+let seActive=false;
+function toggleSelfEvolve(){
+  seActive=!seActive;
+  $('d').style.display=seActive?'none':'';
+  $('se-panel').style.display=seActive?'block':'none';
+  if(seActive)loadSESessions();
+}
+async function loadSESessions(){
+  try{
+    var r=await fetch('/api/self/sessions');var data=await r.json();
+    var sc=data.data||[];
+    if(!sc.length){$('se-list').innerHTML='<div class=empt>No self-evolution sessions yet</div>';return}
+    $('se-list').innerHTML=sc.map(s=>{
+      var clr='var(--y)';if(s.status==='done')clr='var(--g)';if(s.status==='failed'||s.status==='cancelled')clr='var(--r)';
+      return `<div style="border:1px solid var(--bd);border-radius:6px;padding:10px;margin-bottom:8px">
+        <div style=display:flex;justify-content:space-between;align-items:center>
+          <b style=font-size:13px>${s.title}</b>
+          <span style="font-size:11px;padding:2px 8px;border-radius:10px;background:${clr}20;color:${clr}">${s.status}</span>
+        </div>
+        <div style="font-size:11px;color:var(--gr);margin-top:4px;font-family:var(--mono)">${s.id}</div>
+        ${s.feature_id?`<div style="font-size:11px;color:var(--accent);margin-top:4px;cursor:pointer" onclick="toggleSelfEvolve();selFeature('${s.feature_id}')">→ View Feature</div>`:''}
+        ${s.error?`<div style="font-size:11px;color:var(--r);margin-top:4px">${s.error}</div>`:''}
+        ${s.context?`<div style="font-size:10px;color:var(--gr);margin-top:4px">Scope: ${(s.context.estimated_scope||[]).join(', ')||'?'} · Complexity: ${s.context.complexity_score||'?'}</div>`:''}
+        ${s.status!=='done'&&s.status!=='failed'&&s.status!=='cancelled'?`<button onclick="cancelSESession('${s.id}')" style="background:var(--r);color:#fff;border:none;padding:4px 10px;border-radius:4px;font-size:11px;margin-top:6px;cursor:pointer">Cancel</button>`:''}
+      </div>`;
+    }).join('');
+  }catch(e){$('se-list').innerHTML='<div class=empt>Error loading sessions</div>'}
+}
+async function launchSelfEvolve(){
+  var title=$('se-title').value.trim();if(!title)return alert('Title required');
+  var desc=$('se-desc').value.trim();var profile=$('se-profile').value;var maxf=$('se-maxfiles').value;
+  try{
+    var r=await fetch('/api/self/evolve',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({title:title,description:desc||title,constraints:{acceptance_profile:profile,max_files:parseInt(maxf),allowed_scope:['src/grace_control/'],forbidden_scope:['src/prefect_grace/','tests/']}})});
+    if(!r.ok){var e=await r.json();alert('Failed: '+(e.detail||r.status));return}
+    var d=await r.json();
+    $('se-title').value='';$('se-desc').value='';
+    loadSESessions();
+  }catch(e){alert('Error: '+e.message)}
+}
+async function cancelSESession(sid){
+  if(!confirm('Cancel session '+sid+'?'))return;
+  try{await fetch('/api/self/sessions/'+sid+'/cancel',{method:'POST'});loadSESessions()}catch(e){alert('Error: '+e.message)}
+}
 function connectWS(){
   ws=new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/ws`);
   ws.onopen=()=>{$('ws-stat').innerHTML='<span class=ws-dot style=background:var(--g)></span>Live'};
-  ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.type==='state_change')load()};
+  ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.type==='state_change')load();if(m.type==='self_evolution_update'){if(seActive)loadSESessions()}};
   ws.onclose=()=>{setTimeout(connectWS,2000);$('ws-stat').innerHTML='<span class=ws-dot style=background:var(--r)></span>Offline'};
 }
 load();connectWS();setInterval(load,5000);

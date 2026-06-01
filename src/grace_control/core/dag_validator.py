@@ -145,8 +145,9 @@ def detect_scope_conflicts(scope_map: dict[str, list[str]]) -> list[Conflict]:
             files_a = set(scope_map.get(pids[i], []))
             files_b = set(scope_map.get(pids[j], []))
             overlap = files_a & files_b
-            if overlap:
-                conflicts.append(Conflict(pids[i], pids[j], sorted(overlap)))
+            significant_overlap = {f for f in overlap if not f.endswith("__init__.py")}
+            if significant_overlap:
+                conflicts.append(Conflict(pids[i], pids[j], sorted(significant_overlap)))
     return conflicts
 
 #END_BLOCK_CONFLICTS

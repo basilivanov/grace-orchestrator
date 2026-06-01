@@ -1,65 +1,103 @@
 # ############################################################################
 # AI_HEADER: architect_router
-# ROLE: FastAPI router for /api/architect/plan — creates features/waves/packets in READY.
+# ROLE: FastAPI router for /api/architect/plan — context-warmed feature planning.
+#       Two modes: YAML with waves (legacy) or business-TZ (LLM generates plan).
 # ############################################################################
 
 # START_MODULE_CONTRACT
-# purpose: Accept feature spec, generate hierarchical IDs, persist Feature+Wave+Packet in DB.
-# inputs: HTTP POST with feature_spec JSON.
-# returns: JSON with feature_id, waves_count, packets_count, packet_ids.
-# side_effects: DB inserts (3 tables).
-# emitted_logs: None.
-# error_behavior: Returns 422 on invalid spec structure.
+# purpose: Accept feature spec (YAML or business description), collect context,
+#          optionally call Architect LLM to generate waves/packets, persist in DB.
+# inputs: HTTP POST with feature_spec dict.
+# returns: JSON with feature_id, waves/packets, context.
+# side_effects: DB inserts, 2 LLM calls (context + architect).
+# emitted_logs: context_collected, architect_generated, architect_retry.
+# error_behavior: 422 on DAG failure, 500 on LLM timeout (retried once).
 # END_MODULE_CONTRACT
 
 # START_MODULE_MAP
 # mapping:
 #   - function: create_plan
+#   - function: _call_architect_llm
+#   - function: _slugify
+#   - function: _extract_action
 # END_MODULE_MAP
 
 from __future__ import annotations
 
+import asyncio
+import json
+import os
+import re as _re
 from datetime import datetime
+from pathlib import Path
 
 from fastapi import APIRouter
 
+from grace_control.core.context_collector import ContextCollector
 from grace_control.core.dag_validator import validate_dag
+from grace_control.core.structured_logger import GraceLogger
 from grace_control.db import get_db
 from grace_control.db.schema import Feature, Packet, PacketState, Wave
 
 router = APIRouter()
+_log = GraceLogger("architect")
+
+ARCHITECT_MODEL = "deepseek/deepseek-v4-pro"
+ARCHITECT_TIMEOUT = int(os.environ.get("GRACE_ARCHITECT_TIMEOUT", "120"))
 
 
 @router.post("/plan")
 async def create_plan(request: dict) -> dict:
     spec = request["feature_spec"]
-    slug = _slugify(spec["title"])
-    feature_id = f"FEAT-{slug.upper()}"
+    title = spec.get("title", "")
+    if not title:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="title is required")
 
-    # Build packet list for DAG validation
+    slug = _slugify(title)
+    feature_id = f"FEAT-{slug.upper()}"
+    has_waves = bool(spec.get("waves"))
+    architect_generated = False
+
+    # ── Context pre-warming ──────────────────────────────────────────────
+    context = await _warm_context(spec, feature_id)
+
+    # ── LLM path: business-TZ → generate waves/packets ───────────────────
+    if not has_waves and not os.environ.get("GRACE_CONTEXT_DISABLED"):
+        task_desc = spec.get("description", "") or title
+        try:
+            spec = await _call_architect_llm(task_desc, context, slug)
+            spec["title"] = title
+            spec["description"] = spec.get("description", task_desc)
+            architect_generated = True
+            _log.info("architect_generated", feature_id=feature_id,
+                waves=len(spec.get("waves", [])))
+        except Exception as e:
+            _log.error("architect_failed", feature_id=feature_id, error=str(e)[:200])
+            from fastapi import HTTPException
+            raise HTTPException(status_code=500,
+                detail=f"Architect LLM failed to generate plan: {str(e)[:200]}")
+
+    # ── DAG validation ───────────────────────────────────────────────────
     dag_packets = []
     action_to_id: dict[str, str] = {}
     for i, wave_spec in enumerate(spec.get("waves", []), 1):
         for j, pkt_spec in enumerate(wave_spec.get("packets", []), 1):
             wave_slug = _slugify(wave_spec["title"])
-            wave_id = f"W{i:02d}-{wave_slug.upper()}"
+            wave_id = f"{slug.upper()}-W{i:02d}"
             action = _extract_action(pkt_spec["title"])
             pid = f"{feature_id}-{wave_id}-P{j:02d}-{action}"
-            action_to_id[action] = pid  # for depends_on resolution
+            action_to_id[action] = pid
             dag_packets.append({
                 "id": pid,
                 "depends_on": pkt_spec.get("depends_on", []),
                 "scope": pkt_spec.get("scope", []),
             })
 
-    # Resolve depends_on references (short names → full IDs)
     for dp in dag_packets:
         resolved = []
         for dep in dp["depends_on"]:
-            if dep in action_to_id:
-                resolved.append(action_to_id[dep])
-            else:
-                resolved.append(dep)  # keep as-is if not found
+            resolved.append(action_to_id.get(dep, dep))
         dp["depends_on"] = resolved
 
     dag_result = validate_dag(dag_packets)
@@ -71,19 +109,38 @@ async def create_plan(request: dict) -> dict:
             "conflicts": [[c.packet_a, c.packet_b, c.overlapping_files] for c in dag_result.conflicts],
         })
 
+    # ── Persist ──────────────────────────────────────────────────────────
     packets_created = []
-
     with get_db() as db:
+        existing_feature = db.query(Feature).filter_by(id=feature_id).first()
+        if existing_feature:
+            existing_waves = db.query(Wave).filter_by(feature_id=feature_id).order_by(Wave.order).all()
+            existing_packets = db.query(Packet).filter_by(feature_id=feature_id).all()
+            existing_context = {}
+            if existing_packets:
+                first = existing_packets[0]
+                first_spec = first.spec_json or {}
+                existing_context = first_spec.get("_context", {}) if isinstance(first_spec, dict) else {}
+            return {
+                "data": {
+                    "feature_id": existing_feature.id,
+                    "waves_count": len(existing_waves),
+                    "packets_count": len(existing_packets),
+                    "packets": [p.id for p in existing_packets],
+                    "context": existing_context,
+                },
+                "timestamp": datetime.utcnow().isoformat() + "Z",
+            }
+
         db.add(Feature(
-            id=feature_id, slug=slug, title=spec["title"],
+            id=feature_id, slug=slug, title=title,
             description=spec.get("description", ""),
             spec_json=spec, status="NOT_STARTED",
         ))
 
-        wave_count = len(spec.get("waves", []))
         for i, wave_spec in enumerate(spec.get("waves", []), 1):
             wave_slug = _slugify(wave_spec["title"])
-            wave_id = f"W{i:02d}-{wave_slug.upper()}"
+            wave_id = f"{slug.upper()}-W{i:02d}"
             is_first_wave = (i == 1)
 
             db.add(Wave(
@@ -99,12 +156,14 @@ async def create_plan(request: dict) -> dict:
                 packet_id = f"{feature_id}-{wave_id}-P{j:02d}-{action}"
 
                 target_state = PacketState.READY.value if is_first_wave else PacketState.DRAFT.value
+                enriched_spec = dict(pkt_spec)
+                enriched_spec["_context"] = context
 
                 db.add(Packet(
                     id=packet_id, feature_id=feature_id, wave_id=wave_id,
                     slug=pkt_slug, title=pkt_spec["title"],
                     description=pkt_spec.get("description", ""),
-                    spec_json=pkt_spec,
+                    spec_json=enriched_spec,
                     state=target_state,
                     acceptance_profile=pkt_spec.get("acceptance_profile", "NORMAL"),
                 ))
@@ -116,14 +175,193 @@ async def create_plan(request: dict) -> dict:
             "waves_count": len(spec.get("waves", [])),
             "packets_count": len(packets_created),
             "packets": packets_created,
+            "context": context,
+            "generated": architect_generated,
         },
         "timestamp": datetime.utcnow().isoformat() + "Z",
     }
 
 
+async def _warm_context(spec: dict, feature_id: str) -> dict:
+    if os.environ.get("GRACE_CONTEXT_DISABLED"):
+        return {"summary": "Context collection disabled", "disabled": True}
+
+    task_desc = spec.get("description", "") or spec.get("title", "")
+    scope_paths = set()
+    for wave_spec in spec.get("waves", []):
+        for pkt_spec in wave_spec.get("packets", []):
+            for s in pkt_spec.get("scope", []):
+                scope_paths.add(s)
+
+    scene = sorted(scope_paths) if scope_paths else ["src/grace_control/"]
+    try:
+        collector = ContextCollector(cli="opencode", model="deepseek/deepseek-v4-flash")
+        code_ctx = await collector.collect(task_description=task_desc, target_scope=scene)
+        ctx = {
+            "summary": code_ctx.summary,
+            "estimated_scope": code_ctx.estimated_scope,
+            "complexity_score": code_ctx.complexity_score,
+            "file_count": len(code_ctx.files),
+            "files": [{"path": f.path, "size": f.size_lines, "exports": f.exports[:8]}
+                      for f in code_ctx.files[:30]],
+        }
+        _log.info("context_collected", feature_id=feature_id,
+            scope_count=len(scope_paths), complexity=code_ctx.complexity_score)
+        return ctx
+    except Exception as e:
+        _log.warn("context_fallback", feature_id=feature_id, error=str(e)[:120])
+        return {"summary": f"Fallback: {task_desc[:200]}", "fallback": True}
+
+
+async def _call_architect_llm(task: str, context: dict, feature_slug: str) -> dict:
+    files_text = json.dumps(context.get("files", [])[:40], indent=2)
+    if len(files_text) > 4000:
+        files_text = files_text[:4000] + "\n... [truncated]"
+
+    all_paths = "\n".join(f["path"] for f in context.get("files", [])[:60])
+
+    prompt = f"""You are a software architect planning code changes for a project.
+
+Business requirement: {task}
+
+Codebase context:
+- Summary: {context.get('summary', 'Unknown')}
+- Complexity score: {context.get('complexity_score', 'Unknown')}
+- Key files (path, size_lines, exports):
+{files_text}
+- ALL available file paths:
+{all_paths}
+
+Your job: create an execution plan as waves and packets.
+CRITICAL: scope MUST contain ONLY paths from the "ALL available file paths" list above.
+
+Rules:
+1. Each wave is a logical phase. Wave 2 starts only after ALL Wave 1 packets are merged.
+2. Each packet = one atomic code change (1-3 files max).
+3. Scope MUST list actual file paths to write (relative to project root).
+4. NO TWO packets may share the same file in their scope. If changes affect the same file, merge them into ONE packet.
+5. Use acceptance_profile: FAST (simple), NORMAL (moderate), STRICT (needs review).
+6. depends_on: optional list of packet titles that must complete first (within same wave).
+7. Include `constraints` block with: frozen_scope (files NEVER to touch), forbidden_imports, python_version.
+8. Include `verification` list with shell commands to run (pytest, ruff, mypy).
+
+Respond ONLY with valid JSON (no markdown, no backticks):
+
+{{
+  "waves": [
+    {{
+      "title": "Phase 1 name",
+      "packets": [
+        {{
+          "title": "Add login endpoint",
+          "scope": ["src/auth.py", "tests/test_auth.py"],
+          "acceptance_profile": "NORMAL",
+          "depends_on": [],
+          "description": "what this packet does"
+        }}
+      ]
+    }}
+  ],
+  "constraints": {{
+    "frozen_scope": ["src/prefect_grace/"],
+    "forbidden_imports": [],
+    "python_version": ">= 3.12"
+  }},
+  "verification": ["pytest tests/ -x --timeout=60"]
+}}"""
+
+    for attempt in range(2):
+        try:
+            raw = await _run_opencode(prompt, ARCHITECT_MODEL)
+            plan = json.loads(raw)
+            if "waves" not in plan:
+                plan["waves"] = []
+            for w in plan.get("waves", []):
+                if "packets" not in w:
+                    w["packets"] = []
+                for pkt in w["packets"]:
+                    pkt.setdefault("scope", [])
+                    pkt.setdefault("acceptance_profile", "NORMAL")
+                    pkt.setdefault("depends_on", [])
+
+            all_empty = all(not pkt.get("scope") for w in plan.get("waves", [])
+                           for pkt in w.get("packets", []))
+            any_packet = any(w.get("packets") for w in plan.get("waves", []))
+            if any_packet and all_empty:
+                file_paths = [f["path"] for f in context.get("files", [])]
+                if file_paths:
+                    for w in plan.get("waves", []):
+                        for pkt in w.get("packets", []):
+                            if not pkt.get("scope"):
+                                pkt["scope"] = file_paths[:3]
+                    _log.info("architect_scope_seeded", paths=len(file_paths))
+                else:
+                    raise RuntimeError("All packet scopes are empty — you must specify which files to modify")
+
+            plan.setdefault("constraints", {"frozen_scope": ["src/prefect_grace/"]})
+            plan.setdefault("verification", [])
+            return plan
+        except Exception as e:
+            if attempt == 1:
+                raise RuntimeError(f"Architect LLM failed after 2 attempts: {e}")
+            error = str(e)[:200]
+            _log.warn("architect_retry", attempt=attempt + 1, error=error)
+            prompt = prompt + f"\n\n[Previous attempt failed with invalid JSON: {error}. Ensure valid JSON output.]"
+
+    raise RuntimeError("Architect LLM failed")
+
+
+async def _run_opencode(prompt: str, model: str) -> str:
+    prompt_dir = Path.cwd() / ".grace_state" / "arch_prompts"
+    prompt_dir.mkdir(parents=True, exist_ok=True)
+    tmp = prompt_dir / f"architect_{_slugify(prompt[:30])}.txt"
+    tmp.write_text(prompt)
+    instruction = f"Read the task from .grace_state/arch_prompts/{tmp.name}. Respond ONLY with the requested JSON dict, no other text."
+    proc = await asyncio.create_subprocess_exec(
+        "opencode", "run", "--model", model, instruction,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        cwd=str(Path.cwd()),
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=ARCHITECT_TIMEOUT)
+    except asyncio.TimeoutError:
+        proc.kill()
+        tmp.unlink(missing_ok=True)
+        raise RuntimeError(f"Architect LLM timed out after {ARCHITECT_TIMEOUT}s")
+
+    tmp.unlink(missing_ok=True)
+    out = stdout.decode("utf-8", errors="replace").strip()
+    if not out:
+        err = stderr.decode("utf-8", errors="replace")[:300]
+        raise RuntimeError(f"Architect LLM empty output: {err}")
+
+    # Try direct JSON parse first
+    for line in out.split("\n"):
+        line = line.strip()
+        if line.startswith("{") and line.endswith("}"):
+            try:
+                json.loads(line)
+                return line
+            except Exception:
+                pass
+
+    # Try extract JSON block from markdown or conversation
+    m = _re.search(r"\{[\s\S]*\}", out)
+    if m:
+        candidate = m.group(0)
+        try:
+            json.loads(candidate)
+            return candidate
+        except Exception:
+            pass
+
+    # Last resort: return raw output
+    raise RuntimeError(f"Could not extract JSON from output (first 300): {out[:300]}")
+
+
 def _slugify(text: str) -> str:
-    import re
-    text = re.sub(r'[^\w\s-]', '', text)
+    text = _re.sub(r'[^\w\s-]', '', text)
     return text.lower().strip().replace(" ", "-").replace("_", "-")
 
 
