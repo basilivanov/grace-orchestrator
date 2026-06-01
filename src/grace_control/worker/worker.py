@@ -43,8 +43,6 @@ class Worker:
         )
 
     async def start(self):
-        from grace_control.db import init_db
-        init_db()  # ensure DB session is available in this process
         self.log.info("worker_starting", worker_id=self.worker_id)
         await self.api.register(self.worker_id)
         self.log.info("worker_registered", worker_id=self.worker_id)

@@ -87,6 +87,13 @@ class PacketExecutionAdapter:
         start_time = time.time()
         _log.info("adapter_execute_start", packet_id=packet_id, worker_id=worker_id)
 
+        # Ensure DB is initialized in this process
+        try:
+            from grace_control.db import init_db as _init_db
+            _init_db()
+        except Exception:
+            pass
+
         # Use temp directories per attempt — avoids state accumulation
         import tempfile as _tf
         _tmp = _tf.TemporaryDirectory()
