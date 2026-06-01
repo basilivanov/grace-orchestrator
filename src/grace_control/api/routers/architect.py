@@ -68,9 +68,11 @@ async def create_plan(request: dict) -> dict:
             spec_json=spec, status="NOT_STARTED",
         ))
 
+        wave_count = len(spec.get("waves", []))
         for i, wave_spec in enumerate(spec.get("waves", []), 1):
             wave_slug = _slugify(wave_spec["title"])
             wave_id = f"W{i:02d}-{wave_slug.upper()}"
+            is_first_wave = (i == 1)
 
             db.add(Wave(
                 id=wave_id, feature_id=feature_id, slug=wave_slug,
@@ -84,12 +86,14 @@ async def create_plan(request: dict) -> dict:
                 action = _extract_action(pkt_spec["title"])
                 packet_id = f"{feature_id}-{wave_id}-P{j:02d}-{action}"
 
+                target_state = PacketState.READY.value if is_first_wave else PacketState.DRAFT.value
+
                 db.add(Packet(
                     id=packet_id, feature_id=feature_id, wave_id=wave_id,
                     slug=pkt_slug, title=pkt_spec["title"],
                     description=pkt_spec.get("description", ""),
                     spec_json=pkt_spec,
-                    state=PacketState.READY.value,  # Сразу READY
+                    state=target_state,
                     acceptance_profile=pkt_spec.get("acceptance_profile", "NORMAL"),
                 ))
                 packets_created.append(packet_id)

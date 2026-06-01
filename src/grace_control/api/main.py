@@ -48,6 +48,13 @@ async def lifespan(app: FastAPI):
     init_db(db_url)
     from grace_control.core.lease_manager import lease_expiration_loop
     _lease_task = asyncio.create_task(lease_expiration_loop())
+    from grace_control.core.wave_gate import check_wave_gates as _gate_loop
+    async def _gate_task():
+        while True:
+            try: check_wave_gates()
+            except Exception: pass
+            await asyncio.sleep(30)
+    asyncio.create_task(_gate_task())
     yield
     if _lease_task:
         _lease_task.cancel()
