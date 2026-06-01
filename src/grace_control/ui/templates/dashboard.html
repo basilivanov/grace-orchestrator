@@ -281,7 +281,7 @@ async function swTab(e,name,pid){
   document.querySelectorAll('.tc').forEach(t=>t.style.display='none');
   const el=document.getElementById(`tc-${name}`);if(el)el.style.display='block';
   if(name==='events'&&pid){await loadEvents(pid)}
-  if(name==='arts'&&pid){const d=(await(await fetch(`/api/packets/${pid}`)).json()).data;if(d.runs&&d.runs.length)loadRunArts(pid,d.runs[0].id)}
+  if(name==='arts'&&pid){const d=(await(await fetch(`/api/packets/${pid}`)).json()).data;if(d.runs&&d.runs.length)loadRunArts(pid,d.runs[d.runs.length-1].id);else el.innerHTML='<div class=empt>No runs</div>'}
 }
 async function loadEvents(pid){
   const el=$('tc-events');el.innerHTML='Loading...';
@@ -306,8 +306,11 @@ async function viewArt(pid,runId,path){
 function restoreTab(){
   if(actTab==='events'&&selPid)loadEvents(selPid);
   if(actTab==='arts'&&selPid){
-    const tc=document.getElementById('tc-arts');
-    if(tc&&tc.innerHTML.includes('empt'))tc.innerHTML='<div class=empt>Select a run</div>';
+    fetch(`/api/packets/${selPid}`).then(r=>r.json()).then(d=>{
+      const runs=d.data.runs||[];
+      if(runs.length)loadRunArts(selPid,runs[runs.length-1].id);
+      else document.getElementById('tc-arts').innerHTML='<div class=empt>No runs</div>';
+    });
   }
 }
 let navStack=[];
