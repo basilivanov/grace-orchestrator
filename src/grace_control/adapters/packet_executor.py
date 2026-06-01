@@ -116,6 +116,15 @@ class PacketExecutionAdapter:
             )
             db.add(packet_run)
 
+        # Select executor with escalation
+        from grace_control.core.complexity_router import route_packet
+        from grace_control.core.executor_selector import select_executor
+
+        tier = route_packet(packet_data.get("acceptance_profile", "NORMAL"), packet_data.get("spec_json"))
+        executor = select_executor("coder", attempt=packet_data.get("attempt_count", 1) + 1)
+        packet_data["_executor"] = executor
+        packet_data["_tier"] = tier.value
+
         try:
             packet_path = self._materialize_packet(packet_data)
             result = await self._call_legacy_runner(packet_path)
@@ -132,6 +141,7 @@ class PacketExecutionAdapter:
                     existing.evidence_path = evidence_path
                     existing.finished_at = datetime.utcnow()
                     existing.duration_ms = execution_result.duration_ms
+                    existing.executor_id = executor.get("executor_id", "")
 
             return execution_result
 

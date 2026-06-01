@@ -55,6 +55,13 @@ async def lifespan(app: FastAPI):
             except Exception: pass
             await asyncio.sleep(30)
     asyncio.create_task(_gate_task())
+    from grace_control.core.feature_gate import check_feature_completion
+    async def _feature_task():
+        while True:
+            try: check_feature_completion()
+            except Exception: pass
+            await asyncio.sleep(60)
+    asyncio.create_task(_feature_task())
     yield
     if _lease_task:
         _lease_task.cancel()

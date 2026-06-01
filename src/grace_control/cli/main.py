@@ -26,6 +26,39 @@ def cli():
     """GRACE Control Plane CLI."""
 
 
+@cli.command("init")
+@click.option("--project", default=".", help="Project root directory")
+def init_project(project):
+    """Initialize a new GRACE project."""
+    root = Path(project).resolve()
+    grace_dir = root / "grace"
+    packets_dir = grace_dir / "packets"
+    features_dir = grace_dir / "features"
+
+    for d in [grace_dir, packets_dir, features_dir]:
+        d.mkdir(parents=True, exist_ok=True)
+
+    # Create sample feature
+    sample = features_dir / "hello.yaml"
+    if not sample.exists():
+        sample.write_text("""title: Hello GRACE
+description: Sample feature to verify GRACE pipeline.
+waves:
+  - title: Foundation
+    packets:
+      - title: Create hello module
+        scope:
+          - src/hello.py
+        acceptance_profile: NORMAL
+""")
+
+    console.print(f"[green]GRACE project initialized at {root}[/green]")
+    console.print(f"  grace/features/hello.yaml — sample feature")
+    console.print(f"  grace/packets/ — execution packet directory")
+    console.print()
+    console.print("Next: [cyan]grace architect plan grace/features/hello.yaml[/cyan]")
+
+
 # ── Architect ────────────────────────────────────────────────────────────────
 @cli.group()
 def architect():
