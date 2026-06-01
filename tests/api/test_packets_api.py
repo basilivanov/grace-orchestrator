@@ -1,13 +1,20 @@
 """Block H: Packets API tests — 14 tests."""
 import pytest
+import uuid
 
 
-async def _plan(api, title="Test", waves=None, suffix=""):
+def _uniq():
+    return uuid.uuid4().hex[:6]
+
+
+async def _plan(api, title=None, waves=None):
+    if title is None:
+        title = f"T{_uniq()}"
     if waves is None:
-        wid = f"W{suffix}"
-        waves = [{"title": wid, "packets": [{"title": f"P{suffix}", "scope": ["x.py"]}]}]
+        wid = f"W{_uniq()}"
+        waves = [{"title": wid, "packets": [{"title": f"P{_uniq()}", "scope": ["x.py"]}]}]
     r = await api.post("/api/architect/plan", json={
-        "feature_spec": {"title": title + suffix, "waves": waves}
+        "feature_spec": {"title": title, "waves": waves}
     })
     return r
 
@@ -34,11 +41,12 @@ async def test_list_filter_by_state(api):
 
 @pytest.mark.asyncio
 async def test_list_filter_by_feature(api):
-    await _plan(api, title="A")
-    await _plan(api, title="B")
-    r = await api.get("/api/packets/?feature_id=FEAT-A")
+    r = await _plan(api, title=f"FA{_uniq()}")
+    fid_a = r.json()["data"]["features"][0] if "features" in r.json()["data"] else r.json()["data"]["feature_id"]
+    await _plan(api, title=f"FB{_uniq()}")
+    r = await api.get(f"/api/packets/?feature_id={fid_a}")
     for p in r.json()["data"]:
-        assert p["feature_id"] == "FEAT-A"
+        assert p["feature_id"] == fid_a
 
 
 @pytest.mark.asyncio
