@@ -158,10 +158,13 @@ let data={features:[],workers:[],stats:{}},selFid=null,selPid=null,actTab='ov',l
 
 function $(id){return document.getElementById(id)}
 async function load(){
-  const r=await fetch('/api/dashboard');data=await r.json();
-  updateStats();renderFeatures();
-  if(selFid){renderWaves(selFid);updateMobileCrumb(2)}
-  if(selPid){renderInspector(selPid);updateMobileCrumb(3)}
+  try{
+    const r=await fetch('/api/dashboard');data=await r.json();
+    console.log('dashboard loaded',data.stats);
+    updateStats();renderFeatures();
+    if(selFid){renderWaves(selFid);updateMobileCrumb(2)}
+    if(selPid){renderInspector(selPid);updateMobileCrumb(3)}
+  }catch(e){console.error('load failed',e)}
 }
 function updateStats(){
   const s=data.stats;
