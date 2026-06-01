@@ -26,6 +26,53 @@ def cli():
     """GRACE Control Plane CLI."""
 
 
+@cli.command("up")
+@click.option("--port", default=8042, help="API port")
+@click.option("--worker-id", default="agy1", help="Worker ID")
+@click.option("--project", default=".", help="Project root for worker")
+def up(port, worker_id, project):
+    """Start API server + worker (all-in-one)."""
+    import asyncio
+    import uvicorn
+    from pathlib import Path
+    from grace_control.api.main import app
+    from grace_control.worker.worker import Worker
+
+    project_root = Path(project).resolve()
+    state_root = project_root / ".grace" / "state"
+    worktree_root = project_root / ".grace" / "worktrees"
+    state_root.mkdir(parents=True, exist_ok=True)
+    worktree_root.mkdir(parents=True, exist_ok=True)
+
+    os.environ.setdefault("GRACE_DB_URL", f"sqlite:///{project_root / 'grace.db'}")
+    os.environ.setdefault("GRACE_ALLOW_SANDBOX_BYPASS", "true")
+
+    from grace_control.db import init_db
+    init_db()
+
+    worker = Worker(worker_id=worker_id, api_url=f"http://127.0.0.1:{port}",
+                    project_root=project_root, state_root=state_root,
+                    worktree_root=worktree_root)
+
+    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
+    server = uvicorn.Server(config)
+
+    async def start_worker():
+        await asyncio.sleep(2)  # wait for server
+        await worker.start()
+
+    async def main():
+        console.print(f"[green]GRACE Control Plane starting on http://127.0.0.1:{port}[/green]")
+        console.print(f"[white]Project: {project_root}[/white]")
+        console.print(f"[white]Worker: {worker_id}[/white]")
+        await asyncio.gather(server.serve(), start_worker())
+
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Shutting down...[/yellow]")
+
+
 @cli.command("init")
 @click.option("--project", default=".", help="Project root directory")
 def init_project(project):
