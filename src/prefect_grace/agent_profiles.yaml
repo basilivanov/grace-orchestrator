@@ -1,91 +1,118 @@
-version: 1
+version: 2
+# GRACE Control Plane — Model Configuration
+# Canonical reference: CANONICAL_DECISIONS.md, executor_selector.py
+
 codex:
   binary: agy
-  workdir: /opt/astro-project
-  shared_model: gemini-3.5-flash
+  workdir: /tmp/grace-orchestrator-export
+
   executors:
-    - executor_id: coder-cheap
-      kind: codex
+    # ── Architect (opencode) ─────────────────────────────────────────────
+    - executor_id: architect-premium
+      kind: opencode
+      command: opencode
+      model: deepseek/deepseek-v4-pro
+      roles: [architect, reviewer]
+      priority: 10
+      reasoning: max
+      metadata:
+        complexity: complex
+        provider: deepseek
+
+    # ── Reviewer (opencode) ──────────────────────────────────────────────
+    - executor_id: reviewer-premium
+      kind: opencode
+      command: opencode
+      model: deepseek/deepseek-v4-pro
+      roles: [reviewer]
+      priority: 5
+      reasoning: max
+      metadata:
+        complexity: complex
+        provider: deepseek
+
+    # ── Coder #1: opencode cheap (flash) ─────────────────────────────────
+    - executor_id: coder-flash
+      kind: opencode
+      command: opencode
+      model: deepseek/deepseek-v4-flash
+      roles: [coder]
+      priority: 100
+      reasoning: max
+      metadata:
+        complexity: simple
+        provider: deepseek
+
+    # ── Coder #2: agy cheap (gemini flash) ───────────────────────────────
+    - executor_id: coder-agy-flash
+      kind: agy
       command: agy
       model: gemini-3.5-flash
       roles: [coder]
-      priority: 100
+      priority: 80
       metadata:
         complexity: simple
+        provider: google
 
-    - executor_id: coder-standard
-      kind: codex
+    # ── Coder #3: agy medium (sonnet) ────────────────────────────────────
+    - executor_id: coder-agy-sonnet
+      kind: agy
       command: agy
-      model: gemini-3.1-pro
+      model: claude-sonnet-4-6
       roles: [coder]
       priority: 50
       metadata:
         complexity: medium
+        provider: anthropic
 
-    - executor_id: coder-premium
-      kind: codex
+    # ── Verifier: agy cheap ──────────────────────────────────────────────
+    - executor_id: verifier-cheap
+      kind: agy
       command: agy
-      model: claude-opus-4
-      roles: [coder]
-      priority: 10
+      model: gemini-3.5-flash
+      roles: [verifier]
+      priority: 100
       metadata:
-        complexity: complex
+        complexity: simple
+        provider: google
 
-    - executor_id: architect-standard
-      kind: codex
-      command: agy
-      model: gemini-3.1-pro
-      roles: [architect]
-      priority: 50
+  # ── Role Configs ───────────────────────────────────────────────────────
   roles:
-    canon_digest:
-      reasoning: medium
-      sandbox: danger-full-access
-      approval: never
-      stall_timeout_seconds: 300
-      max_auto_resume_attempts: 1
     architect:
-      model: gemini-3.1-pro
-      reasoning: xhigh
+      reasoning: max
       sandbox: danger-full-access
       approval: never
-      resume_strategy: feature_role
-      stall_timeout_seconds: 300
-      max_auto_resume_attempts: 1
-    planner:
-      reasoning: xhigh
-      sandbox: danger-full-access
-      approval: never
-      resume_strategy: feature_role
-      stall_timeout_seconds: 300
+      stall_timeout_seconds: 600
       max_auto_resume_attempts: 1
     coder:
       reasoning: high
       sandbox: danger-full-access
       approval: never
+      stall_timeout_seconds: 1200
+      max_auto_resume_attempts: 2
     verifier:
       reasoning: medium
       sandbox: danger-full-access
       approval: never
-    reviewer:
-      reasoning: xhigh
-      sandbox: danger-full-access
-      approval: never
-      resume_strategy: feature_role
       stall_timeout_seconds: 300
       max_auto_resume_attempts: 1
+    reviewer:
+      reasoning: max
+      sandbox: danger-full-access
+      approval: never
+      stall_timeout_seconds: 600
+      max_auto_resume_attempts: 1
+
+# ── Verification Profiles ────────────────────────────────────────────────
 verification:
   backend_profiles:
-    backend_quick: docker exec astro-project-backend-1 python3 scripts/pipeline.py
-    grace_smoke: python3 -m py_compile prefect_grace/cli.py prefect_grace/tasks/prefect_submitter.py prefect_grace/tasks/prefect_runs.py
+    backend_quick: pytest tests/ -q --tb=short
+    grace_smoke: python3 -m py_compile src/grace_control/**/*.py
   frontend_profiles:
-    frontend_quick: ./scripts/run_e2e.sh --last-failed
+    frontend_quick: npm test
   observability_profiles:
-    today-week: /opt/prefect/venv/bin/python -m gracectl.cli evidence review today-week --report-format json
-    read-only: /opt/prefect/venv/bin/python -m gracectl.cli evidence review read-only --report-format json
-    grace_smoke: python3 -c 'import json; print(json.dumps({"verdict":"PASS_CLEAN","flows":[{"flow_id":"prefect-grace-prod-smoke","status":"ok","sample_trace_id":"prefect-grace-prod-smoke-trace"}]}))'
+    grace_smoke: python3 scripts/verify_all.sh
   default_artifact_globs:
-    - frontend/test-results/**/*
     - test-results/**/*
-    - frontend/artifacts/**/*
     - artifacts/**/*
+    - EVIDENCE/**/*
