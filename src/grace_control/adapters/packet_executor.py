@@ -87,34 +87,31 @@ class PacketExecutionAdapter:
         start_time = time.time()
         _log.info("adapter_execute_start", packet_id=packet_id, worker_id=worker_id)
 
-        # Clean git state BEFORE anything — stale branches from previous attempts
+        # Clean git state BEFORE anything
         import subprocess as _sp
+        import shutil
         try:
             _sp.run(["git", "-C", str(self.project_root), "worktree", "prune"],
                     capture_output=True, timeout=10)
-            result = _sp.run(["git", "-C", str(self.project_root), "branch", "--list", f"agent/default/{packet_id}/*"],
-                           capture_output=True, text=True, timeout=10)
-            for line in result.stdout.splitlines():
-                branch = line.strip().lstrip("* ")
-                if branch:
-                    _sp.run(["git", "-C", str(self.project_root), "branch", "-D", branch],
-                           capture_output=True, timeout=10)
+            wt_path = self.worktree_root / f"{packet_id}-attempt-0001"
+            if wt_path.exists():
+                _sp.run(["git", "-C", str(self.project_root), "worktree", "remove",
+                        str(wt_path), "--force"], capture_output=True, timeout=10)
+                shutil.rmtree(wt_path, ignore_errors=True)
+            branch = f"agent/default/{packet_id}/attempt-0001"
+            _sp.run(["git", "-C", str(self.project_root), "branch", "-D", branch],
+                   capture_output=True, timeout=10)
         except Exception:
             pass
 
-        # Ensure DB is initialized in this process
-        try:
-            from grace_control.db import init_db as _init_db
-            _init_db()
-        except Exception:
-            pass
-
-        # Use temp directories per attempt — avoids state accumulation
+        # Use persistent state_root (registry must survive agent process)
+        state_root = self.state_root
+        state_root.mkdir(parents=True, exist_ok=True)
+        # Use temp worktree_root (fresh each time)
         import tempfile as _tf
         _tmp = _tf.TemporaryDirectory()
-        _state_root = Path(_tmp.name) / "state"
-        _worktree_root = Path(_tmp.name) / "worktrees"
-        _state_root.mkdir(); _worktree_root.mkdir()
+        worktree_root = Path(_tmp.name)
+        worktree_root.mkdir(exist_ok=True)
 
         with get_db() as db:
             packet = db.query(Packet).filter_by(id=packet_id).first()
@@ -163,17 +160,17 @@ class PacketExecutionAdapter:
         packet_data["_tier"] = tier.value
 
         try:
-            packet_path = self._materialize_packet(packet_data, _state_root)
+            packet_path = self._materialize_packet(packet_data, state_root)
             _log.debug("packet_materialized", packet_id=packet_id, path=str(packet_path))
-            result = await self._call_legacy_runner(packet_path, _state_root, _worktree_root)
+            result = await self._call_legacy_runner(packet_path, state_root, worktree_root)
             _log.debug("legacy_runner_completed", packet_id=packet_id,
                 ok=result.ok, domain=result.domain_status,
                 errors=result.errors[:3], blocker=getattr(result, 'registry_reason', '')[:200])
             execution_result = self._parse_result(result)
-            evidence_path = self._save_evidence(packet_id, run_number, result.to_dict(), _state_root)
+            evidence_path = self._save_evidence(packet_id, run_number, result.to_dict(), state_root)
             execution_result.evidence_path = evidence_path
             execution_result.duration_ms = int((time.time() - start_time) * 1000)
-            self._save_agent_log(packet_id, run_number, result, _state_root)
+            self._save_agent_log(packet_id, run_number, result, state_root)
 
             with get_db() as db:
                 existing = db.query(PacketRun).filter_by(id=run_id).first()
