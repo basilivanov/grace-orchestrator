@@ -273,10 +273,11 @@ async function renderInspector(pid){
     h+='</div>';
 
     // Tabs + content
-    var tabs=['ov','runs','events','arts'];var tlabels=['Overview','Runs','Events','Artifacts'];
+    var tnames=['ov','runs','events','arts'];var tlabels=['Overview','Runs','Events','Artifacts'];
     h+='<div class=tabs>';
-    for(var ti=0;ti<tabs.length;ti++){
-      h+='<button class=\"tab'+(actTab===tabs[ti]?' act':'')+'\" onclick=\"swTab(event,\\''+tabs[ti]+'\\',\\''+pid+'\\')\">'+tlabels[ti]+'</button>';
+    for(var ti=0;ti<tnames.length;ti++){
+      var isAct=actTab===tnames[ti]?' act':'';
+      h+='<button class=tab'+isAct+' data-tab='+tnames[ti]+' data-pid='+pid+'>'+tlabels[ti]+'</button>';
     }
     h+='</div>';
     h+=`<div class="tc" id=tc-ov>${renderOverview(d)}</div>`;
@@ -293,7 +294,8 @@ async function renderInspector(pid){
 async function swTab(e,name,pid){
   actTab=name;
   document.querySelectorAll('.tab').forEach(t=>t.classList.remove('act'));
-  e.target.classList.add('act');
+  var btn=document.querySelector('.tab[data-tab=\"'+name+'\"]');
+  if(btn)btn.classList.add('act');
   document.querySelectorAll('.tc').forEach(t=>t.classList.add('hidden'));
   const el=document.getElementById('tc-'+name);if(el)el.classList.remove('hidden');
   if(name==='events'&&pid)await loadEvents(pid);
@@ -356,5 +358,11 @@ function connectWS(){
   ws.onclose=()=>{setTimeout(connectWS,2000);$('ws-stat').innerHTML='<span class=ws-dot style=background:var(--r)></span>Offline'};
 }
 load();connectWS();setInterval(load,5000);
+// Tab click delegation
+document.addEventListener('click',function(e){
+  var btn=e.target.closest('.tab');if(!btn)return;
+  var name=btn.getAttribute('data-tab');var pid=btn.getAttribute('data-pid');
+  if(name&&pid)swTab(e,name,pid);
+});
 window.addEventListener('resize',()=>{mobile=window.innerWidth<700});
 </script>
