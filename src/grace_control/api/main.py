@@ -109,6 +109,143 @@ async def dashboard():
         return HTMLResponse(template.read_text())
     return HTMLResponse("<h1>GRACE Control Plane</h1><p>Dashboard template not found.</p>")
 
+
+@app.get("/api/dashboard")
+async def dashboard_data():
+    """Aggregated view: features → waves → packets + workers + stats."""
+    from grace_control.db import get_db as _gdb
+    from grace_control.db.schema import Feature, Wave, Packet, Worker
+
+    with _gdb() as db:
+        features = db.query(Feature).all()
+        workers = db.query(Worker).all()
+
+        result_features = []
+        for f in features:
+            waves = db.query(Wave).filter_by(feature_id=f.id).order_by(Wave.order).all()
+            fw = []
+            for w in waves:
+                packets = db.query(Packet).filter_by(feature_id=f.id, wave_id=w.id).all()
+                fw.append({
+                    "id": w.id, "title": w.title, "order": w.order, "status": w.status,
+                    "packets": [
+                        {"id": p.id, "title": p.title, "state": p.state,
+                         "acceptance_profile": p.acceptance_profile,
+                         "attempt_count": p.attempt_count, "max_attempts": p.max_attempts,
+                         "feature_id": p.feature_id, "wave_id": p.wave_id}
+                        for p in packets
+                    ]
+                })
+            result_features.append({
+                "id": f.id, "title": f.title, "status": f.status, "waves": fw,
+            })
+
+        # Stats
+        all_pkts = db.query(Packet).all()
+        stats = {}
+        for p in all_pkts:
+            stats[p.state] = stats.get(p.state, 0) + 1
+        active_workers = len([w for w in workers if w.status == "active"])
+
+        return {
+            "features": result_features,
+            "workers": [{"id": w.id, "status": w.status, "current_packet_id": w.current_packet_id,
+                         "last_heartbeat": w.last_heartbeat.isoformat() + "Z" if w.last_heartbeat else None}
+                        for w in workers],
+            "stats": {**stats, "workers": active_workers},
+        }
+
+
+@app.get("/api/events")
+async def list_events(entity_type: str = "", entity_id: str = "", limit: int = 100):
+    from grace_control.db import get_db as _gdb
+    from grace_control.db.schema import Event
+
+    with _gdb() as db:
+        q = db.query(Event).order_by(Event.timestamp.desc())
+        if entity_type:
+            q = q.filter_by(entity_type=entity_type)
+        if entity_id:
+            q = q.filter_by(entity_id=entity_id)
+        events = q.limit(limit).all()
+        return {
+            "data": [
+                {"timestamp": e.timestamp.isoformat() + "Z", "event_type": e.event_type,
+                 "entity_type": e.entity_type, "entity_id": e.entity_id,
+                 "payload": e.payload_json, "trace_id": e.trace_id}
+                for e in reversed(events)
+            ]
+        }
+
+
+@app.get("/api/packets/{packet_id}/runs/{run_id}")
+async def get_packet_run(packet_id: str, run_id: str):
+    from grace_control.db import get_db as _gdb
+    from grace_control.db.schema import PacketRun
+    with _gdb() as db:
+        run = db.query(PacketRun).filter_by(id=f"{packet_id}-{run_id}").first()
+        if not run:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        return {
+            "data": {
+                "id": run.id, "packet_id": run.packet_id, "run_number": run.run_number,
+                "status": run.status, "result_json": run.result_json,
+                "evidence_path": run.evidence_path, "executor_id": run.executor_id,
+                "started_at": run.started_at.isoformat() + "Z" if run.started_at else None,
+                "finished_at": run.finished_at.isoformat() + "Z" if run.finished_at else None,
+                "duration_ms": run.duration_ms,
+            }
+        }
+
+
+@app.get("/api/packets/{packet_id}/runs/{run_id}/artifacts")
+async def list_artifacts(packet_id: str, run_id: str):
+    from grace_control.db import get_db as _gdb
+    from grace_control.db.schema import PacketRun
+    from pathlib import Path as _P
+
+    with _gdb() as db:
+        run = db.query(PacketRun).filter_by(id=f"{packet_id}-{run_id}").first()
+        if not run or not run.evidence_path:
+            return {"data": []}
+
+        ep = _P(run.evidence_path)
+        files = []
+        if ep.exists():
+            for f in sorted(ep.rglob("*")):
+                if f.is_file():
+                    rel = str(f.relative_to(ep))
+                    ext = f.suffix.lower()
+                    ftype = "image" if ext in (".png", ".jpg", ".gif", ".svg") else \
+                            "log" if ext in (".log", ".txt") else \
+                            "json" if ext == ".json" else "file"
+                    files.append({"name": rel, "type": ftype, "size": f.stat().st_size})
+
+        return {"data": files}
+
+
+@app.get("/api/packets/{packet_id}/runs/{run_id}/artifacts/file")
+async def get_artifact_file(packet_id: str, run_id: str, path: str = "", tail: int = 0):
+    from grace_control.db import get_db as _gdb
+    from grace_control.db.schema import PacketRun
+    from pathlib import Path as _P
+    from fastapi.responses import PlainTextResponse
+
+    with _gdb() as db:
+        run = db.query(PacketRun).filter_by(id=f"{packet_id}-{run_id}").first()
+        if not run or not run.evidence_path:
+            return JSONResponse({"error": "not found"}, status_code=404)
+
+        fp = _P(run.evidence_path) / path
+        if not fp.exists() or not fp.is_file():
+            return JSONResponse({"error": "file not found"}, status_code=404)
+
+        content = fp.read_text()
+        if tail > 0:
+            lines = content.splitlines()
+            content = "\n".join(lines[-tail:])
+        return PlainTextResponse(content)
+
 #START_BLOCK_WS
 from fastapi import WebSocket
 from grace_control.api.ws_broadcast import handle_websocket

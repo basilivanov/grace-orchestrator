@@ -1,195 +1,267 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!doctype html><html lang=en><meta charset=UTF-8><meta name=viewport content="width=device-width,initial-scale=1">
 <title>GRACE Control Plane</title>
 <style>
-:root{--bg:#0d1117;--fg:#c9d1d9;--accent:#58a6ff;--green:#3fb950;--red:#f85149;--yellow:#d2991d;--blue:#58a6ff;--cyan:#39d353;--gray:#8b949e;--border:#30363d;--row:#161b22;--hover:#1c2533}
+:root{--bg:#0d1117;--fg:#c9d1d9;--accent:#58a6ff;--green:#3fb950;--red:#f85149;--yellow:#d2991d;--blue:#58a6ff;--cyan:#39d353;--gray:#8b949e;--border:#30363d;--card:#161b22;--hover:#1c2533}
 *{box-sizing:border-box;margin:0;padding:0}
-body{font:14px/1.5 -apple-system,BlinkMacSystemFont,sans-serif;background:var(--bg);color:var(--fg);padding:20px}
-h1{font-size:22px;margin-bottom:4px;color:var(--accent)}
-h2{font-size:14px;margin:20px 0 10px;color:var(--gray);text-transform:uppercase;letter-spacing:1px}
-.header{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
-.status-dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:6px}
-.status-healthy{background:var(--green);box-shadow:0 0 6px var(--green)}
-.status-degraded{background:var(--yellow);box-shadow:0 0 6px var(--yellow)}
-.status-unhealthy{background:var(--red);box-shadow:0 0 6px var(--red)}
-.stats{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px}
-.stat{background:var(--row);border:1px solid var(--border);padding:10px 14px;border-radius:6px;min-width:100px;text-align:center}
-.stat .val{font-size:22px;font-weight:bold}
-.stat .lbl{font-size:10px;color:var(--gray);text-transform:uppercase;margin-top:2px}
-table{width:100%;border-collapse:collapse;font-size:13px;background:var(--row);border:1px solid var(--border);border-radius:6px;overflow:hidden}
-th,td{padding:6px 10px;text-align:left;border-bottom:1px solid var(--border)}
-th{color:var(--gray);font-weight:600;background:var(--row);position:sticky;top:0}
-tr:hover{background:var(--hover)}
-.badge{padding:1px 6px;border-radius:3px;font-size:11px;font-weight:600;text-transform:uppercase}
-.badge-ready{background:#1a3a1a;color:var(--green)}
-.badge-running{background:#3a2a1a;color:var(--yellow)}
-.badge-accepted{background:#1a2a3a;color:var(--blue)}
-.badge-merged{background:#1a3a2a;color:var(--cyan)}
-.badge-rejected{background:#3a1a1a;color:var(--red)}
-.badge-failed{background:#3a1a1a;color:var(--red)}
-.badge-cancelled{background:#2a2a2a;color:var(--gray)}
-.footer{text-align:center;color:var(--gray);font-size:11px;margin-top:24px;padding:10px}
-.ws-indicator{font-size:11px}
-.ws-connected{color:var(--green)}
-.ws-disconnected{color:var(--red)}
-.timeline{display:flex;gap:4px;flex-wrap:wrap;margin:8px 0}
-.timeline-dot{width:12px;height:12px;border-radius:50%;cursor:pointer;transition:transform .2s}
-.timeline-dot:hover{transform:scale(1.4)}
-.timeline-dot.ready{background:var(--green)}
-.timeline-dot.running{background:var(--yellow)}
-.timeline-dot.accepted{background:var(--blue)}
-.timeline-dot.merged{background:var(--cyan)}
-.timeline-dot.rejected{background:var(--red)}
-.timeline-dot.failed{background:var(--red)}
-.tooltip{position:fixed;background:var(--row);border:1px solid var(--border);padding:6px 10px;border-radius:4px;font-size:12px;pointer-events:none;z-index:100;display:none}
-pre{background:var(--bg);padding:10px;border-radius:4px;overflow:auto;max-height:400px;font-size:12px;border:1px solid var(--border)}
-.modal{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.7);z-index:200;justify-content:center;align-items:center}
-.modal.active{display:flex}
-.modal-content{background:var(--row);border:1px solid var(--border);border-radius:8px;padding:20px;max-width:700px;max-height:80vh;overflow:auto;width:90%}
-.modal-close{float:right;background:none;border:none;color:var(--fg);font-size:20px;cursor:pointer}
+body{font:14px/1.5 -apple-system,BlinkMacSystemFont,sans-serif;background:var(--bg);color:var(--fg);overflow:hidden;height:100vh}
+.header{display:flex;justify-content:space-between;align-items:center;padding:8px 16px;background:var(--card);border-bottom:1px solid var(--border);min-height:48px}
+.header h1{font-size:16px;color:var(--accent)}
+.header .stats-bar{display:flex;gap:10px;font-size:12px}
+.header .stats-bar span{padding:2px 6px;border-radius:3px}
+.ws-dot{width:6px;height:6px;border-radius:50%;display:inline-block;margin-right:4px;vertical-align:middle}
+.dashboard{display:grid;grid-template-columns:260px 1fr 400px;height:calc(100vh - 49px);overflow:hidden}
+.panel{overflow-y:auto;border-right:1px solid var(--border);padding:0}
+.panel:last-child{border-right:none}
+.feature-item,.wave-header,.packet-item{padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:6px;min-height:44px}
+.feature-item:hover,.packet-item:hover{background:var(--hover)}
+.feature-item .title{font-weight:600;font-size:13px;flex:1}
+.feature-item .stat{font-size:11px;color:var(--gray)}
+.wave-header{background:var(--card);font-size:12px;font-weight:600;color:var(--gray);text-transform:uppercase;letter-spacing:.5px;cursor:default}
+.packet-item .state-icon{font-size:16px;width:20px;text-align:center}
+.packet-item .info{flex:1;min-width:0}
+.packet-item .id{font-family:monospace;font-size:10px;color:var(--gray);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.packet-item .title{font-size:13px}
+.detail-empty{color:var(--gray);padding:40px 20px;text-align:center}
+.detail-panel{padding:12px 16px}
+.detail-panel h2{font-size:14px;margin-bottom:8px}
+.detail-panel .meta{font-size:12px;color:var(--gray);margin-bottom:12px;line-height:1.8}
+.detail-panel .meta b{color:var(--fg)}
+.timeline{display:flex;align-items:center;gap:0;margin:8px 0 16px;overflow-x:auto}
+.timeline-step{display:flex;flex-direction:column;align-items:center;min-width:56px;font-size:10px}
+.timeline-step .dot{width:14px;height:14px;border-radius:50%;margin:4px 0}
+.timeline-step .line{width:100%;height:2px;background:var(--border)}
+.timeline-step.active .dot{background:var(--green);box-shadow:0 0 6px var(--green)}
+.timeline-step.past .dot{background:var(--gray)}
+.timeline-step.future .dot{border:2px solid var(--border);background:transparent}
+.tabs{display:flex;gap:0;border-bottom:1px solid var(--border);margin-bottom:12px}
+.tab{padding:6px 12px;font-size:12px;cursor:pointer;border:none;background:none;color:var(--gray);border-bottom:2px solid transparent;min-height:44px;display:flex;align-items:center}
+.tab.active{color:var(--accent);border-bottom-color:var(--accent)}
+.events-list{font-size:12px;max-height:300px;overflow-y:auto}
+.events-list .event{padding:4px 0;border-bottom:1px solid var(--border);display:flex;gap:8px}
+.events-list .time{color:var(--gray);font-family:monospace;white-space:nowrap}
+.events-list .type{color:var(--accent);font-weight:600;white-space:nowrap}
+.artifact-item{display:flex;align-items:center;gap:6px;padding:6px 0;border-bottom:1px solid var(--border);font-size:12px;cursor:pointer;min-height:44px}
+.artifact-item:hover{background:var(--hover)}
+.log-view{background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:10px;font-family:monospace;font-size:11px;max-height:400px;overflow:auto;white-space:pre-wrap}
+.runs-list{font-size:12px}
+.runs-list .run{padding:6px 0;border-bottom:1px solid var(--border);cursor:pointer;min-height:44px}
+.runs-list .run:hover{background:var(--hover)}
+.mobile-nav{display:none;align-items:center;gap:8px;padding:6px 12px;background:var(--card);border-bottom:1px solid var(--border);font-size:12px;min-height:44px}
+.mobile-nav button{background:var(--border);border:none;color:var(--fg);padding:4px 10px;border-radius:4px;cursor:pointer;font-size:11px;min-height:36px}
+.empty-state{color:var(--gray);text-align:center;padding:20px;font-size:13px}
+@media (max-width:899px){
+  .dashboard{display:block;height:auto;overflow:visible}
+  .panel{display:none;border-right:none}
+  .panel.active{display:block}
+  .mobile-nav{display:flex}
+  .detail-panel{max-height:none}
+}
 </style>
-</head>
-<body>
-<div class="header">
-  <div>
-    <h1>GRACE Control Plane</h1>
-    <span class="ws-indicator" id="ws-status">connecting...</span>
-  </div>
-  <div style="text-align:right">
-    <div style="font-size:20px;font-weight:bold" id="s-status-text">—</div>
-    <div style="font-size:11px;color:var(--gray)" id="tick">—</div>
+<div class=header>
+  <h1>GRACE</h1>
+  <div class=stats-bar id=stats-bar>
+    <span id=ws-indicator><span class=ws-dot style=background:var(--yellow)></span>connecting</span>
+    <span id=tick></span>
   </div>
 </div>
-
-<div class="stats" id="stats"></div>
-
-<h2>Packets</h2>
-<table><thead><tr><th>ID</th><th>Title</th><th>State</th><th>Profile</th><th>Att</th><th>Timeline</th></tr></thead><tbody id="pkts"></tbody></table>
-
-<h2>Workers</h2>
-<table><thead><tr><th>ID</th><th>Status</th><th>Packet</th><th>Heartbeat</th></tr></thead><tbody id="wrks"></tbody></table>
-
-<div class="footer"><span id="ws-msg"></span></div>
-
-<div class="modal" id="modal"><div class="modal-content"><button class="modal-close" onclick="closeModal()">×</button><pre id="modal-body"></pre></div></div>
-<div class="tooltip" id="tooltip"></div>
-
+<div class=mobile-nav id=mnav>
+  <button onclick=navBack()>← Back</button>
+  <span id=mnav-title>Features</span>
+</div>
+<div class=dashboard id=dash>
+  <!-- Left: Features -->
+  <div class="panel active" id=panel-features></div>
+  <!-- Center: Waves+Packets -->
+  <div class=panel id=panel-packs></div>
+  <!-- Right: Detail -->
+  <div class=panel id=panel-detail></div>
+</div>
 <script>
-const stateColors = {ready:'green',running:'yellow',accepted:'blue',merged:'cyan',rejected:'red',failed:'red',cancelled:'gray'};
-let ws;
-let packets = [];
-let workers = [];
-let health = {status:'unknown',workers:{active:0,idle:0,dead:0},queue_depth:0,running:0};
+const S={ready:{icon:'⚪',color:'var(--green)'},running:{icon:'🔄',color:'var(--yellow)'},accepted:{icon:'✅',color:'var(--blue)'},merged:{icon:'✅',color:'var(--cyan)'},rejected:{icon:'🔴',color:'var(--red)'},failed:{icon:'💥',color:'var(--red)'},cancelled:{icon:'❌',color:'var(--gray)'}};
+let data={features:[],workers:[],stats:{}};
+let ws,isMobile=window.innerWidth<900;
+let navStack=[],selectedFeature=null,selectedPacket=null;
 
-function connectWS() {
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  ws = new WebSocket(`${proto}://${location.host}/ws`);
-  ws.onopen = () => {
-    document.getElementById('ws-status').innerHTML = '<span class="status-dot status-healthy"></span> live';
-    document.getElementById('ws-status').className = 'ws-indicator ws-connected';
-    fetch('/api/packets/').then(r=>r.json()).then(d=>{packets=d.data;render();});
-    fetch('/api/workers/').then(r=>r.json()).then(d=>{workers=d.data;render();});
-    fetch('/health').then(r=>r.json()).then(d=>{health=d;render();});
-  };
-  ws.onmessage = (e) => {
-    const msg = JSON.parse(e.data);
-    if (msg.type === 'state_change') {
-      const p = packets.find(x=>x.id===msg.packet_id);
-      if (p) p.state = msg.state;
-      else packets.push({id:msg.packet_id,title:'',state:msg.state,acceptance_profile:'NORMAL',attempt_count:1,max_attempts:3,feature_id:'—'});
-      render();
-    }
-  };
-  ws.onclose = () => {
-    document.getElementById('ws-status').innerHTML = '<span class="status-dot status-unhealthy"></span> disconnected';
-    document.getElementById('ws-status').className = 'ws-indicator ws-disconnected';
-    setTimeout(connectWS, 2000);
-  };
-  ws.onerror = () => ws.close();
+function $(id){return document.getElementById(id)}
+
+async function load(){
+  const r=await fetch('/api/dashboard');data=await r.json();
+  renderFeatures();renderStats();if(selectedFeature)renderPacks(selectedFeature);
+  if(selectedPacket)renderDetail(selectedPacket);
+}
+function renderStats(){
+  const s=data.stats;
+  $('stats-bar').innerHTML=`
+    <span style="background:#1a3a1a;color:var(--green)">✅ ${s.merged||0}</span>
+    <span style="background:#3a2a1a;color:var(--yellow)">🔄 ${s.running||0}</span>
+    <span style="background:#1a2a3a;color:var(--blue)">ready ${s.ready||0}</span>
+    <span style="background:#3a1a1a;color:var(--red)">💥 ${(s.failed||0)+(s.rejected||0)}</span>
+    <span>👷 ${s.workers||0}</span>
+    <span id=tick style=color:var(--gray)>${new Date().toLocaleTimeString()}</span>`;
 }
 
-function render() {
-  document.getElementById('tick').textContent = new Date().toLocaleTimeString();
-
-  // Stats
-  const counts = {};
-  packets.forEach(p => counts[p.state] = (counts[p.state]||0) + 1);
-  const st = [
-    {l:'Ready',v:counts.ready||0,c:'var(--green)'},
-    {l:'Running',v:counts.running||0,c:'var(--yellow)'},
-    {l:'Accepted',v:counts.accepted||0,c:'var(--blue)'},
-    {l:'Merged',v:counts.merged||0,c:'var(--cyan)'},
-    {l:'Failed',v:counts.failed||0,c:'var(--red)'},
-    {l:'Workers',v:health.workers.active,c:'var(--accent)'},
-  ];
-  document.getElementById('stats').innerHTML = st.map(s => `<div class="stat"><div class="val" style="color:${s.c}">${s.v}</div><div class="lbl">${s.l}</div></div>`).join('');
-  document.getElementById('s-status-text').textContent = health.status;
-  document.getElementById('s-status-text').style.color = {healthy:'var(--green)',degraded:'var(--yellow)',unhealthy:'var(--red)'}[health.status]||'var(--fg)';
-
-  // Packets
-  document.getElementById('pkts').innerHTML = packets.slice(-50).reverse().map(p => {
-    const dots = ['ready','running','accepted','merged'].includes(p.state)
-      ? ['ready','running','accepted','merged'].map(s => {
-          const active = ['ready','running','accepted','merged'].indexOf(p.state) >= ['ready','running','accepted','merged'].indexOf(s);
-          return `<span class="timeline-dot ${s}" style="opacity:${active?1:0.2}" title="${s}" onmouseenter="showTooltip(event,'${p.id}<br>${s}')" onmouseleave="hideTooltip()"></span>`;
-        }).join('')
-      : `<span class="timeline-dot ${p.state}" title="${p.state}"></span>`;
-    
-    return `<tr>
-      <td style="font-family:monospace;font-size:11px;cursor:pointer;color:var(--accent)" onclick="showArtifact('${p.id}')">${p.id}</td>
-      <td>${p.title||'—'}</td>
-      <td><span class="badge badge-${p.state}">${p.state}</span></td>
-      <td>${p.acceptance_profile}</td>
-      <td>${p.attempt_count}/${p.max_attempts}</td>
-      <td><div class="timeline">${dots}</div></td>
-    </tr>`;
-  }).join('') || '<tr><td colspan="6" style="color:var(--gray)">No packets</td></tr>';
-
-  // Workers
-  document.getElementById('wrks').innerHTML = workers.map(w => `<tr>
-    <td style="font-family:monospace">${w.id}</td>
-    <td><span class="badge badge-${w.status==='active'?'ready':'cancelled'}">${w.status}</span></td>
-    <td style="font-family:monospace;font-size:11px">${w.current_packet_id||'—'}</td>
-    <td>${w.last_heartbeat||'—'}</td>
-  </tr>`).join('') || '<tr><td colspan="4" style="color:var(--gray)">No workers</td></tr>';
+function renderFeatures(){
+  const el=$('panel-features');
+  el.innerHTML=data.features.map(f=>{
+    const waves=f.waves||[];let running=0,merged=0,failed=0;
+    waves.forEach(w=>w.packets.forEach(p=>{
+      if(p.state==='running')running++;if(p.state==='merged')merged++;if(p.state==='failed')failed++;
+    }));
+    return `<div class=feature-item onclick="selectFeature('${f.id}')">
+      <span class=title>${f.title}</span>
+      <span class=stat>${merged>0?`✅${merged}`:''} ${running>0?`🔄${running}`:''} ${failed>0?`💥${failed}`:''} ${waves.length}w</span>
+    </div>`;
+  }).join('')||'<div class=empty-state>No features. Run: grace architect plan feature.yaml</div>';
 }
 
-async function showArtifact(packetId) {
-  try {
-    const r = await fetch(`/api/packets/${packetId}`); const d = await r.json();
-    const p = d.data;
-    let html = `<b>${p.id}</b>\nState: ${p.state} | Wave: ${p.wave_id} | Feature: ${p.feature_id}\nAttempts: ${p.attempt_count}/${p.max_attempts}\n\n`;
-    if (p.runs && p.runs.length) {
-      p.runs.forEach(r => {
-        html += `Run ${r.run_number}: ${r.status} | ${r.duration_ms||'?'}ms\n  evidence: ${r.evidence_path||'—'}\n`;
-      });
-    } else { html += 'No runs yet'; }
-    if (d.data.spec_json) {
-      html += `\n\nSpec:\n${JSON.stringify(d.data.spec_json, null, 2)}`;
-    }
-    document.getElementById('modal-body').textContent = html;
-    document.getElementById('modal').classList.add('active');
-  } catch(e) {
-    document.getElementById('modal-body').textContent = 'Error loading artifact';
-    document.getElementById('modal').classList.add('active');
+function selectFeature(fid){
+  selectedFeature=fid;selectedPacket=null;
+  if(isMobile){navStack=['features'];updateMobileNav('Waves')}
+  renderPacks(fid);
+  $('panel-features').classList.remove('active');
+  $('panel-packs').classList.add('active');
+  $('panel-detail').classList.remove('active');
+}
+
+function renderPacks(fid){
+  const f=data.features.find(x=>x.id===fid);
+  if(!f)return;
+  let html=`<div style="padding:8px 12px;font-weight:600;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+    <span>${f.title}</span><span style="font-size:11px;color:var(--gray)">${f.waves.length} waves</span></div>`;
+  f.waves.forEach(w=>{
+    html+=`<div class=wave-header>Wave ${w.order}: ${w.title} (${w.packets.length} packets)</div>`;
+    w.packets.forEach(p=>{
+      const s=S[p.state]||{icon:'❓',color:'var(--gray)'};
+      html+=`<div class=packet-item onclick="selectPacket('${p.id}')">
+        <span class=state-icon>${s.icon}</span>
+        <div class=info><div class=title>${p.title||p.id.slice(-30)}</div>
+        <div class=id>${p.id}</div></div>
+        <span style="font-size:11px;color:${s.color}">${p.state} ${p.attempt_count}/${p.max_attempts}</span></div>`;
+    });
+  });
+  $('panel-packs').innerHTML=html||'<div class=empty-state>No waves</div>';
+}
+
+async function selectPacket(pid){
+  selectedPacket=pid;
+  if(isMobile){navStack.push('packs');updateMobileNav('Packet')}
+  $('panel-detail').classList.add('active');
+  if(isMobile){$('panel-packs').classList.remove('active')}
+  await renderDetail(pid);
+}
+
+async function renderDetail(pid){
+  const el=$('panel-detail');
+  try{
+    const r=await fetch(`/api/packets/${pid}`);const d=(await r.json()).data;
+    const s=S[d.state]||{icon:'❓',color:'var(--gray)'};
+    el.innerHTML=`
+      <div class=detail-panel>
+        <h2>${s.icon} ${d.title||d.id.slice(-30)}</h2>
+        <div class=meta>
+          <b>State:</b> <span style=color:${s.color}>${d.state}</span> &nbsp;
+          <b>Attempt:</b> ${d.attempt_count}/${d.max_attempts} &nbsp;
+          <b>Profile:</b> ${d.acceptance_profile}<br>
+          <b>Feature:</b> <span style=font-family:monospace;font-size:10px>${d.feature_id}</span> &nbsp;
+          <b>Wave:</b> <span style=font-family:monospace;font-size:10px>${d.wave_id}</span>
+        </div>
+        <div class=timeline id=pkt-timeline></div>
+        <div class=tabs>
+          <button class="tab active" onclick="switchTab('runs',this)">Runs</button>
+          <button class=tab onclick="switchTab('events',this)">Events</button>
+          <button class=tab onclick="switchTab('artifacts',this)">Artifacts</button>
+        </div>
+        <div id=tab-runs class=tab-content>${renderRuns(d)}</div>
+        <div id=tab-events class=tab-content style=display:none>Loading...</div>
+        <div id=tab-artifacts class=tab-content style=display:none></div>
+      </div>`;
+    // Timeline
+    const states=['ready','running','accepted','merged'];
+    const currentIdx=states.indexOf(d.state);
+    $('pkt-timeline').innerHTML=states.map((st,i)=>{
+      const cls=i<currentIdx?'past':i===currentIdx?'active':'future';
+      return `<div class=timeline-step><div class="dot ${cls}"></div><span>${st}</span></div>`;
+    }).join('');
+  }catch(e){el.innerHTML=`<div class=detail-empty>Error loading packet</div>`}
+}
+
+function renderRuns(d){
+  if(!d.runs||!d.runs.length)return'<div class=empty-state>No runs</div>';
+  return `<div class=runs-list>${d.runs.map(r=>`
+    <div class=run onclick="loadRunArtifacts('${d.id}','${r.id}')">
+      <b>R${r.run_number}</b> <span style=color:${S[r.status]?.color||'var(--gray)'}>${r.status}</span>
+      ${r.duration_ms?`· ${(r.duration_ms/1000).toFixed(1)}s`:''}
+      ${r.evidence_path?`<br><span style=font-size:10px;color:var(--gray)>ev: ${r.evidence_path}</span>`:''}
+    </div>`).join('')}</div>`;
+}
+
+async function switchTab(name,btn){
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  btn.classList.add('active');
+  document.querySelectorAll('.tab-content').forEach(t=>t.style.display='none');
+  const el=$(`tab-${name}`);el.style.display='block';
+  if(name==='events'&&selectedPacket){
+    el.innerHTML='Loading...';
+    const r=await fetch(`/api/events?entity_type=packet&entity_id=${selectedPacket}`);
+    const events=(await r.json()).data;
+    el.innerHTML=events.length?`<div class=events-list>${events.map(e=>`
+      <div class=event><span class=time>${new Date(e.timestamp).toLocaleTimeString()}</span>
+      <span class=type>${e.event_type}</span>
+      <span>${JSON.stringify(e.payload||{}).slice(0,80)}</span></div>`).join('')}</div>`:'<div class=empty-state>No events</div>';
+  }
+  if(name==='artifacts'&&selectedPacket){
+    const d=(await(await fetch(`/api/packets/${selectedPacket}`)).json()).data;
+    if(d.runs&&d.runs.length){
+      loadRunArtifacts(d.id,d.runs[0].id);
+    }else{el.innerHTML='<div class=empty-state>No runs</div>'}
   }
 }
-function closeModal() { document.getElementById('modal').classList.remove('active'); }
-document.getElementById('modal').onclick = function(e) { if (e.target === this) closeModal(); };
 
-function showTooltip(e, text) {
-  const t = document.getElementById('tooltip');
-  t.innerHTML = text;
-  t.style.display = 'block';
-  t.style.left = (e.clientX + 10) + 'px';
-  t.style.top = (e.clientY - 20) + 'px';
+async function loadRunArtifacts(pid,runId){
+  const el=$('tab-artifacts');
+  try{
+    const r=await fetch(`/api/packets/${pid}/runs/${runId}/artifacts`);
+    const files=(await r.json()).data;
+    el.style.display='block';
+    if(!files.length){el.innerHTML='<div class=empty-state>No artifacts</div>';return}
+    el.innerHTML=`<div>${files.map(f=>`
+      <div class=artifact-item onclick="viewArtifact('${pid}','${runId}','${f.name}','${f.type}')">
+        ${f.type==='image'?'🖼':f.type==='log'?'📄':'📋'} ${f.name}
+        <span style="color:var(--gray);font-size:10px">${(f.size/1024).toFixed(1)}KB</span>
+      </div>`).join('')}</div>`;
+  }catch(e){el.innerHTML='<div class=empty-state>Error loading artifacts</div>'}
 }
-function hideTooltip() { document.getElementById('tooltip').style.display = 'none'; }
 
-connectWS();
+async function viewArtifact(pid,runId,path,type){
+  const r=await fetch(`/api/packets/${pid}/runs/${runId}/artifacts/file?path=${encodeURIComponent(path)}&tail=200`);
+  const content=await r.text();
+  const el=$('tab-artifacts');
+  el.innerHTML=`<div style="position:sticky;top:0;background:var(--card);padding:4px 0;margin-bottom:8px;font-size:11px;color:var(--gray)">
+    📄 ${path} · ${content.split('\\n').length} lines · <a href="#" onclick="switchTab('artifacts',document.querySelector('.tab:nth-child(3)'))" style="color:var(--accent)">← back</a></div>
+    <div class=log-view>${escapeHtml(content)}</div>`;
+}
+
+function escapeHtml(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+
+function navBack(){
+  if(navStack.length<=1){navStack=[];selectedFeature=null;selectedPacket=null;
+    document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+    $('panel-features').classList.add('active');updateMobileNav('Features');return}
+  navStack.pop();
+  if(navStack[navStack.length-1]==='features'){selectedFeature=null;selectedPacket=null;
+    document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+    $('panel-features').classList.add('active');updateMobileNav('Features')}
+  else{selectedPacket=null;$('panel-detail').classList.remove('active');
+    $('panel-packs').classList.add('active');updateMobileNav('Packets')}
+}
+function updateMobileNav(t){$('mnav-title').textContent=t}
+function connectWS(){
+  ws=new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/ws`);
+  ws.onopen=()=>{$('ws-indicator').innerHTML='<span class=ws-dot style=background:var(--green)></span>live'};
+  ws.onmessage=(e)=>{const m=JSON.parse(e.data);if(m.type==='state_change')load()};
+  ws.onclose=()=>{setTimeout(connectWS,2000);$('ws-indicator').innerHTML='<span class=ws-dot style=background:var(--red)></span>offline'};
+}
+// Init
+load();connectWS();setInterval(load,5000);
+window.addEventListener('resize',()=>{isMobile=window.innerWidth<900});
 </script>
-</body>
-</html>
