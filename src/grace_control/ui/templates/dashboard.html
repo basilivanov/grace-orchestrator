@@ -101,6 +101,7 @@ body{font:14px/1.5 var(--font);background:var(--bg);color:var(--fg);overflow:hid
 .art-item:hover{background:var(--hvr)}
 .log-box{background:var(--bg);border:1px solid var(--bd);border-radius:4px;padding:10px;font-family:var(--mono);font-size:11px;max-height:400px;overflow:auto;white-space:pre-wrap;line-height:1.4}
 .copy-btn-lg{display:block;margin:8px 0;background:var(--bd);border:none;color:var(--accent);padding:4px 10px;border-radius:4px;cursor:pointer;font-size:11px}
+.hidden{display:none !important}
 
 /* Legend */
 .legend{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--card);border:1px solid var(--bd);border-radius:8px;padding:20px;z-index:100;display:none;max-width:340px;width:90%}
@@ -223,6 +224,24 @@ function selPacket(pid){
   renderWaves(selFid);renderInspector(pid);
   if(mobile){$('pc').classList.remove('active');$('pr').classList.add('active')}
 }
+function renderOverview(d,s){
+  const lr=d.runs&&d.runs.length?d.runs[d.runs.length-1]:null;
+  const next=d.state==='ready'?'Worker claim':d.state==='running'?'Agent executing':d.state==='accepted'?'Auto-merge':d.state==='failed'?'Manual retry':d.state==='rejected'?'Auto-retry':'Complete';
+  return `<div style=font-size:12px;line-height:2>
+    <b>Status:</b> <span style=color:${s.bg}>${s.label}</span><br>
+    ${lr?`<b>Last run:</b> ${lr.status}${lr.duration_ms?` · ${(lr.duration_ms/1000).toFixed(1)}s`:''}<br>`:''}
+    ${lr&&lr.evidence_path?`<b>Evidence:</b> <span style=font-family:var(--mono);font-size:10px>${lr.evidence_path}</span><br>`:''}
+    <b>Runs:</b> ${d.runs?d.runs.length:0} &nbsp; <b>Next:</b> ${next}
+  </div>`;
+}
+function renderRuns(d){
+  if(!d.runs||!d.runs.length)return'<div class=empt>No runs</div>';
+  return d.runs.map(r=>`<div class=run-card onclick="loadRunArts('${d.id}','${r.id}')">
+    <b>Run ${r.run_number}</b> <span style=color:${STY[r.status]?.bg||'var(--gr)'}>${r.status}</span>
+    ${r.duration_ms?` · ${(r.duration_ms/1000).toFixed(1)}s`:''}
+    ${r.evidence_path?`<br><span style=font-size:10px;color:var(--gr)>${r.evidence_path}</span>`:''}
+  </div>`).join('');
+}
 async function renderInspector(pid){
   let h='<div class=insp>';
   try{
@@ -255,22 +274,15 @@ async function renderInspector(pid){
     });
     h+='</div>';
 
-    // Tabs
-    h+=`<div class=tabs>${[
-      ['ov','Overview'],['runs','Runs'],['events','Events'],['arts','Artifacts']
-    ].map(([n,label])=>`<button class="tab${actTab===n?' act':''}" onclick="swTab(event,'${n}','${pid}')">${label}</button>`).join('')}</div>`;
-
-    // Overview
-    const lr=d.runs&&d.runs.length?d.runs[d.runs.length-1]:null;
-    h+=`<div class=tc id=tc-ov><div style=font-size:12px;line-height:2>
-      <b>Status:</b> <span style=color:${s.bg}>${s.label}</span><br>
-      ${lr?`<b>Last run:</b> ${lr.status} · ${lr.duration_ms?`${(lr.duration_ms/1000).toFixed(1)}s`:''}<br>`:''}
-      ${lr&&lr.evidence_path?`<b>Evidence:</b> <span style=font-family:var(--mono);font-size:10px>${lr.evidence_path}</span><br>`:''}
-      <b>Runs:</b> ${d.runs?d.runs.length:0} &nbsp; <b>Next:</b> ${d.state==='ready'?'Worker claim':d.state==='running'?'Agent executing':d.state==='accepted'?'Auto-merge':d.state==='failed'?'Manual retry':d.state==='rejected'?'Auto-retry':'Complete'}
-    </div></div>`;
-    h+=`<div class=tc id=tc-runs${actTab!=='runs'?' style=display:none':''}>${(d.runs||[]).length?d.runs.map(r=>`<div class=run-card onclick="loadRunArts('${pid}','${r.id}')">
-    h+=`<div class=tc id=tc-events${actTab!=='events'?' style=display:none':''}><div class=empt>Loading...</div></div>`;
-    h+=`<div class=tc id=tc-arts${actTab!=='arts'?' style=display:none':''}><div class=empt>Select a run to view artifacts</div></div>`;
+    // Tabs + content
+    h+=`<div class=tabs>${[['ov','Overview'],['runs','Runs'],['events','Events'],['arts','Artifacts']].map(([n,l])=>`<button class="tab${actTab===n?' act':''}" onclick="swTab(event,'${n}','${pid}')">${l}</button>`).join('')}</div>`;
+    h+=`<div class="tc" id=tc-ov>${renderOverview(d)}</div>`;
+    h+=`<div class="tc hidden" id=tc-runs>${renderRuns(d)}</div>`;
+    h+=`<div class="tc hidden" id=tc-events><div class=empt>Loading...</div></div>`;
+    h+=`<div class="tc hidden" id=tc-arts><div class=empt>Select a run to view artifacts</div></div>`;
+    // Show active tab
+    const atc=document.getElementById('tc-'+actTab);
+    if(atc)atc.classList.remove('hidden');
   }catch(e){h+='<div class=empt>Error loading packet</div>'}
   h+='</div>';$('pr').innerHTML=h;restoreTab();
 }
@@ -278,9 +290,9 @@ async function swTab(e,name,pid){
   actTab=name;
   document.querySelectorAll('.tab').forEach(t=>t.classList.remove('act'));
   e.target.classList.add('act');
-  document.querySelectorAll('.tc').forEach(t=>t.style.display='none');
-  const el=document.getElementById(`tc-${name}`);if(el)el.style.display='block';
-  if(name==='events'&&pid){await loadEvents(pid)}
+  document.querySelectorAll('.tc').forEach(t=>t.classList.add('hidden'));
+  const el=document.getElementById('tc-'+name);if(el)el.classList.remove('hidden');
+  if(name==='events'&&pid)await loadEvents(pid);
   if(name==='arts'&&pid){const d=(await(await fetch(`/api/packets/${pid}`)).json()).data;if(d.runs&&d.runs.length)loadRunArts(pid,d.runs[d.runs.length-1].id);else el.innerHTML='<div class=empt>No runs</div>'}
 }
 async function loadEvents(pid){
