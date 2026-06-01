@@ -178,6 +178,141 @@ def lint(path, json_out):
         raise SystemExit(1)
 
 
+# ── Eval ─────────────────────────────────────────────────────────────────────
+@cli.group()
+def eval():
+    """Evaluation commands for testing model quality."""
+    pass
+
+
+@eval.command("run")
+@click.argument("feature_file", type=click.Path(exists=True))
+@click.option("--workers", default=1, help="Number of workers")
+@click.option("--api-url", default=DEFAULT_API_URL, help="API URL")
+@click.option("--timeout", default=600, help="Max wait per packet (seconds)")
+@click.option("--report", default=None, help="Save JSON report")
+def eval_run(feature_file, workers, api_url, timeout, report):
+    """Run a feature through the pipeline and collect metrics."""
+    import asyncio, json, subprocess, sys, time
+    import httpx, yaml
+    from pathlib import Path
+
+    spec = yaml.safe_load(Path(feature_file).read_text())
+    c = httpx.Client(base_url=api_url, timeout=10)
+
+    r = c.post("/api/architect/plan", json={"feature_spec": spec})
+    if r.status_code != 200:
+        console.print(f"[red]Plan failed: {r.status_code} {r.text[:200]}[/red]")
+        return
+
+    data = r.json()["data"]
+    fid = data["feature_id"]
+    pids = data["packets"]
+    console.print(f"[green]{fid}[/green] ({len(pids)} packets, {workers} workers)")
+
+    for i in range(workers):
+        c.post("/api/workers/register", json={"worker_id": f"eval-w{i}"})
+
+    procs = []
+    for i in range(workers):
+        p = subprocess.Popen([sys.executable, "-c", f"""
+import os, asyncio
+os.environ["GRACE_DB_URL"]=os.environ.get("GRACE_DB_URL","")
+os.environ["GRACE_ALLOW_SANDBOX_BYPASS"]="true"
+from pathlib import Path
+from grace_control.worker.worker import Worker
+w=Worker(worker_id="eval-w{i}",api_url="{api_url}",project_root=Path.cwd())
+async def m():await w.start()
+asyncio.run(m())
+"""])
+        procs.append(p)
+
+    start = time.time()
+    while time.time() - start < timeout * len(pids):
+        time.sleep(5)
+        states = {}
+        for pid in pids:
+            try:
+                r = c.get(f"/api/packets/{pid}")
+                states[pid] = r.json()["data"]["state"]
+            except Exception:
+                pass
+        if states and all(s in ("merged","failed","cancelled","rejected") for s in states.values()):
+            break
+
+    for p in procs:
+        p.terminate()
+
+    results = []
+    for pid in pids:
+        r = c.get(f"/api/packets/{pid}")
+        pkt = r.json()["data"]
+        r2 = c.get(f"/api/events?entity_type=packet&entity_id={pid}")
+        evs = r2.json()["data"]
+        results.append({"packet_id": pid, "state": pkt["state"],
+                        "attempt_count": pkt["attempt_count"], "max_attempts": pkt["max_attempts"],
+                        "profile": pkt["acceptance_profile"],
+                        "events": [{"type": e["event_type"], "ts": e["timestamp"]} for e in evs]})
+
+    passed = all(r["state"] == "merged" for r in results)
+    console.print(f"\n{'✅ PASSED' if passed else '❌ FAILED'} in {int(time.time()-start)}s")
+    for r in results:
+        console.print(f"  {r['state']:10s} {r['packet_id'][-40:]} ({r['attempt_count']}/{r['max_attempts']})")
+
+    if report:
+        Path(report).write_text(json.dumps({"feature_id": fid, "feature_file": feature_file,
+            "workers": workers, "passed": passed, "total_duration_s": int(time.time()-start),
+            "results": results}, indent=2, default=str))
+        console.print(f"[green]Report: {report}[/green]")
+
+
+@eval.command("report")
+@click.option("--feature-id", default=None, help="Filter by feature")
+@click.option("--api-url", default=DEFAULT_API_URL, help="API URL")
+@click.option("--output", default=None, help="Save JSON")
+@click.option("--json", "json_out", is_flag=True, help="Print JSON to stdout")
+def eval_report(feature_id, api_url, output, json_out):
+    """Generate evaluation report from database."""
+    import json as _json
+    from pathlib import Path
+    import httpx
+
+    c = httpx.Client(base_url=api_url, timeout=10)
+    r = c.get(f"/api/packets/{'?feature_id='+feature_id if feature_id else ''}")
+    pkts = r.json()["data"]
+
+    results = []
+    for p in pkts:
+        r2 = c.get(f"/api/events?entity_type=packet&entity_id={p['id']}")
+        evs = r2.json()["data"]
+        results.append({"packet_id": p["id"], "feature_id": p["feature_id"],
+                        "title": p["title"], "state": p["state"],
+                        "attempt_count": p["attempt_count"], "max_attempts": p["max_attempts"],
+                        "profile": p["acceptance_profile"],
+                        "events": [{"type": e["event_type"], "ts": e["timestamp"]} for e in evs]})
+
+    report = {"total_packets": len(results),
+              "merged": sum(1 for r in results if r["state"]=="merged"),
+              "failed": sum(1 for r in results if r["state"]=="failed"),
+              "rejected": sum(1 for r in results if r["state"]=="rejected"),
+              "cancelled": sum(1 for r in results if r["state"]=="cancelled"),
+              "pass_rate": sum(1 for r in results if r["state"]=="merged")/max(len(results),1),
+              "avg_attempts": sum(r["attempt_count"] for r in results)/max(len(results),1),
+              "packets": results}
+
+    if json_out:
+        console.print_json(_json.dumps(report, indent=2, default=str))
+    elif output:
+        Path(output).write_text(_json.dumps(report, indent=2, default=str))
+        console.print(f"[green]Report: {output}[/green]")
+    else:
+        console.print(f"Total: {report['total_packets']} | "
+                      f"✅ {report['merged']} | ❌ {report['failed']} | "
+                      f"🔄 {report['rejected']} | "
+                      f"Pass: {report['pass_rate']:.0%} | "
+                      f"Avg att: {report['avg_attempts']:.1f}")
+
+
 # ── Architect ────────────────────────────────────────────────────────────────
 @cli.group()
 def architect():
