@@ -143,6 +143,41 @@ waves:
     console.print("Next: [cyan]grace architect plan grace/features/hello.yaml[/cyan]")
 
 
+@cli.command("lint")
+@click.argument("path", default=".")
+@click.option("--json", "json_out", is_flag=True, help="JSON output")
+def lint(path, json_out):
+    """Check GRACE Canon compliance in Python files."""
+    from grace_control.core.grace_canon import GraceCanonChecker
+    from pathlib import Path
+
+    checker = GraceCanonChecker()
+    target = Path(path).resolve()
+
+    if target.is_file():
+        result = checker.check_file(target)
+    else:
+        result = checker.check_directory(target)
+
+    if json_out:
+        violations = [
+            {"file": v.file, "line": v.line, "rule": v.rule, "message": v.message, "severity": v.severity}
+            for v in result.violations
+        ]
+        console.print_json(json.dumps({"ok": result.passed, "violations": violations}))
+    elif result.passed:
+        console.print(f"[green]All files pass GRACE Canon[/green]")
+    else:
+        console.print(f"[red]{len(result.violations)} violations:[/red]")
+        for v in result.violations:
+            icon = "❌" if v.severity == "error" else "⚠️"
+            location = f"{v.file}:{v.line}" if v.line else v.file
+            console.print(f"  {icon} [{v.rule}] {location} — {v.message}")
+
+    if not result.passed:
+        raise SystemExit(1)
+
+
 # ── Architect ────────────────────────────────────────────────────────────────
 @cli.group()
 def architect():
