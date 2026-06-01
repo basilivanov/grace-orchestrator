@@ -107,6 +107,9 @@ class PacketExecutionAdapter:
         # Use persistent state_root (registry must survive agent process)
         state_root = self.state_root
         state_root.mkdir(parents=True, exist_ok=True)
+        # Ensure DB initialized
+        from grace_control.db import init_db as _init_db
+        _init_db()
         # Use temp worktree_root (fresh each time)
         import tempfile as _tf
         _tmp = _tf.TemporaryDirectory()
