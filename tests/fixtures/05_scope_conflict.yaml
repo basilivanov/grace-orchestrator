@@ -1,0 +1,8 @@
+title: Scope Conflict Test
+waves:
+  - title: Conflict
+    packets:
+      - title: Change config A
+        scope: [sandbox/config.py]
+      - title: Change config B
+        scope: [sandbox/config.py]

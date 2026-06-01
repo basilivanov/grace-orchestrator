@@ -1,0 +1,10 @@
+title: DAG Cycle Test
+waves:
+  - title: Cycle
+    packets:
+      - title: Add module A
+        scope: [sandbox/a.py]
+        depends_on: [ADD-MODULE-B]
+      - title: Add module B
+        scope: [sandbox/b.py]
+        depends_on: [ADD-MODULE-A]

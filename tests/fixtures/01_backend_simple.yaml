@@ -1,0 +1,7 @@
+title: Backend Smoke Test
+waves:
+  - title: Foundation
+    packets:
+      - title: Add health endpoint
+        scope: [sandbox/__init__.py, sandbox/health.py, sandbox/tests/__init__.py, sandbox/tests/test_health.py]
+        acceptance_profile: NORMAL

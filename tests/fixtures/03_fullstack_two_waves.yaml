@@ -1,0 +1,15 @@
+title: Fullstack Todo App
+waves:
+  - title: Backend
+    packets:
+      - title: Add todo model
+        scope: [sandbox/__init__.py, sandbox/todo_model.py, sandbox/tests/__init__.py, sandbox/tests/test_todo_model.py]
+        acceptance_profile: NORMAL
+      - title: Add todo API
+        scope: [sandbox/__init__.py, sandbox/todo_api.py, sandbox/tests/__init__.py, sandbox/tests/test_todo_api.py]
+        acceptance_profile: NORMAL
+  - title: Frontend
+    packets:
+      - title: Add todo UI
+        scope: [sandbox/__init__.py, sandbox/todo.html]
+        acceptance_profile: NORMAL

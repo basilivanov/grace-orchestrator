@@ -1,0 +1,7 @@
+title: Rejected Retry Test
+waves:
+  - title: Hard
+    packets:
+      - title: Implement tricky validator
+        scope: [sandbox/__init__.py, sandbox/validator.py, sandbox/tests/__init__.py, sandbox/tests/test_validator.py]
+        acceptance_profile: STRICT

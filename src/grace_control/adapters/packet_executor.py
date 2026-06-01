@@ -299,6 +299,22 @@ ruff check src/
 
         os.environ.setdefault("GRACE_ALLOW_SANDBOX_BYPASS", "true")
 
+        # Clean stale git branches from previous attempts
+        import subprocess as _sp
+        try:
+            _sp.run(["git", "-C", str(self.project_root), "worktree", "prune"],
+                    capture_output=True, timeout=10)
+            result = _sp.run(["git", "-C", str(self.project_root), "branch", "--list",
+                            f"agent/default/{packet_id}/*"],
+                           capture_output=True, text=True, timeout=10)
+            for line in result.stdout.splitlines():
+                branch = line.strip().lstrip("* ")
+                if branch:
+                    _sp.run(["git", "-C", str(self.project_root), "branch", "-D", branch],
+                           capture_output=True, timeout=10)
+        except Exception:
+            pass
+
         timeout = int(os.environ.get("GRACE_AGENT_TIMEOUT", "600"))
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(

@@ -1,0 +1,19 @@
+title: Parallel Claim Test
+waves:
+  - title: Batch
+    packets:
+      - title: Add file 1
+        scope: [sandbox/__init__.py, sandbox/file_1.py]
+        acceptance_profile: FAST
+      - title: Add file 2
+        scope: [sandbox/__init__.py, sandbox/file_2.py]
+        acceptance_profile: FAST
+      - title: Add file 3
+        scope: [sandbox/__init__.py, sandbox/file_3.py]
+        acceptance_profile: FAST
+      - title: Add file 4
+        scope: [sandbox/__init__.py, sandbox/file_4.py]
+        acceptance_profile: FAST
+      - title: Add file 5
+        scope: [sandbox/__init__.py, sandbox/file_5.py]
+        acceptance_profile: FAST
