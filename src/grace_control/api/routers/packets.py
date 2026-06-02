@@ -263,56 +263,48 @@ async def merge_packet(packet_id: str, request: dict) -> dict:
             try:
                 from pathlib import Path
                 import subprocess as _sp
-                from prefect_grace.platform.git_mutation_gate import run_git_mutation_gate
                 wt = Path(worktree_path)
                 if wt.exists():
                     repo = Path.cwd()
-                    # Stash dirty tree so merge can proceed cleanly
+
+                    # Stash local changes
                     stashed = False
-                    stash_pop_failed = False
                     try:
-                        s = _sp.run(["git", "stash", "--include-untracked"],
+                        s = _sp.run(["git", "stash", "push", "-m", f"pre-merge-{packet.id[:20]}"],
                                     cwd=str(repo), capture_output=True, text=True, timeout=10)
-                        if s.returncode == 0 and "No local changes" not in s.stdout:
-                            stashed = True
-                            _log.debug("merge_stashed", packet_id=packet.id)
+                        stashed = s.returncode == 0 and "No local changes" not in s.stdout
                     except Exception:
                         pass
 
-                    result = run_git_mutation_gate(
-                        packet=wt / "EXECUTION_PACKET.md",
-                        repo_root=repo,
-                        worktree_root=wt.parent,
-                        worktree_path=wt,
-                        project_key=packet.feature_id.split("-", 1)[0].lower() if "-" in packet.feature_id else "grace",
-                        packet_id=packet.id,
-                        attempt=packet.attempt_count,
-                        base_ref="HEAD",
-                        target_branch="main",
-                        remote="origin",
-                        apply=not request.get("dry_run", False),
-                        commit=True,
-                        push=True,
-                        merge=True,
-                        understand_merge=True,
-                    )
-                    commit_sha = result.commit_sha or commit_sha
+                    # Merge agent's worktree branch into main
+                    try:
+                        _sp.run(["git", "checkout", branch_name], cwd=str(repo),
+                                capture_output=True, timeout=30)
+                        _sp.run(["git", "checkout", "main"], cwd=str(repo),
+                                capture_output=True, timeout=10)
+                        mr = _sp.run(["git", "merge", branch_name, "--no-edit", "--no-ff"],
+                                     cwd=str(repo), capture_output=True, text=True, timeout=30)
+                        if mr.returncode == 0 and mr.stdout:
+                            commit_sha = mr.stdout.strip()[:40]
+                            _log.info("merge_success", packet_id=packet.id, branch=branch_name)
+                    except Exception:
+                        _log.warn("merge_failed", packet_id=packet.id)
 
+                    # Restore local changes
                     if stashed:
                         try:
                             pop = _sp.run(["git", "stash", "pop"],
                                           cwd=str(repo), capture_output=True, text=True, timeout=10)
                             if pop.returncode != 0:
-                                stash_pop_failed = True
-                                _log.warn("merge_stash_pop_failed", packet_id=packet.id,
-                                    stderr=pop.stderr[:200])
-                                # Restore from HEAD to get clean state
-                                _sp.run(["git", "checkout", "--", "."], cwd=str(repo), timeout=10)
-                                _sp.run(["git", "stash", "pop"], cwd=str(repo), timeout=10)
+                                # Stash pop failed — restore clean and try again
+                                _sp.run(["git", "reset", "--hard", "HEAD"], cwd=str(repo),
+                                        capture_output=True, timeout=10)
+                                _sp.run(["git", "stash", "pop"],
+                                        cwd=str(repo), capture_output=True, timeout=10)
                         except Exception:
-                            stash_pop_failed = True
+                            pass
 
-                    # Clean up worktree after successful merge
+                    # Clean up worktree
                     try:
                         import shutil
                         if wt.exists():

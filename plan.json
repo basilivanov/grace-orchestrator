@@ -1,0 +1,244 @@
+{
+  "waves": [
+    {
+      "title": "Wave 1: Backend API Foundation",
+      "packets": [
+        {
+          "title": "Add GET /api/dashboard/v2 endpoint and fix artifact run_id format",
+          "scope": ["src/grace_control/api/main.py"],
+          "acceptance_profile": "NORMAL",
+          "depends_on": [],
+          "description": "Add dashboard/v2 endpoint returning system, stats, features summaries. Fix artifact endpoints to use R01 run_id format without double prefix."
+        },
+        {
+          "title": "Extend GET /api/packets/{packet_id} with detailed fields",
+          "scope": ["src/grace_control/api/routers/packets.py"],
+          "acceptance_profile": "NORMAL",
+          "depends_on": [],
+          "description": "Extend packet detail endpoint to include packet, feature, wave, runs, events, artifacts, next_action, self_improvement fields."
+        },
+        {
+          "title": "Enhance WebSocket broadcast with dashboard state events",
+          "scope": ["src/grace_control/api/ws_broadcast.py"],
+          "acceptance_profile": "FAST",
+          "depends_on": [],
+          "description": "Add dashboard state update events to WebSocket broadcast for live UI refresh."
+        }
+      ]
+    },
+    {
+      "title": "Wave 2: Backend Self-Improvement and Events API",
+      "packets": [
+        {
+          "title": "Enhance self-evolution endpoints for self-improvement UI",
+          "scope": ["src/grace_control/api/routers/self_evolution.py"],
+          "acceptance_profile": "STRICT",
+          "depends_on": [],
+          "description": "Extend self-evolution router with session detail, affected subsystems, risk level, rollback notes for self-improvement dashboard."
+        },
+        {
+          "title": "Add structured event recording for packet lifecycle events",
+          "scope": ["src/grace_control/core/event_recorder.py"],
+          "acceptance_profile": "FAST",
+          "depends_on": [],
+          "description": "Enhance event recorder with structured packet lifecycle events (claimed, running, accepted, rejected, merged, failed) with trace_id."
+        },
+        {
+          "title": "Add packet next_action computation to acceptance pipeline",
+          "scope": ["src/grace_control/core/acceptance_pipeline.py"],
+          "acceptance_profile": "STRICT",
+          "depends_on": [],
+          "description": "Extend acceptance pipeline to compute and expose next_action field (retry, escalate, review, merge) for packet detail view."
+        }
+      ]
+    },
+    {
+      "title": "Wave 3: Dashboard HTML and CSS Foundation",
+      "packets": [
+        {
+          "title": "Create dashboard HTML template with two-column layout",
+          "scope": ["templates/dashboard.html"],
+          "acceptance_profile": "FAST",
+          "depends_on": [],
+          "description": "Create base dashboard HTML template: top bar, left features column, right detail zone, packet detail modal, mobile breadcrumb. Includes all layout divs and empty state placeholders."
+        },
+        {
+          "title": "Create dashboard CSS styles",
+          "scope": ["static/css/dashboard.css"],
+          "acceptance_profile": "NORMAL",
+          "depends_on": [],
+          "description": "Create calm operational CSS: two-column desktop layout, compact packet rows, mobile drill-down at 390px without horizontal scroll, summary cards, tab styles, monospace logs/ids."
+        }
+      ]
+    },
+    {
+      "title": "Wave 4: JavaScript Core Modules",
+      "packets": [
+        {
+          "title": "Create API client module",
+          "scope": ["static/js/api.js"],
+          "acceptance_profile": "FAST",
+          "depends_on": [],
+          "description": "Create api.js with fetch wrappers for dashboard/v2, packet detail, artifacts, events, WebSocket connection. Includes error handling and retry logic."
+        },
+        {
+          "title": "Create state management module",
+          "scope": ["static/js/state.js"],
+          "acceptance_profile": "FAST",
+          "depends_on": [],
+          "description": "Create state.js with reactive application state: selected feature, selected packet, active tab, worker status, offline flag."
+        },
+        {
+          "title": "Create dashboard main orchestrator",
+          "scope": ["static/js/dashboard.js"],
+          "acceptance_profile": "NORMAL",
+          "depends_on": ["Create API client module", "Create state management module"],
+          "description": "Create dashboard.js as main entry point: initializes all modules, sets up event bindings, orchestrates render flow, handles refresh lifecycle."
+        }
+      ]
+    },
+    {
+      "title": "Wave 5: Dashboard Rendering Components",
+      "packets": [
+        {
+          "title": "Create status summary cards renderer",
+          "scope": ["static/js/render_status.js"],
+          "acceptance_profile": "FAST",
+          "depends_on": ["Create API client module", "Create state management module"],
+          "description": "Create render_status.js: renders top-bar summary (live/offline, running, ready, needs attention, merged, workers) and compact status cards."
+        },
+        {
+          "title": "Create features list renderer",
+          "scope": ["static/js/render_features.js"],
+          "acceptance_profile": "NORMAL",
+          "depends_on": ["Create API client module", "Create state management module"],
+          "description": "Create render_features.js: renders left-column features list with title, packet count, status, progress bar, warning badge, self-improvement badge."
+        },
+        {
+          "title": "Create packets and waves renderer",
+          "scope": ["static/js/render_packets.js"],
+          "acceptance_profile": "NORMAL",
+          "depends_on": ["Create API client module", "Create state management module"],
+          "description": "Create render_packets.js: renders right-zone waves with packet rows (short title, state, attempt count, last reason, artifact indicator, self-improvement badge)."
+        }
+      ]
+    },
+    {
+      "title": "Wave 6: Packet Detail Views",
+      "packets": [
+        {
+          "title": "Create packet detail base with overview tab",
+          "scope": ["static/js/render_packet_detail.js"],
+          "acceptance_profile": "NORMAL",
+          "depends_on": ["Create API client module", "Create state management module"],
+          "description": "Create render_packet_detail.js: packet detail modal/drawer with tab navigation and Overview tab (goal, state, next action, last run result, failure reason, acceptance profile, worker, timing, artifact count)."
+        },
+        {
+          "title": "Create runs tab renderer",
+          "scope": ["static/js/render_runs.js"],
+          "acceptance_profile": "NORMAL",
+          "depends_on": ["Create API client module"],
+          "description": "Create render_runs.js: runs tab showing all attempts (run id, status, worker, started/finished, duration, result summary, artifact count, open artifacts button)."
+        },
+        {
+          "title": "Create artifacts tab renderer",
+          "scope": ["static/js/render_artifacts.js"],
+          "acceptance_profile": "NORMAL",
+          "depends_on": ["Create API client module"],
+          "description": "Create render_artifacts.js: artifacts tab with grouped previews (Logs for stdout/stderr, Evidence JSON pretty-print, Diff patch monospace, Images thumbnail)."
+        },
+        {
+          "title": "Create events tab renderer",
+          "scope": ["static/js/render_events.js"],
+          "acceptance_profile": "FAST",
+          "depends_on": ["Create API client module"],
+          "description": "Create render_events.js: events tab with timestamp, event type, message, collapsed payload, trace_id. Filter by lifecycle, worker, errors, merge, notifications."
+        },
+        {
+          "title": "Create spec tab renderer",
+          "scope": ["static/js/render_spec.js"],
+          "acceptance_profile": "FAST",
+          "depends_on": ["Create API client module"],
+          "description": "Create render_spec.js: spec tab showing readable spec_json (title, scope, acceptance criteria, expected changes, non-goals, risk) with raw JSON collapsed."
+        }
+      ]
+    },
+    {
+      "title": "Wave 7: Advanced UI Features",
+      "packets": [
+        {
+          "title": "Create self-improvement UI components",
+          "scope": ["static/js/render_self_improvement.js"],
+          "acceptance_profile": "STRICT",
+          "depends_on": ["Create API client module", "Create state management module"],
+          "description": "Create render_self_improvement.js: self-improvement badge, safety banner, affected subsystem, risk level, required gates checklist (JS syntax, backend tests, API contract, Playwright smoke, reviewer approval), rollback note."
+        },
+        {
+          "title": "Create mobile navigation",
+          "scope": ["static/js/mobile_nav.js"],
+          "acceptance_profile": "NORMAL",
+          "depends_on": ["Create state management module"],
+          "description": "Create mobile_nav.js: drill-down navigation (features -> waves/packets -> detail -> artifacts/logs), sticky top bar, back button, breadcrumb, bottom tabs in packet detail."
+        },
+        {
+          "title": "Add auto-refresh with WebSocket and polling fallback",
+          "scope": ["static/js/refresh.js"],
+          "acceptance_profile": "NORMAL",
+          "depends_on": ["Create API client module", "Create state management module"],
+          "description": "Create refresh.js: WebSocket auto-refresh with polling fallback, preserves selected feature/packet/tab on refresh, shows Offline with retrying on disconnect."
+        },
+        {
+          "title": "Add empty and error state handlers",
+          "scope": ["static/js/error_states.js"],
+          "acceptance_profile": "FAST",
+          "depends_on": ["Create API client module", "Create state management module"],
+          "description": "Create error_states.js: human-readable states for no features, no packets, no runs, no artifacts, API error, WebSocket offline, worker stale, run not found, artifact file missing."
+        }
+      ]
+    },
+    {
+      "title": "Wave 8: Test Suite",
+      "packets": [
+        {
+          "title": "Add JS syntax check and HTML smoke tests",
+          "scope": ["tests/test_frontend_syntax.py"],
+          "acceptance_profile": "FAST",
+          "depends_on": [],
+          "description": "Add tests that run node --check on all JS files and verify HTML template renders without errors. Include demo data fixtures."
+        },
+        {
+          "title": "Add API contract tests for dashboard and packet detail",
+          "scope": ["tests/test_api_contract.py"],
+          "acceptance_profile": "NORMAL",
+          "depends_on": [],
+          "description": "Add pytest contract tests for GET /api/dashboard/v2 and GET /api/packets/{packet_id} verifying response schema, required fields, and data types."
+        },
+        {
+          "title": "Add artifact regression tests for run_id formats",
+          "scope": ["tests/test_artifact_regression.py"],
+          "acceptance_profile": "NORMAL",
+          "depends_on": [],
+          "description": "Add regression tests verifying artifact endpoints work with R01 run_id format and packet_id-R01 format, ensuring no double prefix."
+        },
+        {
+          "title": "Add Playwright browser tests for dashboard",
+          "scope": ["tests/test_playwright.py"],
+          "acceptance_profile": "STRICT",
+          "depends_on": [],
+          "description": "Add Playwright tests: dashboard opens and overview renders, packet detail opens and tabs work, artifacts visible, refresh preserves selection, mobile viewports (390x844, 430x932, 768x1024, 1440x900), self-improvement visible, console error gate."
+        }
+      ]
+    }
+  ],
+  "constraints": {
+    "frozen_scope": ["src/prefect_grace/"],
+    "forbidden_imports": ["react", "vue", "svelte", "angular", "webpack", "vite", "rollup", "parcel"],
+    "python_version": ">= 3.12"
+  },
+  "verification": [
+    "pytest tests/ -x --timeout=60",
+    "ruff check src/grace_control/",
+    "mypy src/grace_control/",
+    "node --check static/js/*.js"
+  ]
+}
