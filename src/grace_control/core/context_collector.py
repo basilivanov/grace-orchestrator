@@ -33,7 +33,7 @@ from pathlib import Path
 from grace_control.core.structured_logger import GraceLogger
 
 _log = GraceLogger("context_collector")
-_DEFAULT_TIMEOUT = int(os.environ.get("GRACE_CONTEXT_TIMEOUT", "30"))
+_DEFAULT_TIMEOUT = int(os.environ.get("GRACE_CONTEXT_TIMEOUT", "60"))
 
 
 @dataclass

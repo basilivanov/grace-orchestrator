@@ -189,6 +189,9 @@ async def _run_evolution(session_id: str, title: str, description: str, constrai
                     "title": title,
                     "description": description or title,
                     "constraints": constraints,
+                    "origin": "self_evolution",
+                    "session_id": session_id,
+                    "self_improvement": True,
                 },
             })
             if r.status_code != 200:

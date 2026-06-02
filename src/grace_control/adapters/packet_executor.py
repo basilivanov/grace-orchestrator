@@ -170,6 +170,20 @@ class PacketExecutionAdapter:
                 ok=result.ok, domain=result.domain_status,
                 errors=result.errors[:3], blocker=getattr(result, 'registry_reason', '')[:200])
 
+            # Commit agent changes in worktree so merge can apply them
+            if result.ok and result.worktree_path:
+                import subprocess as _sp
+                wt = Path(result.worktree_path)
+                if wt.exists():
+                    try:
+                        _sp.run(["git", "add", "-A"], cwd=str(wt), capture_output=True, timeout=10)
+                        _sp.run(["git", "commit", "-m",
+                            f"agent: {packet_id} attempt {packet_data['attempt_count']}"],
+                            cwd=str(wt), capture_output=True, timeout=10)
+                        _log.debug("agent_worktree_committed", packet_id=packet_id, worktree=str(wt))
+                    except Exception:
+                        _log.warn("agent_commit_failed", packet_id=packet_id)
+
             # Self-evolution guard check
             spec = packet_data.get("spec_json") or {}
             if isinstance(spec, dict) and spec.get("origin") == "self_evolution":

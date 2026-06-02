@@ -49,12 +49,13 @@ def check_wave_gates() -> int:
                     if not current_packets:
                         continue
 
-                    all_merged = all(
-                        PacketState(p.state) == PacketState.MERGED
+                    terminal_states = {PacketState.MERGED, PacketState.FAILED, PacketState.CANCELLED, PacketState.REJECTED}
+                    all_done = all(
+                        PacketState(p.state) in terminal_states
                         for p in current_packets
                     )
 
-                    if all_merged:
+                    if all_done:
                         current_wave.status = "COMPLETED"
                         drafts = db.query(Packet).filter_by(
                             feature_id=fid, wave_id=next_wave.id,

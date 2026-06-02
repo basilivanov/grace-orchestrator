@@ -65,10 +65,18 @@ async def create_plan(request: dict) -> dict:
     # ── LLM path: business-TZ → generate waves/packets ───────────────────
     if not has_waves and not os.environ.get("GRACE_CONTEXT_DISABLED"):
         task_desc = spec.get("description", "") or title
+        # Preserve metadata from original spec before LLM overwrites it
+        _origin = spec.get("origin", "")
+        _session_id = spec.get("session_id", "")
+        _self_improvement = spec.get("self_improvement", False)
         try:
-            spec = await _call_architect_llm(task_desc, context, slug)
+            spec = await _call_architect_llm(task_desc, context, slug,
+                self_improvement=_self_improvement or _origin == "self_evolution")
             spec["title"] = title
             spec["description"] = spec.get("description", task_desc)
+            spec["origin"] = _origin
+            spec["session_id"] = _session_id
+            spec["self_improvement"] = _self_improvement or _origin == "self_evolution"
             architect_generated = True
             _log.info("architect_generated", feature_id=feature_id,
                 waves=len(spec.get("waves", [])))
@@ -159,6 +167,13 @@ async def create_plan(request: dict) -> dict:
                 enriched_spec = dict(pkt_spec)
                 enriched_spec["_context"] = context
 
+                if spec.get("self_improvement") or spec.get("origin") == "self_evolution":
+                    enriched_spec.setdefault("origin", spec.get("origin", "self_evolution"))
+                    enriched_spec.setdefault("session_id", spec.get("session_id", ""))
+                    enriched_spec["self_improvement"] = True
+                    enriched_spec["affected_subsystem"] = pkt_spec.get("affected_subsystem", "core")
+                    enriched_spec["risk_level"] = pkt_spec.get("risk_level", "medium")
+
                 db.add(Packet(
                     id=packet_id, feature_id=feature_id, wave_id=wave_id,
                     slug=pkt_slug, title=pkt_spec["title"],
@@ -213,7 +228,8 @@ async def _warm_context(spec: dict, feature_id: str) -> dict:
         return {"summary": f"Fallback: {task_desc[:200]}", "fallback": True}
 
 
-async def _call_architect_llm(task: str, context: dict, feature_slug: str) -> dict:
+async def _call_architect_llm(task: str, context: dict, feature_slug: str,
+                              self_improvement: bool = False) -> dict:
     files_text = json.dumps(context.get("files", [])[:40], indent=2)
     if len(files_text) > 4000:
         files_text = files_text[:4000] + "\n... [truncated]"
@@ -235,7 +251,24 @@ Codebase context:
 Your job: create an execution plan as waves and packets.
 CRITICAL: scope MUST contain ONLY paths from the "ALL available file paths" list above.
 
-Rules:
+"""
+
+    if self_improvement:
+        prompt += """SELF-IMPROVEMENT MODE: You are modifying the GRACE orchestrator itself.
+For each packet, include these additional fields in the JSON:
+  - "affected_subsystem": "ui" | "api" | "core" | "worker" | "tests"
+  - "risk_level": "low" | "medium" | "high"
+  - "required_gates": list of checks before merge (e.g. ["js_syntax", "api_contract", "playwright_smoke"])
+  - "reload_required": true/false (true for Python/API changes, false for static HTML/JS/CSS)
+  - "rollback_note": brief description of how to undo
+
+After ALL waves complete:
+  - Static files (HTML/JS/CSS): served immediately, no restart needed
+  - Python files (api/core/worker): uvicorn needs reload via SIGUSR1 or restart
+  - New test files: run pytest to verify they pass
+"""
+
+    prompt += """Rules:
 1. Each wave is a logical phase. Wave 2 starts only after ALL Wave 1 packets are merged.
 2. Each packet = one atomic code change (1-3 files max).
 3. Scope MUST list actual file paths to write (relative to project root).
@@ -244,6 +277,7 @@ Rules:
 6. depends_on: optional list of packet titles that must complete first (within same wave).
 7. Include `constraints` block with: frozen_scope (files NEVER to touch), forbidden_imports, python_version.
 8. Include `verification` list with shell commands to run (pytest, ruff, mypy).
+9. CRITICAL: Each packet MUST be small enough for a single agent run (~2-5 min, ~200 lines max). A task like "rebuild the entire dashboard" is TOO BIG. Split it into multiple small packets: "add status summary section", "add feature list column", "add packet detail tabs", "add artifact viewer", etc. Each packet touches 1-2 files, never the entire codebase.
 
 Respond ONLY with valid JSON (no markdown, no backticks):
 
