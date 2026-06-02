@@ -110,11 +110,9 @@ class PacketExecutionAdapter:
         # Ensure DB initialized
         from grace_control.db import init_db as _init_db
         _init_db()
-        # Use temp worktree_root (fresh each time)
-        import tempfile as _tf
-        _tmp = _tf.TemporaryDirectory()
-        worktree_root = Path(_tmp.name)
-        worktree_root.mkdir(exist_ok=True)
+        # Use persistent worktree_root (must survive until merge)
+        worktree_root = self.worktree_root
+        worktree_root.mkdir(parents=True, exist_ok=True)
 
         with get_db() as db:
             packet = db.query(Packet).filter_by(id=packet_id).first()
@@ -200,7 +198,6 @@ class PacketExecutionAdapter:
                         errors=guard_result.errors, evidence_path=None,
                         duration_ms=int((time.time() - start_time) * 1000),
                     )
-                    _tmp.cleanup()
                     return execution_result
                 _log.info("self_evolution_guard_passed", packet_id=packet_id)
 
@@ -227,7 +224,6 @@ class PacketExecutionAdapter:
 
         except Exception:
             _log.error("adapter_execute_failed", packet_id=packet_id)
-            _tmp.cleanup()  # Clean only on error
             with get_db() as db:
                 existing = db.query(PacketRun).filter_by(id=run_id).first()
                 if existing:
