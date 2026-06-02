@@ -200,7 +200,7 @@ def eval_run(feature_file, workers, api_url, timeout, report, with_playwright, v
     from pathlib import Path
 
     spec = yaml.safe_load(Path(feature_file).read_text())
-    c = httpx.Client(base_url=api_url, timeout=10)
+    c = httpx.Client(base_url=api_url, timeout=120)
 
     r = c.post("/api/architect/plan", json={"feature_spec": spec})
     if validate:
@@ -311,7 +311,7 @@ def eval_report(feature_id, api_url, output, json_out):
     from pathlib import Path
     import httpx
 
-    c = httpx.Client(base_url=api_url, timeout=10)
+    c = httpx.Client(base_url=api_url, timeout=120)
     r = c.get(f"/api/packets/{'?feature_id='+feature_id if feature_id else ''}")
     pkts = r.json()["data"]
 

@@ -82,25 +82,36 @@ codex:
       reasoning: max
       sandbox: danger-full-access
       approval: never
-      stall_timeout_seconds: 600
+      stall_timeout_seconds: 300
+      hard_timeout_seconds: 1200
       max_auto_resume_attempts: 1
     coder:
       reasoning: high
       sandbox: danger-full-access
       approval: never
-      stall_timeout_seconds: 1200
+      stall_timeout_seconds: 300
+      hard_timeout_seconds: 900
       max_auto_resume_attempts: 2
     verifier:
       reasoning: medium
       sandbox: danger-full-access
       approval: never
       stall_timeout_seconds: 300
+      hard_timeout_seconds: 300
       max_auto_resume_attempts: 1
     reviewer:
       reasoning: max
       sandbox: danger-full-access
       approval: never
-      stall_timeout_seconds: 600
+      stall_timeout_seconds: 300
+      hard_timeout_seconds: 1200
+      max_auto_resume_attempts: 1
+    context_collector:
+      reasoning: low
+      sandbox: danger-full-access
+      approval: never
+      stall_timeout_seconds: 300
+      hard_timeout_seconds: 300
       max_auto_resume_attempts: 1
 
 # ── Verification Profiles ────────────────────────────────────────────────

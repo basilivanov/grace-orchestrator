@@ -369,32 +369,11 @@ Respond ONLY with valid JSON (no markdown, no backticks):
 
 
 async def _run_opencode(prompt: str, model: str) -> str:
-    prompt_dir = Path.cwd() / ".grace_state" / "arch_prompts"
-    prompt_dir.mkdir(parents=True, exist_ok=True)
-    tmp = prompt_dir / f"architect_{_slugify(prompt[:30])}.txt"
-    tmp.write_text(prompt)
-    instruction = f"Read the task from .grace_state/arch_prompts/{tmp.name}. Respond ONLY with the requested JSON dict, no other text."
-    proc = await asyncio.create_subprocess_exec(
-        "opencode", "run", "--model", model, instruction,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        cwd=str(Path.cwd()),
-    )
-    try:
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=ARCHITECT_TIMEOUT)
-    except asyncio.TimeoutError:
-        proc.kill()
-        tmp.unlink(missing_ok=True)
-        raise RuntimeError(f"Architect LLM timed out after {ARCHITECT_TIMEOUT}s")
+    from grace_control.core.llm_runner import run_llm
+    raw = await run_llm(prompt, role="architect", model=model, cli="opencode")
 
-    tmp.unlink(missing_ok=True)
-    out = stdout.decode("utf-8", errors="replace").strip()
-    if not out:
-        err = stderr.decode("utf-8", errors="replace")[:300]
-        raise RuntimeError(f"Architect LLM empty output: {err}")
-
-    # Try direct JSON parse first
-    for line in out.split("\n"):
+    # Try direct JSON parse
+    for line in raw.split("\n"):
         line = line.strip()
         if line.startswith("{") and line.endswith("}"):
             try:
@@ -403,8 +382,8 @@ async def _run_opencode(prompt: str, model: str) -> str:
             except Exception:
                 pass
 
-    # Try extract JSON block from markdown or conversation
-    m = _re.search(r"\{[\s\S]*\}", out)
+    # Try extract JSON block
+    m = _re.search(r"\{[\s\S]*\}", raw)
     if m:
         candidate = m.group(0)
         try:
@@ -413,8 +392,7 @@ async def _run_opencode(prompt: str, model: str) -> str:
         except Exception:
             pass
 
-    # Last resort: return raw output
-    raise RuntimeError(f"Could not extract JSON from output (first 300): {out[:300]}")
+    raise RuntimeError(f"Could not extract JSON from output (first 300): {raw[:300]}")
 
 
 def _slugify(text: str) -> str:

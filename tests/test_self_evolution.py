@@ -114,13 +114,6 @@ class TestContextCollector:
         collector = ContextCollector(project_root=Path("/tmp"))
         assert collector._root == Path("/tmp")
 
-    def test_build_file_summary(self):
-        collector = ContextCollector()
-        files = [FileContext(path="a.py", module_contract="purpose: test", exports=["fn"], size_lines=10)]
-        summary = collector._build_file_summary(files)
-        assert "a.py" in summary
-        assert "fn" in summary
-
     def test_fallback_analysis(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)

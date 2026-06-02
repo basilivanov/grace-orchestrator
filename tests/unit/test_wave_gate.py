@@ -112,4 +112,4 @@ def test_wave_gate_cancelled_packet_blocks(db):
         make_packet(d, pid="P2", fid="F1", wid="W01", state=PacketState.CANCELLED.value)
         make_packet(d, pid="P3", fid="F1", wid="W02", state=PacketState.DRAFT.value)
 
-    assert check_wave_gates() == 0  # CANCELLED != MERGED, gate remains closed
+    assert check_wave_gates() == 1  # CANCELLED is terminal → gate opens

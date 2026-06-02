@@ -158,35 +158,8 @@ Complexity: 0-50 (config), 51-150 (single module), 151-250 (multi-module), 251-3
         )
 
     async def _run_llm(self, prompt: str) -> str:
-        safe = re.sub(r'[^a-zA-Z0-9 ]', '', prompt[:30]).replace(' ', '_')[:40]
-        prompt_dir = self._root / ".grace_state" / "ctx_prompts"
-        prompt_dir.mkdir(parents=True, exist_ok=True)
-        tmp = prompt_dir / f"ctx_{safe}.txt"
-        tmp.write_text(prompt)
-
-        if self._cli == "opencode":
-            instruction = f"Read the task from .grace_state/ctx_prompts/{tmp.name}. Respond ONLY with the requested JSON dict, no other text."
-            cmd = ["opencode", "run", "--model", self._model, instruction]
-        else:
-            cmd = ["agy", "--model", self._model, "--prompt-file", str(tmp), "--json"]
-
-        proc = await asyncio.create_subprocess_exec(
-            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-            cwd=str(self._root),
-        )
-        try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=_DEFAULT_TIMEOUT)
-        except asyncio.TimeoutError:
-            proc.kill()
-            tmp.unlink(missing_ok=True)
-            raise RuntimeError(f"LLM timed out after {_DEFAULT_TIMEOUT}s")
-
-        tmp.unlink(missing_ok=True)
-        out = stdout.decode("utf-8", errors="replace").strip()
-        if not out:
-            err = stderr.decode("utf-8", errors="replace")[:200]
-            raise RuntimeError(f"LLM empty output: {err}")
-        return _extract_json_block(out)
+        from grace_control.core.llm_runner import run_llm
+        return await run_llm(prompt, role="context_collector", model=self._model, cli=self._cli, cwd=self._root)
 
     def _fallback_analysis(self, task: str, files: list[FileContext], scope: list[str]) -> CodebaseContext:
         raw_paths = set()

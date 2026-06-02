@@ -182,23 +182,21 @@ async def _run_evolution(session_id: str, title: str, description: str, constrai
             "context": _context_to_dict(ctx)})
 
         import httpx
-        api_url = f"http://127.0.0.1:{os.environ.get('GRACE_API_PORT', '8042')}"
-        async with httpx.AsyncClient(base_url=api_url, timeout=180) as c:
-            r = await c.post("/api/architect/plan", json={
-                "feature_spec": {
-                    "title": title,
-                    "description": description or title,
-                    "constraints": constraints,
-                    "origin": "self_evolution",
-                    "session_id": session_id,
-                    "self_improvement": True,
-                },
-            })
-            if r.status_code != 200:
-                raise RuntimeError(f"Architect plan failed: {r.status_code} {r.text[:200]}")
+        from grace_control.api.routers.architect import create_plan
 
-            data = r.json()["data"]
-            feature_id = data["feature_id"]
+        result = await create_plan({"feature_spec": {
+            "title": title,
+            "description": description or title,
+            "constraints": constraints,
+            "origin": "self_evolution",
+            "session_id": session_id,
+            "self_improvement": True,
+        }})
+
+        if not result or "data" not in result:
+            raise RuntimeError("Architect plan returned no data")
+
+        feature_id = result["data"]["feature_id"]
 
         with get_db() as db:
             s = db.query(SelfEvolutionSession).filter_by(id=session_id).first()
