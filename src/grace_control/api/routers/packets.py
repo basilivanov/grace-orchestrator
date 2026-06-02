@@ -278,15 +278,12 @@ async def merge_packet(packet_id: str, request: dict) -> dict:
 
                     # Merge agent's worktree branch into main
                     try:
-                        _sp.run(["git", "checkout", branch_name], cwd=str(repo),
-                                capture_output=True, timeout=30)
-                        _sp.run(["git", "checkout", "main"], cwd=str(repo),
-                                capture_output=True, timeout=10)
                         mr = _sp.run(["git", "merge", branch_name, "--no-edit", "--no-ff"],
                                      cwd=str(repo), capture_output=True, text=True, timeout=30)
-                        if mr.returncode == 0 and mr.stdout:
-                            commit_sha = mr.stdout.strip()[:40]
+                        if mr.returncode == 0:
                             _log.info("merge_success", packet_id=packet.id, branch=branch_name)
+                        else:
+                            _log.warn("merge_failed", packet_id=packet.id, stderr=mr.stderr[:200])
                     except Exception:
                         _log.warn("merge_failed", packet_id=packet.id)
 
