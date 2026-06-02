@@ -222,13 +222,12 @@ class PacketExecutionAdapter:
 
             _log.info("adapter_execute_done", packet_id=packet_id,
                 accepted=execution_result.accepted, duration_ms=execution_result.duration_ms)
-            _tmp.cleanup()  # Clean temp dirs
 
             return execution_result
 
         except Exception:
             _log.error("adapter_execute_failed", packet_id=packet_id)
-            _tmp.cleanup()  # Clean temp dirs on error too
+            _tmp.cleanup()  # Clean only on error
             with get_db() as db:
                 existing = db.query(PacketRun).filter_by(id=run_id).first()
                 if existing:
