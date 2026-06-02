@@ -217,8 +217,9 @@ async def _warm_context(spec: dict, feature_id: str) -> dict:
             "estimated_scope": code_ctx.estimated_scope,
             "complexity_score": code_ctx.complexity_score,
             "file_count": len(code_ctx.files),
-            "files": [{"path": f.path, "size": f.size_lines, "exports": f.exports[:8]}
-                      for f in code_ctx.files[:30]],
+            "files": [{"path": f.path, "size_lines": f.size_lines, "exports": f.exports[:8],
+                       "content_preview": f.content_preview, "relevant": f.relevant}
+                      for f in code_ctx.files[:50]],
         }
         _log.info("context_collected", feature_id=feature_id,
             scope_count=len(scope_paths), complexity=code_ctx.complexity_score)
@@ -230,11 +231,23 @@ async def _warm_context(spec: dict, feature_id: str) -> dict:
 
 async def _call_architect_llm(task: str, context: dict, feature_slug: str,
                               self_improvement: bool = False) -> dict:
-    files_text = json.dumps(context.get("files", [])[:40], indent=2)
-    if len(files_text) > 4000:
-        files_text = files_text[:4000] + "\n... [truncated]"
+    all_files = context.get("files", [])
+    all_paths = "\n".join(f.get("path", f.get("path", "?")) for f in all_files[:60])
 
-    all_paths = "\n".join(f["path"] for f in context.get("files", [])[:60])
+    relevant_blocks = []
+    other_files = []
+    for f in all_files:
+        if f.get("relevant") and f.get("content_preview"):
+            relevant_blocks.append(
+                f"### {f['path']} ({f.get('size_lines', '?')}L)\n"
+                f"{f['content_preview'][:2500]}\n"
+            )
+        else:
+            exports = ", ".join(f.get("exports", [])[:6])
+            other_files.append(f"  {f['path']} ({f.get('size_lines', '?')}L) exports=[{exports}]")
+
+    relevants = "\n".join(relevant_blocks[:12])
+    others = "\n".join(other_files[:40])
 
     prompt = f"""You are a software architect planning code changes for a project.
 
@@ -242,16 +255,26 @@ Business requirement: {task}
 
 Codebase context:
 - Summary: {context.get('summary', 'Unknown')}
-- Complexity score: {context.get('complexity_score', 'Unknown')}
-- Key files (path, size_lines, exports):
-{files_text}
-- ALL available file paths:
+- Complexity: {context.get('complexity_score', '?')}/300
+"""
+
+    if relevant_blocks:
+        prompt += f"""
+RELEVANT FILE CONTENT (study this code before planning):
+{relevants}
+"""
+    if other_files:
+        prompt += f"""
+Other files (paths only):
+{others}
+"""
+
+    prompt += f"""Full file listing for scope reference:
 {all_paths}
 
 Your job: create an execution plan as waves and packets.
-CRITICAL: scope MUST contain ONLY paths from the "ALL available file paths" list above.
+CRITICAL: scope MUST contain paths from the file listing above."""
 
-"""
 
     if self_improvement:
         prompt += """SELF-IMPROVEMENT MODE: You are modifying the GRACE orchestrator itself.

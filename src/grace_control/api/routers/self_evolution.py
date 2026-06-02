@@ -248,7 +248,9 @@ def _context_to_dict(ctx: CodebaseContext) -> dict:
         "affected_contracts": ctx.affected_contracts,
         "complexity_score": ctx.complexity_score,
         "file_count": len(ctx.files),
-        "files": [{"path": f.path, "size_lines": f.size_lines, "exports": f.exports[:10]} for f in ctx.files[:50]],
+        "files": [{"path": f.path, "size_lines": f.size_lines, "exports": f.exports[:10],
+                   "content_preview": f.content_preview, "relevant": f.relevant}
+                  for f in ctx.files[:50]],
     }
 
 
