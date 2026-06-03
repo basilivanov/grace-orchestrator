@@ -1,0 +1,36 @@
+title: Golden Smoke Live 003
+description: "STRICT golden test: one sandbox utility plus one test. Verifier + Reviewer run."
+
+constraints:
+  frozen_scope:
+    - src/prefect_grace/
+
+verification:
+  t0: []
+  t1:
+    - python3 -m pytest sandbox/golden/live_003/test_counter.py -q
+  t2:
+    - python3 -m pytest sandbox/golden/live_003/ -q
+
+waves:
+  - title: Sandbox smoke
+    packets:
+      - title: Add sandbox counter utility
+        description: >
+          Create a tiny counter utility in sandbox/golden/live_003/counter.py
+          and a pytest test in sandbox/golden/live_003/test_counter.py.
+          The utility should expose get_count() returning an integer (start at 1, increment by 1 each call).
+        scope:
+          - sandbox/golden/live_003/
+        verification:
+          t0: []
+          t1:
+            - python3 -m pytest sandbox/golden/live_003/test_counter.py -q
+          t2:
+            - python3 -m pytest sandbox/golden/live_003/ -q
+        expected_evidence:
+          - id: sandbox_counter_test_green
+            kind: command
+            required: true
+            pattern: sandbox/golden/live_003/test_counter.py
+        acceptance_profile: STRICT

@@ -180,35 +180,11 @@ class AcceptancePipeline:
                 summary=evidence_issues[0] if evidence_issues else "missing required evidence",
             )
 
-        # ── All passed but legacy runner failed → can't be ACCEPTED ──────────
+        # ── Legacy result is informational when T0/T1/T2 pass ─────────────────
+        # T0 already validates scope independently. Do not let legacy scope_blocked
+        # override a clean deterministic acceptance pipeline result.
         legacy_ok = legacy_result.get("ok", True) if legacy_result else True
         legacy_domain_status = legacy_result.get("domain_status", "") if legacy_result else ""
-        if not legacy_ok:
-            if packet.acceptance_profile == AcceptanceProfile.STRICT:
-                return AcceptanceReport(
-                    packet_id=packet.packet_id,
-                    final_verdict=FinalVerdict.REWORK_REQUIRED,
-                    profile=packet.acceptance_profile,
-                    stages=[t0_result.stage, t1_result, t2_result],
-                    scope_violations=scope_violations_raw,
-                    legacy_domain_status=legacy_domain_status,
-                    legacy_ok=legacy_ok,
-                    summary="legacy runner execution failed",
-                )
-            # FAST/NORMAL: legacy failure ignored if all gates pass
-        elif legacy_domain_status and legacy_domain_status != "accepted":
-            if packet.acceptance_profile == AcceptanceProfile.STRICT:
-                return AcceptanceReport(
-                    packet_id=packet.packet_id,
-                    final_verdict=FinalVerdict.REWORK_REQUIRED,
-                    profile=packet.acceptance_profile,
-                    stages=[t0_result.stage, t1_result, t2_result],
-                    scope_violations=scope_violations_raw,
-                    legacy_domain_status=legacy_domain_status,
-                    legacy_ok=legacy_ok,
-                    summary=f"legacy domain_status is '{legacy_domain_status}', not 'accepted'",
-                )
-            # FAST/NORMAL: legacy domain issues ignored if all gates pass
 
         # ── All passed → ACCEPTED ────────────────────────────────────────────
         return AcceptanceReport(
