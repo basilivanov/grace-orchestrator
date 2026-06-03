@@ -229,8 +229,8 @@ class PacketExecutionAdapter:
                     return ExecutionResult(
                         accepted=False,
                         domain_status="rejected",
-                        errors=accept_report.reasons or ["acceptance failed"],
-                        evidence_path=None,
+                        reason="; ".join(accept_report.reasons or ["acceptance failed"]),
+                        evidence_path=str(ev_dir / "acceptance_report.json"),
                         duration_ms=int((time.time() - start_time) * 1000),
                     )
             except Exception as e:
@@ -238,8 +238,8 @@ class PacketExecutionAdapter:
                 return ExecutionResult(
                     accepted=False,
                     domain_status="blocked",
-                    errors=[f"Acceptance pipeline error: {str(e)[:200]}"],
-                    evidence_path=None,
+                    reason=f"Acceptance pipeline error: {str(e)[:200]}",
+                    evidence_path="",
                     duration_ms=int((time.time() - start_time) * 1000),
                 )
 
