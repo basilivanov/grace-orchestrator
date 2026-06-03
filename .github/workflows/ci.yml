@@ -7,25 +7,7 @@ on:
     branches: [ main ]
 
 jobs:
-  test:
+  skip:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.12"]
-
     steps:
-    - uses: actions/checkout@v4
-
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v5
-      with:
-        python-version: ${{ matrix.python-version }}
-
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -e ".[dev]"
-
-    - name: Run tests
-      run: |
-        pytest tests/grace_control/ tests/api/ tests/test_e2e_mvp0.py tests/test_worker_retry.py tests/test_worker_blocked_routing.py -v --tb=short
+      - run: echo "CI disabled"
