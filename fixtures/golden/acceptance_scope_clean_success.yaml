@@ -1,0 +1,33 @@
+id: acceptance_scope_clean_success
+kind: golden_fixture
+start_stage: acceptance
+profile: FAST
+
+feature:
+  title: Scope clean success
+  slug: scope-clean-success
+
+packet:
+  title: Clean scope test
+  slug: clean-scope
+  state: running
+  acceptance_profile: FAST
+  scope:
+    - sandbox/golden/acceptance_clean/
+  verification:
+    t0: []
+    t1: ["python3 -c \"import sys; sys.exit(0)\""]
+    t2: []
+
+git:
+  init_target_repo: true
+  create_worktree: true
+  create_branch: true
+  branch_name: agent/default/pkt_clean/attempt-0001
+  changed_files:
+    - path: sandbox/golden/acceptance_clean/file.py
+      content: "x = 1"
+
+expected:
+  final_packet_state: accepted
+  merge_should_succeed: true

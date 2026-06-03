@@ -307,14 +307,65 @@ async def run_stage_from_fixture(
                 pass
             return {"success": False, "packet_state": pkt_state, "error": str(e)[:500]}
 
-    if stage in ("acceptance", "verifier", "reviewer"):
-        from grace_control.adapters.packet_executor import PacketExecutionAdapter
-
-        adapter = PacketExecutionAdapter(
-            project_root=git_state.get("target_repo_root", Path.cwd()),
-            state_root=state_root,
-            worktree_root=Path(git_state.get("worktree_path", "/tmp/fixture")).parent,
+    if stage == "acceptance":
+        from grace_control.core.acceptance_pipeline import run_acceptance_pipeline
+        from grace_control.core.contracts import (
+            ExecutionPacketContract, AcceptanceProfile, build_packet_contract,
         )
+
+        wt_path = Path(git_state.get("worktree_path", ""))
+        target_repo = Path(git_state.get("target_repo_root", Path.cwd()))
+
+        from grace_control.db import get_db as _gdb
+        from grace_control.db.schema import Packet as _Pkt
+
+        spec_json = {}
+        try:
+            with _gdb() as db:
+                p = db.query(_Pkt).filter_by(id=packet_id).first()
+                if p:
+                    spec_json = p.spec_json or {}
+        except Exception:
+            pass
+
+        pkt_contract = ExecutionPacketContract(
+            packet_id=packet_id,
+            title=spec.packet.title,
+            allowed_write_scope=spec.packet.scope,
+            frozen_scope=spec.packet.frozen_scope,
+            acceptance_profile=AcceptanceProfile(spec.packet.acceptance_profile),
+            verification=spec.packet.verification,
+        )
+
+        class _FakeLegacyResult:
+            ok = True
+            domain_status = "accepted"
+            worktree_path = str(wt_path)
+            branch_name = git_state.get("branch_name", "")
+            errors = []
+            registry_reason = ""
+            managed_runner_result = {}
+
+        try:
+            accept_report = run_acceptance_pipeline(
+                packet=pkt_contract,
+                legacy_result=_FakeLegacyResult(),
+                project_root=target_repo,
+                worktree_path=wt_path,
+                branch_name=git_state.get("branch_name", ""),
+                run_dir=state_root / "runs" / packet_id,
+                base_ref="HEAD",
+            )
+            return {
+                "success": accept_report.is_accepted,
+                "packet_state": "accepted" if accept_report.is_accepted else "rejected",
+                "acceptance_verdict": accept_report.final_verdict.value,
+                "acceptance_summary": accept_report.summary,
+            }
+        except Exception as e:
+            return {"success": False, "error": f"acceptance error: {str(e)[:500]}"}
+
+    if stage in ("verifier", "reviewer"):
         return {"success": False, "error": f"Stage {stage} not yet implemented in fixture runner"}
 
     return {"success": False, "error": f"Unknown stage: {stage}"}

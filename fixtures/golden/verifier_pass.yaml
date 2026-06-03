@@ -1,0 +1,36 @@
+id: verifier_pass
+kind: golden_fixture
+start_stage: verifier
+profile: NORMAL
+
+feature:
+  title: Verifier pass
+  slug: verifier-pass
+
+packet:
+  title: Verifier pass test
+  slug: verifier-pass
+  state: accepted
+  acceptance_profile: NORMAL
+  scope:
+    - sandbox/golden/verifier_pass/
+
+git:
+  init_target_repo: true
+  create_worktree: true
+  create_branch: true
+  branch_name: agent/default/pkt_verifier_pass/attempt-0001
+  changed_files:
+    - path: sandbox/golden/verifier_pass/file.py
+      content: "x = 1"
+
+runs:
+  - attempt: 1
+    status: accepted
+    domain_status: accepted
+    acceptance_report:
+      final_verdict: accepted
+      summary: fixture acceptance passed
+
+expected:
+  final_packet_state: accepted
