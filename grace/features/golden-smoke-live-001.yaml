@@ -1,0 +1,19 @@
+title: Golden Smoke Live 001
+description: "Minimal live golden test: one backend utility plus one test."
+
+verification:
+  - python -m pytest tests/test_date_util.py -q
+
+constraints:
+  frozen_scope:
+    - src/prefect_grace/
+    - src/grace_control/
+
+waves:
+  - title: Backend smoke
+    packets:
+      - title: Add date utility
+        scope:
+          - src/date_util.py
+          - tests/test_date_util.py
+        acceptance_profile: NORMAL
