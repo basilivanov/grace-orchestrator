@@ -273,6 +273,25 @@ class PacketExecutionAdapter:
                     return execution_result
             except Exception as e:
                 _log.error("acceptance_pipeline_error", packet_id=packet_id, error=str(e)[:200])
+                ev_report = skipped_evidence_report("deterministic acceptance failed")
+                rv_report = skipped_reviewer_report("deterministic acceptance failed")
+                try:
+                    safe_legacy = safe_legacy_dict
+                except Exception:
+                    safe_legacy = {"error": str(e)[:200]}
+                try:
+                    self._update_packet_run_result(
+                        run_id=run_id, status="blocked",
+                        legacy_result=safe_legacy,
+                        acceptance_report=None,
+                        evidence_verifier_report=ev_report,
+                        reviewer_report=rv_report,
+                        evidence_path="",
+                        duration_ms=int((time.time() - start_time) * 1000),
+                        executor_id=executor.get("executor_id", ""),
+                    )
+                except Exception:
+                    pass
                 return ExecutionResult(
                     accepted=False,
                     domain_status="blocked",
@@ -293,11 +312,23 @@ class PacketExecutionAdapter:
                 guard_result = guard.check(changed, session_id=spec_json.get("session_id", ""))
                 if not guard_result.passed:
                     _log.warn("self_evolution_guard_blocked", packet_id=packet_id, errors=guard_result.errors)
+                    ev_report = skipped_evidence_report("self-evolution guard blocked")
+                    rv_report = skipped_reviewer_report("self-evolution guard blocked")
                     execution_result = ExecutionResult(
                         accepted=False, domain_status="rejected",
                         reason="; ".join(guard_result.errors),
                         evidence_path="",
                         duration_ms=int((time.time() - start_time) * 1000),
+                    )
+                    self._update_packet_run_result(
+                        run_id=run_id, status="rejected",
+                        legacy_result=safe_legacy_dict,
+                        acceptance_report=accept_report,
+                        evidence_verifier_report=ev_report,
+                        reviewer_report=rv_report,
+                        evidence_path=execution_result.evidence_path,
+                        duration_ms=execution_result.duration_ms,
+                        executor_id=executor.get("executor_id", ""),
                     )
                     return execution_result
                 _log.info("self_evolution_guard_passed", packet_id=packet_id)
@@ -368,7 +399,7 @@ class PacketExecutionAdapter:
                     duration_ms=int((time.time() - start_time) * 1000),
                 )
                 self._update_packet_run_result(
-                    run_id=run_id, status="rejected",
+                    run_id=run_id, status="blocked",
                     legacy_result=safe_legacy_dict,
                     acceptance_report=accept_report,
                     evidence_verifier_report=evidence_report,
@@ -460,7 +491,7 @@ class PacketExecutionAdapter:
                     duration_ms=int((time.time() - start_time) * 1000),
                 )
                 self._update_packet_run_result(
-                    run_id=run_id, status="rejected",
+                    run_id=run_id, status="blocked",
                     legacy_result=safe_legacy_dict,
                     acceptance_report=accept_report,
                     evidence_verifier_report=evidence_report,
@@ -787,9 +818,10 @@ class PacketExecutionAdapter:
                 existing = db.query(PacketRun).filter_by(id=run_id).first()
                 if existing:
                     existing.status = status
+                    accept_dict = acceptance_report.to_dict() if acceptance_report else {"error": "acceptance pipeline failed"}
                     existing.result_json = {
                         "legacy_result": legacy_result,
-                        "acceptance_report": acceptance_report.to_dict(),
+                        "acceptance_report": accept_dict,
                         "evidence_verifier_report": evidence_verifier_report.model_dump(),
                         "reviewer_report": reviewer_report.model_dump(),
                     }

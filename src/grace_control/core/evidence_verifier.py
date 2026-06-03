@@ -128,7 +128,7 @@ async def run_evidence_verifier(
     if artifacts:
         prompt_parts.append(f"Artifacts: {artifacts[:20]}")
 
-    prompt_path = Path(__file__).parent.parent.parent.parent / "src" / "prefect_grace" / "prompts" / "evidence_verifier_prompt.md"
+    prompt_path = Path(__file__).resolve().parents[3] / "src" / "prefect_grace" / "prompts" / "evidence_verifier_prompt.md"
     try:
         prompt_template = prompt_path.read_text()
     except Exception:

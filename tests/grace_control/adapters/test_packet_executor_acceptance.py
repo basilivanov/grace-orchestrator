@@ -216,7 +216,8 @@ class TestOriginal:
     @patch("grace_control.adapters.packet_executor.get_db")
     @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
     @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_legacy_runner")
-    async def test_legacy_failed_acceptance_would_pass(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
+    async def test_adapter_trusts_acceptance_pipeline_when_mocked(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
+        """Adapter trusts the acceptance pipeline report even when legacy failed (pipeline mock)."""
         result = await _run_adapter_test(
             mock_legacy, mock_get_db, mock_pipeline,
             legacy_ok=False, domain_status="runner_error",
@@ -270,7 +271,8 @@ class TestOriginal:
     @patch("grace_control.adapters.packet_executor.get_db")
     @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
     @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_legacy_runner")
-    async def test_legacy_domain_status_rejected_blocks_accept(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
+    async def test_adapter_trusts_acceptance_pipeline_domain_status_mocked(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
+        """Adapter trusts pipeline report even when legacy domain_status=rejected (pipeline mock)."""
         result = await _run_adapter_test(
             mock_legacy, mock_get_db, mock_pipeline,
             domain_status="rejected",

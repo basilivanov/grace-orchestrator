@@ -87,7 +87,12 @@ class Worker:
                             domain_status=result.domain_status,
                             duration_ms=result.duration_ms)
 
-                        status = "accepted" if result.accepted else "rejected"
+                        if result.accepted:
+                            status = "accepted"
+                        elif result.domain_status == "blocked":
+                            status = "blocked"
+                        else:
+                            status = "rejected"
                         await self.api.release_packet(packet_id, self.worker_id, status, result.model_dump())
                         self.log.info("packet_released", packet_id=packet_id, status=status)
 
@@ -102,6 +107,8 @@ class Worker:
                         if status == "rejected":
                             self.log.warn("packet_rejected", packet_id=packet_id, reason=result.reason)
                             self._handle_rejection(packet_id)
+                        elif status == "blocked":
+                            self.log.warn("packet_blocked", packet_id=packet_id, reason=result.reason)
 
                     except asyncio.TimeoutError:
                         self.log.error("execution_timed_out", packet_id=packet_id,

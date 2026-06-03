@@ -171,6 +171,8 @@ async def release_packet(packet_id: str, request: dict) -> dict:
 
         if status == "accepted" and result.get("accepted"):
             target = PacketState.ACCEPTED
+        elif status == "blocked" or result.get("domain_status") == "blocked":
+            target = PacketState.BLOCKED
         elif status == "rejected":
             target = PacketState.REJECTED
         else:
@@ -209,7 +211,7 @@ async def cancel_packet(packet_id: str, request: dict) -> dict:
                 raise HTTPException(status_code=404, detail="Packet not found")
 
             current = PacketState(packet.state)
-            if current in (PacketState.MERGED, PacketState.FAILED, PacketState.CANCELLED):
+            if current in (PacketState.MERGED, PacketState.FAILED, PacketState.BLOCKED, PacketState.CANCELLED):
                 raise HTTPException(status_code=400, detail=f"Cannot cancel terminal packet: {current.value}")
 
             lease = db.query(Lease).filter_by(packet_id=packet_id).first()

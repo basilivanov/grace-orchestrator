@@ -56,10 +56,12 @@ class PacketStateMachine:
         PacketState.RUNNING: [
             PacketState.ACCEPTED,
             PacketState.REJECTED,
+            PacketState.BLOCKED,
             PacketState.FAILED,
             PacketState.CANCELLED,
         ],
         PacketState.REJECTED: [PacketState.READY, PacketState.CANCELLED],
+        PacketState.BLOCKED: [],
         PacketState.ACCEPTED: [PacketState.MERGED],
         PacketState.MERGED: [],
         PacketState.FAILED: [],
@@ -78,6 +80,7 @@ class PacketStateMachine:
     TERMINAL_STATES: set[PacketState] = {
         PacketState.MERGED,
         PacketState.FAILED,
+        PacketState.BLOCKED,
         PacketState.CANCELLED,
     }
 

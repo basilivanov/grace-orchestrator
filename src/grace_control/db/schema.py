@@ -38,7 +38,7 @@ Base = declarative_base()
 
 # START_BLOCK_PACKET_STATE
 class PacketState(enum.Enum):
-    """Canonical packet states — 8 total. CANCELLED reserved for post-MVP."""
+    """Canonical packet states — 9 total. CANCELLED reserved for post-MVP."""
 
     DRAFT = "draft"
     READY = "ready"
@@ -46,6 +46,7 @@ class PacketState(enum.Enum):
     ACCEPTED = "accepted"
     MERGED = "merged"
     REJECTED = "rejected"
+    BLOCKED = "blocked"
     FAILED = "failed"
     CANCELLED = "cancelled"  # reserved, no endpoint creates this in MVP-0
 
