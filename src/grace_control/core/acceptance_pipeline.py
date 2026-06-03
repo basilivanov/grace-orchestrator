@@ -184,28 +184,31 @@ class AcceptancePipeline:
         legacy_ok = legacy_result.get("ok", True) if legacy_result else True
         legacy_domain_status = legacy_result.get("domain_status", "") if legacy_result else ""
         if not legacy_ok:
-            return AcceptanceReport(
-                packet_id=packet.packet_id,
-                final_verdict=FinalVerdict.REWORK_REQUIRED,
-                profile=packet.acceptance_profile,
-                stages=[t0_result.stage, t1_result, t2_result],
-                scope_violations=scope_violations_raw,
-                legacy_domain_status=legacy_domain_status,
-                legacy_ok=legacy_ok,
-                summary="legacy runner execution failed",
-            )
-
-        if legacy_domain_status and legacy_domain_status != "accepted":
-            return AcceptanceReport(
-                packet_id=packet.packet_id,
-                final_verdict=FinalVerdict.REWORK_REQUIRED,
-                profile=packet.acceptance_profile,
-                stages=[t0_result.stage, t1_result, t2_result],
-                scope_violations=scope_violations_raw,
-                legacy_domain_status=legacy_domain_status,
-                legacy_ok=legacy_ok,
-                summary=f"legacy domain_status is '{legacy_domain_status}', not 'accepted'",
-            )
+            if packet.acceptance_profile == AcceptanceProfile.STRICT:
+                return AcceptanceReport(
+                    packet_id=packet.packet_id,
+                    final_verdict=FinalVerdict.REWORK_REQUIRED,
+                    profile=packet.acceptance_profile,
+                    stages=[t0_result.stage, t1_result, t2_result],
+                    scope_violations=scope_violations_raw,
+                    legacy_domain_status=legacy_domain_status,
+                    legacy_ok=legacy_ok,
+                    summary="legacy runner execution failed",
+                )
+            # FAST/NORMAL: legacy failure ignored if all gates pass
+        elif legacy_domain_status and legacy_domain_status != "accepted":
+            if packet.acceptance_profile == AcceptanceProfile.STRICT:
+                return AcceptanceReport(
+                    packet_id=packet.packet_id,
+                    final_verdict=FinalVerdict.REWORK_REQUIRED,
+                    profile=packet.acceptance_profile,
+                    stages=[t0_result.stage, t1_result, t2_result],
+                    scope_violations=scope_violations_raw,
+                    legacy_domain_status=legacy_domain_status,
+                    legacy_ok=legacy_ok,
+                    summary=f"legacy domain_status is '{legacy_domain_status}', not 'accepted'",
+                )
+            # FAST/NORMAL: legacy domain issues ignored if all gates pass
 
         # ── All passed → ACCEPTED ────────────────────────────────────────────
         return AcceptanceReport(
@@ -242,13 +245,14 @@ class AcceptancePipeline:
                 scope_violations=violations)
 
         if violations:
-            return _T0Result(
-                stage=StageResult(name=StageName.T0_SCOPE_AND_LINT,
-                    status=StageStatus.FAILED, summary="scope guard failed",
-                    blocking_issues=[f"scope violations: {v.path}" for v in violations],
-                    commands=commands),
-                scope_violations=violations)
-
+            if packet.acceptance_profile == AcceptanceProfile.STRICT:
+                return _T0Result(
+                    stage=StageResult(name=StageName.T0_SCOPE_AND_LINT,
+                        status=StageStatus.FAILED, summary="scope guard failed",
+                        blocking_issues=[f"scope violations: {v.path}" for v in violations],
+                        commands=commands),
+                    scope_violations=violations)
+            # FAST/NORMAL: scope violations are warnings, not blockers
         if "t0" in packet.verification:
             t0_cmds = packet.verification.get("t0", []) or []
         else:

@@ -235,9 +235,10 @@ function renderFeatures(){
       const st={};let bad=0;
       (f.waves||[]).forEach(w=>w.packets.forEach(p=>{st[p.state]=(st[p.state]||0)+1;if(p.state==='failed'||p.state==='rejected')bad++}));
       const wcnt=f.waves.length,pcnt=(f.waves||[]).reduce((a,w)=>a+w.packets.length,0);
+      const ft = f.created_at ? new Date(f.created_at).toLocaleTimeString() : '';
       return `<div class="fcard${f.id===selFid?' sel':''}" onclick="selFeature('${f.id}')">
         <div class=ftitle>${f.title}</div>
-        <div class=fmeta>${wcnt} waves · ${pcnt} packets</div>
+        <div class=fmeta>${wcnt} waves · ${pcnt} packets · ${ft}</div>
         <div class=fstats>${Object.entries(st).map(([k,v])=>{
           const s=STY[k]||{bg:'var(--gr)'};
           return`<span class=fstat style="background:${s.bg}20;color:${s.bg};border:1px solid ${s.bg}40">${s.label}: ${v}</span>`
@@ -259,14 +260,16 @@ function renderWaves(fid){
   const f=data.features.find(x=>x.id===fid);
   if(!f){$('pc').innerHTML='<div class=empt>Feature not found</div>';return}
   const pcnt=(f.waves||[]).reduce((a,w)=>a+w.packets.length,0);
-  let h=`<div class=ctr-hdr><div class=fname>${f.title}</div><div class=fid>${f.id}</div><div class=fsum>${f.waves.length} waves · ${pcnt} packets</div></div>`;
+  let h=`<div class=ctr-hdr><div class=fname>${f.title}</div><div class=fid>${f.id} · ${f.created_at?new Date(f.created_at).toLocaleString():''}</div><div class=fsum>${f.waves.length} waves · ${pcnt} packets</div></div>`;
   f.waves.forEach(w=>{
-    h+=`<div class=wcard><div class=whead><span class=wname>Wave ${w.order}: ${w.title}</span><span style=font-size:11px;color:var(--gr)>${w.packets.length} pkt</span></div>`;
+    const wt = w.created_at ? new Date(w.created_at).toLocaleTimeString() : '';
+    h+=`<div class=wcard><div class=whead><span class=wname>Wave ${w.order}: ${w.title}</span><span style=font-size:11px;color:var(--gr)>${w.packets.length} pkt · ${wt}</span></div>`;
     w.packets.forEach(p=>{
       const s=STY[p.state]||{bg:'var(--gr)',label:p.state};
+      const pt = p.created_at ? new Date(p.created_at).toLocaleTimeString() : '';
       h+=`<div class="pcard${p.id===selPid?' sel':''}" onclick="selPacket('${p.id}')">
         <span class=pdot style=background:${s.bg}></span>
-        <div class=pinfo><div class=ptitle>${p.title||p.id.slice(-30)}</div><div class=pmeta>${p.id}</div></div>
+        <div class=pinfo><div class=ptitle>${p.title||p.id.slice(-30)}</div><div class=pmeta>${p.id} · ${pt}</div></div>
         <span class=pbadge style="background:${s.bg}20;color:${s.bg};border:1px solid ${s.bg}40">${s.label} ${p.attempt_count}/${p.max_attempts}</span>
       </div>`;
     });
@@ -303,10 +306,14 @@ async function renderInspector(pid){
   try{
     const r=await fetch(`/api/packets/${pid}`);const d=(await r.json()).data;
     const s=STY[d.state]||{bg:'var(--gr)',label:d.state};
+    const ct = d.created_at ? new Date(d.created_at).toLocaleString() : '?';
+    const ut = d.updated_at ? new Date(d.updated_at).toLocaleString() : '?';
+    const dur = d.created_at && d.updated_at ? ((new Date(d.updated_at)-new Date(d.created_at))/1000).toFixed(0) : '?';
     h+=`<h3>${d.title||'Packet'}</h3>
     <span class=state-badge style="background:${s.bg}20;color:${s.bg};border:1px solid ${s.bg}40">${s.label}</span>
     <div class=meta>
       <b>Attempt:</b> ${d.attempt_count}/${d.max_attempts} &nbsp; <b>Profile:</b> ${d.acceptance_profile}<br>
+      <b>Created:</b> ${ct} &nbsp; <b>Life:</b> ${dur}s<br>
       <b>Feature:</b> <span style=font-family:var(--mono);font-size:10px>${d.feature_id}</span> <button class=copy-btn onclick="navigator.clipboard.writeText('${d.feature_id}')">copy</button><br>
       <b>Wave:</b> <span style=font-family:var(--mono);font-size:10px>${d.wave_id}</span>
     </div>`;

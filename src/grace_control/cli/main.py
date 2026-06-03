@@ -213,9 +213,13 @@ def eval_run(feature_file, workers, api_url, timeout, report, with_playwright, v
     wt_rt = worktree_root or f"/tmp/grace-eval/{run_slug}/worktrees"
 
     spec = yaml.safe_load(feature_path.read_text())
-    c = httpx.Client(base_url=api_url, timeout=120)
+    c = httpx.Client(base_url=api_url, timeout=30)
 
-    r = c.post("/api/architect/plan", json={"feature_spec": spec})
+    try:
+        r = c.post("/api/architect/plan", json={"feature_spec": spec})
+    except httpx.RequestError as e:
+        console.print(f"[red]Architect plan request failed: {e}[/red]")
+        return
     if validate:
         if r.status_code == 422:
             detail = ""
@@ -244,6 +248,9 @@ def eval_run(feature_file, workers, api_url, timeout, report, with_playwright, v
     for i in range(workers):
         c.post("/api/workers/register", json={"worker_id": f"eval-w{i}"})
 
+    # Kill zombie workers from previous runs (their cmdline contains "from grace_control")
+    os.system("pkill -f 'from grace_control' 2>/dev/null")
+
     procs = []
     for i in range(workers):
         worker_env = {**os.environ,
@@ -268,8 +275,20 @@ asyncio.run(m())
         procs.append(p)
 
     start = time.time()
-    while time.time() - start < timeout * len(pids):
-        time.sleep(5)
+    deadline = start + timeout * max(len(pids), 1)
+    terminal_states = ("merged", "failed", "cancelled", "rejected", "blocked")
+
+    while time.time() < deadline:
+        time.sleep(2)
+
+        dead_count = 0
+        for p in procs:
+            if p.poll() is not None:
+                dead_count += 1
+        if dead_count == len(procs) and procs:
+            console.print(f"[yellow]All {dead_count} worker(s) died — stopping[/yellow]")
+            break
+
         states = {}
         for pid in pids:
             try:
@@ -277,8 +296,13 @@ asyncio.run(m())
                 states[pid] = r.json()["data"]["state"]
             except Exception:
                 pass
-        if states and all(s in ("merged","failed","cancelled","rejected","blocked") for s in states.values()):
-            break
+
+        if states:
+            current = " ".join(f"{s}" for s in states.values())
+            if all(s in terminal_states for s in states.values()):
+                console.print(f"[dim]- {current}[/dim]")
+                break
+            console.print(f"[dim]    {current}[/dim]")
 
     for p in procs:
         p.terminate()

@@ -81,7 +81,8 @@ async def run_llm(
         )
         cmd = ["opencode", "run", "--model", model, instruction]
     else:
-        cmd = ["agy", "--model", model, "--prompt-file", str(tmp), "--json"]
+        prompt_text = tmp.read_text()
+        cmd = ["agy", "--print", prompt_text]
 
     _log.info("llm_started", role=role, model=model, stall_s=stall_sec, hard_s=hard_sec)
 

@@ -156,12 +156,16 @@ async def dashboard_data():
                         {"id": p.id, "title": p.title, "state": p.state,
                          "acceptance_profile": p.acceptance_profile,
                          "attempt_count": p.attempt_count, "max_attempts": p.max_attempts,
-                         "feature_id": p.feature_id, "wave_id": p.wave_id}
+                         "feature_id": p.feature_id, "wave_id": p.wave_id,
+                         "created_at": p.created_at.isoformat() + "Z" if p.created_at else None,
+                         "updated_at": p.updated_at.isoformat() + "Z" if p.updated_at else None}
                         for p in packets
-                    ]
+                    ],
+                    "created_at": w.created_at.isoformat() + "Z" if w.created_at else None,
                 })
             result_features.append({
                 "id": f.id, "title": f.title, "status": f.status, "waves": fw,
+                "created_at": f.created_at.isoformat() + "Z" if f.created_at else None,
             })
 
         # Stats

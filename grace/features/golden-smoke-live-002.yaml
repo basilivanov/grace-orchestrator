@@ -1,0 +1,34 @@
+title: Golden Smoke Live 002
+description: "NORMAL golden test: one sandbox utility plus one test. Verifier runs."
+
+constraints:
+  frozen_scope:
+    - src/prefect_grace/
+
+verification:
+  t0: []
+  t1:
+    - python3 -m pytest sandbox/golden/live_002/test_str_util.py -q
+  t2: []
+
+waves:
+  - title: Sandbox smoke
+    packets:
+      - title: Add sandbox string utility
+        description: >
+          Create a tiny string utility in sandbox/golden/live_002/str_util.py
+          and a pytest test in sandbox/golden/live_002/test_str_util.py.
+          The utility should expose reverse_str(s: str) returning the reversed string.
+        scope:
+          - sandbox/golden/live_002/
+        verification:
+          t0: []
+          t1:
+            - python3 -m pytest sandbox/golden/live_002/test_str_util.py -q
+          t2: []
+        expected_evidence:
+          - id: sandbox_str_util_test_green
+            kind: command
+            required: true
+            pattern: sandbox/golden/live_002/test_str_util.py
+        acceptance_profile: NORMAL
