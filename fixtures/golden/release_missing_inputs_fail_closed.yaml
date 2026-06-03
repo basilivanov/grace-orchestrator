@@ -24,4 +24,4 @@ runs:
 expected:
   final_packet_state: accepted
   merge_should_succeed: false
-  expected_error_contains: required for merge
+  expected_error_contains: does not exist
