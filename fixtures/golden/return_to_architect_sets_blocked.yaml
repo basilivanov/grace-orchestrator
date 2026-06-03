@@ -1,0 +1,29 @@
+id: return_to_architect_sets_blocked
+kind: golden_fixture
+start_stage: verifier
+profile: NORMAL
+feature:
+  title: Return to architect sets blocked
+packet:
+  title: Return to architect test
+  slug: return-to-architect
+  state: accepted
+  acceptance_profile: NORMAL
+  scope:
+    - sandbox/golden/return_to_architect/
+git:
+  init_target_repo: true
+  create_worktree: true
+  create_branch: true
+  branch_name: agent/default/pkt_rtarch/attempt-0001
+  changed_files:
+    - path: sandbox/golden/return_to_architect/file.py
+      content: "x = 1"
+runs:
+  - attempt: 1
+    status: accepted
+    acceptance_report:
+      final_verdict: accepted
+      summary: fixture ok
+expected:
+  final_packet_state: blocked

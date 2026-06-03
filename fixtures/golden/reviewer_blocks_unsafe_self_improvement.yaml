@@ -1,0 +1,30 @@
+id: reviewer_blocks_unsafe_self_improvement
+kind: golden_fixture
+start_stage: reviewer
+profile: STRICT
+feature:
+  title: Reviewer blocks unsafe self-improvement
+  self_improvement: true
+packet:
+  title: Reviewer blocks unsafe test
+  slug: reviewer-blocks-unsafe
+  state: accepted
+  acceptance_profile: STRICT
+  scope:
+    - sandbox/golden/reviewer_unsafe/
+git:
+  init_target_repo: true
+  create_worktree: true
+  create_branch: true
+  branch_name: agent/default/pkt_runsafe/attempt-0001
+  changed_files:
+    - path: sandbox/golden/reviewer_unsafe/file.py
+      content: "x = 1"
+runs:
+  - attempt: 1
+    status: accepted
+    acceptance_report:
+      final_verdict: accepted
+      summary: fixture ok
+expected:
+  final_packet_state: blocked

@@ -1,0 +1,28 @@
+id: self_improvement_missing_gate
+kind: golden_fixture
+start_stage: acceptance
+profile: NORMAL
+feature:
+  title: Self-improvement missing gate
+  self_improvement: true
+packet:
+  title: Self-improvement missing gate test
+  slug: si-missing-gate
+  state: running
+  acceptance_profile: NORMAL
+  scope:
+    - sandbox/golden/si_missing_gate/
+  verification:
+    t0: ["false"]
+    t1: []
+    t2: []
+git:
+  init_target_repo: true
+  create_worktree: true
+  create_branch: true
+  branch_name: agent/default/pkt_simiss/attempt-0001
+  changed_files:
+    - path: sandbox/golden/si_missing_gate/file.py
+      content: "x = 1"
+expected:
+  final_packet_state: rejected

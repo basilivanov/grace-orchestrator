@@ -1,0 +1,28 @@
+id: self_improvement_fast_rejected
+kind: golden_fixture
+start_stage: acceptance
+profile: FAST
+feature:
+  title: Self-improvement FAST rejected
+  self_improvement: true
+packet:
+  title: Self-improvement FAST test
+  slug: si-fast-rejected
+  state: running
+  acceptance_profile: FAST
+  scope:
+    - sandbox/golden/si_fast_rej/
+  verification:
+    t0: []
+    t1: ["python3 -c \"import sys; sys.exit(1)\""]
+    t2: []
+git:
+  init_target_repo: true
+  create_worktree: true
+  create_branch: true
+  branch_name: agent/default/pkt_sifast/attempt-0001
+  changed_files:
+    - path: sandbox/golden/si_fast_rej/file.py
+      content: "x = 1"
+expected:
+  final_packet_state: rejected

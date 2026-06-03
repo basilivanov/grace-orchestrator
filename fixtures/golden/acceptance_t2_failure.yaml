@@ -1,0 +1,27 @@
+id: acceptance_t2_failure
+kind: golden_fixture
+start_stage: acceptance
+profile: STRICT
+feature:
+  title: T2 failure
+packet:
+  title: T2 failure test
+  slug: t2-failure
+  state: running
+  acceptance_profile: STRICT
+  scope:
+    - sandbox/golden/acceptance_t2_fail/
+  verification:
+    t0: []
+    t1: ["echo ok"]
+    t2: ["false"]
+git:
+  init_target_repo: true
+  create_worktree: true
+  create_branch: true
+  branch_name: agent/default/pkt_t2fail/attempt-0001
+  changed_files:
+    - path: sandbox/golden/acceptance_t2_fail/file.py
+      content: "x = 1"
+expected:
+  final_packet_state: rejected

@@ -1,0 +1,29 @@
+id: verifier_invalid_json_retryable
+kind: golden_fixture
+start_stage: verifier
+profile: NORMAL
+feature:
+  title: Verifier invalid JSON retryable
+packet:
+  title: Verifier invalid JSON test
+  slug: verifier-invalid-json
+  state: accepted
+  acceptance_profile: NORMAL
+  scope:
+    - sandbox/golden/verifier_invalid_json/
+git:
+  init_target_repo: true
+  create_worktree: true
+  create_branch: true
+  branch_name: agent/default/pkt_vinvalid/attempt-0001
+  changed_files:
+    - path: sandbox/golden/verifier_invalid_json/file.py
+      content: "x = 1"
+runs:
+  - attempt: 1
+    status: accepted
+    acceptance_report:
+      final_verdict: accepted
+      summary: fixture ok
+expected:
+  final_packet_state: rejected

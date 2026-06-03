@@ -1,0 +1,29 @@
+id: verifier_missing_evidence
+kind: golden_fixture
+start_stage: verifier
+profile: NORMAL
+feature:
+  title: Verifier missing evidence
+packet:
+  title: Verifier missing evidence test
+  slug: verifier-missing-evidence
+  state: accepted
+  acceptance_profile: NORMAL
+  scope:
+    - sandbox/golden/verifier_no_evidence/
+git:
+  init_target_repo: true
+  create_worktree: true
+  create_branch: true
+  branch_name: agent/default/pkt_vnoevidence/attempt-0001
+  changed_files:
+    - path: sandbox/golden/verifier_no_evidence/file.py
+      content: "x = 1"
+runs:
+  - attempt: 1
+    status: accepted
+    acceptance_report:
+      final_verdict: accepted
+      summary: fixture ok
+expected:
+  final_packet_state: rejected

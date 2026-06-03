@@ -1,0 +1,30 @@
+id: self_improvement_reviewer_required
+kind: golden_fixture
+start_stage: reviewer
+profile: STRICT
+feature:
+  title: Self-improvement reviewer required
+  self_improvement: true
+packet:
+  title: Self-improvement reviewer test
+  slug: si-reviewer-req
+  state: accepted
+  acceptance_profile: STRICT
+  scope:
+    - sandbox/golden/si_reviewer_req/
+git:
+  init_target_repo: true
+  create_worktree: true
+  create_branch: true
+  branch_name: agent/default/pkt_sirev/attempt-0001
+  changed_files:
+    - path: sandbox/golden/si_reviewer_req/file.py
+      content: "x = 1"
+runs:
+  - attempt: 1
+    status: accepted
+    acceptance_report:
+      final_verdict: accepted
+      summary: fixture ok
+expected:
+  final_packet_state: accepted
