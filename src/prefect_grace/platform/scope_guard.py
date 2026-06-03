@@ -167,6 +167,9 @@ def _matches_pattern(normalized_path: str, pattern: str) -> bool:
 
         # Exact match (no wildcards)
         if "*" not in pattern:
+            # Directory prefix: "path/dir/" matches any file under it
+            if pattern.endswith("/"):
+                return normalized_path.startswith(pattern)
             return normalized_path == pattern
 
         # Handle directory glob: "path/**" matches anything under path/
