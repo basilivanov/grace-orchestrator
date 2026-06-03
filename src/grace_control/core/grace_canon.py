@@ -66,6 +66,7 @@ class GraceCanonChecker:
         self._check_ai_header(file_path, content, violations)
         self._check_module_contract(file_path, content, violations)
         self._check_module_map(file_path, content, violations)
+        self._check_module_blocks(file_path, content, violations)
         self._check_function_contracts(file_path, content, violations)
         self._check_semantic_blocks(file_path, content, violations)
 
@@ -144,6 +145,13 @@ class GraceCanonChecker:
                         rule="function_contract",
                         message=f"Function '{node.name}' missing FUNCTION_CONTRACT",
                         severity="error"))
+
+    def _check_module_blocks(self, path: Path, content: str, violations: list):
+        if "#START_BLOCK_" not in content:
+            violations.append(CanonViolation(str(path),
+                rule="module_blocks",
+                message="Missing module-level #START_BLOCK_* / #END_BLOCK_* sections",
+                severity="error"))
 
     def _check_semantic_blocks(self, path: Path, content: str, violations: list):
         lines = content.split("\n")
