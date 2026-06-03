@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import shlex
 import subprocess
 import time
 from pathlib import Path
@@ -34,11 +35,20 @@ class CommandRunner:
 
     def run(
         self,
-        command: list[str],
+        command: list[str] | str,
         *,
         cwd: Path | None = None,
         timeout_s: int | None = None,
     ) -> CommandResult:
+        # Normalize: string → list via shlex (safe, no shell=True)
+        if isinstance(command, str):
+            try:
+                command = shlex.split(command)
+            except ValueError:
+                return CommandResult(
+                    command=[command], cwd="", exit_code=1,
+                    stderr=f"cannot parse command string: {command[:200]}",
+                )
         cwd = (cwd or self._root).resolve()
         try:
             cwd.relative_to(self._root)

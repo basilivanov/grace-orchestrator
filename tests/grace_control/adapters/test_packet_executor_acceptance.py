@@ -113,3 +113,37 @@ class TestAdapterAcceptance:
         for p in profiles:
             report = _make_report(PacketVerdict.ACCEPTED)
             assert report.final_verdict == PacketVerdict.ACCEPTED
+
+
+class TestDurableWorktree:
+    """Tests for durable worktree: reject if worktree_path is missing or cleaned."""
+
+    def test_missing_worktree_path_rejected(self):
+        """If worktree_path is None/empty after coder success, reject."""
+        result = ExecutionResult(accepted=False, domain_status="rejected",
+                                 reason="Worktree was cleaned before acceptance could verify",
+                                 evidence_path="", duration_ms=0)
+        assert result.accepted is False
+        assert "cleaned" in result.reason.lower()
+
+    def test_worktree_cleaned_before_accept_rejected(self):
+        """If worktree dir no longer exists, reject."""
+        result = ExecutionResult(accepted=False, domain_status="rejected",
+                                 reason="Worktree cleaned before acceptance",
+                                 evidence_path="", duration_ms=0)
+        assert result.accepted is False
+        assert "cleaned" in result.reason.lower()
+
+    def test_cleanup_rejected_path_no_merge(self):
+        """Rejected packets must not be merged."""
+        result = ExecutionResult(accepted=False, domain_status="rejected",
+                                 reason="acceptance failed", evidence_path="", duration_ms=0)
+        assert result.accepted is False
+        assert result.domain_status == "rejected"
+
+    def test_cleanup_blocked_path_no_merge(self):
+        """Blocked packets must not be merged."""
+        result = ExecutionResult(accepted=False, domain_status="blocked",
+                                 reason="pipeline error", evidence_path="", duration_ms=0)
+        assert result.accepted is False
+        assert result.domain_status == "blocked"

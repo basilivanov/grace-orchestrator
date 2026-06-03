@@ -163,43 +163,60 @@ class PacketExecutionAdapter:
         try:
             packet_path = self._materialize_packet(packet_data, state_root)
             _log.debug("packet_materialized", packet_id=packet_id, path=str(packet_path))
-            result = await self._call_legacy_runner(packet_path, state_root, worktree_root)
+
+            # Build packet contract for registry + legacy runner
+            spec = packet_data.get("spec_json") or {}
+            scope_list = spec.get("scope", [])
+            if isinstance(scope_list, str):
+                scope_list = [scope_list]
+            scope_list = scope_list or ["src/grace_control/"]
+            frozen = spec.get("frozen_scope", ["src/prefect_grace/"])
+
+            result = await self._call_legacy_runner(
+                packet_path, state_root, worktree_root,
+                allowed_scope=scope_list, frozen_scope=frozen)
             _log.debug("legacy_runner_completed", packet_id=packet_id,
                 ok=result.ok, domain=result.domain_status,
                 errors=result.errors[:3], blocker=getattr(result, 'registry_reason', '')[:200])
 
-            # Commit agent changes in worktree so merge can apply them
+            # Durable worktree check: reject if worktree is already cleaned
+            if result.ok and not result.worktree_path:
+                _log.warn("worktree_missing_after_run", packet_id=packet_id)
+                return ExecutionResult(
+                    accepted=False, domain_status="rejected",
+                    reason="Worktree was cleaned before acceptance could verify",
+                    evidence_path="", duration_ms=int((time.time() - start_time) * 1000))
+
             if result.ok and result.worktree_path:
-                import subprocess as _sp
                 wt = Path(result.worktree_path)
-                if wt.exists():
-                    try:
-                        _sp.run(["git", "add", "-A"], cwd=str(wt), capture_output=True, timeout=10)
-                        _sp.run(["git", "commit", "-m",
-                            f"agent: {packet_id} attempt {packet_data['attempt_count']}"],
-                            cwd=str(wt), capture_output=True, timeout=10)
-                        _log.debug("agent_worktree_committed", packet_id=packet_id, worktree=str(wt))
-                    except Exception:
-                        _log.warn("agent_commit_failed", packet_id=packet_id)
+                if not wt.exists():
+                    _log.warn("worktree_cleaned_before_accept", packet_id=packet_id)
+                    return ExecutionResult(
+                        accepted=False, domain_status="rejected",
+                        reason=f"Worktree cleaned before acceptance: {result.worktree_path}",
+                        evidence_path="", duration_ms=int((time.time() - start_time) * 1000))
+                import subprocess as _sp
+                try:
+                    _sp.run(["git", "add", "-A"], cwd=str(wt), capture_output=True, timeout=10)
+                    _sp.run(["git", "commit", "-m",
+                        f"agent: {packet_id} attempt {packet_data['attempt_count']}"],
+                        cwd=str(wt), capture_output=True, timeout=10)
+                    _log.debug("agent_worktree_committed", packet_id=packet_id, worktree=str(wt))
+                except Exception:
+                    _log.warn("agent_commit_failed", packet_id=packet_id)
 
             # ── Deterministic acceptance pipeline (replaces fake verifier/reviewer) ──
             try:
-                spec = packet_data.get("spec_json") or {}
                 from grace_control.core.acceptance_pipeline import AcceptancePipeline
                 from grace_control.core.contracts import (
                     AcceptanceProfile, ExecutionPacketContract,
                 )
-                from grace_control.core.scope_guard import ScopeGuard
-
-                scope_list = spec.get("scope", [])
-                if isinstance(scope_list, str):
-                    scope_list = [scope_list]
 
                 pkt_contract = ExecutionPacketContract(
                     packet_id=packet_id,
                     title=packet_data.get("title", packet_id),
-                    allowed_write_scope=scope_list or ["src/grace_control/"],
-                    frozen_scope=spec.get("frozen_scope", ["src/prefect_grace/"]),
+                    allowed_write_scope=scope_list,
+                    frozen_scope=frozen,
                     acceptance_profile=AcceptanceProfile(
                         packet_data.get("acceptance_profile", "NORMAL")
                     ),
@@ -209,7 +226,9 @@ class PacketExecutionAdapter:
                               "session_id": spec.get("session_id", "")},
                 )
 
-                scope_guard = ScopeGuard(self.project_root)
+                # Diff from worktree, not project_root — agent changes are there
+                from grace_control.core.scope_guard import ScopeGuard
+                scope_guard = ScopeGuard(Path(result.worktree_path) if result.worktree_path else self.project_root)
                 changed = scope_guard.get_changed_files() if result.worktree_path else []
                 pipe = AcceptancePipeline(repo_root=self.project_root, scope_guard=scope_guard)
 
@@ -382,7 +401,9 @@ ruff check src/
     # emitted_logs: None.
     # error_behavior: Raises on runtime failure.
     # END_FUNCTION_CONTRACT
-    async def _call_legacy_runner(self, packet_path: Path, state_root: Path, worktree_root: Path):
+    async def _call_legacy_runner(self, packet_path: Path, state_root: Path, worktree_root: Path,
+                                   allowed_scope: list[str] | None = None,
+                                   frozen_scope: list[str] | None = None):
         from prefect_grace.platform.e2e_packet_runner import run_e2e_packet
 
         packet_id = packet_path.parent.name
@@ -402,7 +423,9 @@ ruff check src/
                 "feature_id": packet_id.split("-W")[0] if "-W" in packet_id else "unknown",
                 "wave_id": "W01", "status": "ready", "phase": "PHASE-TEST",
                 "packet_path": str(packet_path),
-                "allowed_write_scope": [], "frozen_scope": [], "depends_on": [],
+                "allowed_write_scope": allowed_scope or [],
+                "frozen_scope": frozen_scope or [],
+                "depends_on": [],
             }
             reg_file.write_text(yaml.dump(existing, default_flow_style=False))
         except Exception:

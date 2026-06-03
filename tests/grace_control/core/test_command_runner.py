@@ -61,7 +61,8 @@ class TestCommandRunner:
         r = runner.run(["/nonexistent/binary_xyz_123"])
         assert r.exit_code == 127
 
-    def test_command_string_rejected(self):
+    def test_command_string_accepted_via_shlex(self):
         runner = CommandRunner(Path.cwd())
-        r = runner.run("echo hello")  # type: ignore
-        assert r.exit_code != 0
+        r = runner.run("echo hello world")
+        assert r.exit_code == 0
+        assert "hello world" in r.stdout
