@@ -2,11 +2,7 @@ title: Golden Smoke Live 001
 description: "Minimal live golden test: one sandbox utility plus one test."
 
 constraints:
-  frozen_scope:
-    - src/
-    - tests/
-    - src/prefect_grace/
-    - src/grace_control/
+  frozen_scope: []
 
 verification:
   t0: []
