@@ -53,6 +53,9 @@ class AcceptancePipeline:
         self._runner = command_runner or CommandRunner(self._root)
         self._scope = scope_guard or ScopeGuard(self._root)
         self._evidence = evidence_collector or EvidenceCollector()
+        self._t0_commands: list[list[str]] = [
+            ["python", "-m", "py_compile", "src/grace_control/core/contracts.py"],
+        ]
 
     def run(
         self,
@@ -62,52 +65,52 @@ class AcceptancePipeline:
         base_ref: str | None = None,
         head_ref: str | None = None,
     ) -> AcceptanceReport:
-        stages: list[StageResult] = []
         scope_violations: list[ScopeViolation] = []
-        evidence_paths: list[str] = []
-        all_blocking: list[str] = []
 
         # ── T0: scope + cheap machine gates ──────────────────────────────────
         t0_result = self._run_t0(packet, changed_files, base_ref, head_ref)
-        stages.append(t0_result)
         scope_violations = t0_result.get("scope_violations", [])
-        all_blocking = t0_result.get("blocking_issues", [])
-        if t0_result["status"] == StageStatus.FAILED:
+        if t0_result.get("status") == StageStatus.FAILED:
             return AcceptanceReport(
                 packet_id=packet.packet_id,
                 final_verdict=PacketVerdict.REWORK_REQUIRED,
-                stages=self._build_stages(t0_result),
+                stages=[t0_result["stage"]],
                 scope_violations=scope_violations,
+                reasons=t0_result.get("blocking_issues", []) or ["T0 failed"],
             )
 
         ep = self._evidence.collect_from_stage(t0_result["stage"]) if "stage" in t0_result else []
 
         # ── T1: targeted verification ────────────────────────────────────────
         t1_result = self._run_t1(packet)
-        stages.append(t1_result)
         ep += self._evidence.collect_from_stage(t1_result)
         if t1_result.status == StageStatus.FAILED:
+            t0_stage = t0_result.get("stage")
+            stages = [t0_stage] if t0_stage else []
+            stages.append(t1_result)
             return AcceptanceReport(
                 packet_id=packet.packet_id,
                 final_verdict=PacketVerdict.REWORK_REQUIRED,
-                stages=self._build_stages(t0_result, t1_result),
+                stages=stages,
                 scope_violations=scope_violations,
                 evidence_paths=ep,
+                reasons=t1_result.blocking_issues or ["T1 failed"],
             )
-        if t1_result.blocking_issues:
-            all_blocking.extend(t1_result.blocking_issues)
 
         # ── T2: full checks ──────────────────────────────────────────────────
         t2_result = self._run_t2(packet)
-        stages.append(t2_result)
         ep += self._evidence.collect_from_stage(t2_result)
         if t2_result.status == StageStatus.FAILED:
+            t0_stage = t0_result.get("stage")
+            stages = [t0_stage] if t0_stage else []
+            stages.extend([t1_result, t2_result])
             return AcceptanceReport(
                 packet_id=packet.packet_id,
                 final_verdict=PacketVerdict.REWORK_REQUIRED,
-                stages=self._build_stages(t0_result, t1_result, t2_result),
+                stages=stages,
                 scope_violations=scope_violations,
                 evidence_paths=ep,
+                reasons=t2_result.blocking_issues or ["T2 failed"],
             )
 
         # ── Build final verdict ─────────────────────────────────────────────
@@ -117,19 +120,25 @@ class AcceptancePipeline:
             acceptance_profile=packet.acceptance_profile,
         )
         if packet.acceptance_profile in (AcceptanceProfile.NORMAL, AcceptanceProfile.STRICT) and not has_evidence:
+            t0_stage = t0_result.get("stage")
+            stages = [t0_stage] if t0_stage else []
+            stages.extend([t1_result, t2_result])
             return AcceptanceReport(
                 packet_id=packet.packet_id,
                 final_verdict=PacketVerdict.BLOCKED,
-                stages=self._build_stages(t0_result, t1_result, t2_result),
+                stages=stages,
                 scope_violations=scope_violations,
                 evidence_paths=ep,
                 reasons=["missing required evidence"],
             )
 
+        t0_stage = t0_result.get("stage")
+        final_stages = [t0_stage] if t0_stage else []
+        final_stages.extend([t1_result, t2_result])
         return AcceptanceReport(
             packet_id=packet.packet_id,
             final_verdict=PacketVerdict.ACCEPTED,
-            stages=self._build_stages(t0_result, t1_result, t2_result),
+            stages=final_stages,
             scope_violations=scope_violations,
             evidence_paths=ep,
         )
@@ -149,28 +158,34 @@ class AcceptancePipeline:
         commands: list[CommandResult] = []
 
         if errs:
-            return {"status": StageStatus.FAILED, "summary": "invalid packet contract",
-                    "blocking_issues": errs, "scope_violations": violations, "commands": commands}
+            return {"status": StageStatus.FAILED, "scope_violations": violations,
+                    "stage": StageResult(name=StageName.T0_SCOPE_AND_LINT,
+                        status=StageStatus.FAILED, summary="invalid packet contract",
+                        blocking_issues=errs, commands=commands)}
 
         if violations:
-            return {"status": StageStatus.FAILED, "summary": "scope guard failed",
-                    "blocking_issues": [f"scope violations: {v.path}" for v in violations],
-                    "scope_violations": violations, "commands": commands}
+            return {"status": StageStatus.FAILED, "scope_violations": violations,
+                    "stage": StageResult(name=StageName.T0_SCOPE_AND_LINT,
+                        status=StageStatus.FAILED, summary="scope guard failed",
+                        blocking_issues=[f"scope violations: {v.path}" for v in violations],
+                        commands=commands)}
 
-        # Cheap syntax check
-        py_check = self._runner.run(["python", "-m", "py_compile", "src/grace_control/core/contracts.py"])
-        commands.append(py_check)
-        if not py_check.passed:
-            return {"status": StageStatus.FAILED, "summary": "T0 cheap check failed",
-                    "blocking_issues": [f"py_compile failed: {py_check.stderr[:200]}"],
-                    "scope_violations": violations, "commands": commands}
+        # Cheap syntax checks from configurable list
+        for cmd in self._t0_commands:
+            r = self._runner.run(cmd)
+            commands.append(r)
+            if not r.passed:
+                return {"status": StageStatus.FAILED, "scope_violations": violations,
+                        "stage": StageResult(name=StageName.T0_SCOPE_AND_LINT,
+                            status=StageStatus.FAILED, summary="T0 cheap check failed",
+                            blocking_issues=[f"{' '.join(cmd)} failed: {r.stderr[:200]}"],
+                            commands=commands)}
 
         stage = StageResult(name=StageName.T0_SCOPE_AND_LINT, status=StageStatus.PASSED,
                            summary="T0 passed: scope clean, contract valid, cheap checks ok",
                            commands=commands)
         return {"status": StageStatus.PASSED, "stage": stage,
-                "summary": stage.summary, "commands": commands,
-                "scope_violations": violations, "blocking_issues": []}
+                "scope_violations": violations}
 
     def _run_t1(self, packet: ExecutionPacketContract) -> StageResult:
         commands = [self._runner.run(cmd) for cmd in packet.verification_commands]
@@ -216,23 +231,3 @@ class AcceptancePipeline:
                               blocking_issues=[f"full check failed: {' '.join(c.command)} ({c.exit_code})" for c in failed])
         return StageResult(name=StageName.T2_FULL_TESTS, status=StageStatus.PASSED,
                           summary=f"T2 passed: {len(commands)} commands ok", commands=commands)
-
-    def _build_stages(self, *results: dict | StageResult) -> list[StageResult]:
-        stages: list[StageResult] = []
-        for r in results:
-            if isinstance(r, dict):
-                st = r.get("stage")
-                if st is not None:
-                    stages.append(st)
-                else:
-                    status = r.get("status", StageStatus.SKIPPED)
-                    name = StageName.T0_SCOPE_AND_LINT
-                    stages.append(StageResult(
-                        name=name, status=status,
-                        summary=r.get("summary", ""),
-                        blocking_issues=r.get("blocking_issues", []),
-                        commands=r.get("commands", []),
-                    ))
-            elif isinstance(r, StageResult):
-                stages.append(r)
-        return stages

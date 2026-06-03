@@ -183,9 +183,6 @@ class PacketExecutionAdapter:
                         _log.warn("agent_commit_failed", packet_id=packet_id)
 
             # ── Deterministic acceptance pipeline (replaces fake verifier/reviewer) ──
-            spec = packet_data.get("spec_json") or {}
-            if not isinstance(spec, dict):
-                spec = {}
             try:
                 from grace_control.core.acceptance_pipeline import AcceptancePipeline
                 from grace_control.core.contracts import (
@@ -220,19 +217,30 @@ class PacketExecutionAdapter:
                     verdict=accept_report.final_verdict.value,
                     is_accepted=accept_report.is_accepted)
 
+                # Save acceptance report as evidence
+                import json as _json
+                ev_dir = state_root / "packets" / packet_id / "runs" / f"R{run_number:02d}"
+                ev_dir.mkdir(parents=True, exist_ok=True)
+                (ev_dir / "acceptance_report.json").write_text(
+                    _json.dumps(accept_report.to_dict(), indent=2, default=str))
+
                 if not accept_report.is_accepted:
-                    execution_result = ExecutionResult(
+                    return ExecutionResult(
                         accepted=False,
                         domain_status="rejected",
                         errors=accept_report.reasons or ["acceptance failed"],
                         evidence_path=None,
                         duration_ms=int((time.time() - start_time) * 1000),
                     )
-                    return execution_result
             except Exception as e:
-                _log.warn("acceptance_pipeline_error", packet_id=packet_id, error=str(e)[:200])
-                # Don't block on acceptance pipeline failure — log and continue
-                pass
+                _log.error("acceptance_pipeline_error", packet_id=packet_id, error=str(e)[:200])
+                return ExecutionResult(
+                    accepted=False,
+                    domain_status="blocked",
+                    errors=[f"Acceptance pipeline error: {str(e)[:200]}"],
+                    evidence_path=None,
+                    duration_ms=int((time.time() - start_time) * 1000),
+                )
 
             # Self-evolution guard check (additional checks for self-improvement)
             if isinstance(spec, dict) and spec.get("origin") == "self_evolution":
