@@ -1,0 +1,29 @@
+id: reviewer_pass_strict
+kind: golden_fixture
+start_stage: reviewer
+profile: NORMAL
+feature:
+  title: reviewer_pass_strict
+packet:
+  title: reviewer_pass_strict test
+  slug: reviewer_pass_strict
+  state: accepted
+  acceptance_profile: NORMAL
+  scope:
+    - sandbox/golden/reviewer_pass_strict/
+git:
+  init_target_repo: true
+  create_worktree: true
+  create_branch: true
+  branch_name: agent/default/pkt_reviewer_pass_strict/attempt-0001
+  changed_files:
+    - path: sandbox/golden/reviewer_pass_strict/file.py
+      content: "x = 1"
+runs:
+  - attempt: 1
+    status: accepted
+    acceptance_report:
+      final_verdict: accepted
+      summary: fixture ok
+expected:
+  final_packet_state: accepted

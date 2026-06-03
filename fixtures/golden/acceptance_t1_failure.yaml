@@ -1,0 +1,27 @@
+id: acceptance_t1_failure
+kind: golden_fixture
+start_stage: acceptance
+profile: NORMAL
+feature:
+  title: T1 failure
+packet:
+  title: T1 failure test
+  slug: t1-failure
+  state: running
+  acceptance_profile: NORMAL
+  scope:
+    - sandbox/golden/acceptance_t1_fail/
+  verification:
+    t0: []
+    t1: ["python3 -c \"import sys; sys.exit(1)\""]
+    t2: []
+git:
+  init_target_repo: true
+  create_worktree: true
+  create_branch: true
+  branch_name: agent/default/pkt_t1fail/attempt-0001
+  changed_files:
+    - path: sandbox/golden/acceptance_t1_fail/file.py
+      content: "x = 1"
+expected:
+  final_packet_state: rejected

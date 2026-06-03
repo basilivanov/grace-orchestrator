@@ -1,0 +1,29 @@
+id: verifier_return_to_architect
+kind: golden_fixture
+start_stage: verifier
+profile: NORMAL
+feature:
+  title: verifier_return_to_architect
+packet:
+  title: verifier_return_to_architect test
+  slug: verifier_return_to_architect
+  state: accepted
+  acceptance_profile: NORMAL
+  scope:
+    - sandbox/golden/verifier_return_to_architect/
+git:
+  init_target_repo: true
+  create_worktree: true
+  create_branch: true
+  branch_name: agent/default/pkt_verifier_return_to_architect/attempt-0001
+  changed_files:
+    - path: sandbox/golden/verifier_return_to_architect/file.py
+      content: "x = 1"
+runs:
+  - attempt: 1
+    status: accepted
+    acceptance_report:
+      final_verdict: accepted
+      summary: fixture ok
+expected:
+  final_packet_state: blocked

@@ -1,0 +1,5 @@
+id: reviewer_rework_to_coder
+kind: golden_fixture
+start_stage: reviewer
+expected:
+  final_packet_state: rejected

@@ -1,0 +1,31 @@
+id: acceptance_frozen_scope_violation
+kind: golden_fixture
+start_stage: acceptance
+profile: STRICT
+feature:
+  title: Frozen scope violation
+packet:
+  title: Frozen violation test
+  slug: frozen-violation
+  state: running
+  acceptance_profile: STRICT
+  scope:
+    - sandbox/golden/acceptance_ok/
+  frozen_scope:
+    - sandbox/golden/frozen_only/
+  verification:
+    t0: []
+    t1: ["echo ok"]
+    t2: []
+git:
+  init_target_repo: true
+  create_worktree: true
+  create_branch: true
+  branch_name: agent/default/pkt_frozen/attempt-0001
+  changed_files:
+    - path: sandbox/golden/acceptance_ok/file.py
+      content: "ok"
+    - path: sandbox/golden/frozen_only/blocked.py
+      content: "should be blocked"
+expected:
+  final_packet_state: rejected

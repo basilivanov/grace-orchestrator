@@ -1,0 +1,24 @@
+id: retry_rejected_packet
+kind: golden_fixture
+start_stage: merge
+packet:
+  title: Retry rejected test
+  slug: retry-rejected
+  state: rejected
+  acceptance_profile: FAST
+  scope:
+    - sandbox/golden/retry_rejected/
+git:
+  init_target_repo: true
+  create_worktree: false
+  create_branch: false
+runs:
+  - attempt: 1
+    status: rejected
+    acceptance_report:
+      final_verdict: rejected
+      summary: fixture rejected
+expected:
+  final_packet_state: rejected
+  merge_should_succeed: false
+  expected_error_contains: ACCEPTED

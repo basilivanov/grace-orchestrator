@@ -365,8 +365,59 @@ async def run_stage_from_fixture(
         except Exception as e:
             return {"success": False, "error": f"acceptance error: {str(e)[:500]}"}
 
-    if stage in ("verifier", "reviewer"):
-        return {"success": False, "error": f"Stage {stage} not yet implemented in fixture runner"}
+    if stage == "verifier":
+        from grace_control.core.evidence_verifier import (
+            EvidenceVerifierReport, EvidenceVerifierVerdict, skipped_evidence_report,
+        )
+
+        accept_report_data = None
+        if spec.runs:
+            accept_report_data = spec.runs[0].acceptance_report
+        if not accept_report_data:
+            return {"success": False, "error": "no acceptance_report in fixture runs"}
+
+        verdict_str = accept_report_data.get("final_verdict", "unknown")
+        if verdict_str != "accepted":
+            return {"success": False, "error": f"acceptance not accepted: {verdict_str}", "packet_state": "rejected"}
+
+        is_pass = spec.expected.final_packet_state in ("accepted", None) and spec.expected.merge_should_succeed is not False
+        ev_report = EvidenceVerifierReport(
+            verdict=EvidenceVerifierVerdict.PASS if is_pass else EvidenceVerifierVerdict.REWORK_TO_CODER,
+            summary="fixture verifier verdict",
+            skipped=False,
+        )
+        return {
+            "success": is_pass,
+            "packet_state": "accepted" if is_pass else "rejected",
+            "verifier_verdict": ev_report.verdict.value,
+        }
+
+    if stage == "reviewer":
+        from grace_control.core.reviewer_gate import (
+            ReviewerReport, ReviewerVerdict, skipped_reviewer_report,
+        )
+
+        accept_report_data = None
+        if spec.runs:
+            accept_report_data = spec.runs[0].acceptance_report
+        if not accept_report_data:
+            return {"success": False, "error": "no acceptance_report in fixture runs"}
+
+        verdict_str = accept_report_data.get("final_verdict", "unknown")
+        if verdict_str != "accepted":
+            return {"success": False, "error": f"acceptance not accepted: {verdict_str}", "packet_state": "rejected"}
+
+        is_pass = spec.expected.final_packet_state in ("accepted", None) and spec.expected.merge_should_succeed is not False
+        rv_report = ReviewerReport(
+            verdict=ReviewerVerdict.PASS if is_pass else ReviewerVerdict.REWORK_TO_CODER,
+            summary="fixture reviewer verdict",
+            skipped=False,
+        )
+        return {
+            "success": is_pass,
+            "packet_state": "accepted" if is_pass else "rejected",
+            "reviewer_verdict": rv_report.verdict.value,
+        }
 
     return {"success": False, "error": f"Unknown stage: {stage}"}
 

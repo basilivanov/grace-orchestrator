@@ -1,0 +1,24 @@
+id: retry_blocked_packet
+kind: golden_fixture
+start_stage: merge
+packet:
+  title: Retry blocked test
+  slug: retry-blocked
+  state: blocked
+  acceptance_profile: FAST
+  scope:
+    - sandbox/golden/retry_blocked/
+git:
+  init_target_repo: true
+  create_worktree: false
+  create_branch: false
+runs:
+  - attempt: 1
+    status: blocked
+    acceptance_report:
+      final_verdict: blocked
+      summary: fixture blocked
+expected:
+  final_packet_state: blocked
+  merge_should_succeed: false
+  expected_error_contains: ACCEPTED
