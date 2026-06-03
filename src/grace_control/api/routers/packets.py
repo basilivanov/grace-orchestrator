@@ -280,7 +280,17 @@ async def merge_packet(packet_id: str, request: dict) -> dict:
 
         wt = Path(worktree_path)
         if not wt.exists():
-            _log.warn("merge_worktree_not_found", packet_id=packet.id, worktree=worktree_path)
+            raise HTTPException(status_code=400, detail=f"worktree_path does not exist: {worktree_path}")
+        try:
+            wt_list = _sp.run(["git", "-C", str(repo), "worktree", "list", "--porcelain"],
+                              capture_output=True, text=True, timeout=10)
+            if worktree_path not in wt_list.stdout:
+                raise HTTPException(status_code=400,
+                    detail=f"worktree_path is not registered for target repo: {worktree_path}")
+        except HTTPException:
+            raise
+        except Exception:
+            pass
         try:
             rev = _sp.run(["git", "-C", str(repo), "rev-parse", "--verify", branch_name],
                           capture_output=True, timeout=10)

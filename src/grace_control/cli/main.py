@@ -193,12 +193,13 @@ def eval():
 @click.option("--report", default=None, help="Save JSON report")
 @click.option("--with-playwright", is_flag=True, help="Run Playwright screenshot verification")
 @click.option("--validate", is_flag=True, help="Expect plan rejection (422 = success)")
+@click.option("--control-plane-root", default=None, help="GRACE control plane root (default: cwd)")
 @click.option("--target-repo-root", default=None, help="Target repo root (default: cwd)")
 @click.option("--state-root", default=None, help="Runtime state root (default: /tmp/grace-eval/<slug>/state)")
 @click.option("--worktree-root", default=None, help="Worktree root (default: /tmp/grace-eval/<slug>/worktrees)")
 @click.option("--base-ref", default="HEAD", help="Base git ref (default: HEAD)")
 def eval_run(feature_file, workers, api_url, timeout, report, with_playwright, validate,
-             target_repo_root, state_root, worktree_root, base_ref):
+             control_plane_root, target_repo_root, state_root, worktree_root, base_ref):
     """Run a feature through the pipeline and collect metrics."""
     import asyncio, json, subprocess, sys, time
     import httpx, yaml
@@ -206,6 +207,7 @@ def eval_run(feature_file, workers, api_url, timeout, report, with_playwright, v
 
     feature_path = Path(feature_file)
     run_slug = feature_path.stem
+    ctrl_root = control_plane_root or str(Path.cwd())
     target_repo = target_repo_root or str(Path.cwd())
     state_rt = state_root or f"/tmp/grace-eval/{run_slug}/state"
     wt_rt = worktree_root or f"/tmp/grace-eval/{run_slug}/worktrees"
@@ -245,8 +247,8 @@ def eval_run(feature_file, workers, api_url, timeout, report, with_playwright, v
     procs = []
     for i in range(workers):
         worker_env = {**os.environ,
-            "PYTHONPATH": f"{target_repo}/src",
-            "GRACE_DB_URL": os.environ.get("GRACE_DB_URL", f"sqlite:///{target_repo}/grace.db"),
+            "PYTHONPATH": f"{ctrl_root}/src",
+            "GRACE_DB_URL": os.environ.get("GRACE_DB_URL", f"sqlite:///{state_rt}/grace.db"),
             "GRACE_TARGET_REPO_ROOT": target_repo,
             "GRACE_STATE_ROOT": state_rt,
             "GRACE_WORKTREE_ROOT": wt_rt,
@@ -254,7 +256,7 @@ def eval_run(feature_file, workers, api_url, timeout, report, with_playwright, v
         }
         p = subprocess.Popen([sys.executable, "-c", f"""
 import os, sys, asyncio
-sys.path.insert(0, "{target_repo}/src")
+sys.path.insert(0, "{ctrl_root}/src")
 os.environ["GRACE_ALLOW_SANDBOX_BYPASS"] = "true"
 from grace_control.db import init_db
 from grace_control.worker.worker import Worker
@@ -275,7 +277,7 @@ asyncio.run(m())
                 states[pid] = r.json()["data"]["state"]
             except Exception:
                 pass
-        if states and all(s in ("merged","failed","cancelled","rejected") for s in states.values()):
+        if states and all(s in ("merged","failed","cancelled","rejected","blocked") for s in states.values()):
             break
 
     for p in procs:

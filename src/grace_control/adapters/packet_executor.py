@@ -199,21 +199,22 @@ class PacketExecutionAdapter:
             # Durable worktree check: reject if worktree is already cleaned
             if result.ok and not result.worktree_path:
                 _log.warn("worktree_missing_after_run", packet_id=packet_id)
-                return ExecutionResult(
-                    accepted=False, domain_status="rejected",
-                    reason="Worktree was cleaned before acceptance could verify",
-                    evidence_path="", duration_ms=int((time.time() - start_time) * 1000))
+                return self._finish_early_rejected_run(
+                    run_id=run_id, reason="Worktree was cleaned before acceptance could verify",
+                    duration_ms=int((time.time() - start_time) * 1000),
+                    executor_id=executor.get("executor_id", ""))
 
             agent_commit_sha = ""
             if result.ok and result.worktree_path:
                 wt = Path(result.worktree_path)
                 if not wt.exists():
                     _log.warn("worktree_cleaned_before_accept", packet_id=packet_id)
-                    return ExecutionResult(
-                        accepted=False, domain_status="rejected",
+                    return self._finish_early_rejected_run(
+                        run_id=run_id,
                         reason=f"Worktree cleaned before acceptance: {result.worktree_path}",
-                        evidence_path="", duration_ms=int((time.time() - start_time) * 1000))
-                # Verify/commit worktree changes only if it's a real git worktree
+                        duration_ms=int((time.time() - start_time) * 1000),
+                        executor_id=executor.get("executor_id", ""))
+
                 import subprocess as _sp
                 is_git_wt = False
                 try:
@@ -224,30 +225,41 @@ class PacketExecutionAdapter:
                     pass
                 if is_git_wt:
                     try:
+                        # Check if there are already committed changes vs base
+                        base = os.environ.get("GRACE_BASE_REF", "HEAD")
+                        diff_cmd = ["git", "diff", "--name-only", f"{base}...HEAD"]
+                        diff_r = _sp.run(diff_cmd, cwd=str(wt), capture_output=True, text=True, timeout=10)
+                        committed_changes = [p.strip() for p in diff_r.stdout.split("\n") if p.strip()]
+
                         status = _sp.run(["git", "status", "--porcelain"], cwd=str(wt),
                                          capture_output=True, text=True, timeout=10)
-                        if not status.stdout.strip():
+                        has_uncommitted = bool(status.stdout.strip())
+
+                        if not has_uncommitted and not committed_changes:
                             _log.warn("no_changes_produced", packet_id=packet_id)
-                            return ExecutionResult(
-                                accepted=False, domain_status="rejected",
-                                reason="Agent produced no changes",
-                                evidence_path="", duration_ms=int((time.time() - start_time) * 1000))
-                        add = _sp.run(["git", "add", "-A"], cwd=str(wt), capture_output=True, timeout=10)
-                        if add.returncode != 0:
-                            _log.warn("git_add_failed", packet_id=packet_id, stderr=add.stderr[:200])
-                            return ExecutionResult(
-                                accepted=False, domain_status="rejected",
-                                reason=f"git add failed: {add.stderr[:200]}",
-                                evidence_path="", duration_ms=int((time.time() - start_time) * 1000))
-                        commit = _sp.run(["git", "commit", "-m",
-                            f"agent: {packet_id} attempt {packet_data['attempt_count']}"],
-                            cwd=str(wt), capture_output=True, text=True, timeout=10)
-                        if commit.returncode != 0:
-                            _log.warn("git_commit_failed", packet_id=packet_id, stderr=commit.stderr[:200])
-                            return ExecutionResult(
-                                accepted=False, domain_status="rejected",
-                                reason=f"git commit failed: {commit.stderr[:200]}",
-                                evidence_path="", duration_ms=int((time.time() - start_time) * 1000))
+                            return self._finish_early_rejected_run(
+                                run_id=run_id, reason="Agent produced no changes",
+                                duration_ms=int((time.time() - start_time) * 1000),
+                                executor_id=executor.get("executor_id", ""))
+
+                        if has_uncommitted:
+                            add = _sp.run(["git", "add", "-A"], cwd=str(wt), capture_output=True, timeout=10)
+                            if add.returncode != 0:
+                                _log.warn("git_add_failed", packet_id=packet_id, stderr=add.stderr[:200])
+                                return self._finish_early_rejected_run(
+                                    run_id=run_id, reason=f"git add failed: {add.stderr[:200]}",
+                                    duration_ms=int((time.time() - start_time) * 1000),
+                                    executor_id=executor.get("executor_id", ""))
+                            commit = _sp.run(["git", "commit", "-m",
+                                f"agent: {packet_id} attempt {packet_data['attempt_count']}"],
+                                cwd=str(wt), capture_output=True, text=True, timeout=10)
+                            if commit.returncode != 0:
+                                _log.warn("git_commit_failed", packet_id=packet_id, stderr=commit.stderr[:200])
+                                return self._finish_early_rejected_run(
+                                    run_id=run_id, reason=f"git commit failed: {commit.stderr[:200]}",
+                                    duration_ms=int((time.time() - start_time) * 1000),
+                                    executor_id=executor.get("executor_id", ""))
+
                         sha = _sp.run(["git", "rev-parse", "HEAD"], cwd=str(wt),
                                       capture_output=True, text=True, timeout=10)
                         agent_commit_sha = sha.stdout.strip() if sha.returncode == 0 else ""
@@ -255,10 +267,10 @@ class PacketExecutionAdapter:
                                    sha=agent_commit_sha[:12])
                     except Exception as e:
                         _log.warn("agent_commit_failed", packet_id=packet_id, error=str(e)[:200])
-                        return ExecutionResult(
-                            accepted=False, domain_status="rejected",
-                            reason=f"Agent commit exception: {str(e)[:200]}",
-                            evidence_path="", duration_ms=int((time.time() - start_time) * 1000))
+                        return self._finish_early_rejected_run(
+                            run_id=run_id, reason=f"Agent commit exception: {str(e)[:200]}",
+                            duration_ms=int((time.time() - start_time) * 1000),
+                            executor_id=executor.get("executor_id", ""))
                 else:
                     _log.debug("worktree_not_git_wt_skipping_commit_verification", packet_id=packet_id,
                                worktree=str(wt))
@@ -427,6 +439,7 @@ class PacketExecutionAdapter:
                     evidence_path=evidence_path,
                     duration_ms=execution_result.duration_ms,
                     executor_id=executor.get("executor_id", ""),
+                    commit_sha=agent_commit_sha,
                 )
                 _log.info("adapter_execute_done", packet_id=packet_id,
                     accepted=True, duration_ms=execution_result.duration_ms)
@@ -523,6 +536,7 @@ class PacketExecutionAdapter:
                     evidence_path=evidence_path,
                     duration_ms=execution_result.duration_ms,
                     executor_id=executor.get("executor_id", ""),
+                    commit_sha=agent_commit_sha,
                 )
                 _log.info("adapter_execute_done", packet_id=packet_id,
                     accepted=True, duration_ms=execution_result.duration_ms)
@@ -566,6 +580,7 @@ class PacketExecutionAdapter:
                     evidence_path=evidence_path,
                     duration_ms=execution_result.duration_ms,
                     executor_id=executor.get("executor_id", ""),
+                    commit_sha=agent_commit_sha,
                 )
                 _log.info("adapter_execute_done", packet_id=packet_id,
                     accepted=True, duration_ms=execution_result.duration_ms)
@@ -929,6 +944,7 @@ class PacketExecutionAdapter:
         evidence_path: str,
         duration_ms: int,
         executor_id: str = "",
+        commit_sha: str = "",
     ) -> None:
         try:
             with get_db() as db:
@@ -941,6 +957,7 @@ class PacketExecutionAdapter:
                         "acceptance_report": accept_dict,
                         "evidence_verifier_report": evidence_verifier_report.model_dump(),
                         "reviewer_report": reviewer_report.model_dump(),
+                        "agent_commit_sha": commit_sha,
                     }
                     existing.evidence_path = evidence_path
                     existing.finished_at = datetime.utcnow()
@@ -948,6 +965,45 @@ class PacketExecutionAdapter:
                     existing.executor_id = executor_id
         except Exception:
             _log.warn("update_run_result_failed", run_id=run_id, status=status)
+
+    # START_FUNCTION_CONTRACT
+    # name: _finish_early_rejected_run
+    # purpose: Update PacketRun on early git/worktree failures before acceptance pipeline runs.
+    # inputs: run_id, reason, duration_ms, executor_id, legacy_result.
+    # returns: ExecutionResult with accepted=False.
+    # side_effects: Writes PacketRun.status=rejected with result_json.
+    # emitted_logs: None.
+    # error_behavior: Never raises.
+    # END_FUNCTION_CONTRACT
+    def _finish_early_rejected_run(
+        self,
+        *,
+        run_id: str,
+        reason: str,
+        duration_ms: int,
+        executor_id: str = "",
+        legacy_result: dict | None = None,
+    ) -> ExecutionResult:
+        result = ExecutionResult(
+            accepted=False, domain_status="rejected", reason=reason,
+            evidence_path="", duration_ms=duration_ms, commit_sha="")
+        lr = legacy_result or {"error": "pre-acceptance failure", "reason": reason}
+        try:
+            skip_ev = skipped_evidence_report(reason)
+            skip_rv = skipped_reviewer_report(reason)
+            self._update_packet_run_result(
+                run_id=run_id, status="rejected",
+                legacy_result=lr,
+                acceptance_report=None,
+                evidence_verifier_report=skip_ev,
+                reviewer_report=skip_rv,
+                evidence_path="",
+                duration_ms=duration_ms,
+                executor_id=executor_id,
+            )
+        except Exception:
+            pass
+        return result
 
     def _save_agent_log(self, packet_id: str, run_number: int, result, state_root: Path) -> None:
         try:
