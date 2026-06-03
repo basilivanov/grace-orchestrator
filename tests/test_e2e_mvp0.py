@@ -71,17 +71,16 @@ async def test_mvp0_vertical_slice(api_client):
     assert r.status_code == 200
     assert r.json()["data"]["state"] == "accepted"
 
-    # 4. Merge → MERGED
+    # 4. Merge without worktree/branch → 400 (new guard)
     r = await c.post(f"/api/packets/{pid}/merge", json={"commit_sha": "abc"})
-    assert r.status_code == 200
-    assert r.json()["data"]["state"] == "merged"
+    assert r.status_code == 400
+    assert "worktree_path" in r.json()["detail"]
 
-    # 5. Final verification
+    # 5. Final verification (state unchanged — ACCEPTED because merge was rejected)
     r = await c.get(f"/api/packets/{pid}")
     data = r.json()["data"]
-    assert data["state"] == "merged"
+    assert data["state"] == "accepted"
     assert data["attempt_count"] == 1
-    assert len(data.get("runs", [])) >= 0
 
 
 @pytest.mark.asyncio

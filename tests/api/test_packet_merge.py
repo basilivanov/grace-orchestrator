@@ -37,3 +37,19 @@ async def test_merge_400_if_not_accepted(api):
         "worktree_path": "/tmp/wt", "branch_name": "agent/test"})
     assert r.status_code == 400
     assert "ACCEPTED" in r.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_merge_accepted_packet_missing_inputs_400(api):
+    """ACCEPTED packet without worktree_path/branch_name returns 400."""
+    r = await api.post("/api/architect/plan", json={
+        "feature_spec": {"title": "MergeGuard", "waves": [{"title": "W1", "packets": [{"title": "P1", "scope": ["x.py"]}]}]}})
+    pid = r.json()["data"]["packets"][0]
+    await api.post("/api/workers/register", json={"worker_id": "w1"})
+    await api.post("/api/packets/claim", json={"worker_id": "w1"})
+    await api.post(f"/api/packets/{pid}/release",
+                   json={"worker_id": "w1", "status": "accepted", "result": {"accepted": True}})
+
+    r = await api.post(f"/api/packets/{pid}/merge", json={})
+    assert r.status_code == 400
+    assert "worktree_path" in r.json()["detail"]

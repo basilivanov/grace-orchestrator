@@ -40,7 +40,8 @@ async def test_release_generates_event(api):
 
 
 @pytest.mark.asyncio
-async def test_merge_generates_event(api):
+async def test_merge_fake_branch_returns_409(api):
+    """Merge with a non-existent git branch returns 409 and no packet_merged event."""
     r = await api.post("/api/architect/plan", json={
         "feature_spec": {"title": "Evt3", "waves": [{"title": "W1", "packets": [{"title": "P1", "scope": ["x.py"]}]}]}})
     pid = r.json()["data"]["packets"][0]
@@ -51,12 +52,10 @@ async def test_merge_generates_event(api):
     r_merge = await api.post(f"/api/packets/{pid}/merge", json={
         "worktree_path": "/tmp/fake-wt", "branch_name": "agent/test"})
 
-    r = await api.get(f"/api/events?entity_type=packet&entity_id={pid}")
-    event_types = [e["event_type"] for e in r.json()["data"]]
-    if r_merge.status_code == 200:
-        assert "packet_merged" in event_types
-    else:
-        assert "packet_merged" not in event_types
+    assert r_merge.status_code == 409
+    r_ev = await api.get(f"/api/events?entity_type=packet&entity_id={pid}")
+    event_types = [e["event_type"] for e in r_ev.json()["data"]]
+    assert "packet_merged" not in event_types
 
 
 @pytest.mark.asyncio
