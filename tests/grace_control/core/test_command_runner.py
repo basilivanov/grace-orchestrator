@@ -66,3 +66,15 @@ class TestCommandRunner:
         r = runner.run("echo hello world")
         assert r.exit_code == 0
         assert "hello world" in r.stdout
+
+    def test_timeout_returns_124_with_string_command(self):
+        runner = CommandRunner(Path.cwd(), default_timeout_s=1)
+        r = runner.run([sys.executable, "-c", "import time; time.sleep(10)"], timeout_s=1)
+        assert r.exit_code == 124
+        assert "timeout" in r.stderr
+
+    def test_cwd_outside_repo_string(self):
+        runner = CommandRunner(Path("/tmp/isolated"))
+        r = runner.run(["echo", "hi"], cwd=Path("/etc"))
+        assert r.exit_code != 0
+        assert "outside" in r.stderr

@@ -125,3 +125,23 @@ class TestMatch:
 
     def test_no_match(self):
         assert _match("other/file.py", "src/*.py") is False
+
+
+class TestGetChangedFiles:
+    def test_get_changed_files_in_git_repo(self):
+        """ScopeGuard.get_changed_files returns list in a git repo."""
+        guard = ScopeGuard(Path.cwd())
+        files = guard.get_changed_files()
+        assert isinstance(files, list)
+
+    def test_get_changed_files_with_base_head(self):
+        """get_changed_files with base_ref/head_ref."""
+        guard = ScopeGuard(Path.cwd())
+        files = guard.get_changed_files(base_ref="HEAD", head_ref="HEAD")
+        assert isinstance(files, list)
+
+    def test_get_changed_files_outside_git_returns_empty(self, tmp_path):
+        """Outside git repo returns empty list."""
+        guard = ScopeGuard(tmp_path)
+        files = guard.get_changed_files()
+        assert files == []
