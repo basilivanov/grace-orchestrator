@@ -348,6 +348,42 @@ class PacketExecutionAdapter:
                 except Exception:
                     artifacts = []
 
+            # ── Profile-based routing for LLM gates ──
+            from grace_control.core.contracts import AcceptanceProfile
+
+            profile = pkt_contract.acceptance_profile
+
+            if profile == AcceptanceProfile.FAST:
+                ev_report = skipped_evidence_report("FAST profile skips evidence verifier")
+                rv_report = skipped_reviewer_report("FAST profile skips reviewer")
+                execution_result = ExecutionResult(
+                    accepted=True,
+                    reason=None,
+                    domain_status=accept_report.final_verdict.value,
+                    worktree_path=result.worktree_path or "",
+                    branch_name=result.branch_name or "",
+                    acceptance_report_path=accept_report_path,
+                    acceptance_verdict=accept_report.final_verdict.value,
+                    acceptance_summary=accept_report.summary,
+                    duration_ms=int((time.time() - start_time) * 1000),
+                )
+                evidence_path = self._save_evidence(packet_id, run_number, result.to_dict(), state_root)
+                execution_result.evidence_path = evidence_path
+                self._save_agent_log(packet_id, run_number, result, state_root)
+                self._update_packet_run_result(
+                    run_id=run_id, status="accepted",
+                    legacy_result=safe_legacy_dict,
+                    acceptance_report=accept_report,
+                    evidence_verifier_report=ev_report,
+                    reviewer_report=rv_report,
+                    evidence_path=evidence_path,
+                    duration_ms=execution_result.duration_ms,
+                    executor_id=executor.get("executor_id", ""),
+                )
+                _log.info("adapter_execute_done", packet_id=packet_id,
+                    accepted=True, duration_ms=execution_result.duration_ms)
+                return execution_result
+
             # ── Evidence Verifier (cheap LLM gate) ──
             evidence_report = await run_evidence_verifier(
                 packet=pkt_contract,
@@ -412,7 +448,38 @@ class PacketExecutionAdapter:
                     accepted=False, duration_ms=execution_result.duration_ms)
                 return execution_result
 
-            # ── Evidence Verifier PASS → run Reviewer ──
+            # ── Evidence Verifier PASS → profile-based routing ──
+            if profile == AcceptanceProfile.NORMAL:
+                rv_report = skipped_reviewer_report("NORMAL profile skips reviewer by default")
+                execution_result = ExecutionResult(
+                    accepted=True,
+                    reason=None,
+                    domain_status=accept_report.final_verdict.value,
+                    worktree_path=result.worktree_path or "",
+                    branch_name=result.branch_name or "",
+                    acceptance_report_path=accept_report_path,
+                    acceptance_verdict=accept_report.final_verdict.value,
+                    acceptance_summary=accept_report.summary,
+                    duration_ms=int((time.time() - start_time) * 1000),
+                )
+                evidence_path = self._save_evidence(packet_id, run_number, result.to_dict(), state_root)
+                execution_result.evidence_path = evidence_path
+                self._save_agent_log(packet_id, run_number, result, state_root)
+                self._update_packet_run_result(
+                    run_id=run_id, status="accepted",
+                    legacy_result=safe_legacy_dict,
+                    acceptance_report=accept_report,
+                    evidence_verifier_report=evidence_report,
+                    reviewer_report=rv_report,
+                    evidence_path=evidence_path,
+                    duration_ms=execution_result.duration_ms,
+                    executor_id=executor.get("executor_id", ""),
+                )
+                _log.info("adapter_execute_done", packet_id=packet_id,
+                    accepted=True, duration_ms=execution_result.duration_ms)
+                return execution_result
+
+            # ── STRICT / default: run Reviewer ──
             reviewer_report = await run_reviewer_gate(
                 packet=pkt_contract,
                 acceptance_report=accept_report,

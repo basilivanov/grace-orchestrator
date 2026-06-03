@@ -34,4 +34,4 @@ waves:
             kind: command
             required: true
             pattern: sandbox/golden/live_001/test_date_util.py
-        acceptance_profile: NORMAL
+        acceptance_profile: FAST

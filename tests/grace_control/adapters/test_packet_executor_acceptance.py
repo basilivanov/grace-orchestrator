@@ -68,7 +68,7 @@ def _make_blocked_report() -> AcceptanceReport:
     )
 
 
-def _make_mock_packet(attempt_count=1):
+def _make_mock_packet(attempt_count=1, profile="NORMAL"):
     p = MagicMock()
     p.id = "pkt-001"
     p.feature_id = "feat-001"
@@ -78,7 +78,7 @@ def _make_mock_packet(attempt_count=1):
     p.description = "Test"
     p.spec_json = {"scope": ["src/"], "verification": {"t1": [["echo", "ok"]]}}
     p.state = "pending"
-    p.acceptance_profile = "NORMAL"
+    p.acceptance_profile = profile
     p.attempt_count = attempt_count
     p.max_attempts = 3
     return p
@@ -126,7 +126,8 @@ async def _run_adapter_test(mock_legacy, mock_get_db, mock_pipeline,
                        legacy_ok=True, domain_status="accepted",
                        worktree_subdir="wt", packet_attempt=1,
                        pipeline_report=None, expect_accepted=None,
-                       existing_run=None, mock_verifier=None, mock_reviewer=None):
+                       existing_run=None, mock_verifier=None, mock_reviewer=None,
+                       profile="NORMAL"):
     mock_legacy.return_value = _FakeLegacyResult(
         ok=legacy_ok, domain_status=domain_status,
         worktree_path=None,
@@ -147,7 +148,7 @@ async def _run_adapter_test(mock_legacy, mock_get_db, mock_pipeline,
 
         run_mock = existing_run if existing_run is not None else _make_mock_packet_run(f"pkt-001-R{packet_attempt:02d}", attempt=packet_attempt)
         side_effect_values = [
-            _make_mock_packet(attempt_count=packet_attempt),
+            _make_mock_packet(attempt_count=packet_attempt, profile=profile),
             existing_run,
             run_mock,
         ]
@@ -257,7 +258,7 @@ class TestOriginal:
             mock_pipeline.return_value = _make_accepted_report()
             mock_verifier.return_value = _make_verifier_pass()
             mock_reviewer.return_value = _make_reviewer_pass()
-            side_effect_values = [_make_mock_packet(), None, _make_mock_packet_run()]
+            side_effect_values = [_make_mock_packet(profile="STRICT"), None, _make_mock_packet_run()]
             mock_get_db.return_value.__enter__.return_value.query.return_value.filter_by.return_value.first.side_effect = side_effect_values
             adapter = PacketExecutionAdapter(
                 project_root=Path(td), state_root=Path(td), worktree_root=Path(td))
@@ -328,34 +329,62 @@ class TestOriginal:
 # ── TZ-008 Routing tests ─────────────────────────────────────────────────────
 
 class TestEvidenceVerifierReviewerRouting:
-    @patch("grace_control.adapters.packet_executor.run_reviewer_gate")
-    @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
-    @patch("grace_control.adapters.packet_executor.get_db")
-    @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
-    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_legacy_runner")
-    async def test_deterministic_fail_skips_verifier_reviewer(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
-        result = await _run_adapter_test(
-            mock_legacy, mock_get_db, mock_pipeline,
-            pipeline_report=_make_rework_report(),
-            expect_accepted=False,
-            mock_verifier=mock_verifier, mock_reviewer=mock_reviewer,
-        )
-        mock_verifier.assert_not_called()
-        mock_reviewer.assert_not_called()
-        assert result.domain_status == "rework_required"
+
+    # ── Tests that use FAST profile ──────────────────────────────────
 
     @patch("grace_control.adapters.packet_executor.run_reviewer_gate")
     @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
     @patch("grace_control.adapters.packet_executor.get_db")
     @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
     @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_legacy_runner")
-    async def test_verifier_rework_skips_reviewer(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
+    async def test_fast_skips_verifier_and_reviewer(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
+        """FAST with deterministic accepted → verifier and reviewer not called."""
+        result = await _run_adapter_test(
+            mock_legacy, mock_get_db, mock_pipeline,
+            pipeline_report=_make_accepted_report(),
+            expect_accepted=True,
+            mock_verifier=mock_verifier, mock_reviewer=mock_reviewer,
+            profile="FAST",
+        )
+        mock_verifier.assert_not_called()
+        mock_reviewer.assert_not_called()
+        mock_run = mock_get_db.return_value.__enter__.return_value.query.return_value.filter_by.return_value.first
+        last_call = mock_run.side_effect
+        assert result.acceptance_verdict == "accepted"
+
+    # ── Tests that use NORMAL profile ────────────────────────────────
+
+    @patch("grace_control.adapters.packet_executor.run_reviewer_gate")
+    @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
+    @patch("grace_control.adapters.packet_executor.get_db")
+    @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
+    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_legacy_runner")
+    async def test_normal_verifier_pass_skips_reviewer(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
+        """NORMAL with verifier PASS → reviewer not called, accepted."""
+        result = await _run_adapter_test(
+            mock_legacy, mock_get_db, mock_pipeline,
+            pipeline_report=_make_accepted_report(),
+            expect_accepted=True,
+            mock_verifier=mock_verifier, mock_reviewer=mock_reviewer,
+            profile="NORMAL",
+        )
+        mock_verifier.assert_called_once()
+        mock_reviewer.assert_not_called()
+
+    @patch("grace_control.adapters.packet_executor.run_reviewer_gate")
+    @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
+    @patch("grace_control.adapters.packet_executor.get_db")
+    @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
+    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_legacy_runner")
+    async def test_normal_verifier_rework_skips_reviewer(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
+        """NORMAL with verifier REWORK_TO_CODER → reviewer not called, rejected."""
         mock_verifier.return_value = _make_verifier_rework()
         result = await _run_adapter_test(
             mock_legacy, mock_get_db, mock_pipeline,
             pipeline_report=_make_accepted_report(),
             expect_accepted=False,
             mock_verifier=mock_verifier, mock_reviewer=mock_reviewer,
+            profile="NORMAL",
         )
         mock_reviewer.assert_not_called()
         assert result.domain_status == "rejected"
@@ -365,23 +394,28 @@ class TestEvidenceVerifierReviewerRouting:
     @patch("grace_control.adapters.packet_executor.get_db")
     @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
     @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_legacy_runner")
-    async def test_verifier_architect_skips_reviewer(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
+    async def test_normal_verifier_architect_skips_reviewer(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
+        """NORMAL with verifier RETURN_TO_ARCHITECT → reviewer not called, blocked."""
         mock_verifier.return_value = _make_verifier_architect()
         result = await _run_adapter_test(
             mock_legacy, mock_get_db, mock_pipeline,
             pipeline_report=_make_accepted_report(),
             expect_accepted=False,
             mock_verifier=mock_verifier, mock_reviewer=mock_reviewer,
+            profile="NORMAL",
         )
         mock_reviewer.assert_not_called()
         assert result.domain_status == "blocked"
+
+    # ── Tests that use STRICT profile ────────────────────────────────
 
     @patch("grace_control.adapters.packet_executor.run_reviewer_gate")
     @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
     @patch("grace_control.adapters.packet_executor.get_db")
     @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
     @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_legacy_runner")
-    async def test_verifier_pass_reviewer_pass(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
+    async def test_strict_verifier_pass_reviewer_pass(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
+        """STRICT with verifier PASS + reviewer PASS → accepted."""
         mock_verifier.return_value = _make_verifier_pass()
         mock_reviewer.return_value = _make_reviewer_pass()
         result = await _run_adapter_test(
@@ -389,6 +423,7 @@ class TestEvidenceVerifierReviewerRouting:
             pipeline_report=_make_accepted_report(),
             expect_accepted=True,
             mock_verifier=mock_verifier, mock_reviewer=mock_reviewer,
+            profile="STRICT",
         )
         mock_reviewer.assert_called_once()
         assert result.acceptance_verdict == "accepted"
@@ -398,7 +433,8 @@ class TestEvidenceVerifierReviewerRouting:
     @patch("grace_control.adapters.packet_executor.get_db")
     @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
     @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_legacy_runner")
-    async def test_reviewer_rework_rejected(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
+    async def test_strict_reviewer_rework_rejected(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
+        """STRICT with reviewer REWORK_TO_CODER → rejected."""
         mock_verifier.return_value = _make_verifier_pass()
         mock_reviewer.return_value = _make_reviewer_rework()
         result = await _run_adapter_test(
@@ -406,6 +442,7 @@ class TestEvidenceVerifierReviewerRouting:
             pipeline_report=_make_accepted_report(),
             expect_accepted=False,
             mock_verifier=mock_verifier, mock_reviewer=mock_reviewer,
+            profile="STRICT",
         )
         assert result.domain_status == "rejected"
 
@@ -414,7 +451,8 @@ class TestEvidenceVerifierReviewerRouting:
     @patch("grace_control.adapters.packet_executor.get_db")
     @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
     @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_legacy_runner")
-    async def test_reviewer_architect_blocked(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
+    async def test_strict_reviewer_architect_blocked(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
+        """STRICT with reviewer RETURN_TO_ARCHITECT → blocked."""
         mock_verifier.return_value = _make_verifier_pass()
         mock_reviewer.return_value = _make_reviewer_architect()
         result = await _run_adapter_test(
@@ -422,6 +460,7 @@ class TestEvidenceVerifierReviewerRouting:
             pipeline_report=_make_accepted_report(),
             expect_accepted=False,
             mock_verifier=mock_verifier, mock_reviewer=mock_reviewer,
+            profile="STRICT",
         )
         assert result.domain_status == "blocked"
 
@@ -430,7 +469,8 @@ class TestEvidenceVerifierReviewerRouting:
     @patch("grace_control.adapters.packet_executor.get_db")
     @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
     @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_legacy_runner")
-    async def test_result_json_has_four_keys(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
+    async def test_result_json_has_four_keys_strict(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
+        """STRICT: result_json always has all four keys."""
         mock_verifier.return_value = _make_verifier_pass()
         mock_reviewer.return_value = _make_reviewer_pass()
         mock_run = _make_mock_packet_run()
@@ -439,8 +479,28 @@ class TestEvidenceVerifierReviewerRouting:
             pipeline_report=_make_accepted_report(),
             existing_run=mock_run,
             mock_verifier=mock_verifier, mock_reviewer=mock_reviewer,
+            profile="STRICT",
         )
         assert "legacy_result" in mock_run.result_json
         assert "acceptance_report" in mock_run.result_json
         assert "evidence_verifier_report" in mock_run.result_json
         assert "reviewer_report" in mock_run.result_json
+
+    # ── Deterministic fail for all profiles ──────────────────────────
+
+    @patch("grace_control.adapters.packet_executor.run_reviewer_gate")
+    @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
+    @patch("grace_control.adapters.packet_executor.get_db")
+    @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
+    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_legacy_runner")
+    async def test_deterministic_fail_skips_verifier_reviewer(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
+        """All profiles: deterministic fail → verifier and reviewer not called."""
+        result = await _run_adapter_test(
+            mock_legacy, mock_get_db, mock_pipeline,
+            pipeline_report=_make_rework_report(),
+            expect_accepted=False,
+            mock_verifier=mock_verifier, mock_reviewer=mock_reviewer,
+        )
+        mock_verifier.assert_not_called()
+        mock_reviewer.assert_not_called()
+        assert result.domain_status == "rework_required"
