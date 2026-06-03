@@ -1,0 +1,38 @@
+id: merge_already_applied
+kind: golden_fixture
+start_stage: merge
+profile: FAST
+
+feature:
+  title: Merge already applied
+  slug: merge-already-applied
+
+packet:
+  title: Merge already applied test
+  slug: merge-already-applied
+  state: accepted
+  acceptance_profile: FAST
+  scope:
+    - sandbox/golden/merge_applied/
+
+git:
+  init_target_repo: true
+  base_branch: main
+  create_worktree: true
+  create_branch: true
+  branch_name: agent/default/pkt_applied/attempt-0001
+  no_commit_diff: true
+  changed_files:
+    - path: sandbox/golden/merge_applied/file.py
+      content: "x = 1"
+
+runs:
+  - attempt: 1
+    status: accepted
+    acceptance_report:
+      final_verdict: accepted
+      summary: fixture ok
+
+expected:
+  merge_should_succeed: true
+  final_packet_state: merged

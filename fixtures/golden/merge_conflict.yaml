@@ -1,0 +1,39 @@
+id: merge_conflict
+kind: golden_fixture
+start_stage: merge
+profile: FAST
+
+feature:
+  title: Merge conflict
+  slug: merge-conflict
+
+packet:
+  title: Merge conflict test
+  slug: merge-conflict
+  state: accepted
+  acceptance_profile: FAST
+  scope:
+    - sandbox/golden/merge_conflict/
+
+git:
+  init_target_repo: true
+  base_branch: main
+  create_worktree: true
+  create_branch: true
+  branch_name: agent/default/pkt_conflict/attempt-0001
+  commit_message: fixture branch commit
+  conflict_with_branch_file: sandbox/golden/merge_conflict/shared.py
+  changed_files:
+    - path: sandbox/golden/merge_conflict/shared.py
+      content: "branch_value = 'from_branch'"
+
+runs:
+  - attempt: 1
+    status: accepted
+    acceptance_report:
+      final_verdict: accepted
+      summary: fixture ok
+
+expected:
+  merge_should_succeed: false
+  expected_error_contains: conflict

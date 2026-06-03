@@ -61,6 +61,7 @@ class FixtureGit(BaseModel):
     changed_files: list[FixtureChangedFile] = Field(default_factory=list)
     dirty_uncommitted_file: str | None = None
     no_commit_diff: bool = False
+    conflict_with_branch_file: str | None = None
 
 
 class FixturePacket(BaseModel):
@@ -199,6 +200,16 @@ def create_fixture_git_state(
         df = target_repo_root / git_cfg.dirty_uncommitted_file
         df.parent.mkdir(parents=True, exist_ok=True)
         df.write_text("dirty content")
+
+    if git_cfg.conflict_with_branch_file:
+        cf_path = target_repo_root / git_cfg.conflict_with_branch_file
+        cf_path.parent.mkdir(parents=True, exist_ok=True)
+        cf_path.write_text("main_base_value = 'from_main'")
+        subprocess.run(["git", "add", "-A"], cwd=str(target_repo_root), capture_output=True, timeout=10)
+        subprocess.run(
+            ["git", "commit", "-m", "conflicting main commit"],
+            cwd=str(target_repo_root), capture_output=True, timeout=10,
+        )
 
     return result
 
@@ -380,17 +391,23 @@ async def run_stage_from_fixture(
         if verdict_str != "accepted":
             return {"success": False, "error": f"acceptance not accepted: {verdict_str}", "packet_state": "rejected"}
 
-        is_pass = spec.expected.final_packet_state in ("accepted", None) and spec.expected.merge_should_succeed is not False
+        exp_state = spec.expected.final_packet_state or "accepted"
+        if exp_state == "accepted":
+            ev_verdict = EvidenceVerifierVerdict.PASS
+            pkt_state = "accepted"
+            ok = True
+        elif exp_state == "blocked":
+            ev_verdict = EvidenceVerifierVerdict.RETURN_TO_ARCHITECT
+            pkt_state = "blocked"
+            ok = False
+        else:
+            ev_verdict = EvidenceVerifierVerdict.REWORK_TO_CODER
+            pkt_state = "rejected"
+            ok = False
         ev_report = EvidenceVerifierReport(
-            verdict=EvidenceVerifierVerdict.PASS if is_pass else EvidenceVerifierVerdict.REWORK_TO_CODER,
-            summary="fixture verifier verdict",
-            skipped=False,
+            verdict=ev_verdict, summary="fixture verifier verdict", skipped=False,
         )
-        return {
-            "success": is_pass,
-            "packet_state": "accepted" if is_pass else "rejected",
-            "verifier_verdict": ev_report.verdict.value,
-        }
+        return {"success": ok, "packet_state": pkt_state, "verifier_verdict": ev_report.verdict.value}
 
     if stage == "reviewer":
         from grace_control.core.reviewer_gate import (
@@ -407,17 +424,23 @@ async def run_stage_from_fixture(
         if verdict_str != "accepted":
             return {"success": False, "error": f"acceptance not accepted: {verdict_str}", "packet_state": "rejected"}
 
-        is_pass = spec.expected.final_packet_state in ("accepted", None) and spec.expected.merge_should_succeed is not False
+        exp_state = spec.expected.final_packet_state or "accepted"
+        if exp_state == "accepted":
+            rv_verdict = ReviewerVerdict.PASS
+            pkt_state = "accepted"
+            ok = True
+        elif exp_state == "blocked":
+            rv_verdict = ReviewerVerdict.RETURN_TO_ARCHITECT
+            pkt_state = "blocked"
+            ok = False
+        else:
+            rv_verdict = ReviewerVerdict.REWORK_TO_CODER
+            pkt_state = "rejected"
+            ok = False
         rv_report = ReviewerReport(
-            verdict=ReviewerVerdict.PASS if is_pass else ReviewerVerdict.REWORK_TO_CODER,
-            summary="fixture reviewer verdict",
-            skipped=False,
+            verdict=rv_verdict, summary="fixture reviewer verdict", skipped=False,
         )
-        return {
-            "success": is_pass,
-            "packet_state": "accepted" if is_pass else "rejected",
-            "reviewer_verdict": rv_report.verdict.value,
-        }
+        return {"success": ok, "packet_state": pkt_state, "reviewer_verdict": rv_report.verdict.value}
 
     return {"success": False, "error": f"Unknown stage: {stage}"}
 
