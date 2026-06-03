@@ -6,6 +6,13 @@ Goal: add a fast golden fixture system that can prepare realistic control-plane 
 
 This is a test/debug infrastructure task. It must not bypass production safety gates and must not change normal feature execution behavior.
 
+Related specs:
+
+```text
+docs/codex/tz-016-golden-replay-resume-mode.md
+docs/codex/tz-017-feature-recovery-escalation-policy.md
+```
+
 ---
 
 ## 0. Why this is needed
@@ -36,9 +43,10 @@ verifier fixture   → start at verifier
 reviewer fixture   → start at reviewer
 merge fixture      → start at merge
 blocked fixture    → start at release/retry/block handling
+recovery fixture   → start at recovery decision / escalation policy
 ```
 
-The fixture must be realistic enough to catch DB/git/worktree/branch/commit/report mismatches, especially merge bugs.
+The fixture must be realistic enough to catch DB/git/worktree/branch/commit/report mismatches, especially merge bugs and feature-recovery routing bugs.
 
 ---
 
@@ -58,6 +66,19 @@ There are three test layers:
 ```
 
 Do not replace live golden tests. Add staged fixtures to debug and regression-test specific layers quickly.
+
+For feature reliability, staged fixtures must let us test the future `TZ 017` recovery policy with realistic states:
+
+```text
+rejected packet with one failed coder attempt
+rejected packet with two failed coder attempts
+verifier returned REWORK_TO_CODER
+verifier returned RETURN_TO_ARCHITECT
+reviewer returned REWORK_TO_CODER
+merge failed with dirty target repo
+blocked packet retry denied
+architect repair attempts exhausted
+```
 
 ---
 
@@ -83,7 +104,7 @@ fail closed with clear error
 
 Never run fixture seeding against a production repo or normal self-improvement repo.
 
-Never disable acceptance, scope guard, merge validation, dirty repo checks, or reviewer rules.
+Never disable acceptance, scope guard, merge validation, dirty repo checks, reviewer rules, or recovery safety blockers.
 
 ---
 
@@ -97,7 +118,7 @@ Fixture seed
   Code that creates DB rows, git repo/worktree/branch/commit, artifacts, reports.
 
 Start stage
-  The stage where the test begins: acceptance/verifier/reviewer/merge/release/retry.
+  The stage where the test begins: acceptance/verifier/reviewer/merge/release/retry/recovery.
 
 Generated target repo
   A temporary git repository created under /tmp for fixture testing.
@@ -129,6 +150,20 @@ fixtures/golden/
   retry_blocked_packet.yaml
   self_improvement_strict_gate.yaml
 
+  # Recovery/stability fixtures for TZ-017
+  recovery_coder_fail_once_retry_same.yaml
+  recovery_coder_fail_twice_switch_model.yaml
+  recovery_coder_fail_four_times_return_architect.yaml
+  recovery_architect_repair_exhausted_escalate.yaml
+  recovery_verifier_rework_to_coder.yaml
+  recovery_verifier_return_to_architect.yaml
+  recovery_reviewer_rework_to_coder.yaml
+  recovery_reviewer_return_to_architect.yaml
+  recovery_merge_dirty_target_true_blocker.yaml
+  recovery_merge_transient_retry.yaml
+  recovery_blocked_retry_denied.yaml
+  recovery_unknown_first_retryable.yaml
+
 src/grace_control/core/golden_fixtures.py
 src/grace_control/cli/golden_fixtures.py  # or integrate into existing CLI
 scripts/golden_fixtures/README.md         # optional run examples
@@ -137,6 +172,7 @@ tests/golden_fixtures/
   test_fixture_seed_models.py
   test_fixture_merge_scenarios.py
   test_fixture_verifier_reviewer_scenarios.py
+  test_fixture_recovery_scenarios.py
   test_fixture_safety_guards.py
 ```
 
@@ -180,6 +216,17 @@ grace golden fixture run-one fixtures/golden/merge_clean_success.yaml \
   --run-id merge-clean-001 \
   --from merge \
   --base-dir /tmp/grace-fixtures/merge-clean-001 \
+  --golden-fixture
+```
+
+Recovery fixture example:
+
+```bash
+export GRACE_GOLDEN_FIXTURE=1
+
+grace golden fixture run-one fixtures/golden/recovery_coder_fail_twice_switch_model.yaml \
+  --base-dir /tmp/grace-fixtures/recovery-coder-switch \
+  --from recovery \
   --golden-fixture
 ```
 
@@ -281,7 +328,83 @@ YAML should use title/slug for readability, UID for generated state only.
 
 ---
 
-## 7. Fixture report schema
+## 7. Recovery fixture YAML extension
+
+Recovery/stability fixtures support `start_stage: recovery` and must create the exact failure history that `TZ 017` needs.
+
+Example:
+
+```yaml
+id: recovery_coder_fail_twice_switch_model
+kind: golden_fixture
+start_stage: recovery
+profile: NORMAL
+
+feature:
+  title: Recovery coder switch
+  slug: recovery-coder-switch
+
+wave:
+  title: Recovery wave
+  order: 1
+
+packet:
+  title: Fix small API bug
+  slug: fix-small-api-bug
+  state: rejected
+  acceptance_profile: NORMAL
+  scope:
+    - sandbox/golden/recovery_coder_switch/
+  verification:
+    t0: []
+    t1: ["python3 -m pytest sandbox/golden/recovery_coder_switch/test_api.py -q"]
+    t2: []
+
+failure_signal:
+  failure_class_hint: retryable_coder
+  reason: "T1 failed twice"
+  acceptance_verdict: rework_required
+  coder_attempt_count: 2
+  attempt_count: 2
+  current_executor_id: coder-flash
+  previous_executor_ids:
+    - coder-flash
+    - coder-flash
+
+runs:
+  - attempt: 1
+    status: rejected
+    executor_id: coder-flash
+    result_json:
+      acceptance_report:
+        final_verdict: rework_required
+        summary: T1 failed
+  - attempt: 2
+    status: rejected
+    executor_id: coder-flash
+    result_json:
+      acceptance_report:
+        final_verdict: rework_required
+        summary: T1 failed again
+
+expected:
+  recovery:
+    failure_class: retryable_coder
+    action: switch_coder
+    next_executor_hint_any_of:
+      - coder-agy-flash
+      - coder-agy-sonnet
+    must_not_block_feature: true
+    must_not_lower_acceptance_profile: true
+```
+
+The fixture runner does not need to implement recovery policy itself unless `TZ 017` is already implemented. It must at least be able to seed these states and later call `decide_recovery(...)` when available.
+
+If `feature_recovery.py` is not implemented yet, recovery fixtures can be validated as seed/preflight fixtures only and marked pending for execution.
+
+---
+
+## 8. Fixture report schema
 
 Every fixture run writes a JSON report:
 
@@ -305,11 +428,24 @@ Every fixture run writes a JSON report:
 }
 ```
 
+Recovery fixture report adds:
+
+```json
+{
+  "recovery": {
+    "failure_signal": {},
+    "expected_decision": {},
+    "actual_decision": {},
+    "status": "passed"
+  }
+}
+```
+
 This report must make debugging possible without searching logs.
 
 ---
 
-## 8. Realistic DB state requirements
+## 9. Realistic DB state requirements
 
 Seeder must create real DB rows using existing SQLAlchemy models or repository helpers, not raw ad hoc SQL unless there is no alternative.
 
@@ -351,11 +487,36 @@ acceptance_summary
 target_repo_root if required
 ```
 
+For recovery scenarios, Packet/PacketRun/result_json must include enough data to build `FailureSignal` from `TZ 017`:
+
+```text
+feature_id
+packet_id
+packet_state
+domain_status
+reason
+acceptance_verdict
+evidence_verifier_verdict
+reviewer_verdict
+merge_error
+blocked_reason
+acceptance_profile
+attempt_count
+coder_attempt_count
+architect_repair_count
+reviewer_reject_count
+verifier_reject_count
+merge_attempt_count
+current_executor_id
+previous_executor_ids
+changed_files
+```
+
 The goal is to match production contract, not fake around it.
 
 ---
 
-## 9. Realistic git state requirements
+## 10. Realistic git state requirements
 
 Merge fixtures must create real git state:
 
@@ -415,7 +576,7 @@ merge should reject no_changes or equivalent
 
 ---
 
-## 10. Artifact fixture requirements
+## 11. Artifact fixture requirements
 
 Artifacts should be real files under fixture state root.
 
@@ -445,7 +606,7 @@ Expected: endpoint must not look for `packet_id-packet_id-R01`.
 
 ---
 
-## 11. Start stage behavior
+## 12. Start stage behavior
 
 Fixture runner should support starting from:
 
@@ -457,6 +618,7 @@ merge
 release
 retry
 blocked
+recovery
 ```
 
 MVP required stages:
@@ -466,9 +628,10 @@ merge
 verifier
 reviewer
 acceptance
+recovery-seed-only
 ```
 
-### 11.1 Start from acceptance
+### 12.1 Start from acceptance
 
 Create:
 
@@ -480,7 +643,7 @@ legacy_result-like data present if required
 
 Run deterministic acceptance only and then continue according to profile if requested.
 
-### 11.2 Start from verifier
+### 12.2 Start from verifier
 
 Create:
 
@@ -492,7 +655,7 @@ PacketRun result_json contains acceptance report
 
 Run Evidence Verifier only or verifier + subsequent flow depending command.
 
-### 11.3 Start from reviewer
+### 12.3 Start from reviewer
 
 Create:
 
@@ -504,7 +667,7 @@ STRICT profile if reviewer is required
 
 Run reviewer and verify output routing.
 
-### 11.4 Start from merge
+### 12.4 Start from merge
 
 Create:
 
@@ -516,13 +679,39 @@ merge payload complete
 
 Call merge path and verify result.
 
+### 12.5 Start from recovery
+
+Create:
+
+```text
+Feature/Wave/Packet/PacketRun history representing a known failure pattern
+failure_signal fixture payload
+optional worktree/artifacts if failure depends on git/acceptance reports
+```
+
+If `feature_recovery.py` exists:
+
+```text
+build FailureSignal from seeded state
+call classify_failure(...)
+call decide_recovery(...)
+validate expected recovery decision
+```
+
+If `feature_recovery.py` is not yet implemented:
+
+```text
+validate seeded DB/result_json/failure_signal only
+mark execution as pending_recovery_policy
+```
+
 ---
 
-## 12. Required scenario set
+## 13. Required scenario set
 
 Implement fixture specs for at least these scenarios.
 
-### 12.1 Merge scenarios
+### 13.1 Merge scenarios
 
 ```text
 merge_clean_success
@@ -534,7 +723,7 @@ merge_conflict
 merge_already_merged_or_already_applied
 ```
 
-### 12.2 Acceptance scenarios
+### 13.2 Acceptance scenarios
 
 ```text
 acceptance_scope_clean_success
@@ -545,7 +734,7 @@ acceptance_t2_failure
 acceptance_output_files_present
 ```
 
-### 12.3 Verifier scenarios
+### 13.3 Verifier scenarios
 
 ```text
 verifier_pass
@@ -555,7 +744,7 @@ verifier_invalid_json_retryable
 verifier_missing_evidence
 ```
 
-### 12.4 Reviewer scenarios
+### 13.4 Reviewer scenarios
 
 ```text
 reviewer_pass_strict
@@ -565,7 +754,7 @@ reviewer_invalid_json_retryable
 reviewer_blocks_unsafe_self_improvement
 ```
 
-### 12.5 Routing/blocking scenarios
+### 13.5 Routing/blocking scenarios
 
 ```text
 blocked_release_no_retry
@@ -575,7 +764,7 @@ release_missing_inputs_fail_closed
 return_to_architect_sets_blocked_or_architect_state
 ```
 
-### 12.6 Self-improvement scenarios
+### 13.6 Self-improvement scenarios
 
 ```text
 self_improvement_strict_gate_pass
@@ -584,11 +773,188 @@ self_improvement_missing_required_gate
 self_improvement_reviewer_required
 ```
 
-MVP may implement only merge scenarios first, but file structure and models should allow all.
+### 13.7 Feature recovery / stability scenarios for TZ-017
+
+These fixtures directly test the future Feature Recovery / Escalation Policy from `docs/codex/tz-017-feature-recovery-escalation-policy.md`.
+
+Coder retry/model-switch fixtures:
+
+```text
+recovery_coder_fail_once_retry_same
+  state: one rejected attempt, retryable coder failure
+  expected: RETRY_SAME_CODER
+
+recovery_coder_fail_twice_switch_model
+  state: two rejected attempts by coder-flash
+  expected: SWITCH_CODER, next_executor_hint not coder-flash
+
+recovery_coder_fail_four_times_return_architect
+  state: four coder failures, deterministic acceptance still failing
+  expected: RETURN_TO_ARCHITECT
+
+recovery_no_changes_retryable_then_switch
+  state: repeated no_changes_produced failures
+  expected: first retry coder, then switch coder/model
+```
+
+Architect escalation fixtures:
+
+```text
+recovery_scope_impossible_return_architect
+  state: verifier/reviewer indicates scope impossible without expanding allowed scope
+  expected: RETURN_TO_ARCHITECT
+
+recovery_architect_repair_once_retry_packet
+  state: one architect repair already happened, new corrected packet exists
+  expected: continue/retry packet, not true blocker
+
+recovery_architect_repair_exhausted_escalate
+  state: architect_repair_count >= 2 and packet still impossible
+  expected: ESCALATE_ARCHITECT
+```
+
+Verifier fixtures:
+
+```text
+recovery_verifier_rework_to_coder
+  state: evidence_verifier_verdict=REWORK_TO_CODER
+  expected: RETRYABLE_CODER → coder ladder
+
+recovery_verifier_return_to_architect
+  state: evidence_verifier_verdict=RETURN_TO_ARCHITECT
+  expected: ARCHITECT_REPACK_NEEDED → RETURN_TO_ARCHITECT
+
+recovery_verifier_invalid_json_retry
+  state: verifier parser/invalid JSON failure, verifier_reject_count=1
+  expected: RETRY_VERIFIER
+
+recovery_verifier_invalid_json_escalate
+  state: repeated verifier parser failures
+  expected: ESCALATE_ARCHITECT or switch verifier if registry supports it
+```
+
+Reviewer fixtures:
+
+```text
+recovery_reviewer_rework_to_coder
+  state: reviewer_verdict=REWORK_TO_CODER
+  expected: RETRYABLE_CODER → coder ladder
+
+recovery_reviewer_return_to_architect
+  state: reviewer_verdict=RETURN_TO_ARCHITECT
+  expected: ARCHITECT_REPACK_NEEDED → RETURN_TO_ARCHITECT
+
+recovery_reviewer_invalid_json_retry
+  state: reviewer parser/invalid JSON failure, reviewer_reject_count=1
+  expected: RETRY_REVIEWER
+
+recovery_reviewer_invalid_json_escalate
+  state: repeated reviewer parser failures
+  expected: ESCALATE_ARCHITECT
+```
+
+Merge recovery fixtures:
+
+```text
+recovery_merge_dirty_target_true_blocker
+  state: merge_error=DIRTY_TARGET_REPO
+  expected: TRUE_BLOCKER → BLOCK_FEATURE
+
+recovery_merge_conflict_true_blocker
+  state: merge conflict
+  expected: TRUE_BLOCKER → BLOCK_FEATURE
+
+recovery_merge_transient_retry
+  state: transient merge/API error, merge_attempt_count < limit
+  expected: MERGE_RETRYABLE → RETRY_MERGE
+
+recovery_merge_retry_limit_blocks
+  state: transient merge/API error, merge_attempt_count >= max_merge_retries
+  expected: BLOCK_FEATURE
+
+recovery_missing_branch_retry_then_block
+  state: missing branch first time vs repeated
+  expected: MERGE_RETRYABLE first, then BLOCK_FEATURE
+```
+
+True blocker fixtures:
+
+```text
+recovery_missing_cli_true_blocker
+  state: missing opencode/agy/codex CLI
+  expected: TRUE_BLOCKER → BLOCK_FEATURE
+
+recovery_missing_api_key_true_blocker
+  state: auth/key missing
+  expected: TRUE_BLOCKER → BLOCK_FEATURE
+
+recovery_user_decision_required_blocker
+  state: blocked_reason=user decision required
+  expected: TRUE_BLOCKER → BLOCK_FEATURE
+
+recovery_security_risk_requires_approval
+  state: auth/security/data-loss risk without approval
+  expected: TRUE_BLOCKER or STRICT/human approval path, never silent retry
+```
+
+Blocked/retry fixtures:
+
+```text
+recovery_blocked_retry_denied
+  state: packet BLOCKED
+  expected: retry denied, BLOCK_FEATURE or NO_ACTION according to policy
+
+recovery_rejected_retry_allowed
+  state: packet REJECTED with retryable coder failure
+  expected: retry/switch according to coder ladder
+
+recovery_return_to_architect_sets_blocked_or_architect_state
+  state: verifier/reviewer return_to_architect
+  expected: packet exits normal coder retry loop and routes to architect
+```
+
+Unknown failure fixtures:
+
+```text
+recovery_unknown_first_retryable
+  state: unknown failure first occurrence
+  expected: UNKNOWN_RETRYABLE and retry once
+
+recovery_unknown_repeated_escalates
+  state: repeated unknown failure
+  expected: ESCALATE_ARCHITECT or TRUE_BLOCKER depending safety
+```
+
+Acceptance profile safety fixtures:
+
+```text
+recovery_strict_profile_never_downgraded
+  state: STRICT packet failure
+  expected: next_acceptance_profile is STRICT or stricter-equivalent, never NORMAL/FAST
+
+recovery_profile_escalates_to_strict_for_core_git_merge
+  state: NORMAL packet touches worker/git/merge/core safety path
+  expected: next_acceptance_profile STRICT if policy supports escalation
+```
+
+MVP for recovery fixtures:
+
+```text
+1. Seed-only fixtures for all recovery scenario classes.
+2. Executable `decide_recovery(...)` validation only after TZ-017 implementation lands.
+3. At minimum, implement executable tests for:
+   - recovery_coder_fail_once_retry_same
+   - recovery_coder_fail_twice_switch_model
+   - recovery_coder_fail_four_times_return_architect
+   - recovery_merge_dirty_target_true_blocker
+   - recovery_blocked_retry_denied
+```
+
+MVP may implement only merge scenarios first, but file structure and models must allow all recovery fixtures.
 
 ---
 
-## 13. Expected result validation
+## 14. Expected result validation
 
 Each fixture YAML has an `expected` section.
 
@@ -610,13 +976,21 @@ expected:
     - src/grace_control/core/acceptance_pipeline.py
   expected_report_fields:
     acceptance_verdict: accepted
+  recovery:
+    failure_class: retryable_coder
+    action: switch_coder
+    next_executor_hint_any_of:
+      - coder-agy-flash
+      - coder-agy-sonnet
+    must_not_block_feature: true
+    must_not_lower_acceptance_profile: true
 ```
 
 Fixture runner must validate expected results and fail with clear diff.
 
 ---
 
-## 14. Integration with golden replay/resume
+## 15. Integration with golden replay/resume
 
 This TZ complements `TZ 016 — Golden-only replay/resume mode`.
 
@@ -644,24 +1018,43 @@ But fixture seeding must be explicit and test-only.
 
 ---
 
-## 15. Integration with Feature Recovery TZ
+## 16. Integration with Feature Recovery TZ
 
-This TZ also supports `TZ 017 — Feature Recovery / Escalation Policy`.
+This TZ directly supports `TZ 017 — Feature Recovery / Escalation Policy`.
 
-Recovery policy tests can use fixture states later:
+Recovery policy tests should use fixture states to validate:
 
 ```text
-coder failed twice → switch coder
+coder failed once → retry same coder
+coder failed twice → switch coder/model
+coder failed four times → return to architect
 verifier returned RETURN_TO_ARCHITECT → architect repack
+reviewer returned REWORK_TO_CODER → coder ladder
 merge dirty target → true blocker
+merge transient error → retry merge
 blocked packet retry denied
+unknown failure first time → retryable once
+repeated unknown failure → escalate/block
+STRICT packet → never downgrade acceptance profile
 ```
 
-Do not implement recovery policy here. Only prepare fixtures that can later test it.
+Do not implement recovery policy here. Only prepare fixtures that can test it once `feature_recovery.py` exists.
+
+The fixture layer must expose a helper usable by recovery tests:
+
+```python
+def seed_recovery_fixture(spec, db, base_dir) -> SeededFixture:
+    ...
+
+def build_failure_signal_from_fixture(seeded: SeededFixture) -> FailureSignal:
+    ...
+```
+
+If `FailureSignal` is not importable yet, keep fixture failure-signal payload as plain dict and document the intended mapping.
 
 ---
 
-## 16. UID model requirements
+## 17. UID model requirements
 
 Use current UID model:
 
@@ -688,7 +1081,7 @@ test_fixture_runner_does_not_parse_w01_p01_from_ids
 
 ---
 
-## 17. Scope/frozen scope requirements
+## 18. Scope/frozen scope requirements
 
 Even in fixture worktrees:
 
@@ -724,7 +1117,7 @@ Do not weaken scope guard for fixtures.
 
 ---
 
-## 18. API/DB seeding design
+## 19. API/DB seeding design
 
 Do not blindly insert partial rows.
 
@@ -751,13 +1144,14 @@ branch exists if required
 commit_sha exists if required
 artifact paths exist if required
 target repo clean/dirty as scenario requires
+recovery failure_signal can be built from seeded state if start_stage=recovery
 ```
 
 If preflight fails, fixture should fail as `fixture_setup_failed`, not as pipeline failure.
 
 ---
 
-## 19. Test-only generated repos
+## 20. Test-only generated repos
 
 Generated repo layout:
 
@@ -783,7 +1177,7 @@ Do not use the real control-plane repo as target for staged fixtures unless an e
 
 ---
 
-## 20. Commands should be deterministic
+## 21. Commands should be deterministic
 
 Avoid randomness in expected contents. UIDs can be random, but reports should capture them.
 
@@ -795,7 +1189,7 @@ Do not rely on wall-clock delays.
 
 ---
 
-## 21. Tests required
+## 22. Tests required
 
 Create tests:
 
@@ -805,6 +1199,7 @@ tests/golden_fixtures/test_fixture_seed_models.py
 tests/golden_fixtures/test_fixture_git_state.py
 tests/golden_fixtures/test_fixture_merge_scenarios.py
 tests/golden_fixtures/test_fixture_artifacts.py
+tests/golden_fixtures/test_fixture_recovery_scenarios.py
 ```
 
 ### Safety tests
@@ -826,6 +1221,7 @@ test_fixture_creates_packet_run_with_result_json
 test_fixture_creates_acceptance_report_artifact
 test_fixture_preflight_fails_missing_worktree
 test_fixture_preflight_fails_missing_branch
+test_fixture_creates_recovery_failure_signal_payload
 ```
 
 ### Git state tests
@@ -858,11 +1254,39 @@ test_reviewer_return_architect_fixture_routes_to_architect
 test_self_improvement_strict_fixture_requires_reviewer
 ```
 
-MVP may initially add only safety + seed + merge tests, but leave TODO fixtures for verifier/reviewer.
+### Feature recovery fixture tests
+
+If `feature_recovery.py` exists:
+
+```text
+test_recovery_coder_fail_once_retry_same
+test_recovery_coder_fail_twice_switch_model
+test_recovery_coder_fail_four_times_return_architect
+test_recovery_architect_repair_exhausted_escalate
+test_recovery_verifier_rework_to_coder
+test_recovery_verifier_return_to_architect
+test_recovery_reviewer_rework_to_coder
+test_recovery_reviewer_return_to_architect
+test_recovery_merge_dirty_target_true_blocker
+test_recovery_merge_transient_retry
+test_recovery_blocked_retry_denied
+test_recovery_unknown_first_retryable
+test_recovery_strict_profile_never_downgraded
+```
+
+If `feature_recovery.py` does not exist yet:
+
+```text
+test_recovery_fixture_seed_coder_fail_twice_switch_model
+test_recovery_fixture_seed_merge_dirty_target_true_blocker
+test_recovery_fixture_seed_blocked_retry_denied
+```
+
+MVP may initially add only safety + seed + merge tests, but must leave fixture specs/TODOs for verifier/reviewer/recovery.
 
 ---
 
-## 22. Acceptance criteria
+## 23. Acceptance criteria
 
 Done only if:
 
@@ -881,13 +1305,15 @@ Done only if:
 12. generated IDs use feat_/wave_/pkt_ UID model.
 13. scope/frozen_scope are still enforced in acceptance fixtures.
 14. expected outcome validation is implemented.
-15. tests do not run real LLMs, opencode, agy, or architect.
-16. normal live golden path remains unchanged.
+15. recovery fixture specs exist for coder retry/model-switch, architect repack/escalation, verifier/reviewer routing, merge true blocker/retryable, blocked retry denied, unknown failure, and strict profile no-downgrade.
+16. recovery seed/preflight can create FailureSignal-compatible payloads.
+17. tests do not run real LLMs, opencode, agy, or architect.
+18. normal live golden path remains unchanged.
 ```
 
 ---
 
-## 23. Do not do in this task
+## 24. Do not do in this task
 
 ```text
 Do not replace live golden tests.
@@ -899,11 +1325,13 @@ Do not require generated UIDs in fixture YAML.
 Do not implement recovery policy here.
 Do not auto-resolve merge conflicts.
 Do not add manual mark-stage-passed override.
+Do not make recovery fixtures lower acceptance_profile.
+Do not treat true blockers as retryable just to keep tests moving.
 ```
 
 ---
 
-## 24. Suggested implementation order
+## 25. Suggested implementation order
 
 ```text
 1. Add fixture Pydantic models.
@@ -915,12 +1343,14 @@ Do not add manual mark-stage-passed override.
 7. Add run-one CLI for merge_clean_success.
 8. Add merge dirty/missing/no_changes fixtures.
 9. Add tests for safety/seed/git/merge.
-10. Add placeholder fixture specs for acceptance/verifier/reviewer/self-improvement.
+10. Add recovery fixture schema extension and seed-only recovery fixtures.
+11. Add placeholder fixture specs for acceptance/verifier/reviewer/self-improvement.
+12. After TZ-017 lands, wire recovery fixtures to `classify_failure(...)` and `decide_recovery(...)`.
 ```
 
 ---
 
-## 25. Example MVP command set
+## 26. Example MVP command set
 
 ```bash
 export GRACE_GOLDEN_FIXTURE=1
@@ -933,11 +1363,24 @@ grace golden fixture run-one fixtures/golden/merge_clean_success.yaml \
 cat /tmp/grace-fixtures/merge-clean-success/reports/run-report.json
 ```
 
+Recovery seed-only example:
+
+```bash
+export GRACE_GOLDEN_FIXTURE=1
+
+grace golden fixture run-one fixtures/golden/recovery_coder_fail_twice_switch_model.yaml \
+  --base-dir /tmp/grace-fixtures/recovery-coder-switch \
+  --from recovery \
+  --golden-fixture
+
+cat /tmp/grace-fixtures/recovery-coder-switch/reports/run-report.json
+```
+
 Expected runtime should be seconds, not minutes.
 
 ---
 
-## 26. Final coder report format
+## 27. Final coder report format
 
 Coder must report:
 
@@ -952,6 +1395,8 @@ Preflight validation added: yes/no
 CLI run-one added: yes/no
 Merge clean fixture added: yes/no
 Merge failure fixtures added: yes/no
+Recovery fixture schema added: yes/no
+Recovery seed fixtures added: yes/no
 Verifier/reviewer fixture placeholders added: yes/no
 Tests added
 Tests run
