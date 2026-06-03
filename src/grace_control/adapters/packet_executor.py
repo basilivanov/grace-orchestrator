@@ -184,6 +184,7 @@ class PacketExecutionAdapter:
 
             # ── Deterministic acceptance pipeline (replaces fake verifier/reviewer) ──
             try:
+                spec = packet_data.get("spec_json") or {}
                 from grace_control.core.acceptance_pipeline import AcceptancePipeline
                 from grace_control.core.contracts import (
                     AcceptanceProfile, ExecutionPacketContract,

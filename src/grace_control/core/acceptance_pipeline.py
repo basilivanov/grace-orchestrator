@@ -39,6 +39,15 @@ from grace_control.core.evidence import EvidenceCollector
 from grace_control.core.scope_guard import ScopeGuard
 
 
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class _T0Result:
+    stage: StageResult
+    scope_violations: list[ScopeViolation]
+
+
 class AcceptancePipeline:
 
     def __init__(
@@ -68,16 +77,66 @@ class AcceptancePipeline:
         scope_violations: list[ScopeViolation] = []
 
         # ── T0: scope + cheap machine gates ──────────────────────────────────
-        t0_result = self._run_t0(packet, changed_files, base_ref, head_ref)
-        scope_violations = t0_result.get("scope_violations", [])
-        if t0_result.get("status") == StageStatus.FAILED:
+        t0 = self._run_t0(packet, changed_files, base_ref, head_ref)
+        if t0.stage.status == StageStatus.FAILED:
             return AcceptanceReport(
                 packet_id=packet.packet_id,
                 final_verdict=PacketVerdict.REWORK_REQUIRED,
-                stages=[t0_result["stage"]],
-                scope_violations=scope_violations,
-                reasons=t0_result.get("blocking_issues", []) or ["T0 failed"],
+                stages=[t0.stage],
+                scope_violations=t0.scope_violations,
+                reasons=t0.stage.blocking_issues or ["T0 failed"],
             )
+
+        ep = self._evidence.collect_from_stage(t0.stage)
+
+        # ── T1: targeted verification ────────────────────────────────────────
+        t1_result = self._run_t1(packet)
+        ep += self._evidence.collect_from_stage(t1_result)
+        if t1_result.status == StageStatus.FAILED:
+            return AcceptanceReport(
+                packet_id=packet.packet_id,
+                final_verdict=PacketVerdict.REWORK_REQUIRED,
+                stages=[t0.stage, t1_result],
+                scope_violations=t0.scope_violations,
+                evidence_paths=ep,
+                reasons=t1_result.blocking_issues or ["T1 failed"],
+            )
+
+        # ── T2: full checks ──────────────────────────────────────────────────
+        t2_result = self._run_t2(packet)
+        ep += self._evidence.collect_from_stage(t2_result)
+        if t2_result.status == StageStatus.FAILED:
+            return AcceptanceReport(
+                packet_id=packet.packet_id,
+                final_verdict=PacketVerdict.REWORK_REQUIRED,
+                stages=[t0.stage, t1_result, t2_result],
+                scope_violations=t0.scope_violations,
+                evidence_paths=ep,
+                reasons=t2_result.blocking_issues or ["T2 failed"],
+            )
+
+        has_evidence = self._evidence.has_required_evidence(
+            expected_evidence=packet.expected_evidence,
+            collected_evidence=ep,
+            acceptance_profile=packet.acceptance_profile,
+        )
+        if packet.acceptance_profile in (AcceptanceProfile.NORMAL, AcceptanceProfile.STRICT) and not has_evidence:
+            return AcceptanceReport(
+                packet_id=packet.packet_id,
+                final_verdict=PacketVerdict.BLOCKED,
+                stages=[t0.stage, t1_result, t2_result],
+                scope_violations=t0.scope_violations,
+                evidence_paths=ep,
+                reasons=["missing required evidence"],
+            )
+
+        return AcceptanceReport(
+            packet_id=packet.packet_id,
+            final_verdict=PacketVerdict.ACCEPTED,
+            stages=[t0.stage, t1_result, t2_result],
+            scope_violations=t0.scope_violations,
+            evidence_paths=ep,
+        )
 
         ep = self._evidence.collect_from_stage(t0_result["stage"]) if "stage" in t0_result else []
 
@@ -147,7 +206,7 @@ class AcceptancePipeline:
         self, packet: ExecutionPacketContract,
         changed_files: list[str] | None,
         base_ref: str | None, head_ref: str | None,
-    ) -> dict:
+    ) -> _T0Result:
         cf = changed_files or self._scope.get_changed_files(base_ref, head_ref)
         violations = self._scope.validate_changed_files(
             changed_files=cf,
@@ -158,34 +217,36 @@ class AcceptancePipeline:
         commands: list[CommandResult] = []
 
         if errs:
-            return {"status": StageStatus.FAILED, "scope_violations": violations,
-                    "stage": StageResult(name=StageName.T0_SCOPE_AND_LINT,
-                        status=StageStatus.FAILED, summary="invalid packet contract",
-                        blocking_issues=errs, commands=commands)}
+            return _T0Result(
+                stage=StageResult(name=StageName.T0_SCOPE_AND_LINT,
+                    status=StageStatus.FAILED, summary="invalid packet contract",
+                    blocking_issues=errs, commands=commands),
+                scope_violations=violations)
 
         if violations:
-            return {"status": StageStatus.FAILED, "scope_violations": violations,
-                    "stage": StageResult(name=StageName.T0_SCOPE_AND_LINT,
-                        status=StageStatus.FAILED, summary="scope guard failed",
-                        blocking_issues=[f"scope violations: {v.path}" for v in violations],
-                        commands=commands)}
+            return _T0Result(
+                stage=StageResult(name=StageName.T0_SCOPE_AND_LINT,
+                    status=StageStatus.FAILED, summary="scope guard failed",
+                    blocking_issues=[f"scope violations: {v.path}" for v in violations],
+                    commands=commands),
+                scope_violations=violations)
 
-        # Cheap syntax checks from configurable list
         for cmd in self._t0_commands:
             r = self._runner.run(cmd)
             commands.append(r)
             if not r.passed:
-                return {"status": StageStatus.FAILED, "scope_violations": violations,
-                        "stage": StageResult(name=StageName.T0_SCOPE_AND_LINT,
-                            status=StageStatus.FAILED, summary="T0 cheap check failed",
-                            blocking_issues=[f"{' '.join(cmd)} failed: {r.stderr[:200]}"],
-                            commands=commands)}
+                return _T0Result(
+                    stage=StageResult(name=StageName.T0_SCOPE_AND_LINT,
+                        status=StageStatus.FAILED, summary="T0 cheap check failed",
+                        blocking_issues=[f"{' '.join(cmd)} failed: {r.stderr[:200]}"],
+                        commands=commands),
+                    scope_violations=violations)
 
-        stage = StageResult(name=StageName.T0_SCOPE_AND_LINT, status=StageStatus.PASSED,
-                           summary="T0 passed: scope clean, contract valid, cheap checks ok",
-                           commands=commands)
-        return {"status": StageStatus.PASSED, "stage": stage,
-                "scope_violations": violations}
+        return _T0Result(
+            stage=StageResult(name=StageName.T0_SCOPE_AND_LINT, status=StageStatus.PASSED,
+                summary="T0 passed: scope clean, contract valid, cheap checks ok",
+                commands=commands),
+            scope_violations=violations)
 
     def _run_t1(self, packet: ExecutionPacketContract) -> StageResult:
         commands = [self._runner.run(cmd) for cmd in packet.verification_commands]
