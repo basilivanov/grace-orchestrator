@@ -23,12 +23,18 @@ def main():
     parser.add_argument("--db-url", default=None)
     parser.add_argument("--state-root", default=None)
     parser.add_argument("--start-api", action="store_true", help="Start API before test")
+    parser.add_argument("--resume", action="store_true", help="Resume existing test (reuse state, skip timestamp)")
     args = parser.parse_args()
 
     feature_path = Path(args.feature_file).resolve()
     spec = yaml.safe_load(feature_path.read_text())
-    run_slug = f"{feature_path.stem}-{int(time.time()) % 100000}"
-    spec["title"] = f"{spec.get('title', run_slug)} #{run_slug}"
+
+    if args.resume:
+        run_slug = feature_path.stem
+    else:
+        run_slug = f"{feature_path.stem}-{int(time.time()) % 100000}"
+        spec["title"] = f"{spec.get('title', run_slug)} #{run_slug}"
+
     state_root = args.state_root or f"/tmp/grace-eval/{run_slug}"
     db_url = args.db_url or f"sqlite:///{state_root}/grace.db"
 
@@ -37,10 +43,12 @@ def main():
     # 1. Start API if requested
     if args.start_api:
         subprocess.run(["fuser", "-k", "8042/tcp"], capture_output=True)
-        os.makedirs(state_root, exist_ok=True)
-        os.makedirs(f"{state_root}/worktrees", exist_ok=True)
+        if not args.resume:
+            os.makedirs(state_root, exist_ok=True)
+            os.makedirs(f"{state_root}/worktrees", exist_ok=True)
         api_env = {**os.environ, "GRACE_DB_URL": db_url, "GRACE_AGENT_TIMEOUT": "1200",
-                   "GRACE_CONTEXT_DISABLED": "true", "PYTHONDONTWRITEBYTECODE": "1"}
+                   "GRACE_CONTEXT_DISABLED": "true", "PYTHONDONTWRITEBYTECODE": "1",
+                   "GRACE_ALLOW_DIRTY_TARGET_MERGE": "true"}
         api_proc = subprocess.Popen(
             [sys.executable, "scripts/run_api.py"],
             env=api_env,
