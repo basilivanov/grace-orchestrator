@@ -32,6 +32,16 @@ import yaml
 from pydantic import BaseModel
 
 from grace_control.core.structured_logger import GraceLogger
+from grace_control.core.evidence_verifier import (
+    EvidenceVerifierVerdict,
+    run_evidence_verifier,
+    skipped_evidence_report,
+)
+from grace_control.core.reviewer_gate import (
+    ReviewerVerdict,
+    run_reviewer_gate,
+    skipped_reviewer_report,
+)
 from grace_control.db import get_db
 from grace_control.db.schema import Packet, PacketRun
 
@@ -231,7 +241,15 @@ class PacketExecutionAdapter:
                 ev_dir = run_dir
                 accept_report_path = self._save_acceptance_report(packet_id, run_number, accept_report, state_root)
 
+                try:
+                    safe_legacy_dict = result.to_dict()
+                except Exception:
+                    safe_legacy_dict = {"ok": result.ok, "domain_status": result.domain_status}
+
+                # ── Deterministic fail branch (skips verifier + reviewer) ──
                 if not accept_report.is_accepted:
+                    ev_report = skipped_evidence_report("deterministic acceptance failed")
+                    rv_report = skipped_reviewer_report("deterministic acceptance failed")
                     execution_result = self._build_execution_result_from_acceptance(
                         legacy_execution_result=None,
                         acceptance_report=accept_report,
@@ -240,21 +258,16 @@ class PacketExecutionAdapter:
                         branch_name=result.branch_name or "",
                         duration_ms=int((time.time() - start_time) * 1000),
                     )
-                    try:
-                        safe_legacy_dict = result.to_dict()
-                    except Exception:
-                        safe_legacy_dict = {"ok": result.ok, "domain_status": result.domain_status}
-                    with get_db() as db:
-                        existing = db.query(PacketRun).filter_by(id=run_id).first()
-                        if existing:
-                            existing.status = "rejected"
-                            existing.result_json = {
-                                "legacy_result": safe_legacy_dict,
-                                "acceptance_report": accept_report.to_dict(),
-                            }
-                            existing.evidence_path = execution_result.evidence_path
-                            existing.finished_at = datetime.utcnow()
-                            existing.duration_ms = execution_result.duration_ms
+                    self._update_packet_run_result(
+                        run_id=run_id, status="rejected",
+                        legacy_result=safe_legacy_dict,
+                        acceptance_report=accept_report,
+                        evidence_verifier_report=ev_report,
+                        reviewer_report=rv_report,
+                        evidence_path=execution_result.evidence_path,
+                        duration_ms=execution_result.duration_ms,
+                        executor_id=executor.get("executor_id", ""),
+                    )
                     _log.info("adapter_execute_done", packet_id=packet_id,
                         accepted=False, duration_ms=execution_result.duration_ms)
                     return execution_result
@@ -270,7 +283,7 @@ class PacketExecutionAdapter:
                     duration_ms=int((time.time() - start_time) * 1000),
                 )
 
-            # Self-evolution guard check (additional checks for self-improvement)
+            # ── Self-evolution guard ──
             spec_json = packet_data.get("spec_json") or {}
             if isinstance(spec_json, dict) and spec_json.get("origin") == "self_evolution":
                 _log.info("self_evolution_guard_check", packet_id=packet_id)
@@ -279,8 +292,7 @@ class PacketExecutionAdapter:
                 changed = _collect_changed_files(worktree_root)
                 guard_result = guard.check(changed, session_id=spec_json.get("session_id", ""))
                 if not guard_result.passed:
-                    _log.warn("self_evolution_guard_blocked", packet_id=packet_id,
-                        errors=guard_result.errors)
+                    _log.warn("self_evolution_guard_blocked", packet_id=packet_id, errors=guard_result.errors)
                     execution_result = ExecutionResult(
                         accepted=False, domain_status="rejected",
                         reason="; ".join(guard_result.errors),
@@ -290,43 +302,180 @@ class PacketExecutionAdapter:
                     return execution_result
                 _log.info("self_evolution_guard_passed", packet_id=packet_id)
 
-            # Accepted path — build from acceptance_report, not _parse_result
-            execution_result = self._build_execution_result_from_acceptance(
-                legacy_execution_result=None,
-                acceptance_report=accept_report,
-                acceptance_report_path=accept_report_path,
-                worktree_path=result.worktree_path or "",
-                branch_name=result.branch_name or "",
-                duration_ms=int((time.time() - start_time) * 1000),
-            )
-            evidence_path = self._save_evidence(packet_id, run_number, result.to_dict(), state_root)
-            execution_result.evidence_path = evidence_path
-            execution_result.duration_ms = int((time.time() - start_time) * 1000)
-            self._save_agent_log(packet_id, run_number, result, state_root)
-
-            safe_legacy_dict = None
+            # ── Prepare context for verifier + reviewer ──
+            from grace_control.core.scope_guard import get_changed_files as _get_changed_files
+            changed_files: list[str] = []
             try:
-                safe_legacy_dict = result.to_dict()
+                changed_files = _get_changed_files(wt_path, base_ref="main")
             except Exception:
-                safe_legacy_dict = {"ok": result.ok, "domain_status": result.domain_status}
+                changed_files = []
 
-            with get_db() as db:
-                existing = db.query(PacketRun).filter_by(id=run_id).first()
-                if existing:
-                    existing.status = "accepted"
-                    existing.result_json = {
-                        "legacy_result": safe_legacy_dict,
-                        "acceptance_report": accept_report.to_dict(),
-                    }
-                    existing.evidence_path = evidence_path
-                    existing.finished_at = datetime.utcnow()
-                    existing.duration_ms = execution_result.duration_ms
-                    existing.executor_id = executor.get("executor_id", "")
+            artifacts: list[str] = []
+            if run_dir.exists():
+                try:
+                    artifacts = [str(p.relative_to(run_dir)) for p in run_dir.rglob("*") if p.is_file()]
+                except Exception:
+                    artifacts = []
 
-            _log.info("adapter_execute_done", packet_id=packet_id,
-                accepted=execution_result.accepted, duration_ms=execution_result.duration_ms)
+            # ── Evidence Verifier (cheap LLM gate) ──
+            evidence_report = await run_evidence_verifier(
+                packet=pkt_contract,
+                acceptance_report=accept_report,
+                worktree_path=wt_path,
+                run_dir=run_dir,
+                changed_files=changed_files,
+                artifacts=artifacts,
+            )
+            _log.info("evidence_verifier_completed", packet_id=packet_id,
+                verdict=evidence_report.verdict.value, skipped=evidence_report.skipped)
 
-            return execution_result
+            if evidence_report.verdict == EvidenceVerifierVerdict.REWORK_TO_CODER:
+                rv_report = skipped_reviewer_report("evidence verifier did not pass")
+                execution_result = ExecutionResult(
+                    accepted=False, domain_status="rejected",
+                    reason=evidence_report.summary,
+                    worktree_path=result.worktree_path or "",
+                    branch_name=result.branch_name or "",
+                    acceptance_report_path=accept_report_path,
+                    acceptance_verdict=accept_report.final_verdict.value,
+                    acceptance_summary=accept_report.summary,
+                    duration_ms=int((time.time() - start_time) * 1000),
+                )
+                self._update_packet_run_result(
+                    run_id=run_id, status="rejected",
+                    legacy_result=safe_legacy_dict,
+                    acceptance_report=accept_report,
+                    evidence_verifier_report=evidence_report,
+                    reviewer_report=rv_report,
+                    evidence_path=execution_result.evidence_path,
+                    duration_ms=execution_result.duration_ms,
+                    executor_id=executor.get("executor_id", ""),
+                )
+                _log.info("adapter_execute_done", packet_id=packet_id,
+                    accepted=False, duration_ms=execution_result.duration_ms)
+                return execution_result
+
+            if evidence_report.verdict == EvidenceVerifierVerdict.RETURN_TO_ARCHITECT:
+                rv_report = skipped_reviewer_report("evidence verifier returned to architect")
+                execution_result = ExecutionResult(
+                    accepted=False, domain_status="blocked",
+                    reason=evidence_report.summary,
+                    worktree_path=result.worktree_path or "",
+                    branch_name=result.branch_name or "",
+                    acceptance_report_path=accept_report_path,
+                    acceptance_verdict=accept_report.final_verdict.value,
+                    acceptance_summary=accept_report.summary,
+                    duration_ms=int((time.time() - start_time) * 1000),
+                )
+                self._update_packet_run_result(
+                    run_id=run_id, status="rejected",
+                    legacy_result=safe_legacy_dict,
+                    acceptance_report=accept_report,
+                    evidence_verifier_report=evidence_report,
+                    reviewer_report=rv_report,
+                    evidence_path=execution_result.evidence_path,
+                    duration_ms=execution_result.duration_ms,
+                    executor_id=executor.get("executor_id", ""),
+                )
+                _log.info("adapter_execute_done", packet_id=packet_id,
+                    accepted=False, duration_ms=execution_result.duration_ms)
+                return execution_result
+
+            # ── Evidence Verifier PASS → run Reviewer ──
+            reviewer_report = await run_reviewer_gate(
+                packet=pkt_contract,
+                acceptance_report=accept_report,
+                evidence_verifier_report=evidence_report,
+                worktree_path=wt_path,
+                run_dir=run_dir,
+                changed_files=changed_files,
+                artifacts=artifacts,
+            )
+            _log.info("reviewer_gate_completed", packet_id=packet_id,
+                verdict=reviewer_report.verdict.value, skipped=reviewer_report.skipped)
+
+            if reviewer_report.verdict == ReviewerVerdict.PASS:
+                execution_result = ExecutionResult(
+                    accepted=True,
+                    reason=None,
+                    domain_status=accept_report.final_verdict.value,
+                    worktree_path=result.worktree_path or "",
+                    branch_name=result.branch_name or "",
+                    acceptance_report_path=accept_report_path,
+                    acceptance_verdict=accept_report.final_verdict.value,
+                    acceptance_summary=accept_report.summary,
+                    duration_ms=int((time.time() - start_time) * 1000),
+                )
+                evidence_path = self._save_evidence(packet_id, run_number, result.to_dict(), state_root)
+                execution_result.evidence_path = evidence_path
+                self._save_agent_log(packet_id, run_number, result, state_root)
+                self._update_packet_run_result(
+                    run_id=run_id, status="accepted",
+                    legacy_result=safe_legacy_dict,
+                    acceptance_report=accept_report,
+                    evidence_verifier_report=evidence_report,
+                    reviewer_report=reviewer_report,
+                    evidence_path=evidence_path,
+                    duration_ms=execution_result.duration_ms,
+                    executor_id=executor.get("executor_id", ""),
+                )
+                _log.info("adapter_execute_done", packet_id=packet_id,
+                    accepted=True, duration_ms=execution_result.duration_ms)
+                return execution_result
+
+            if reviewer_report.verdict == ReviewerVerdict.REWORK_TO_CODER:
+                execution_result = ExecutionResult(
+                    accepted=False, domain_status="rejected",
+                    reason=reviewer_report.summary,
+                    worktree_path=result.worktree_path or "",
+                    branch_name=result.branch_name or "",
+                    acceptance_report_path=accept_report_path,
+                    acceptance_verdict=accept_report.final_verdict.value,
+                    acceptance_summary=accept_report.summary,
+                    duration_ms=int((time.time() - start_time) * 1000),
+                )
+                self._update_packet_run_result(
+                    run_id=run_id, status="rejected",
+                    legacy_result=safe_legacy_dict,
+                    acceptance_report=accept_report,
+                    evidence_verifier_report=evidence_report,
+                    reviewer_report=reviewer_report,
+                    evidence_path=execution_result.evidence_path,
+                    duration_ms=execution_result.duration_ms,
+                    executor_id=executor.get("executor_id", ""),
+                )
+                _log.info("adapter_execute_done", packet_id=packet_id,
+                    accepted=False, duration_ms=execution_result.duration_ms)
+                return execution_result
+
+            if reviewer_report.verdict == ReviewerVerdict.RETURN_TO_ARCHITECT:
+                execution_result = ExecutionResult(
+                    accepted=False, domain_status="blocked",
+                    reason=reviewer_report.summary,
+                    worktree_path=result.worktree_path or "",
+                    branch_name=result.branch_name or "",
+                    acceptance_report_path=accept_report_path,
+                    acceptance_verdict=accept_report.final_verdict.value,
+                    acceptance_summary=accept_report.summary,
+                    duration_ms=int((time.time() - start_time) * 1000),
+                )
+                self._update_packet_run_result(
+                    run_id=run_id, status="rejected",
+                    legacy_result=safe_legacy_dict,
+                    acceptance_report=accept_report,
+                    evidence_verifier_report=evidence_report,
+                    reviewer_report=reviewer_report,
+                    evidence_path=execution_result.evidence_path,
+                    duration_ms=execution_result.duration_ms,
+                    executor_id=executor.get("executor_id", ""),
+                )
+                _log.info("adapter_execute_done", packet_id=packet_id,
+                    accepted=False, duration_ms=execution_result.duration_ms)
+                return execution_result
+
+            _log.error("unexpected_reviewer_verdict", packet_id=packet_id,
+                verdict=reviewer_report.verdict.value)
+            raise RuntimeError(f"Unexpected reviewer verdict: {reviewer_report.verdict.value}")
 
         except Exception:
             _log.error("adapter_execute_failed", packet_id=packet_id)
@@ -609,6 +758,47 @@ class PacketExecutionAdapter:
             acceptance_summary=acceptance_report.summary,
             duration_ms=duration_ms,
         )
+
+    # START_FUNCTION_CONTRACT
+    # name: _update_packet_run_result
+    # purpose: Write PacketRun result_json with all four reports and metadata.
+    # inputs: run_id, status, legacy_result, acceptance_report, evidence_verifier_report,
+    #         reviewer_report, evidence_path, duration_ms, executor_id.
+    # returns: None.
+    # side_effects: Updates PacketRun row in DB.
+    # emitted_logs: None.
+    # error_behavior: Never raises.
+    # END_FUNCTION_CONTRACT
+    def _update_packet_run_result(
+        self,
+        *,
+        run_id: str,
+        status: str,
+        legacy_result: dict,
+        acceptance_report,
+        evidence_verifier_report,
+        reviewer_report,
+        evidence_path: str,
+        duration_ms: int,
+        executor_id: str = "",
+    ) -> None:
+        try:
+            with get_db() as db:
+                existing = db.query(PacketRun).filter_by(id=run_id).first()
+                if existing:
+                    existing.status = status
+                    existing.result_json = {
+                        "legacy_result": legacy_result,
+                        "acceptance_report": acceptance_report.to_dict(),
+                        "evidence_verifier_report": evidence_verifier_report.model_dump(),
+                        "reviewer_report": reviewer_report.model_dump(),
+                    }
+                    existing.evidence_path = evidence_path
+                    existing.finished_at = datetime.utcnow()
+                    existing.duration_ms = duration_ms
+                    existing.executor_id = executor_id
+        except Exception:
+            _log.warn("update_run_result_failed", run_id=run_id, status=status)
 
     def _save_agent_log(self, packet_id: str, run_number: int, result, state_root: Path) -> None:
         try:

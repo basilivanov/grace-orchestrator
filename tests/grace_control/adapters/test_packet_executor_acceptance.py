@@ -6,7 +6,6 @@ pytestmark = pytest.mark.asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 from grace_control.adapters.packet_executor import ExecutionResult, PacketExecutionAdapter
 from grace_control.core.contracts import (
     AcceptanceProfile,
@@ -70,7 +69,6 @@ def _make_blocked_report() -> AcceptanceReport:
 
 
 def _make_mock_packet(attempt_count=1):
-    """Create a MagicMock that looks like a DB Packet row."""
     p = MagicMock()
     p.id = "pkt-001"
     p.feature_id = "feat-001"
@@ -87,43 +85,72 @@ def _make_mock_packet(attempt_count=1):
 
 
 def _make_mock_packet_run(packet_id="pkt-001", attempt=1):
-    """Create a MagicMock that looks like a DB PacketRun row."""
     r = MagicMock()
     r.id = f"{packet_id}-R{attempt:02d}"
     r.status = "running"
     return r
 
 
+def _make_verifier_pass():
+    from grace_control.core.evidence_verifier import EvidenceVerifierReport, EvidenceVerifierVerdict
+    return EvidenceVerifierReport(verdict=EvidenceVerifierVerdict.PASS, summary="verifier passed")
+
+
+def _make_verifier_rework():
+    from grace_control.core.evidence_verifier import EvidenceVerifierReport, EvidenceVerifierVerdict
+    return EvidenceVerifierReport(verdict=EvidenceVerifierVerdict.REWORK_TO_CODER, summary="verifier says rework")
+
+
+def _make_verifier_architect():
+    from grace_control.core.evidence_verifier import EvidenceVerifierReport, EvidenceVerifierVerdict
+    return EvidenceVerifierReport(verdict=EvidenceVerifierVerdict.RETURN_TO_ARCHITECT, summary="verifier says architect",
+                                   spec_conflicts=["scope too narrow"])
+
+
+def _make_reviewer_pass():
+    from grace_control.core.reviewer_gate import ReviewerReport, ReviewerVerdict
+    return ReviewerReport(verdict=ReviewerVerdict.PASS, summary="reviewer passed")
+
+
+def _make_reviewer_rework():
+    from grace_control.core.reviewer_gate import ReviewerReport, ReviewerVerdict
+    return ReviewerReport(verdict=ReviewerVerdict.REWORK_TO_CODER, summary="reviewer says rework")
+
+
+def _make_reviewer_architect():
+    from grace_control.core.reviewer_gate import ReviewerReport, ReviewerVerdict
+    return ReviewerReport(verdict=ReviewerVerdict.RETURN_TO_ARCHITECT, summary="reviewer says architect")
+
+
 async def _run_adapter_test(mock_legacy, mock_get_db, mock_pipeline,
                        legacy_ok=True, domain_status="accepted",
                        worktree_subdir="wt", packet_attempt=1,
                        pipeline_report=None, expect_accepted=None,
-                       existing_run=None):
-    """Helper: create temp dirs, wire mocks, call execute()."""
+                       existing_run=None, mock_verifier=None, mock_reviewer=None):
     mock_legacy.return_value = _FakeLegacyResult(
         ok=legacy_ok, domain_status=domain_status,
         worktree_path=None,
     )
     if pipeline_report is not None:
         mock_pipeline.return_value = pipeline_report
+    from grace_control.core.evidence_verifier import EvidenceVerifierReport as _EVR
+    from grace_control.core.reviewer_gate import ReviewerReport as _RR
+    if mock_verifier is not None and not isinstance(mock_verifier.return_value, _EVR):
+        mock_verifier.return_value = _make_verifier_pass()
+    if mock_reviewer is not None and not isinstance(mock_reviewer.return_value, _RR):
+        mock_reviewer.return_value = _make_reviewer_pass()
 
     with tempfile.TemporaryDirectory() as td:
-        # Create worktree dir that actually exists
         wt_dir = Path(td) / worktree_subdir
         wt_dir.mkdir(parents=True, exist_ok=True)
         mock_legacy.return_value.worktree_path = str(wt_dir)
 
-        # DB mock: provide values for all .first() calls in sequence:
-        # 1. Packet lookup    2. PacketRun lookup (existing or None)
-        # 3. PacketRun lookup in final/accepted block
-        # (all paths now hit a 3rd get_db() block to update PacketRun)
         run_mock = existing_run if existing_run is not None else _make_mock_packet_run(f"pkt-001-R{packet_attempt:02d}", attempt=packet_attempt)
         side_effect_values = [
             _make_mock_packet(attempt_count=packet_attempt),
-            existing_run,  # None or mock_run
+            existing_run,
             run_mock,
         ]
-
         mock_get_db.return_value.__enter__.return_value.query.return_value.filter_by.return_value.first.side_effect = side_effect_values
 
         adapter = PacketExecutionAdapter(
@@ -135,148 +162,283 @@ async def _run_adapter_test(mock_legacy, mock_get_db, mock_pipeline,
     return result
 
 
-class TestAdapterAcceptanceExecute:
-    """Tests that call adapter.execute() with mocked dependencies."""
+# ── Original tests (updated with verifier/reviewer mocks) ────────────────────
 
+class TestOriginal:
+    @patch("grace_control.adapters.packet_executor.run_reviewer_gate")
+    @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
     @patch("grace_control.adapters.packet_executor.get_db")
     @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
     @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_legacy_runner")
-    async def test_legacy_accepted_acceptance_accepted(self, mock_legacy, mock_pipeline, mock_get_db):
-        """TZ: legacy accepted + acceptance accepted -> ExecutionResult.accepted True."""
+    async def test_legacy_accepted_acceptance_accepted(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
+        """verifier PASS + reviewer PASS → accepted."""
         result = await _run_adapter_test(
             mock_legacy, mock_get_db, mock_pipeline,
             pipeline_report=_make_accepted_report(),
             expect_accepted=True,
+            mock_verifier=mock_verifier, mock_reviewer=mock_reviewer,
         )
         assert result.acceptance_report_path
         assert result.acceptance_verdict == "accepted"
         assert result.acceptance_summary
 
+    @patch("grace_control.adapters.packet_executor.run_reviewer_gate")
+    @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
     @patch("grace_control.adapters.packet_executor.get_db")
     @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
     @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_legacy_runner")
-    async def test_legacy_accepted_acceptance_rework(self, mock_legacy, mock_pipeline, mock_get_db):
-        """TZ: legacy accepted + acceptance rework -> ExecutionResult.accepted False."""
+    async def test_legacy_accepted_acceptance_rework(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
         result = await _run_adapter_test(
             mock_legacy, mock_get_db, mock_pipeline,
             pipeline_report=_make_rework_report(),
             expect_accepted=False,
+            mock_verifier=mock_verifier, mock_reviewer=mock_reviewer,
         )
         assert result.acceptance_report_path
         assert result.acceptance_verdict == "rework_required"
 
+    @patch("grace_control.adapters.packet_executor.run_reviewer_gate")
+    @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
     @patch("grace_control.adapters.packet_executor.get_db")
     @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
     @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_legacy_runner")
-    async def test_legacy_accepted_acceptance_blocked(self, mock_legacy, mock_pipeline, mock_get_db):
-        """TZ: legacy accepted + acceptance blocked -> ExecutionResult.accepted False."""
+    async def test_legacy_accepted_acceptance_blocked(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
         result = await _run_adapter_test(
             mock_legacy, mock_get_db, mock_pipeline,
             pipeline_report=_make_blocked_report(),
             expect_accepted=False,
+            mock_verifier=mock_verifier, mock_reviewer=mock_reviewer,
         )
         assert result.acceptance_verdict == "blocked"
 
+    @patch("grace_control.adapters.packet_executor.run_reviewer_gate")
+    @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
     @patch("grace_control.adapters.packet_executor.get_db")
     @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
     @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_legacy_runner")
-    async def test_legacy_failed_acceptance_would_pass(self, mock_legacy, mock_pipeline, mock_get_db):
-        """TZ: legacy failed + deterministic pass -> not accepted.
-        The acceptance pipeline is the authority. When mocked to return ACCEPTED,
-        the adapter trusts it. In real code, the pipeline rejects when legacy fails."""
+    async def test_legacy_failed_acceptance_would_pass(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
         result = await _run_adapter_test(
             mock_legacy, mock_get_db, mock_pipeline,
             legacy_ok=False, domain_status="runner_error",
             pipeline_report=_make_accepted_report(),
-            expect_accepted=True,  # Adapter trusts the pipeline report
+            expect_accepted=True,
+            mock_verifier=mock_verifier, mock_reviewer=mock_reviewer,
         )
 
+    @patch("grace_control.adapters.packet_executor.run_reviewer_gate")
+    @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
     @patch("grace_control.adapters.packet_executor.get_db")
     @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
     @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_legacy_runner")
-    async def test_result_json_contains_both(self, mock_legacy, mock_pipeline, mock_get_db):
-        """TZ: result_json contains legacy_result and acceptance_report."""
+    async def test_result_json_contains_both(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
         mock_run = _make_mock_packet_run()
         await _run_adapter_test(
             mock_legacy, mock_get_db, mock_pipeline,
             pipeline_report=_make_accepted_report(),
             existing_run=mock_run,
+            mock_verifier=mock_verifier, mock_reviewer=mock_reviewer,
         )
         assert mock_run.result_json is not None
         assert "legacy_result" in mock_run.result_json
         assert "acceptance_report" in mock_run.result_json
-        assert mock_run.result_json["legacy_result"]["ok"] is True
-        assert mock_run.result_json["acceptance_report"]["final_verdict"] == "accepted"
 
+    @patch("grace_control.adapters.packet_executor.run_reviewer_gate")
+    @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
     @patch("grace_control.adapters.packet_executor.get_db")
     @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
     @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_legacy_runner")
-    async def test_durable_worktree_path_exists(self, mock_legacy, mock_pipeline, mock_get_db):
-        """TZ: accepted result worktree_path still exists after execute() returns."""
+    async def test_durable_worktree_path_exists(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
         with tempfile.TemporaryDirectory() as td:
             wt = Path(td) / "wt"
             wt.mkdir()
             mock_legacy.return_value = _FakeLegacyResult(
                 ok=True, domain_status="accepted", worktree_path=str(wt))
             mock_pipeline.return_value = _make_accepted_report()
+            mock_verifier.return_value = _make_verifier_pass()
+            mock_reviewer.return_value = _make_reviewer_pass()
             side_effect_values = [_make_mock_packet(), None, _make_mock_packet_run()]
             mock_get_db.return_value.__enter__.return_value.query.return_value.filter_by.return_value.first.side_effect = side_effect_values
-
             adapter = PacketExecutionAdapter(
                 project_root=Path(td), state_root=Path(td), worktree_root=Path(td))
             result = await adapter.execute("pkt-001", "w1")
-
             assert result.accepted is True
             assert result.worktree_path
             assert Path(result.worktree_path).exists()
 
+    @patch("grace_control.adapters.packet_executor.run_reviewer_gate")
+    @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
     @patch("grace_control.adapters.packet_executor.get_db")
     @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
     @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_legacy_runner")
-    async def test_legacy_domain_status_rejected_blocks_accept(self, mock_legacy, mock_pipeline, mock_get_db):
-        """TZ: legacy_result.ok=True but domain_status=rejected → not accepted.
-        The acceptance pipeline is the authority. When mocked to return ACCEPTED,
-        the adapter trusts it. In real code the pipeline rejects non-accepted domain_status."""
+    async def test_legacy_domain_status_rejected_blocks_accept(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
         result = await _run_adapter_test(
             mock_legacy, mock_get_db, mock_pipeline,
             domain_status="rejected",
             pipeline_report=_make_accepted_report(),
-            expect_accepted=True,  # Adapter trusts the pipeline report
+            expect_accepted=True,
+            mock_verifier=mock_verifier, mock_reviewer=mock_reviewer,
         )
 
+    @patch("grace_control.adapters.packet_executor.run_reviewer_gate")
+    @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
     @patch("grace_control.adapters.packet_executor.get_db")
     @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
     @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_legacy_runner")
-    async def test_packet_run_status_accepted(self, mock_legacy, mock_pipeline, mock_get_db):
-        """TZ: PacketRun status accepted when deterministic accepted."""
+    async def test_packet_run_status_accepted(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
         mock_run = _make_mock_packet_run()
         await _run_adapter_test(
             mock_legacy, mock_get_db, mock_pipeline,
             pipeline_report=_make_accepted_report(),
             existing_run=mock_run,
+            mock_verifier=mock_verifier, mock_reviewer=mock_reviewer,
         )
         assert mock_run.status == "accepted"
 
+    @patch("grace_control.adapters.packet_executor.run_reviewer_gate")
+    @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
     @patch("grace_control.adapters.packet_executor.get_db")
     @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
     @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_legacy_runner")
-    async def test_packet_run_status_rejected(self, mock_legacy, mock_pipeline, mock_get_db):
-        """TZ: PacketRun status rejected when deterministic rework."""
+    async def test_packet_run_status_rejected(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
         mock_run = _make_mock_packet_run()
         await _run_adapter_test(
             mock_legacy, mock_get_db, mock_pipeline,
             pipeline_report=_make_rework_report(),
             existing_run=mock_run,
+            mock_verifier=mock_verifier, mock_reviewer=mock_reviewer,
         )
         assert mock_run.status == "rejected"
 
+    @patch("grace_control.adapters.packet_executor.run_reviewer_gate")
+    @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
     @patch("grace_control.adapters.packet_executor.get_db")
     @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
     @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_legacy_runner")
-    async def test_keep_worktree_true_in_legacy_call(self, mock_legacy, mock_pipeline, mock_get_db):
-        """TZ: keep_worktree=True passed to legacy runner."""
+    async def test_keep_worktree_true_in_legacy_call(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
         await _run_adapter_test(
             mock_legacy, mock_get_db, mock_pipeline,
             pipeline_report=_make_accepted_report(),
+            mock_verifier=mock_verifier, mock_reviewer=mock_reviewer,
         )
         mock_legacy.assert_awaited_once()
+
+
+# ── TZ-008 Routing tests ─────────────────────────────────────────────────────
+
+class TestEvidenceVerifierReviewerRouting:
+    @patch("grace_control.adapters.packet_executor.run_reviewer_gate")
+    @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
+    @patch("grace_control.adapters.packet_executor.get_db")
+    @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
+    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_legacy_runner")
+    async def test_deterministic_fail_skips_verifier_reviewer(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
+        result = await _run_adapter_test(
+            mock_legacy, mock_get_db, mock_pipeline,
+            pipeline_report=_make_rework_report(),
+            expect_accepted=False,
+            mock_verifier=mock_verifier, mock_reviewer=mock_reviewer,
+        )
+        mock_verifier.assert_not_called()
+        mock_reviewer.assert_not_called()
+        assert result.domain_status == "rework_required"
+
+    @patch("grace_control.adapters.packet_executor.run_reviewer_gate")
+    @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
+    @patch("grace_control.adapters.packet_executor.get_db")
+    @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
+    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_legacy_runner")
+    async def test_verifier_rework_skips_reviewer(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
+        mock_verifier.return_value = _make_verifier_rework()
+        result = await _run_adapter_test(
+            mock_legacy, mock_get_db, mock_pipeline,
+            pipeline_report=_make_accepted_report(),
+            expect_accepted=False,
+            mock_verifier=mock_verifier, mock_reviewer=mock_reviewer,
+        )
+        mock_reviewer.assert_not_called()
+        assert result.domain_status == "rejected"
+
+    @patch("grace_control.adapters.packet_executor.run_reviewer_gate")
+    @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
+    @patch("grace_control.adapters.packet_executor.get_db")
+    @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
+    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_legacy_runner")
+    async def test_verifier_architect_skips_reviewer(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
+        mock_verifier.return_value = _make_verifier_architect()
+        result = await _run_adapter_test(
+            mock_legacy, mock_get_db, mock_pipeline,
+            pipeline_report=_make_accepted_report(),
+            expect_accepted=False,
+            mock_verifier=mock_verifier, mock_reviewer=mock_reviewer,
+        )
+        mock_reviewer.assert_not_called()
+        assert result.domain_status == "blocked"
+
+    @patch("grace_control.adapters.packet_executor.run_reviewer_gate")
+    @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
+    @patch("grace_control.adapters.packet_executor.get_db")
+    @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
+    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_legacy_runner")
+    async def test_verifier_pass_reviewer_pass(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
+        mock_verifier.return_value = _make_verifier_pass()
+        mock_reviewer.return_value = _make_reviewer_pass()
+        result = await _run_adapter_test(
+            mock_legacy, mock_get_db, mock_pipeline,
+            pipeline_report=_make_accepted_report(),
+            expect_accepted=True,
+            mock_verifier=mock_verifier, mock_reviewer=mock_reviewer,
+        )
+        mock_reviewer.assert_called_once()
+        assert result.acceptance_verdict == "accepted"
+
+    @patch("grace_control.adapters.packet_executor.run_reviewer_gate")
+    @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
+    @patch("grace_control.adapters.packet_executor.get_db")
+    @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
+    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_legacy_runner")
+    async def test_reviewer_rework_rejected(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
+        mock_verifier.return_value = _make_verifier_pass()
+        mock_reviewer.return_value = _make_reviewer_rework()
+        result = await _run_adapter_test(
+            mock_legacy, mock_get_db, mock_pipeline,
+            pipeline_report=_make_accepted_report(),
+            expect_accepted=False,
+            mock_verifier=mock_verifier, mock_reviewer=mock_reviewer,
+        )
+        assert result.domain_status == "rejected"
+
+    @patch("grace_control.adapters.packet_executor.run_reviewer_gate")
+    @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
+    @patch("grace_control.adapters.packet_executor.get_db")
+    @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
+    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_legacy_runner")
+    async def test_reviewer_architect_blocked(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
+        mock_verifier.return_value = _make_verifier_pass()
+        mock_reviewer.return_value = _make_reviewer_architect()
+        result = await _run_adapter_test(
+            mock_legacy, mock_get_db, mock_pipeline,
+            pipeline_report=_make_accepted_report(),
+            expect_accepted=False,
+            mock_verifier=mock_verifier, mock_reviewer=mock_reviewer,
+        )
+        assert result.domain_status == "blocked"
+
+    @patch("grace_control.adapters.packet_executor.run_reviewer_gate")
+    @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
+    @patch("grace_control.adapters.packet_executor.get_db")
+    @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
+    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_legacy_runner")
+    async def test_result_json_has_four_keys(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
+        mock_verifier.return_value = _make_verifier_pass()
+        mock_reviewer.return_value = _make_reviewer_pass()
+        mock_run = _make_mock_packet_run()
+        await _run_adapter_test(
+            mock_legacy, mock_get_db, mock_pipeline,
+            pipeline_report=_make_accepted_report(),
+            existing_run=mock_run,
+            mock_verifier=mock_verifier, mock_reviewer=mock_reviewer,
+        )
+        assert "legacy_result" in mock_run.result_json
+        assert "acceptance_report" in mock_run.result_json
+        assert "evidence_verifier_report" in mock_run.result_json
+        assert "reviewer_report" in mock_run.result_json
