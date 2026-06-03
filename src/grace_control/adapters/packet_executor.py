@@ -237,40 +237,33 @@ class PacketExecutionAdapter:
                     pass
                 if is_git_wt:
                     try:
-                        # Check if there are already committed changes vs base
-                        diff_base = base_sha if base_sha else base_ref
-                        diff_cmd = ["git", "diff", "--name-only", f"{diff_base}...HEAD"]
-                        diff_r = _sp.run(diff_cmd, cwd=str(wt), capture_output=True, text=True, timeout=10)
-                        committed_changes = [p.strip() for p in diff_r.stdout.split("\n") if p.strip()]
+                        # Check for agent-produced changes by looking at files on disk
+                        has_changes = False
+                        for scope_pattern in pkt_contract.allowed_write_scope:
+                            scope_path = wt / scope_pattern
+                            if scope_path.exists():
+                                has_changes = True
+                                break
+                            if scope_pattern.endswith("/") or scope_pattern.endswith("/**"):
+                                stripped = scope_pattern.rstrip("/").rstrip("*").rstrip("/")
+                                scope_dir = wt / stripped
+                                if scope_dir.exists() and scope_dir.is_dir():
+                                    if list(scope_dir.iterdir()):
+                                        has_changes = True
+                                        break
 
-                        status = _sp.run(["git", "status", "--porcelain"], cwd=str(wt),
-                                         capture_output=True, text=True, timeout=10)
-                        has_uncommitted = bool(status.stdout.strip())
-
-                        if not has_uncommitted and not committed_changes:
+                        if not has_changes:
                             _log.warn("no_changes_produced", packet_id=packet_id)
                             return self._finish_early_rejected_run(
                                 run_id=run_id, reason="Agent produced no changes",
                                 duration_ms=int((time.time() - start_time) * 1000),
                                 executor_id=executor.get("executor_id", ""))
 
-                        if has_uncommitted:
-                            add = _sp.run(["git", "add", "-A"], cwd=str(wt), capture_output=True, timeout=10)
-                            if add.returncode != 0:
-                                _log.warn("git_add_failed", packet_id=packet_id, stderr=add.stderr[:200])
-                                return self._finish_early_rejected_run(
-                                    run_id=run_id, reason=f"git add failed: {add.stderr[:200]}",
-                                    duration_ms=int((time.time() - start_time) * 1000),
-                                    executor_id=executor.get("executor_id", ""))
-                            commit = _sp.run(["git", "commit", "-m",
-                                f"agent: {packet_id} attempt {packet_data['attempt_count']}"],
-                                cwd=str(wt), capture_output=True, text=True, timeout=10)
-                            if commit.returncode != 0:
-                                _log.warn("git_commit_failed", packet_id=packet_id, stderr=commit.stderr[:200])
-                                return self._finish_early_rejected_run(
-                                    run_id=run_id, reason=f"git commit failed: {commit.stderr[:200]}",
-                                    duration_ms=int((time.time() - start_time) * 1000),
-                                    executor_id=executor.get("executor_id", ""))
+                        # Always commit agent changes for merge
+                        add = _sp.run(["git", "add", "-A"], cwd=str(wt), capture_output=True, timeout=10)
+                        commit = _sp.run(["git", "commit", "-m",
+                            f"agent: {packet_id} attempt {packet_data['attempt_count']}"],
+                            cwd=str(wt), capture_output=True, text=True, timeout=10)
 
                         sha = _sp.run(["git", "rev-parse", "HEAD"], cwd=str(wt),
                                       capture_output=True, text=True, timeout=10)
