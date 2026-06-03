@@ -12,6 +12,7 @@ import traceback
 from pathlib import Path
 
 from grace_control.adapters.packet_executor import PacketExecutionAdapter, ExecutionResult
+from grace_control.core.git_context import resolve_git_execution_context, GitExecutionContext
 from grace_control.core.structured_logger import GraceLogger, trace_context
 from grace_control.worker.api_client import WorkerAPIClient
 
@@ -33,6 +34,7 @@ class Worker:
         project_root: Path | None = None,
         state_root: Path | None = None,
         worktree_root: Path | None = None,
+        git_context: GitExecutionContext | None = None,
     ):
         self.worker_id = worker_id or f"worker-{uuid.uuid4().hex[:8]}"
         self.api = WorkerAPIClient(api_url)
@@ -40,14 +42,22 @@ class Worker:
         self.running = False
         self.log = GraceLogger("worker")
 
-        self._base_project_root = project_root or Path.cwd()
-        self._base_state_root = state_root or Path.cwd() / ".grace"
-        self._base_worktree_root = worktree_root or Path.cwd() / ".grace/worktrees"
-        # Use base paths for executor — adapter will use temp dirs per attempt
+        self._git_context = git_context or resolve_git_execution_context(
+            control_plane_root=project_root,
+            target_repo_root=project_root,
+            runtime_state_root=state_root,
+            worktree_root=worktree_root,
+        )
+        self.log.info("git_context",
+            target_repo_root=str(self._git_context.target_repo_root),
+            runtime_state_root=str(self._git_context.runtime_state_root),
+            worktree_root=str(self._git_context.worktree_root),
+            base_ref=self._git_context.base_ref)
+
         self.executor = PacketExecutionAdapter(
-            project_root=self._base_project_root,
-            state_root=self._base_state_root,
-            worktree_root=self._base_worktree_root,
+            project_root=self._git_context.target_repo_root,
+            state_root=self._git_context.runtime_state_root,
+            worktree_root=self._git_context.worktree_root,
         )
 
     async def start(self):
@@ -100,11 +110,15 @@ class Worker:
                         self.log.info("packet_released", packet_id=packet_id, status=status)
 
                         if status == "accepted":
+                            target_repo = str(self._git_context.target_repo_root)
                             self.log.info("merging", packet_id=packet_id,
-                                worktree=result.worktree_path, branch=result.branch_name)
+                                worktree=result.worktree_path, branch=result.branch_name,
+                                target_repo=target_repo, sha=result.commit_sha[:12])
                             await self.api.merge_packet(packet_id,
+                                target_repo_root=target_repo,
                                 worktree_path=result.worktree_path,
-                                branch_name=result.branch_name)
+                                branch_name=result.branch_name,
+                                commit_sha=result.commit_sha)
                             self.log.info("merged", packet_id=packet_id)
 
                         if status == "rejected":

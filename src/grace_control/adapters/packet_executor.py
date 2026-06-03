@@ -60,6 +60,7 @@ class ExecutionResult(BaseModel):
     acceptance_report_path: str = ""
     acceptance_verdict: str = ""
     acceptance_summary: str = ""
+    commit_sha: str = ""
 
 #END_BLOCK_MODELS
 
@@ -101,23 +102,6 @@ class PacketExecutionAdapter:
         start_time = time.time()
         _log.info("adapter_execute_start", packet_id=packet_id, worker_id=worker_id)
 
-        # Clean git state BEFORE anything
-        import subprocess as _sp
-        import shutil
-        try:
-            _sp.run(["git", "-C", str(self.project_root), "worktree", "prune"],
-                    capture_output=True, timeout=10)
-            wt_path = self.worktree_root / f"{packet_id}-attempt-0001"
-            if wt_path.exists():
-                _sp.run(["git", "-C", str(self.project_root), "worktree", "remove",
-                        str(wt_path), "--force"], capture_output=True, timeout=10)
-                shutil.rmtree(wt_path, ignore_errors=True)
-            branch = f"agent/default/{packet_id}/attempt-0001"
-            _sp.run(["git", "-C", str(self.project_root), "branch", "-D", branch],
-                   capture_output=True, timeout=10)
-        except Exception:
-            pass
-
         # Use persistent state_root (registry must survive agent process)
         state_root = self.state_root
         state_root.mkdir(parents=True, exist_ok=True)
@@ -135,6 +119,24 @@ class PacketExecutionAdapter:
 
             run_number = packet.attempt_count
             run_id = f"{packet_id}-R{run_number:02d}"
+
+            # Clean git state for this attempt BEFORE anything
+            import subprocess as _sp
+            import shutil
+            attempt_slug = f"attempt-{run_number:04d}"
+            try:
+                _sp.run(["git", "-C", str(self.project_root), "worktree", "prune"],
+                        capture_output=True, timeout=10)
+                wt_path = self.worktree_root / f"{packet_id}-{attempt_slug}"
+                if wt_path.exists():
+                    _sp.run(["git", "-C", str(self.project_root), "worktree", "remove",
+                            str(wt_path), "--force"], capture_output=True, timeout=10)
+                    shutil.rmtree(wt_path, ignore_errors=True)
+                branch = f"agent/default/{packet_id}/{attempt_slug}"
+                _sp.run(["git", "-C", str(self.project_root), "branch", "-D", branch],
+                       capture_output=True, timeout=10)
+            except Exception:
+                pass
 
             # Check if run already exists (from a previous worker crash)
             existing_run = db.query(PacketRun).filter_by(id=run_id).first()
@@ -165,6 +167,8 @@ class PacketExecutionAdapter:
                 "max_attempts": packet.max_attempts,
             }
 
+        agent_commit_sha = ""
+
         # Select executor with escalation
         from grace_control.core.complexity_router import route_packet
         from grace_control.core.executor_selector import select_executor
@@ -186,7 +190,8 @@ class PacketExecutionAdapter:
                 packet_path, state_root, worktree_root,
                 allowed_scope=pkt_contract.allowed_write_scope,
                 frozen_scope=pkt_contract.frozen_scope,
-                packet_contract=pkt_contract)
+                packet_contract=pkt_contract,
+                attempt=run_number)
             _log.debug("legacy_runner_completed", packet_id=packet_id,
                 ok=result.ok, domain=result.domain_status,
                 errors=result.errors[:3], blocker=getattr(result, 'registry_reason', '')[:200])
@@ -199,6 +204,7 @@ class PacketExecutionAdapter:
                     reason="Worktree was cleaned before acceptance could verify",
                     evidence_path="", duration_ms=int((time.time() - start_time) * 1000))
 
+            agent_commit_sha = ""
             if result.ok and result.worktree_path:
                 wt = Path(result.worktree_path)
                 if not wt.exists():
@@ -207,15 +213,55 @@ class PacketExecutionAdapter:
                         accepted=False, domain_status="rejected",
                         reason=f"Worktree cleaned before acceptance: {result.worktree_path}",
                         evidence_path="", duration_ms=int((time.time() - start_time) * 1000))
+                # Verify/commit worktree changes only if it's a real git worktree
                 import subprocess as _sp
+                is_git_wt = False
                 try:
-                    _sp.run(["git", "add", "-A"], cwd=str(wt), capture_output=True, timeout=10)
-                    _sp.run(["git", "commit", "-m",
-                        f"agent: {packet_id} attempt {packet_data['attempt_count']}"],
-                        cwd=str(wt), capture_output=True, timeout=10)
-                    _log.debug("agent_worktree_committed", packet_id=packet_id, worktree=str(wt))
+                    r = _sp.run(["git", "rev-parse", "--is-inside-work-tree"], cwd=str(wt),
+                                capture_output=True, text=True, timeout=5)
+                    is_git_wt = r.returncode == 0 and r.stdout.strip() == "true"
                 except Exception:
-                    _log.warn("agent_commit_failed", packet_id=packet_id)
+                    pass
+                if is_git_wt:
+                    try:
+                        status = _sp.run(["git", "status", "--porcelain"], cwd=str(wt),
+                                         capture_output=True, text=True, timeout=10)
+                        if not status.stdout.strip():
+                            _log.warn("no_changes_produced", packet_id=packet_id)
+                            return ExecutionResult(
+                                accepted=False, domain_status="rejected",
+                                reason="Agent produced no changes",
+                                evidence_path="", duration_ms=int((time.time() - start_time) * 1000))
+                        add = _sp.run(["git", "add", "-A"], cwd=str(wt), capture_output=True, timeout=10)
+                        if add.returncode != 0:
+                            _log.warn("git_add_failed", packet_id=packet_id, stderr=add.stderr[:200])
+                            return ExecutionResult(
+                                accepted=False, domain_status="rejected",
+                                reason=f"git add failed: {add.stderr[:200]}",
+                                evidence_path="", duration_ms=int((time.time() - start_time) * 1000))
+                        commit = _sp.run(["git", "commit", "-m",
+                            f"agent: {packet_id} attempt {packet_data['attempt_count']}"],
+                            cwd=str(wt), capture_output=True, text=True, timeout=10)
+                        if commit.returncode != 0:
+                            _log.warn("git_commit_failed", packet_id=packet_id, stderr=commit.stderr[:200])
+                            return ExecutionResult(
+                                accepted=False, domain_status="rejected",
+                                reason=f"git commit failed: {commit.stderr[:200]}",
+                                evidence_path="", duration_ms=int((time.time() - start_time) * 1000))
+                        sha = _sp.run(["git", "rev-parse", "HEAD"], cwd=str(wt),
+                                      capture_output=True, text=True, timeout=10)
+                        agent_commit_sha = sha.stdout.strip() if sha.returncode == 0 else ""
+                        _log.debug("agent_worktree_committed", packet_id=packet_id, worktree=str(wt),
+                                   sha=agent_commit_sha[:12])
+                    except Exception as e:
+                        _log.warn("agent_commit_failed", packet_id=packet_id, error=str(e)[:200])
+                        return ExecutionResult(
+                            accepted=False, domain_status="rejected",
+                            reason=f"Agent commit exception: {str(e)[:200]}",
+                            evidence_path="", duration_ms=int((time.time() - start_time) * 1000))
+                else:
+                    _log.debug("worktree_not_git_wt_skipping_commit_verification", packet_id=packet_id,
+                               worktree=str(wt))
 
             # ── Deterministic acceptance pipeline (replaces fake verifier/reviewer) ──
             try:
@@ -308,7 +354,7 @@ class PacketExecutionAdapter:
                 _log.info("self_evolution_guard_check", packet_id=packet_id)
                 from grace_control.core.self_evolution_guard import SelfEvolutionGuard
                 guard = SelfEvolutionGuard()
-                changed = _collect_changed_files(worktree_root)
+                changed = _collect_changed_files(wt_path)
                 guard_result = guard.check(changed, session_id=spec_json.get("session_id", ""))
                 if not guard_result.passed:
                     _log.warn("self_evolution_guard_blocked", packet_id=packet_id, errors=guard_result.errors)
@@ -366,9 +412,11 @@ class PacketExecutionAdapter:
                     acceptance_verdict=accept_report.final_verdict.value,
                     acceptance_summary=accept_report.summary,
                     duration_ms=int((time.time() - start_time) * 1000),
+                    commit_sha=agent_commit_sha,
                 )
                 evidence_path = self._save_evidence(packet_id, run_number, result.to_dict(), state_root)
                 execution_result.evidence_path = evidence_path
+                execution_result.commit_sha = agent_commit_sha
                 self._save_agent_log(packet_id, run_number, result, state_root)
                 self._update_packet_run_result(
                     run_id=run_id, status="accepted",
@@ -462,6 +510,7 @@ class PacketExecutionAdapter:
                     acceptance_summary=accept_report.summary,
                     duration_ms=int((time.time() - start_time) * 1000),
                 )
+                execution_result.commit_sha = agent_commit_sha
                 evidence_path = self._save_evidence(packet_id, run_number, result.to_dict(), state_root)
                 execution_result.evidence_path = evidence_path
                 self._save_agent_log(packet_id, run_number, result, state_root)
@@ -503,6 +552,7 @@ class PacketExecutionAdapter:
                     acceptance_verdict=accept_report.final_verdict.value,
                     acceptance_summary=accept_report.summary,
                     duration_ms=int((time.time() - start_time) * 1000),
+                    commit_sha=agent_commit_sha,
                 )
                 evidence_path = self._save_evidence(packet_id, run_number, result.to_dict(), state_root)
                 execution_result.evidence_path = evidence_path
@@ -705,7 +755,8 @@ class PacketExecutionAdapter:
     async def _call_legacy_runner(self, packet_path: Path, state_root: Path, worktree_root: Path,
                                    allowed_scope: list[str] | None = None,
                                    frozen_scope: list[str] | None = None,
-                                   packet_contract=None):
+                                   packet_contract=None,
+                                   attempt: int = 1):
         from prefect_grace.platform.e2e_packet_runner import run_e2e_packet
 
         packet_id = packet_path.parent.name
@@ -742,18 +793,16 @@ class PacketExecutionAdapter:
         # Clean stale git worktrees + branches from previous attempts
         import subprocess as _sp
         import shutil
+        attempt_slug = f"attempt-{attempt:04d}"
         try:
-            # First prune dead worktrees
             _sp.run(["git", "-C", str(self.project_root), "worktree", "prune"],
                     capture_output=True, timeout=10)
-            # Then remove the worktree directory if it exists
-            wt_path = worktree_root / f"{packet_id}-attempt-0001"
+            wt_path = worktree_root / f"{packet_id}-{attempt_slug}"
             if wt_path.exists():
                 _sp.run(["git", "-C", str(self.project_root), "worktree", "remove", str(wt_path), "--force"],
                        capture_output=True, timeout=10)
                 shutil.rmtree(wt_path, ignore_errors=True)
-            # Delete the branch if it still exists
-            branch = f"agent/default/{packet_id}/attempt-0001"
+            branch = f"agent/default/{packet_id}/{attempt_slug}"
             _sp.run(["git", "-C", str(self.project_root), "branch", "-D", branch],
                    capture_output=True, timeout=10)
         except Exception:
@@ -771,6 +820,7 @@ class PacketExecutionAdapter:
                 worktree_root=worktree_root,
                 dry_run=False,
                 execute_agent=True,
+                attempt=attempt,
                 keep_worktree=True,
                 runtime_state_root=state_root,
                 timeout_seconds=timeout,

@@ -193,13 +193,24 @@ def eval():
 @click.option("--report", default=None, help="Save JSON report")
 @click.option("--with-playwright", is_flag=True, help="Run Playwright screenshot verification")
 @click.option("--validate", is_flag=True, help="Expect plan rejection (422 = success)")
-def eval_run(feature_file, workers, api_url, timeout, report, with_playwright, validate):
+@click.option("--target-repo-root", default=None, help="Target repo root (default: cwd)")
+@click.option("--state-root", default=None, help="Runtime state root (default: /tmp/grace-eval/<slug>/state)")
+@click.option("--worktree-root", default=None, help="Worktree root (default: /tmp/grace-eval/<slug>/worktrees)")
+@click.option("--base-ref", default="HEAD", help="Base git ref (default: HEAD)")
+def eval_run(feature_file, workers, api_url, timeout, report, with_playwright, validate,
+             target_repo_root, state_root, worktree_root, base_ref):
     """Run a feature through the pipeline and collect metrics."""
     import asyncio, json, subprocess, sys, time
     import httpx, yaml
     from pathlib import Path
 
-    spec = yaml.safe_load(Path(feature_file).read_text())
+    feature_path = Path(feature_file)
+    run_slug = feature_path.stem
+    target_repo = target_repo_root or str(Path.cwd())
+    state_rt = state_root or f"/tmp/grace-eval/{run_slug}/state"
+    wt_rt = worktree_root or f"/tmp/grace-eval/{run_slug}/worktrees"
+
+    spec = yaml.safe_load(feature_path.read_text())
     c = httpx.Client(base_url=api_url, timeout=120)
 
     r = c.post("/api/architect/plan", json={"feature_spec": spec})
@@ -232,23 +243,26 @@ def eval_run(feature_file, workers, api_url, timeout, report, with_playwright, v
         c.post("/api/workers/register", json={"worker_id": f"eval-w{i}"})
 
     procs = []
-    project_root = str(Path.cwd())
     for i in range(workers):
+        worker_env = {**os.environ,
+            "PYTHONPATH": f"{target_repo}/src",
+            "GRACE_DB_URL": os.environ.get("GRACE_DB_URL", f"sqlite:///{target_repo}/grace.db"),
+            "GRACE_TARGET_REPO_ROOT": target_repo,
+            "GRACE_STATE_ROOT": state_rt,
+            "GRACE_WORKTREE_ROOT": wt_rt,
+            "GRACE_BASE_REF": base_ref,
+        }
         p = subprocess.Popen([sys.executable, "-c", f"""
 import os, sys, asyncio
-sys.path.insert(0, "{project_root}/src")
+sys.path.insert(0, "{target_repo}/src")
 os.environ["GRACE_ALLOW_SANDBOX_BYPASS"] = "true"
-from pathlib import Path
 from grace_control.db import init_db
 from grace_control.worker.worker import Worker
 init_db()
-w = Worker(worker_id="eval-w{i}", api_url="{api_url}",
-           project_root=Path("{project_root}"),
-           state_root=Path("{project_root}/.grace_state"),
-           worktree_root=Path("{project_root}/.grace_worktrees"))
+w = Worker(worker_id="eval-w{i}", api_url="{api_url}")
 async def m(): await w.start()
 asyncio.run(m())
-"""], env={**os.environ, "PYTHONPATH": f"{project_root}/src", "GRACE_DB_URL": os.environ.get("GRACE_DB_URL", f"sqlite:///{project_root}/grace.db")})
+"""], env=worker_env)
         procs.append(p)
 
     start = time.time()
