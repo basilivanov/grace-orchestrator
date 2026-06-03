@@ -277,3 +277,52 @@ def fn():
         r = _run(str(tmp_path))
         assert r.returncode == 1
         assert "GRC001" in r.stdout  # b.py has no header
+
+
+class TestFileLimits:
+    def test_file_over_1000_lines_reports_grc005(self, tmp_path):
+        f = tmp_path / "big.py"
+        lines = ["# AI_HEADER: big\n# START_MODULE_CONTRACT\n# p\n# END_MODULE_CONTRACT\n# START_MODULE_MAP\n# END_MODULE_MAP\n"]
+        lines += [f"a{i}=None" for i in range(1000)]
+        f.write_text("\n".join(lines))
+        r = _run(str(f))
+        assert "GRC005" in r.stdout
+
+    def test_file_under_1000_lines_no_grc005(self, tmp_path):
+        f = tmp_path / "small.py"
+        f.write_text("# AI_HEADER: small\n# START_MODULE_CONTRACT\n# p\n# END_MODULE_CONTRACT\n# START_MODULE_MAP\n# END_MODULE_MAP\ndef fn(): pass")
+        r = _run(str(f))
+        assert "GRC005" not in r.stdout
+
+
+class TestFunctionLimits:
+    def test_function_over_4000_tokens_reports_grc012(self, tmp_path):
+        f = tmp_path / "bigfunc.py"
+        header = """# AI_HEADER: bigfunc
+# ROLE: test
+# START_MODULE_CONTRACT
+# purpose: test
+# END_MODULE_CONTRACT
+# START_MODULE_MAP
+# END_MODULE_MAP
+"""
+        body = "def huge():" + f"\n    x={repr('x' * 17000)}\n"  # function with ~4500 tokens
+        f.write_text(header + body)
+        r = _run(str(f))
+        assert "GRC012" in r.stdout
+
+    def test_function_under_4000_tokens_no_grc012(self, tmp_path):
+        f = tmp_path / "smallfunc.py"
+        header = """# AI_HEADER: smallfunc
+# ROLE: test
+# START_MODULE_CONTRACT
+# purpose: test
+# END_MODULE_CONTRACT
+# START_MODULE_MAP
+# mapping:
+# END_MODULE_MAP
+"""
+        body = "a=42\n"
+        f.write_text(header + body)
+        r = _run(str(f))
+        assert "GRC012" not in r.stdout

@@ -97,6 +97,10 @@ def lint_file(filepath: Path, skip_function_contracts: bool = False) -> list[Vio
                 violations.append(Violation("GRC004", f"mismatched BLOCK: START_{s} vs END_{e}", path, 1))
                 break
 
+    # GRC005: file exceeds 1000 lines
+    if len(lines) > 1000:
+        violations.append(Violation("GRC005", f"file too large: {len(lines)} lines (max 1000)", path, 1))
+
     # GRC010/011: function contracts
     if not skip_function_contracts:
         for node in ast.walk(tree):
@@ -126,6 +130,15 @@ def lint_file(filepath: Path, skip_function_contracts: bool = False) -> list[Vio
                             violations.append(Violation("GRC011",
                                 f"function '{node.name}' contract missing: {', '.join(missing)}",
                                 path, node.lineno))
+
+                # GRC012: function exceeds 4000 tokens
+                func_lines = lines[node.lineno - 1:node.end_lineno] if node.end_lineno else []
+                func_body = "\n".join(func_lines)
+                est_tokens = len(func_body) // 4  # ~4 chars per token
+                if est_tokens > 4000:
+                    violations.append(Violation("GRC012",
+                        f"function '{node.name}' too large: ~{est_tokens} tokens (max 4000)",
+                        path, node.lineno))
 
     return violations
 
