@@ -11,9 +11,17 @@ import uuid
 import traceback
 from pathlib import Path
 
-from grace_control.adapters.packet_executor import PacketExecutionAdapter
+from grace_control.adapters.packet_executor import PacketExecutionAdapter, ExecutionResult
 from grace_control.core.structured_logger import GraceLogger, trace_context
 from grace_control.worker.api_client import WorkerAPIClient
+
+
+def release_status_from_result(result: ExecutionResult) -> str:
+    if result.accepted:
+        return "accepted"
+    if result.domain_status == "blocked":
+        return "blocked"
+    return "rejected"
 
 
 class Worker:
@@ -87,12 +95,7 @@ class Worker:
                             domain_status=result.domain_status,
                             duration_ms=result.duration_ms)
 
-                        if result.accepted:
-                            status = "accepted"
-                        elif result.domain_status == "blocked":
-                            status = "blocked"
-                        else:
-                            status = "rejected"
+                        status = release_status_from_result(result)
                         await self.api.release_packet(packet_id, self.worker_id, status, result.model_dump())
                         self.log.info("packet_released", packet_id=packet_id, status=status)
 

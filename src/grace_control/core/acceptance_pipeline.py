@@ -245,7 +245,12 @@ class AcceptancePipeline:
                     commands=commands),
                 scope_violations=violations)
 
-        for cmd in (packet.verification.get("t0", []) if packet.verification.get("t0", []) else self._t0_commands):
+        if "t0" in packet.verification:
+            t0_cmds = packet.verification.get("t0", []) or []
+        else:
+            t0_cmds = self._t0_commands
+
+        for cmd in t0_cmds:
             r = self._runner.run(cmd, output_dir=output_dir)
             commands.append(r)
             if not r.passed:
@@ -256,9 +261,15 @@ class AcceptancePipeline:
                         commands=commands),
                     scope_violations=violations)
 
+        summary = "T0 passed: scope clean, contract valid"
+        if t0_cmds:
+            summary += ", cheap checks ok"
+        else:
+            summary += ", no cheap commands configured"
+
         return _T0Result(
             stage=StageResult(name=StageName.T0_SCOPE_AND_LINT, status=StageStatus.PASSED,
-                summary="T0 passed: scope clean, contract valid, cheap checks ok",
+                summary=summary,
                 commands=commands),
             scope_violations=violations)
 

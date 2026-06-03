@@ -129,6 +129,22 @@ async def test_cancel_ready(api):
 
 
 @pytest.mark.asyncio
+async def test_release_blocked(api):
+    """API release with status=blocked moves packet to BLOCKED state."""
+    r = await _plan(api)
+    pid = r.json()["data"]["packets"][0]
+    await api.post("/api/workers/register", json={"worker_id": "w1"})
+    await api.post("/api/packets/claim", json={"worker_id": "w1"})
+    r = await api.post(f"/api/packets/{pid}/release", json={
+        "worker_id": "w1", "status": "blocked",
+        "result": {"accepted": False, "domain_status": "blocked", "reason": "scope impossible"}})
+    assert r.status_code == 200
+    assert r.json()["data"]["state"] == "blocked"
+    r2 = await api.get(f"/api/packets/{pid}")
+    assert r2.json()["data"]["state"] == "blocked"
+
+
+@pytest.mark.asyncio
 async def test_cancel_invalid_state_is_400(api):
     """Cancel on a terminal or non-cancellable state returns 400/500."""
     r = await _plan(api)

@@ -1,19 +1,37 @@
 title: Golden Smoke Live 001
-description: "Minimal live golden test: one backend utility plus one test."
-
-verification:
-  - python -m pytest tests/test_date_util.py -q
+description: "Minimal live golden test: one sandbox utility plus one test."
 
 constraints:
   frozen_scope:
+    - src/
+    - tests/
     - src/prefect_grace/
     - src/grace_control/
 
+verification:
+  t0: []
+  t1:
+    - python3 -m pytest sandbox/golden/live_001/test_date_util.py -q
+  t2: []
+
 waves:
-  - title: Backend smoke
+  - title: Sandbox smoke
     packets:
-      - title: Add date utility
+      - title: Add sandbox date utility
+        description: >
+          Create a tiny date utility in sandbox/golden/live_001/date_util.py
+          and a pytest test in sandbox/golden/live_001/test_date_util.py.
+          The utility should expose today_iso() returning a YYYY-MM-DD string.
         scope:
-          - src/date_util.py
-          - tests/test_date_util.py
+          - sandbox/golden/live_001/
+        verification:
+          t0: []
+          t1:
+            - python3 -m pytest sandbox/golden/live_001/test_date_util.py -q
+          t2: []
+        expected_evidence:
+          - id: sandbox_date_util_test_green
+            kind: command
+            required: true
+            pattern: sandbox/golden/live_001/test_date_util.py
         acceptance_profile: NORMAL

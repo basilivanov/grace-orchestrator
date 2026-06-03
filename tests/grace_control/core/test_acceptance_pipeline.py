@@ -102,6 +102,32 @@ class TestT0:
         t1_called = any("python" in c for c in runner.calls)
         assert not t1_called or r.final_verdict == FinalVerdict.REWORK_REQUIRED
 
+    def test_explicit_empty_t0_skips_default_commands_scope_clean(self):
+        """Explicit t0: [] with clean scope → skip default py_compile, T0 passes."""
+        runner = FakeRunner()
+        p = ExecutionPacketContract(
+            packet_id="p1", title="Test",
+            allowed_write_scope=["sandbox/golden/"], frozen_scope=[],
+            acceptance_profile=AcceptanceProfile.NORMAL,
+            verification={"t0": [], "t1": [["echo", "ok"]]})
+        r = _pipeline(packet=p, runner=runner).run(packet=p, changed_files=["sandbox/date_util.py"])
+        assert r.final_verdict == FinalVerdict.ACCEPTED
+        t0_called = any("py_compile" in c for c in runner.calls)
+        assert not t0_called
+
+    def test_explicit_empty_t0_scope_guard_still_runs(self):
+        """Explicit t0: [] with out-of-scope change → scope guard fails."""
+        runner = FakeRunner()
+        scope = FakeScope(violations=[ScopeViolation(path="src/core.py", reason="r", violation_type="out_of_scope")])
+        p = ExecutionPacketContract(
+            packet_id="p1", title="Test",
+            allowed_write_scope=["sandbox/golden/"], frozen_scope=["legacy/"],
+            acceptance_profile=AcceptanceProfile.NORMAL,
+            verification={"t0": [], "t1": [["echo", "ok"]]})
+        r = _pipeline(packet=p, runner=runner, scope=scope).run(packet=p, changed_files=["src/core.py"])
+        assert r.final_verdict == FinalVerdict.REWORK_REQUIRED
+        assert r.scope_violations
+
 
 class TestFAST:
     def test_fast_t0_passed_no_commands_accepted(self):

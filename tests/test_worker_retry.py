@@ -48,6 +48,21 @@ def test_max_attempts_blocks_retry(test_db):
         retry_packet("PKT-MAXED")
 
 
+def test_retry_blocked_raises(test_db):
+    """BLOCKED packet → retry raises StateTransitionError."""
+    with get_db() as db:
+        db.add(Packet(
+            id="PKT-BLOCKED", feature_id="F1", wave_id="W01",
+            slug="blocked", title="Blocked", spec_json={},
+            state=PacketState.BLOCKED.value, attempt_count=1, max_attempts=3,
+        ))
+    with pytest.raises(StateTransitionError):
+        retry_packet("PKT-BLOCKED")
+    with get_db() as db:
+        p = db.query(Packet).filter_by(id="PKT-BLOCKED").first()
+        assert p.state == PacketState.BLOCKED.value
+
+
 def test_retry_loop_mock(test_db):
     """Simulate worker retry flow: REJECTED → retry → READY → RUNNING → ACCEPTED."""
     from grace_control.core.packet_operations import mark_accepted, mark_running
