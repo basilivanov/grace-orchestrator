@@ -196,7 +196,7 @@ def create_fixture_git_state(
             result["agent_commit_sha"] = ""
 
     if git_cfg.dirty_uncommitted_file:
-        df = wt_path / git_cfg.dirty_uncommitted_file
+        df = target_repo_root / git_cfg.dirty_uncommitted_file
         df.parent.mkdir(parents=True, exist_ok=True)
         df.write_text("dirty content")
 
@@ -295,7 +295,17 @@ async def run_stage_from_fixture(
             resp = await merge_packet(packet_id, request_data)
             return {"success": True, "packet_state": resp.get("data", {}).get("state", ""), "response": resp}
         except Exception as e:
-            return {"success": False, "error": str(e)[:500]}
+            from grace_control.db import get_db
+            from grace_control.db.schema import Packet
+            pkt_state = ""
+            try:
+                with get_db() as db:
+                    p = db.query(Packet).filter_by(id=packet_id).first()
+                    if p:
+                        pkt_state = p.state
+            except Exception:
+                pass
+            return {"success": False, "packet_state": pkt_state, "error": str(e)[:500]}
 
     if stage in ("acceptance", "verifier", "reviewer"):
         from grace_control.adapters.packet_executor import PacketExecutionAdapter

@@ -96,5 +96,4 @@ class TestGitState:
                 changed_files=[FixtureChangedFile(path="clean.py", content="clean")],
             )
             state = create_fixture_git_state(target, wt_root, "pkt_dirty", git_cfg)
-            wt = Path(state["worktree_path"])
-            assert (wt / "DIRTY.txt").exists()
+            assert (target / "DIRTY.txt").exists()
