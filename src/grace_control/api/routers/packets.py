@@ -245,6 +245,11 @@ async def merge_packet(packet_id: str, request: dict) -> dict:
     commit_sha = request.get("commit_sha", "")
     worktree_path = request.get("worktree_path", "")
     branch_name = request.get("branch_name", "")
+
+    if not worktree_path or not branch_name:
+        raise HTTPException(status_code=400,
+            detail="worktree_path and branch_name are required for merge")
+
     import subprocess as _sp
     from pathlib import Path
 

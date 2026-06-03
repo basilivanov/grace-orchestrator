@@ -79,3 +79,41 @@ async def test_plan_idempotent_feature_id(api):
         "feature_spec": {"title": "IdempotentTest", "waves": [{"title": "W1", "packets": [{"title": "P1", "scope": ["x.py"]}]}]}})
     assert r2.status_code == 200
     assert r2.json()["data"]["feature_id"] == fid1
+
+
+@pytest.mark.asyncio
+async def test_plan_propagates_root_verification_into_packets(api):
+    """P0-1: root-level verification and constraints.frozen_scope propagate into packet spec_json."""
+    r = await api.post("/api/architect/plan", json={
+        "feature_spec": {
+            "title": "PropTest",
+            "verification": ["pytest tests/ -x"],
+            "constraints": {"frozen_scope": ["src/secret/"]},
+            "waves": [{"title": "W1", "packets": [{"title": "P1", "scope": ["x.py"]}]}],
+        }})
+    pid = r.json()["data"]["packets"][0]
+    r2 = await api.get(f"/api/packets/{pid}")
+    spec = r2.json()["data"]["spec_json"]
+    assert "verification" in spec
+    assert "pytest" in str(spec["verification"])
+    assert spec.get("frozen_scope", []) == ["src/secret/"]
+
+
+@pytest.mark.asyncio
+async def test_plan_packet_level_verification_overrides_root(api):
+    """P0-1: packet-level verification takes precedence over root-level."""
+    r = await api.post("/api/architect/plan", json={
+        "feature_spec": {
+            "title": "OverrideTest",
+            "verification": ["root command"],
+            "waves": [{"title": "W1", "packets": [
+                {"title": "P1", "scope": ["x.py"], "verification": ["packet command"]}
+            ]}],
+        }})
+    pid = r.json()["data"]["packets"][0]
+    r2 = await api.get(f"/api/packets/{pid}")
+    spec = r2.json()["data"]["spec_json"]
+    assert spec["verification"] == ["packet command"]
+
+
+

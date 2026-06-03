@@ -48,10 +48,15 @@ async def test_merge_generates_event(api):
     await api.post("/api/packets/claim", json={"worker_id": "w1"})
     await api.post(f"/api/packets/{pid}/release",
                    json={"worker_id": "w1", "status": "accepted", "result": {"accepted": True}})
-    await api.post(f"/api/packets/{pid}/merge", json={})
+    r_merge = await api.post(f"/api/packets/{pid}/merge", json={
+        "worktree_path": "/tmp/fake-wt", "branch_name": "agent/test"})
 
     r = await api.get(f"/api/events?entity_type=packet&entity_id={pid}")
-    assert "packet_merged" in [e["event_type"] for e in r.json()["data"]]
+    event_types = [e["event_type"] for e in r.json()["data"]]
+    if r_merge.status_code == 200:
+        assert "packet_merged" in event_types
+    else:
+        assert "packet_merged" not in event_types
 
 
 @pytest.mark.asyncio

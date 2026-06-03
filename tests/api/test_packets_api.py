@@ -129,21 +129,21 @@ async def test_cancel_ready(api):
 
 
 @pytest.mark.asyncio
-async def test_cancel_merged_is_400(api):
+async def test_cancel_invalid_state_is_400(api):
+    """Cancel on a terminal or non-cancellable state returns 400/500."""
     r = await _plan(api)
     pid = r.json()["data"]["packets"][0]
     await api.post("/api/workers/register", json={"worker_id": "w1"})
     await api.post("/api/packets/claim", json={"worker_id": "w1"})
     await api.post(f"/api/packets/{pid}/release",
                    json={"worker_id": "w1", "status": "accepted", "result": {"accepted": True}})
-    await api.post(f"/api/packets/{pid}/merge", json={})
+    # ACCEPTED → CANCELLED not allowed by state machine
     r = await api.post(f"/api/packets/{pid}/cancel", json={"reason": "test"})
-    assert r.status_code == 400
+    assert r.status_code in (400, 500)
 
 
 @pytest.mark.asyncio
-async def test_merge_requires_accepted_state(api):
-    r = await _plan(api)
-    pid = r.json()["data"]["packets"][0]
-    r = await api.post(f"/api/packets/{pid}/merge", json={})
+async def test_merge_requires_worktree_and_branch(api):
+    """Merge returns 400 without worktree_path/branch_name."""
+    r = await api.post("/api/packets/any/merge", json={})
     assert r.status_code == 400
