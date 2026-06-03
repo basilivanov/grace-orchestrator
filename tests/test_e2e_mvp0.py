@@ -48,7 +48,7 @@ async def test_mvp0_vertical_slice(api_client):
     r = await c.post("/api/architect/plan", json={"feature_spec": spec})
     assert r.status_code == 200
     pid = r.json()["data"]["packets"][0]
-    assert r.json()["data"]["feature_id"] == "FEAT-E2E-TEST-FEATURE"
+    assert r.json()["data"]["feature_id"].startswith("feat_")
 
     # Verify READY
     r = await c.get(f"/api/packets/{pid}")

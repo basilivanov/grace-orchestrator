@@ -802,7 +802,7 @@ class PacketExecutionAdapter:
                 existing = yaml.safe_load(reg_file.read_text()) or {}
             existing[packet_id] = {
                 "packet_id": packet_id,
-                "feature_id": packet_id.split("-W")[0] if "-W" in packet_id else "unknown",
+                "feature_id": packet_id[:15],
                 "wave_id": "W01", "status": "ready", "phase": "PHASE-TEST",
                 "packet_path": str(packet_path),
                 "allowed_write_scope": effective_allowed or [],

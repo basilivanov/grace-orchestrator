@@ -164,7 +164,7 @@ async def dashboard_data():
                     "created_at": w.created_at.isoformat() + "Z" if w.created_at else None,
                 })
             result_features.append({
-                "id": f.id, "title": f.title, "status": f.status, "waves": fw,
+                "id": f.id, "slug": f.slug, "title": f.title, "status": f.status, "waves": fw,
                 "created_at": f.created_at.isoformat() + "Z" if f.created_at else None,
             })
 
