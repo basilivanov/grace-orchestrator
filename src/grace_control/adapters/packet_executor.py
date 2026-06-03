@@ -237,12 +237,18 @@ class PacketExecutionAdapter:
                     verdict=accept_report.final_verdict.value,
                     is_accepted=accept_report.is_accepted)
 
-                # Save acceptance report as evidence
+                # Save acceptance report + evidence as JSON
                 import json as _json
                 ev_dir = state_root / "packets" / packet_id / "runs" / f"R{run_number:02d}"
                 ev_dir.mkdir(parents=True, exist_ok=True)
                 (ev_dir / "acceptance_report.json").write_text(
                     _json.dumps(accept_report.to_dict(), indent=2, default=str))
+                if accept_report.verifier_report:
+                    (ev_dir / "verifier_report.json").write_text(
+                        _json.dumps(accept_report.verifier_report, indent=2, default=str))
+                if accept_report.reviewer_verdict:
+                    (ev_dir / "reviewer_verdict.json").write_text(
+                        _json.dumps(accept_report.reviewer_verdict, indent=2, default=str))
 
                 if not accept_report.is_accepted:
                     return ExecutionResult(

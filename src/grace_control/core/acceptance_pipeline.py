@@ -29,10 +29,12 @@ from grace_control.core.contracts import (
     CommandResult,
     ExecutionPacketContract,
     PacketVerdict,
+    ReviewerVerdict,
     ScopeViolation,
     StageName,
     StageResult,
     StageStatus,
+    VerifierReport,
     validate_packet_contract,
 )
 from grace_control.core.evidence import EvidenceCollector
@@ -89,9 +91,27 @@ class AcceptancePipeline:
 
         ep = self._evidence.collect_from_stage(t0.stage)
 
-        # ── T1: targeted verification ────────────────────────────────────────
+        # ── T1: targeted verification + VerifierReport ────────────────────────
         t1_result = self._run_t1(packet)
         ep += self._evidence.collect_from_stage(t1_result)
+
+        test_verdict: Literal["passed", "failed", "not_run"] = "passed"
+        if t1_result.status == StageStatus.SKIPPED:
+            test_verdict = "not_run"
+        elif t1_result.status == StageStatus.FAILED:
+            test_verdict = "failed"
+
+        verifier_report = VerifierReport(
+            packet_id=packet.packet_id,
+            verdict=PacketVerdict.ACCEPTED if t1_result.status == StageStatus.PASSED else PacketVerdict.REWORK_REQUIRED,
+            requirement_results=[{"command": " ".join(c.command), "exit_code": c.exit_code}
+                                for c in t1_result.commands],
+            test_verdict=test_verdict,
+            commands_run=[" ".join(c.command) for c in t1_result.commands],
+            evidence_paths=ep,
+            blocking_issues=t1_result.blocking_issues,
+        )
+
         if t1_result.status == StageStatus.FAILED:
             return AcceptanceReport(
                 packet_id=packet.packet_id,
@@ -100,6 +120,7 @@ class AcceptancePipeline:
                 scope_violations=t0.scope_violations,
                 evidence_paths=ep,
                 reasons=t1_result.blocking_issues or ["T1 failed"],
+                verifier_report=verifier_report,
             )
 
         # ── T2: full checks ──────────────────────────────────────────────────
@@ -113,6 +134,7 @@ class AcceptancePipeline:
                 scope_violations=t0.scope_violations,
                 evidence_paths=ep,
                 reasons=t2_result.blocking_issues or ["T2 failed"],
+                verifier_report=verifier_report,
             )
 
         has_evidence = self._evidence.has_required_evidence(
@@ -120,7 +142,17 @@ class AcceptancePipeline:
             collected_evidence=ep,
             acceptance_profile=packet.acceptance_profile,
         )
-        if packet.acceptance_profile in (AcceptanceProfile.NORMAL, AcceptanceProfile.STRICT) and not has_evidence:
+        blocked = packet.acceptance_profile in (AcceptanceProfile.NORMAL, AcceptanceProfile.STRICT) and not has_evidence
+
+        if blocked:
+            reviewer = ReviewerVerdict(
+                packet_id=packet.packet_id,
+                packet_verdict=PacketVerdict.BLOCKED,
+                follow_up_action="localized_rework",
+                route_classification="self_resolvable_rework",
+                rework_mode="bounded_fresh",
+                reasons=["missing required evidence"],
+            )
             return AcceptanceReport(
                 packet_id=packet.packet_id,
                 final_verdict=PacketVerdict.BLOCKED,
@@ -128,14 +160,26 @@ class AcceptancePipeline:
                 scope_violations=t0.scope_violations,
                 evidence_paths=ep,
                 reasons=["missing required evidence"],
+                verifier_report=verifier_report,
+                reviewer_verdict=reviewer,
             )
 
+        # ── All passed → ACCEPTED ────────────────────────────────────────────
+        reviewer = ReviewerVerdict(
+            packet_id=packet.packet_id,
+            packet_verdict=PacketVerdict.ACCEPTED,
+            follow_up_action="none",
+            route_classification="accepted",
+            rework_mode="none",
+        )
         return AcceptanceReport(
             packet_id=packet.packet_id,
             final_verdict=PacketVerdict.ACCEPTED,
             stages=[t0.stage, t1_result, t2_result],
             scope_violations=t0.scope_violations,
             evidence_paths=ep,
+            verifier_report=verifier_report,
+            reviewer_verdict=reviewer,
         )
 
     def _run_t0(

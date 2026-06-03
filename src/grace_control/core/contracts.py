@@ -107,6 +107,27 @@ class ExecutionPacketContract:
 
 
 @dataclass(frozen=True)
+class VerifierReport:
+    packet_id: str
+    verdict: "PacketVerdict"
+    requirement_results: list[dict[str, Any]] = field(default_factory=list)
+    test_verdict: Literal["passed", "failed", "not_run"] = "not_run"
+    commands_run: list[str] = field(default_factory=list)
+    evidence_paths: list[str] = field(default_factory=list)
+    blocking_issues: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class ReviewerVerdict:
+    packet_id: str
+    packet_verdict: "PacketVerdict"
+    follow_up_action: Literal["none", "localized_rework", "architect_decision"] = "none"
+    route_classification: Literal["self_resolvable_rework", "requires_user_decision", "requires_planner", "accepted"] = "accepted"
+    rework_mode: Literal["none", "light_resume", "bounded_fresh", "decision_required"] = "none"
+    reasons: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class AcceptanceReport:
     packet_id: str
     final_verdict: PacketVerdict
@@ -114,6 +135,8 @@ class AcceptanceReport:
     scope_violations: list[ScopeViolation] = field(default_factory=list)
     evidence_paths: list[str] = field(default_factory=list)
     reasons: list[str] = field(default_factory=list)
+    verifier_report: VerifierReport | None = None
+    reviewer_verdict: ReviewerVerdict | None = None
 
     @property
     def is_accepted(self) -> bool:
