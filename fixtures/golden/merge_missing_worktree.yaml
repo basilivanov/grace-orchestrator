@@ -1,0 +1,33 @@
+id: merge_missing_worktree
+kind: golden_fixture
+start_stage: merge
+profile: FAST
+
+feature:
+  title: Merge missing worktree
+  slug: merge-missing-worktree
+
+packet:
+  title: Missing wt test
+  slug: missing-wt-test
+  state: accepted
+  acceptance_profile: FAST
+  scope:
+    - sandbox/golden/missing_wt/
+
+git:
+  init_target_repo: true
+  create_worktree: false
+  create_branch: true
+  branch_name: agent/default/pkt_missing_wt/attempt-0001
+
+runs:
+  - attempt: 1
+    status: accepted
+    acceptance_report:
+      final_verdict: accepted
+      summary: ok
+
+expected:
+  merge_should_succeed: false
+  expected_error_contains: does not exist

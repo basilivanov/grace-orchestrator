@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
 from pathlib import Path
 
 import click
@@ -618,6 +619,74 @@ def _run_playwright_checks(feature_name):
         if r.get("screenshot"):
             console.print(f"     screenshot: {r['screenshot']}")
     return results
+
+
+# ── Golden Fixtures ───────────────────────────────────────────────────────────
+@cli.group()
+def golden():
+    """Golden fixture commands."""
+
+
+@golden.group()
+def fixture():
+    """Fixture management."""
+
+
+@fixture.command("run-one")
+@click.argument("fixture_file", type=click.Path(exists=True))
+@click.option("--run-id", default=None, help="Unique run ID")
+@click.option("--from", "start_stage", default="merge", help="Start stage")
+@click.option("--base-dir", default=None, help="Base directory (default: /tmp/grace-fixtures/<run-id>)")
+@click.option("--golden-fixture", is_flag=True, help="Required safety flag")
+def fixture_run_one(fixture_file, run_id, start_stage, base_dir, golden_fixture):
+    """Create fixture state and run from selected stage (one-shot)."""
+    import asyncio as _asyncio
+    import yaml as _yaml
+    from grace_control.core.golden_fixtures import FixtureSpec, FixtureSafetyError, assert_golden_fixture_allowed, run_fixture
+
+    fixture_path = Path(fixture_file)
+    run_id = run_id or f"run-{time.time():.0f}"
+    bd = Path(base_dir) if base_dir else Path(f"/tmp/grace-fixtures/{run_id}")
+
+    if not golden_fixture:
+        console.print("[red]ERROR: --golden-fixture flag is required[/red]")
+        raise SystemExit(1)
+
+    try:
+        assert_golden_fixture_allowed(bd, fixture_path)
+    except FixtureSafetyError as e:
+        console.print(f"[red]Safety check failed: {e}[/red]")
+        raise SystemExit(1)
+
+    spec = FixtureSpec(**_yaml.safe_load(fixture_path.read_text()))
+
+    from grace_control.db import init_db as _init_db
+    bd.mkdir(parents=True, exist_ok=True)
+    db_url = f"sqlite:///{bd}/grace.db"
+    os.environ.setdefault("GRACE_DB_URL", db_url)
+    _init_db()
+
+    console.print(f"[yellow]Running fixture: {spec.id} (stage: {start_stage})[/yellow]")
+    report = _asyncio.run(run_fixture(spec, base_dir=bd, run_id=run_id, start_stage=start_stage))
+    rep_path = bd / "reports" / "run-report.json"
+
+    if report.get("validation_errors"):
+        console.print("[red]Fixture FAILED validation:[/red]")
+        for e in report["validation_errors"]:
+            console.print(f"  [red]• {e}[/red]")
+        status = "FAILED"
+    elif report.get("stage_result", {}).get("success"):
+        console.print("[green]Fixture PASSED[/green]")
+        status = "PASSED"
+    else:
+        err = report.get("stage_result", {}).get("error", "unknown")
+        console.print(f"[red]Fixture stage failed: {err[:200]}[/red]")
+        status = "FAILED"
+
+    console.print(f"Report: {rep_path}")
+    console.print(f"Status: {status}")
+    console.print(f"Feature ID: {report.get('feature_id', '?')}")
+    console.print(f"Packet ID: {report.get('packet_id', '?')}")
 
 
 def _handle_error(e, json_out):

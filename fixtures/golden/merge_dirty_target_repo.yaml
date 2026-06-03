@@ -1,0 +1,37 @@
+id: merge_dirty_target_repo
+kind: golden_fixture
+start_stage: merge
+profile: FAST
+
+feature:
+  title: Merge dirty target
+  slug: merge-dirty-target
+
+packet:
+  title: Dirty test
+  slug: dirty-test
+  state: accepted
+  acceptance_profile: FAST
+  scope:
+    - sandbox/golden/merge_dirty/
+
+git:
+  init_target_repo: true
+  create_worktree: true
+  create_branch: true
+  branch_name: agent/default/pkt_dirty/attempt-0001
+  changed_files:
+    - path: sandbox/golden/merge_dirty/file.py
+      content: "x = 1"
+  dirty_uncommitted_file: UNTRACKED_DIRTY.txt
+
+runs:
+  - attempt: 1
+    status: accepted
+    acceptance_report:
+      final_verdict: accepted
+      summary: ok
+
+expected:
+  merge_should_succeed: false
+  final_packet_state: accepted

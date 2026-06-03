@@ -1,0 +1,67 @@
+id: merge_clean_success
+kind: golden_fixture
+start_stage: merge
+profile: FAST
+
+feature:
+  title: Merge clean success
+  slug: merge-clean-success
+
+wave:
+  title: Merge wave
+  order: 1
+
+packet:
+  title: Add fixture file
+  slug: add-fixture-file
+  state: accepted
+  acceptance_profile: FAST
+  scope:
+    - sandbox/golden/merge_clean_success/
+  frozen_scope:
+    - src/grace_control/core/acceptance_pipeline.py
+  verification:
+    t0: []
+    t1: []
+    t2: []
+
+git:
+  init_target_repo: true
+  base_branch: main
+  create_worktree: true
+  create_branch: true
+  branch_name: agent/default/pkt_fixture/attempt-0001
+  commit_message: fixture agent commit
+  changed_files:
+    - path: sandbox/golden/merge_clean_success/fixture_file.py
+      content: |
+        def answer():
+            return 42
+    - path: sandbox/golden/merge_clean_success/test_fixture_file.py
+      content: |
+        from fixture_file import answer
+        def test_answer():
+            assert answer() == 42
+
+runs:
+  - attempt: 1
+    status: accepted
+    domain_status: accepted
+    acceptance_report:
+      final_verdict: accepted
+      summary: fixture acceptance passed
+    artifacts:
+      - name: stdout.log
+        type: log
+        content: "pytest passed\n"
+      - name: acceptance_report.json
+        type: json
+        content_json:
+          final_verdict: accepted
+          summary: fixture acceptance passed
+
+expected:
+  final_packet_state: merged
+  merge_should_succeed: true
+  expected_files_in_target:
+    - sandbox/golden/merge_clean_success/fixture_file.py
