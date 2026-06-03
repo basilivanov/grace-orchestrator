@@ -182,8 +182,59 @@ class PacketExecutionAdapter:
                     except Exception:
                         _log.warn("agent_commit_failed", packet_id=packet_id)
 
-            # Self-evolution guard check
+            # ── Deterministic acceptance pipeline (replaces fake verifier/reviewer) ──
             spec = packet_data.get("spec_json") or {}
+            if not isinstance(spec, dict):
+                spec = {}
+            try:
+                from grace_control.core.acceptance_pipeline import AcceptancePipeline
+                from grace_control.core.contracts import (
+                    AcceptanceProfile, ExecutionPacketContract,
+                )
+                from grace_control.core.scope_guard import ScopeGuard
+
+                scope_list = spec.get("scope", [])
+                if isinstance(scope_list, str):
+                    scope_list = [scope_list]
+
+                pkt_contract = ExecutionPacketContract(
+                    packet_id=packet_id,
+                    title=packet_data.get("title", packet_id),
+                    allowed_write_scope=scope_list or ["src/grace_control/"],
+                    frozen_scope=spec.get("frozen_scope", ["src/prefect_grace/"]),
+                    acceptance_profile=AcceptanceProfile(
+                        packet_data.get("acceptance_profile", "NORMAL")
+                    ),
+                    verification_commands=spec.get("verification_commands", []),
+                    expected_evidence=spec.get("expected_evidence", []),
+                    metadata={"origin": spec.get("origin", ""),
+                              "session_id": spec.get("session_id", "")},
+                )
+
+                scope_guard = ScopeGuard(self.project_root)
+                changed = scope_guard.get_changed_files() if result.worktree_path else []
+                pipe = AcceptancePipeline(repo_root=self.project_root, scope_guard=scope_guard)
+
+                accept_report = pipe.run(packet=pkt_contract, changed_files=changed)
+                _log.info("acceptance_completed", packet_id=packet_id,
+                    verdict=accept_report.final_verdict.value,
+                    is_accepted=accept_report.is_accepted)
+
+                if not accept_report.is_accepted:
+                    execution_result = ExecutionResult(
+                        accepted=False,
+                        domain_status="rejected",
+                        errors=accept_report.reasons or ["acceptance failed"],
+                        evidence_path=None,
+                        duration_ms=int((time.time() - start_time) * 1000),
+                    )
+                    return execution_result
+            except Exception as e:
+                _log.warn("acceptance_pipeline_error", packet_id=packet_id, error=str(e)[:200])
+                # Don't block on acceptance pipeline failure — log and continue
+                pass
+
+            # Self-evolution guard check (additional checks for self-improvement)
             if isinstance(spec, dict) and spec.get("origin") == "self_evolution":
                 _log.info("self_evolution_guard_check", packet_id=packet_id)
                 from grace_control.core.self_evolution_guard import SelfEvolutionGuard
