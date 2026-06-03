@@ -358,6 +358,35 @@ class PacketExecutionAdapter:
         if isinstance(scope, str):
             scope = [scope]
         scope_lines = "\n".join(f"- {s}" for s in scope)
+
+        frozen = spec_json.get("frozen_scope", ["src/prefect_grace/"])
+        if isinstance(frozen, str):
+            frozen = [frozen]
+        frozen_lines = "\n".join(f"- {s}" for s in frozen)
+
+        verification_raw = spec_json.get("verification", {})
+        if isinstance(verification_raw, list):
+            verification_text = "\n".join(f"- {v}" if isinstance(v, str) else f"- {' '.join(v)}" for v in verification_raw)
+        elif isinstance(verification_raw, dict):
+            parts = []
+            for stage in ("t0", "t1", "t2"):
+                cmds = verification_raw.get(stage, [])
+                for c in cmds:
+                    c_str = " ".join(c) if isinstance(c, list) else c
+                    parts.append(f"- [{stage}] {c_str}")
+            verification_text = "\n".join(parts) if parts else "pytest -v\nruff check src/"
+        else:
+            verification_text = "pytest -v\nruff check src/"
+
+        expected_raw = spec_json.get("expected_evidence", [])
+        if expected_raw:
+            expected_lines = "\n".join(
+                f"- {e['id']}" if isinstance(e, dict) else f"- {e}"
+                for e in expected_raw
+            )
+        else:
+            expected_lines = "- test results\n- lint output"
+
         pd = packet_data
         content = f"""# Execution Packet: {pd['id']}
 
@@ -379,7 +408,7 @@ class PacketExecutionAdapter:
 
 ## Frozen Scope
 
-- src/prefect_grace/**
+{frozen_lines}
 
 ## Must Preserve
 
@@ -394,14 +423,12 @@ class PacketExecutionAdapter:
 ## Verification
 
 ```bash
-pytest -v
-ruff check src/
+{verification_text}
 ```
 
 ## Expected Evidence
 
-- test results
-- lint output
+{expected_lines}
 
 ## Escalation Triggers
 
@@ -515,7 +542,8 @@ ruff check src/
     # END_FUNCTION_CONTRACT
     def _parse_result(self, result) -> ExecutionResult:
         return ExecutionResult(
-            accepted=True,
+            accepted=False,
+            reason="legacy result is not an acceptance gate",
             domain_status=result.domain_status,
             worktree_path=result.worktree_path or "",
             branch_name=result.branch_name or "",

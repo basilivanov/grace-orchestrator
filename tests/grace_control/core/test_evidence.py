@@ -57,13 +57,13 @@ class TestEvidenceCollector:
             acceptance_profile=AcceptanceProfile.FAST,
         ) is True
 
-    def test_no_expected_evidence_fails_normal(self):
+    def test_no_expected_evidence_passes_normal_with_passed_commands(self):
         ec = self._collector()
         assert ec.has_required_evidence(
             expected_evidence=[],
             collected_evidence=["exit_code:0"],
             acceptance_profile=AcceptanceProfile.NORMAL,
-        ) is False
+        ) is True
 
     def test_failed_command_evidence_does_not_satisfy(self):
         ec = self._collector()

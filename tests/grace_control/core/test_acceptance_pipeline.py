@@ -206,8 +206,30 @@ class TestReport:
         d = r.to_dict()
         assert d["packet_id"] == "p1"
 
-    def test_missing_evidence_blocks_normal(self):
-        p = _make_packet(profile=AcceptanceProfile.NORMAL, t1=[["echo", "ok"]], expected_evidence=[EvidenceRequirement(id="tests", kind="command")])
-        runner = FakeRunner({"echo ok": CommandResult(command="echo ok", cwd="/", exit_code=0)})
-        r = _pipeline(packet=p, runner=runner, evidence=FakeEvidence(has=False)).run(packet=p)
+    def test_missing_evidence_blocks_strict(self):
+        p = _make_packet(profile=AcceptanceProfile.STRICT, t1=[["echo", "ok"]], t2=[["echo", "full"]], expected_evidence=[EvidenceRequirement(id="missing-test", kind="command", required=True, pattern="nonexistent")])
+        runner = FakeRunner({"echo ok": CommandResult(command="echo ok", cwd="/", exit_code=0), "echo full": CommandResult(command="echo full", cwd="/", exit_code=0)})
+        r = _pipeline(packet=p, runner=runner).run(packet=p)
         assert r.final_verdict == FinalVerdict.BLOCKED
+
+    def test_legacy_ok_false_blocks_accept(self):
+        """legacy_result.ok=False even with passed deterministic gates → cannot be ACCEPTED."""
+        p = _make_packet(profile=AcceptanceProfile.FAST, t1=[])
+        r = _pipeline(packet=p).run(packet=p, legacy_result={"ok": False, "domain_status": "runner_error"})
+        assert r.final_verdict == FinalVerdict.REWORK_REQUIRED
+        assert r.legacy_ok is False
+
+    def test_legacy_domain_status_rejected_blocks_accept(self):
+        """legacy_result.ok=True but domain_status=rejected → cannot be ACCEPTED."""
+        p = _make_packet(profile=AcceptanceProfile.FAST, t1=[])
+        r = _pipeline(packet=p).run(packet=p, legacy_result={"ok": True, "domain_status": "rejected"})
+        assert r.final_verdict == FinalVerdict.REWORK_REQUIRED
+        assert r.legacy_domain_status == "rejected"
+
+    def test_legacy_ok_true_domain_accepted_allowed(self):
+        """legacy_result.ok=True and domain_status=accepted → can reach ACCEPTED if gates pass."""
+        p = _make_packet(profile=AcceptanceProfile.FAST, t1=[])
+        r = _pipeline(packet=p).run(packet=p, legacy_result={"ok": True, "domain_status": "accepted"})
+        assert r.final_verdict == FinalVerdict.ACCEPTED
+        assert r.legacy_domain_status == "accepted"
+        assert r.legacy_ok is True

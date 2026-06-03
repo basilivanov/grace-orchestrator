@@ -39,8 +39,8 @@ from grace_control.core.contracts import (
     VerifierReport,
     validate_packet_contract,
 )
-from grace_control.core.evidence import EvidenceCollector
-from grace_control.core.scope_guard import ScopeGuard
+from grace_control.core.evidence import EvidenceCollector, check_expected_evidence
+from grace_control.core.scope_guard import ScopeGuard, get_changed_files
 
 
 from dataclasses import dataclass
@@ -67,7 +67,7 @@ def run_acceptance_pipeline(
     )
     changed_files: list[str] = []
     try:
-        changed_files = pipe._scope.get_changed_files()
+        changed_files = get_changed_files(worktree_path, base_ref="main")
     except Exception:
         pass
     return pipe.run(
@@ -114,7 +114,8 @@ class AcceptancePipeline:
         worktree_root = Path(worktree_path) if worktree_path else self._root
 
         # ── T0: scope + cheap machine gates ──────────────────────────────────
-        t0_result = self._run_t0(packet, changed_files, base_ref, head_ref)
+        run_dir_t0 = Path(run_dir) / "t0" if run_dir else worktree_root
+        t0_result = self._run_t0(packet, changed_files, base_ref, head_ref, output_dir=run_dir_t0)
         scope_violations_raw = [f"{v.path}: {v.reason}" for v in t0_result.scope_violations]
         if t0_result.stage.status == StageStatus.FAILED:
             return AcceptanceReport(
@@ -157,22 +158,22 @@ class AcceptancePipeline:
                 summary=t2_result.summary or "T2 failed",
             )
 
-        has_evidence = self._evidence.has_required_evidence(
-            expected_evidence=packet.expected_evidence,
-            collected_evidence=ep,
-            acceptance_profile=packet.acceptance_profile,
+        evidence_issues = check_expected_evidence(
+            expected=packet.expected_evidence,
+            stage_results=[t0_result.stage, t1_result, t2_result],
+            worktree_path=worktree_root,
+            changed_files=changed_files or [],
+            profile=packet.acceptance_profile,
         )
-        blocked = packet.acceptance_profile in (AcceptanceProfile.NORMAL, AcceptanceProfile.STRICT) and not has_evidence
-
-        if blocked:
+        if evidence_issues:
             return AcceptanceReport(
                 packet_id=packet.packet_id,
-                final_verdict=FinalVerdict.BLOCKED,
+                final_verdict=FinalVerdict.BLOCKED if packet.acceptance_profile == AcceptanceProfile.STRICT else FinalVerdict.REWORK_REQUIRED,
                 profile=packet.acceptance_profile,
                 stages=[t0_result.stage, t1_result, t2_result],
                 scope_violations=scope_violations_raw,
-                evidence_issues=["missing required evidence"],
-                summary="missing required evidence",
+                evidence_issues=evidence_issues,
+                summary=evidence_issues[0] if evidence_issues else "missing required evidence",
             )
 
         # ── All passed but legacy runner failed → can't be ACCEPTED ──────────
@@ -218,6 +219,7 @@ class AcceptancePipeline:
         self, packet: ExecutionPacketContract,
         changed_files: list[str] | None,
         base_ref: str | None, head_ref: str | None,
+        *, output_dir: Path | None = None,
     ) -> _T0Result:
         cf = changed_files or self._scope.get_changed_files(base_ref, head_ref)
         violations = self._scope.validate_changed_files(
@@ -244,7 +246,7 @@ class AcceptancePipeline:
                 scope_violations=violations)
 
         for cmd in (packet.verification.get("t0", []) if packet.verification.get("t0", []) else self._t0_commands):
-            r = self._runner.run(cmd)
+            r = self._runner.run(cmd, output_dir=output_dir)
             commands.append(r)
             if not r.passed:
                 return _T0Result(

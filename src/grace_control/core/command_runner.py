@@ -24,6 +24,7 @@ from __future__ import annotations
 import re
 import shlex
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 
@@ -126,108 +127,87 @@ class CommandRunner:
         timeout_s: int | None = None,
         output_dir: Path | None = None,
     ) -> CommandResult:
-        # Normalize: string → list via shlex (safe, no shell=True)
         if isinstance(command, str):
-            if _SHELL_OPS.search(command):
-                return CommandResult(
-                    command=command, cwd=str((cwd or self._root).resolve()), exit_code=1,
-                    stderr=f"unsupported shell syntax in command: {command[:200]}",
-                    stdout_path="", stderr_path="",
-                    timed_out=False, duration_ms=0,
-                )
+            resolved_cwd = (cwd or self._root).resolve()
             try:
-                cmd_list = shlex.split(command)
+                resolved_cwd.relative_to(self._root)
             except ValueError:
                 return CommandResult(
-                    command=command, cwd=str((cwd or self._root).resolve()), exit_code=1,
-                    stderr=f"cannot parse command string: {command[:200]}",
-                    stdout_path="", stderr_path="",
-                    timed_out=False, duration_ms=0,
+                    command=command, cwd=str(resolved_cwd), exit_code=1,
+                    stderr=f"cwd {resolved_cwd} is outside repo root {self._root}",
                 )
-        else:
-            cmd_list = list(command)
-        cwd_resolved = (cwd or self._root).resolve()
+            effective_outdir = output_dir or Path(tempfile.mkdtemp(prefix="cmd_output_"))
+            return run_command(
+                command=command,
+                cwd=resolved_cwd,
+                output_dir=effective_outdir,
+                timeout_seconds=timeout_s or self._default_timeout,
+            )
+
+        cmd_list = list(command)
+        resolved_cwd = (cwd or self._root).resolve()
         try:
-            cwd_resolved.relative_to(self._root)
+            resolved_cwd.relative_to(self._root)
         except ValueError:
             return CommandResult(
-                command=" ".join(cmd_list) if isinstance(cmd_list, list) else cmd_list,
-                cwd=str(cwd_resolved), exit_code=1,
-                stderr=f"cwd {cwd_resolved} is outside repo root {self._root}",
-                stdout_path="", stderr_path="",
-                timed_out=False, duration_ms=0,
+                command=" ".join(cmd_list), cwd=str(resolved_cwd), exit_code=1,
+                stderr=f"cwd {resolved_cwd} is outside repo root {self._root}",
             )
-
         if not cmd_list:
             return CommandResult(
-                command="", cwd=str(cwd_resolved), exit_code=1,
-                stderr="command must be non-empty list[str]",
-                stdout_path="", stderr_path="",
-                timed_out=False, duration_ms=0,
+                command="", cwd=str(resolved_cwd), exit_code=1,
+                stderr="command must be non-empty",
             )
 
-        for arg in cmd_list:
-            if not isinstance(arg, str):
-                return CommandResult(
-                    command=" ".join(str(a) for a in cmd_list), cwd=str(cwd_resolved), exit_code=1,
-                    stderr=f"command arg must be str, got {type(arg).__name__}",
-                    stdout_path="", stderr_path="",
-                    timed_out=False, duration_ms=0,
-                )
-
+        cmd_str = " ".join(cmd_list)
         timeout = timeout_s or self._default_timeout
         started = time.time()
-        stdout_path = ""
-        stderr_path = ""
+
         if output_dir:
             output_dir.mkdir(parents=True, exist_ok=True)
             existing = sorted(output_dir.glob("*_stdout.log"))
             cmd_id = (int(existing[-1].stem.split("_")[1]) if existing else 0) + 1
             stdout_path = str(output_dir / f"cmd_{cmd_id:03d}_stdout.log")
             stderr_path = str(output_dir / f"cmd_{cmd_id:03d}_stderr.log")
+        else:
+            out_dir = Path(tempfile.mkdtemp(prefix="cmd_output_"))
+            stdout_path = str(out_dir / "cmd_001_stdout.log")
+            stderr_path = str(out_dir / "cmd_001_stderr.log")
 
         try:
-            if output_dir:
-                with open(stdout_path, "w") as out_f, open(stderr_path, "w") as err_f:
-                    proc = subprocess.run(
-                        cmd_list, cwd=str(cwd_resolved), timeout=timeout,
-                        stdout=out_f, stderr=err_f,
-                    )
-                stdout_text = open(stdout_path).read()
-                stderr_text = open(stderr_path).read()
-            else:
+            with open(stdout_path, "w") as out_f, open(stderr_path, "w") as err_f:
                 proc = subprocess.run(
-                    cmd_list, cwd=str(cwd_resolved), capture_output=True, text=True, timeout=timeout,
+                    cmd_list, cwd=str(resolved_cwd), timeout=timeout,
+                    stdout=out_f, stderr=err_f,
                 )
-                stdout_text = proc.stdout or ""
-                stderr_text = proc.stderr or ""
-
+            stdout_text = open(stdout_path).read()
+            stderr_text = open(stderr_path).read()
             duration = int((time.time() - started) * 1000)
-            cmd_str = " ".join(cmd_list) if isinstance(cmd_list, list) else cmd_list
             return CommandResult(
-                command=cmd_str, cwd=str(cwd_resolved), exit_code=proc.returncode,
+                command=cmd_str, cwd=str(resolved_cwd), exit_code=proc.returncode,
                 stdout=stdout_text, stderr=stderr_text,
                 stdout_path=stdout_path, stderr_path=stderr_path,
                 timed_out=False, duration_ms=duration,
             )
         except subprocess.TimeoutExpired:
             duration = int((time.time() - started) * 1000)
-            cmd_str = " ".join(cmd_list) if isinstance(cmd_list, list) else cmd_list
             return CommandResult(
-                command=cmd_str, cwd=str(cwd_resolved), exit_code=-1,
+                command=cmd_str, cwd=str(resolved_cwd), exit_code=-1,
                 stderr=f"timeout after {timeout}s",
                 stdout_path=stdout_path, stderr_path=stderr_path,
                 timed_out=True, duration_ms=duration,
             )
         except FileNotFoundError:
-            cmd_str = " ".join(cmd_list) if isinstance(cmd_list, list) else cmd_list
             return CommandResult(
-                command=cmd_str, cwd=str(cwd_resolved), exit_code=127,
+                command=cmd_str, cwd=str(resolved_cwd), exit_code=127,
                 stderr=f"command not found: {cmd_list[0]}",
+                stdout_path=stdout_path, stderr_path=stderr_path,
+                timed_out=False, duration_ms=int((time.time() - started) * 1000),
             )
         except Exception as e:
-            cmd_str = " ".join(cmd_list) if isinstance(cmd_list, list) else cmd_list
             return CommandResult(
-                command=cmd_str, cwd=str(cwd_resolved), exit_code=1,
+                command=cmd_str, cwd=str(resolved_cwd), exit_code=1,
                 stderr=str(e)[:500],
+                stdout_path=stdout_path, stderr_path=stderr_path,
+                timed_out=False, duration_ms=int((time.time() - started) * 1000),
             )

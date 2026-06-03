@@ -123,8 +123,14 @@ class EvidenceCollector:
         if acceptance_profile == AcceptanceProfile.FAST:
             return True  # FAST only needs T0
 
-        if not expected_evidence:
-            return False
-
         passed_commands = [e for e in collected_evidence if e.startswith("exit_code:0")]
-        return len(passed_commands) >= 1
+
+        if acceptance_profile == AcceptanceProfile.NORMAL:
+            return len(passed_commands) >= 1
+
+        if acceptance_profile == AcceptanceProfile.STRICT:
+            if not expected_evidence:
+                return False
+            return len(passed_commands) >= 1
+
+        return False
