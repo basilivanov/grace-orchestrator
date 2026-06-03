@@ -8,6 +8,25 @@
 - admin UI changes should use `NORMAL` or `STRICT`, not `FAST` by default
 - core/runtime/worker/git/merge changes require `STRICT`
 - verify no runtime state is created in target repo except intentional files
+- use returned NanoID UIDs from API responses (`feature_id=feat_...`, `packet_id=pkt_...`); never derive IDs from title/slug such as `FEAT-...`
+
+## Identity model
+
+The control plane now separates canonical IDs from readable labels:
+
+```text
+Feature.id = feat_<nanoid>   # canonical UID / API identity
+Feature.slug = title slug    # readable label only
+
+Wave.id = wave_<nanoid>
+Wave.slug = title slug
+
+Packet.id = pkt_<nanoid>
+Packet.slug = title slug
+```
+
+Self-improvement scripts, admin UI links, merge/retry actions, and polling must use returned UIDs.
+Slugs/titles are display/search metadata only and must not be used as primary keys or idempotency keys.
 
 ## Environment
 
@@ -40,3 +59,14 @@ grace eval run grace/features/self-improvement.yaml \
   --base-ref HEAD \
   --report /tmp/grace-self-improvement/<run-id>/report.json
 ```
+
+## Reading IDs from plan responses
+
+When creating a self-improvement/admin feature through `/api/architect/plan`, capture IDs from the response:
+
+```bash
+FEATURE_ID=$(jq -r '.data.feature_id' plan.json)
+PACKET_ID=$(jq -r '.data.packet_summaries[0].id // .data.packet_ids[0] // .data.packets[0]' plan.json)
+```
+
+Do not compute IDs from title, slug, wave order, or packet order.
