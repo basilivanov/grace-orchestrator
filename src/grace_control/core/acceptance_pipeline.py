@@ -119,7 +119,7 @@ class AcceptancePipeline:
 
         # ── T0: scope + cheap machine gates ──────────────────────────────────
         run_dir_t0 = Path(run_dir) / "t0" if run_dir else worktree_root
-        t0_result = self._run_t0(packet, changed_files, base_ref, head_ref, output_dir=run_dir_t0)
+        t0_result = self._run_t0(packet, changed_files, base_ref, head_ref, output_dir=run_dir_t0, cwd=worktree_root)
         scope_violations_raw = [f"{v.path}: {v.reason}" for v in t0_result.scope_violations]
         if t0_result.stage.status == StageStatus.FAILED:
             return AcceptanceReport(
@@ -135,7 +135,7 @@ class AcceptancePipeline:
 
         # ── T1: targeted verification + VerifierReport ────────────────────────
         run_dir_t1 = Path(run_dir) / "t1" if run_dir else worktree_root
-        t1_result = self._run_t1(packet, run_dir=run_dir_t1)
+        t1_result = self._run_t1(packet, run_dir=run_dir_t1, cwd=worktree_root)
         ep += self._evidence.collect_from_stage(t1_result)
 
         if t1_result.status == StageStatus.FAILED:
@@ -150,7 +150,7 @@ class AcceptancePipeline:
 
         # ── T2: full checks ──────────────────────────────────────────────────
         run_dir_t2 = Path(run_dir) / "t2" if run_dir else worktree_root
-        t2_result = self._run_t2(packet, run_dir=run_dir_t2)
+        t2_result = self._run_t2(packet, run_dir=run_dir_t2, cwd=worktree_root)
         ep += self._evidence.collect_from_stage(t2_result)
         if t2_result.status == StageStatus.FAILED:
             return AcceptanceReport(
@@ -223,7 +223,7 @@ class AcceptancePipeline:
         self, packet: ExecutionPacketContract,
         changed_files: list[str] | None,
         base_ref: str | None, head_ref: str | None,
-        *, output_dir: Path | None = None,
+        *, output_dir: Path | None = None, cwd: Path | None = None,
     ) -> _T0Result:
         cf = changed_files or self._scope.get_changed_files(base_ref, head_ref)
         violations = self._scope.validate_changed_files(
@@ -255,7 +255,7 @@ class AcceptancePipeline:
             t0_cmds = self._t0_commands
 
         for cmd in t0_cmds:
-            r = self._runner.run(cmd, output_dir=output_dir)
+            r = self._runner.run(cmd, output_dir=output_dir, cwd=cwd)
             commands.append(r)
             if not r.passed:
                 return _T0Result(
@@ -277,9 +277,9 @@ class AcceptancePipeline:
                 commands=commands),
             scope_violations=violations)
 
-    def _run_t1(self, packet: ExecutionPacketContract, *, run_dir: Path | None = None) -> StageResult:
+    def _run_t1(self, packet: ExecutionPacketContract, *, run_dir: Path | None = None, cwd: Path | None = None) -> StageResult:
         cmds = packet.verification.get("t1", [])
-        commands = [self._runner.run(cmd, output_dir=run_dir) for cmd in cmds]
+        commands = [self._runner.run(cmd, output_dir=run_dir, cwd=cwd) for cmd in cmds]
 
         if not cmds:
             if packet.acceptance_profile == AcceptanceProfile.FAST:
@@ -299,7 +299,7 @@ class AcceptancePipeline:
         return StageResult(name=StageName.T1_TARGETED_TESTS, status=StageStatus.PASSED,
                           summary=f"T1 passed: {len(commands)} commands ok", commands=commands)
 
-    def _run_t2(self, packet: ExecutionPacketContract, *, run_dir: Path | None = None) -> StageResult:
+    def _run_t2(self, packet: ExecutionPacketContract, *, run_dir: Path | None = None, cwd: Path | None = None) -> StageResult:
         cmds = packet.verification.get("t2", [])
         if not cmds:
             if packet.acceptance_profile == AcceptanceProfile.STRICT:
@@ -313,7 +313,7 @@ class AcceptancePipeline:
             return StageResult(name=StageName.T2_FULL_TESTS, status=StageStatus.SKIPPED,
                               summary="FAST always skips T2", skipped_reason="FAST profile skips T2")
 
-        commands = [self._runner.run(cmd, output_dir=run_dir) for cmd in cmds]
+        commands = [self._runner.run(cmd, output_dir=run_dir, cwd=cwd) for cmd in cmds]
         failed = [c for c in commands if not c.passed]
         if failed:
             return StageResult(name=StageName.T2_FULL_TESTS, status=StageStatus.FAILED,

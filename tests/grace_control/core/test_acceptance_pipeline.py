@@ -42,10 +42,12 @@ class FakeRunner:
     def __init__(self, results=None):
         self._results = results or {}
         self.calls: list[str] = []
+        self.call_cwds: list[Path | None] = []
 
     def run(self, command, *, cwd=None, timeout_s=None, output_dir=None):
         cmd_str = " ".join(command) if isinstance(command, list) else command
         self.calls.append(cmd_str)
+        self.call_cwds.append(cwd)
         key = cmd_str
         if key in self._results:
             return self._results[key]
@@ -259,3 +261,33 @@ class TestReport:
         assert r.final_verdict == FinalVerdict.ACCEPTED
         assert r.legacy_domain_status == "accepted"
         assert r.legacy_ok is True
+
+    def test_t1_command_cwd_is_worktree(self):
+        """T1 command receives cwd=worktree_root (passed through run())."""
+        runner = FakeRunner()
+        p = _make_packet(profile=AcceptanceProfile.NORMAL, t1=[["echo", "ok"]])
+        _pipeline(packet=p, runner=runner).run(packet=p, changed_files=["src/main.py"],
+                                                worktree_path="/tmp/test-wt")
+        assert len(runner.call_cwds) >= 1
+        # T1 commands get cwd from worktree_root
+        t1_cwds = [c for c in runner.call_cwds if c is not None]
+        assert any(str(c) == "/tmp/test-wt" for c in t1_cwds)
+
+    def test_t2_command_cwd_is_worktree(self):
+        """T2 command receives cwd=worktree_root."""
+        runner = FakeRunner()
+        p = _make_packet(profile=AcceptanceProfile.STRICT, t1=[["echo", "ok"]], t2=[["echo", "full"]])
+        _pipeline(packet=p, runner=runner).run(packet=p, changed_files=["src/main.py"],
+                                                worktree_path="/tmp/test-wt2")
+        assert len(runner.call_cwds) >= 2
+        t2_cwds = [str(c) for c in runner.call_cwds if c is not None]
+        assert "/tmp/test-wt2" in t2_cwds
+
+    def test_fast_runs_t1_when_configured(self):
+        """FAST profile still runs T1 commands if verification.t1 is set."""
+        runner = FakeRunner()
+        p = _make_packet(profile=AcceptanceProfile.FAST, t1=[["echo", "fast-t1"]])
+        r = _pipeline(packet=p, runner=runner).run(packet=p, changed_files=["src/main.py"])
+        assert r.final_verdict == FinalVerdict.ACCEPTED
+        t1_called = any("fast-t1" in c for c in runner.calls)
+        assert t1_called
