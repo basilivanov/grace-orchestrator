@@ -269,8 +269,8 @@ class TestSelfEvolutionSessionModel:
         session.status = "collecting_context"
         assert session.status == "collecting_context"
         session.status = "planning"
-        session.feature_id = "FEAT-TEST"
-        assert session.feature_id == "FEAT-TEST"
+        session.feature_id = "feat_test"
+        assert session.feature_id == "feat_test"
         session.status = "done"
         from datetime import datetime
         session.finished_at = datetime.utcnow()

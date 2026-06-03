@@ -185,6 +185,7 @@ async def create_plan(request: dict) -> dict:
             "waves_count": len(spec.get("waves", [])),
             "packets_count": len(packets_created),
             "packets": packets_created,
+            "packet_ids": packets_created,
             "context": context,
             "generated": architect_generated,
         },

@@ -8,9 +8,10 @@ async def test_full_two_wave_e2e(api):
         "feature_spec": {"title": "WGATE", "waves": [
             {"title": "W1", "packets": [{"title": "A", "scope": ["a.py"]}, {"title": "B", "scope": ["b.py"]}]},
             {"title": "W2", "packets": [{"title": "C", "scope": ["c.py"]}]}]}})
+    fid = r.json()["data"]["feature_id"]
     pids = r.json()["data"]["packets"]
-    w1_pids = [p for p in pids if "W01" in p]
-    w2_pids = [p for p in pids if "W02" in p]
+    w1_pids = pids[:2]
+    w2_pids = pids[2:]
 
     # Verify W1 ready, W2 draft
     for p in w1_pids:
@@ -47,7 +48,7 @@ async def test_full_two_wave_e2e(api):
     from grace_control.core.feature_gate import check_feature_completion
     check_feature_completion()
 
-    r = await api.get("/api/features/FEAT-WGATE")
+    r = await api.get(f"/api/features/{fid}")
     assert r.json()["data"]["status"] == "COMPLETED"
 
 
@@ -72,7 +73,7 @@ async def test_wave_gate_check_idempotent_via_api(api):
             {"title": "W1", "packets": [{"title": "A", "scope": ["a.py"]}]},
             {"title": "W2", "packets": [{"title": "B", "scope": ["b.py"]}]}]}})
     pids = r.json()["data"]["packets"]
-    w2_pid = [p for p in pids if "W02" in p][0]
+    w2_pid = pids[1]
 
     await api.post("/api/workers/register", json={"worker_id": "w1"})
     await api.post("/api/packets/claim", json={"worker_id": "w1"})

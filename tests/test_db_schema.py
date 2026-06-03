@@ -38,10 +38,10 @@ def test_all_tables_exist(test_db):
 
 def test_create_feature(test_db):
     with get_db() as db:
-        f = Feature(id="FEAT-TEST", slug="test", title="Test", spec_json={})
+        f = Feature(id="feat_test", slug="test", title="Test", spec_json={})
         db.add(f)
     with get_db() as db:
-        found = db.query(Feature).filter_by(id="FEAT-TEST").first()
+        found = db.query(Feature).filter_by(id="feat_test").first()
         assert found is not None
         assert found.title == "Test"
         assert found.slug == "test"
@@ -49,10 +49,10 @@ def test_create_feature(test_db):
 
 def test_create_wave(test_db):
     with get_db() as db:
-        w = Wave(id="W01", feature_id="FEAT-TEST", slug="w1", title="Wave 1", order=1)
+        w = Wave(id="wave_test", feature_id="feat_test", slug="w1", title="Wave 1", order=1)
         db.add(w)
     with get_db() as db:
-        found = db.query(Wave).filter_by(id="W01").first()
+        found = db.query(Wave).filter_by(id="wave_test").first()
         assert found is not None
         assert found.order == 1
 
@@ -60,9 +60,9 @@ def test_create_wave(test_db):
 def test_create_packet(test_db):
     with get_db() as db:
         p = Packet(
-            id="FEAT-TEST-W01-P01-CREATE",
-            feature_id="FEAT-TEST",
-            wave_id="W01",
+            id="pkt_test",
+            feature_id="feat_test",
+            wave_id="wave_test",
             slug="create",
             title="Create test",
             spec_json={"scope": "src/test.py"},
@@ -70,7 +70,7 @@ def test_create_packet(test_db):
         )
         db.add(p)
     with get_db() as db:
-        found = db.query(Packet).filter_by(id="FEAT-TEST-W01-P01-CREATE").first()
+        found = db.query(Packet).filter_by(id="pkt_test").first()
         assert found is not None
         assert found.state == PacketState.DRAFT.value
         assert found.acceptance_profile == "NORMAL"
