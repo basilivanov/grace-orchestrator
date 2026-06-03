@@ -89,17 +89,21 @@ async def create_plan(request: dict) -> dict:
     dag_packets = []
     action_to_id: dict[str, str] = {}
     planned_waves = []
+    plan_used_ids: set[str] = set()
 
     with get_db() as db:
-        feature_id = generate_unique_id(db, Feature, new_feature_uid)
+        feature_id = generate_unique_id(db, Feature, new_feature_uid, reserved=plan_used_ids)
+    plan_used_ids.add(feature_id)
 
     for i, wave_spec in enumerate(spec.get("waves", []), 1):
         with get_db() as db:
-            wave_id = generate_unique_id(db, Wave, new_wave_uid)
+            wave_id = generate_unique_id(db, Wave, new_wave_uid, reserved=plan_used_ids)
+        plan_used_ids.add(wave_id)
         wave_entry = {"id": wave_id, "spec": wave_spec, "order": i, "packet_ids": []}
         for j, pkt_spec in enumerate(wave_spec.get("packets", []), 1):
             with get_db() as db:
-                pkt_id = generate_unique_id(db, Packet, new_packet_uid)
+                pkt_id = generate_unique_id(db, Packet, new_packet_uid, reserved=plan_used_ids)
+            plan_used_ids.add(pkt_id)
             action = _extract_action(pkt_spec["title"])
             action_to_id[action] = pkt_id
             dag_packets.append({
@@ -128,6 +132,7 @@ async def create_plan(request: dict) -> dict:
 
     # ── Persist ──────────────────────────────────────────────────────────
     packets_created = []
+    packet_summaries = []
     with get_db() as db:
         db.add(Feature(
             id=feature_id, slug=slug, title=title,
@@ -177,15 +182,21 @@ async def create_plan(request: dict) -> dict:
                     acceptance_profile=pkt_spec.get("acceptance_profile", "NORMAL"),
                 ))
                 packets_created.append(pkt_id)
+                packet_summaries.append({
+                    "id": pkt_id, "slug": pkt_slug,
+                    "title": pkt_spec["title"], "wave_id": wave_id,
+                })
 
     return {
         "data": {
             "feature_id": feature_id,
+            "feature_slug": slug,
             "slug": slug,
             "waves_count": len(spec.get("waves", [])),
             "packets_count": len(packets_created),
             "packets": packets_created,
             "packet_ids": packets_created,
+            "packet_summaries": packet_summaries,
             "context": context,
             "generated": architect_generated,
         },

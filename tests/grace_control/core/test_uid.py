@@ -57,3 +57,15 @@ class TestNanoID:
         db.query.return_value.filter_by.return_value.first.return_value = MagicMock()
         with pytest.raises(RuntimeError, match="failed to generate unique id"):
             generate_unique_id(db, object, new_feature_uid, max_attempts=2)
+
+    def test_generate_unique_id_reserved_collision(self):
+        db = MagicMock()
+        db.query.return_value.filter_by.return_value.first.return_value = None
+        counter = [0]
+        def factory():
+            counter[0] += 1
+            return "feat_EXISTS" if counter[0] == 1 else "feat_FREE"
+        reserved = {"feat_EXISTS"}
+        uid = generate_unique_id(db, object, factory, reserved=reserved)
+        assert uid == "feat_FREE"
+        assert uid not in reserved

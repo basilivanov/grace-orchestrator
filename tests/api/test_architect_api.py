@@ -82,6 +82,34 @@ async def test_same_title_creates_different_feature_ids(api):
         "feature_spec": {"title": "NonIdempotentTZ", "waves": [{"title": "W1", "packets": [{"title": "P1", "scope": ["x.py"]}]}]}})
     assert r2.status_code == 200
     assert r2.json()["data"]["feature_id"] != fid1
+    assert r1.json()["data"]["slug"] == r2.json()["data"]["slug"] == "nonidempotenttz"
+
+
+@pytest.mark.asyncio
+async def test_architect_response_contains_feature_id_and_slug(api):
+    r = await api.post("/api/architect/plan", json={
+        "feature_spec": {"title": "RespTest", "waves": [{"title": "W1", "packets": [{"title": "P1", "scope": ["x.py"]}]}]}})
+    d = r.json()["data"]
+    assert d["feature_id"].startswith("feat_")
+    assert d["feature_slug"] == "resptest"
+    assert d["slug"] == "resptest"
+
+
+@pytest.mark.asyncio
+async def test_architect_response_packet_summaries(api):
+    r = await api.post("/api/architect/plan", json={
+        "feature_spec": {"title": "SumTest", "waves": [{"title": "W1", "packets": [
+            {"title": "Create util", "scope": ["x.py"]},
+            {"title": "Add test", "scope": ["y.py"]}]}]}})
+    d = r.json()["data"]
+    assert len(d["packet_summaries"]) == 2
+    for ps in d["packet_summaries"]:
+        assert "id" in ps and ps["id"].startswith("pkt_")
+        assert "slug" in ps
+        assert "title" in ps
+        assert "wave_id" in ps and ps["wave_id"].startswith("wave_")
+    assert d["packet_summaries"][0]["title"] == "Create util"
+    assert d["packet_summaries"][1]["title"] == "Add test"
 
 
 @pytest.mark.asyncio

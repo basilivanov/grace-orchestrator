@@ -56,7 +56,7 @@ class PacketState(enum.Enum):
 class Feature(Base):
     """Feature table — top-level business feature.
     id = canonical generated UID (e.g. feat_K7F3P9Qx2L), not title-derived slug.
-    slug = human-readable title-derivated label, not a primary identifier.
+    slug = human-readable title-derived label, not a primary identifier.
     """
 
     __tablename__ = "features"
@@ -74,7 +74,7 @@ class Feature(Base):
 class Wave(Base):
     """Wave table — sequential group of packets.
     id = canonical generated UID (e.g. wave_A9mP2qR7Vz), not order/slug-derived.
-    slug = human-readable title-derivated label.
+    slug = human-readable title-derived label.
     order = display/processing order within the feature.
     """
 
@@ -93,7 +93,7 @@ class Wave(Base):
 class Packet(Base):
     """Packet table — self-contained work unit.
     id = canonical generated UID (e.g. pkt_T4V9K2mA1b), not feature/wave/action-derived.
-    slug = human-readable title-derivated label.
+    slug = human-readable title-derived label.
     """
 
     __tablename__ = "packets"

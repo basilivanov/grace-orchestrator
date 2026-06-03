@@ -50,9 +50,12 @@ def new_run_uid() -> str:
     return f"run_{nanoid(10)}"
 
 
-def generate_unique_id(db, model, factory, *, max_attempts: int = 5) -> str:
+def generate_unique_id(db, model, factory, *, max_attempts: int = 5, reserved: set[str] | None = None) -> str:
     for _ in range(max_attempts):
         value = factory()
-        if db.query(model).filter_by(id=value).first() is None:
-            return value
+        if db.query(model).filter_by(id=value).first() is not None:
+            continue
+        if reserved is not None and value in reserved:
+            continue
+        return value
     raise RuntimeError(f"failed to generate unique id after {max_attempts} attempts")
