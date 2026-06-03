@@ -202,7 +202,8 @@ class PacketExecutionAdapter:
                 allowed_scope=pkt_contract.allowed_write_scope,
                 frozen_scope=pkt_contract.frozen_scope,
                 packet_contract=pkt_contract,
-                attempt=run_number)
+                attempt=run_number,
+                base_ref=base_ref)
             _log.debug("legacy_runner_completed", packet_id=packet_id,
                 ok=result.ok, domain=result.domain_status,
                 errors=result.errors[:3], blocker=getattr(result, 'registry_reason', '')[:200])
@@ -301,6 +302,8 @@ class PacketExecutionAdapter:
                     worktree_path=wt_path,
                     branch_name=result.branch_name or "",
                     run_dir=run_dir,
+                    base_ref=base_ref,
+                    base_sha=base_sha,
                 )
                 _log.info("acceptance_completed", packet_id=packet_id,
                     verdict=accept_report.final_verdict.value,
@@ -406,7 +409,7 @@ class PacketExecutionAdapter:
             from grace_control.core.scope_guard import get_changed_files as _get_changed_files
             changed_files: list[str] = []
             try:
-                changed_files = _get_changed_files(wt_path, base_ref="main")
+                changed_files = _get_changed_files(wt_path, base_ref=base_sha or base_ref)
             except Exception:
                 changed_files = []
 
@@ -782,7 +785,8 @@ class PacketExecutionAdapter:
                                    allowed_scope: list[str] | None = None,
                                    frozen_scope: list[str] | None = None,
                                    packet_contract=None,
-                                   attempt: int = 1):
+                                   attempt: int = 1,
+                                   base_ref: str = "HEAD"):
         from prefect_grace.platform.e2e_packet_runner import run_e2e_packet
 
         packet_id = packet_path.parent.name
@@ -847,6 +851,7 @@ class PacketExecutionAdapter:
                 dry_run=False,
                 execute_agent=True,
                 attempt=attempt,
+                base_ref=base_ref,
                 keep_worktree=True,
                 runtime_state_root=state_root,
                 timeout_seconds=timeout,

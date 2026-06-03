@@ -65,14 +65,18 @@ async def run_llm(
     hard_sec = config["hard"]
 
     project_root = cwd or Path.cwd()
-    prompt_dir = project_root / ".grace_state" / "llm_prompts"
+    state_root_env = os.environ.get("GRACE_STATE_ROOT", "")
+    if state_root_env:
+        prompt_dir = Path(state_root_env) / "llm_prompts"
+    else:
+        prompt_dir = project_root / ".grace_state" / "llm_prompts"
     prompt_dir.mkdir(parents=True, exist_ok=True)
     tmp = prompt_dir / f"{role}_{uuid4().hex[:8]}.txt"
     tmp.write_text(prompt)
 
     if cli == "opencode":
         instruction = (
-            f"Read the task from .grace_state/llm_prompts/{tmp.name}. "
+            f"Read the task from {tmp}. "
             "Respond ONLY with valid JSON, no other text."
         )
         cmd = ["opencode", "run", "--model", model, instruction]

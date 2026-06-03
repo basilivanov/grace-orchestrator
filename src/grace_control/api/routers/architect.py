@@ -321,7 +321,20 @@ Respond ONLY with valid JSON (no markdown, no backticks):
           "scope": ["src/auth.py", "tests/test_auth.py"],
           "acceptance_profile": "NORMAL",
           "depends_on": [],
-          "description": "what this packet does"
+          "description": "what this packet does",
+          "verification": {{
+            "t0": [],
+            "t1": ["python3 -m pytest tests/test_auth.py -q"],
+            "t2": []
+          }},
+          "expected_evidence": [
+            {{
+              "id": "auth_test_green",
+              "kind": "command",
+              "required": true,
+              "pattern": "tests/test_auth.py"
+            }}
+          ]
         }}
       ]
     }}
@@ -331,7 +344,11 @@ Respond ONLY with valid JSON (no markdown, no backticks):
     "forbidden_imports": [],
     "python_version": ">= 3.12"
   }},
-  "verification": ["pytest tests/ -x --timeout=60"]
+  "verification": {{
+    "t0": [],
+    "t1": [],
+    "t2": []
+  }}
 }}"""
 
     for attempt in range(2):
@@ -363,7 +380,7 @@ Respond ONLY with valid JSON (no markdown, no backticks):
                     raise RuntimeError("All packet scopes are empty — you must specify which files to modify")
 
             plan.setdefault("constraints", {"frozen_scope": ["src/prefect_grace/"]})
-            plan.setdefault("verification", [])
+            plan.setdefault("verification", {"t0": [], "t1": [], "t2": []})
             return plan
         except Exception as e:
             if attempt == 1:

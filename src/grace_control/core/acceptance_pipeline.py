@@ -21,6 +21,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from grace_control.core.command_runner import CommandRunner
@@ -59,6 +60,8 @@ def run_acceptance_pipeline(
     worktree_path: Path,
     branch_name: str,
     run_dir: Path,
+    base_ref: str | None = None,
+    base_sha: str | None = None,
 ) -> AcceptanceReport:
     pipe = AcceptancePipeline(
         repo_root=project_root,
@@ -67,7 +70,8 @@ def run_acceptance_pipeline(
     )
     changed_files: list[str] = []
     try:
-        changed_files = get_changed_files(worktree_path, base_ref="main")
+        changed_base = base_sha or base_ref or os.environ.get("GRACE_BASE_REF", "HEAD")
+        changed_files = get_changed_files(worktree_path, base_ref=changed_base)
     except Exception:
         pass
     return pipe.run(
