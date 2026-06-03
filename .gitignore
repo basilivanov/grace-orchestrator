@@ -66,5 +66,6 @@ src/prefect_grace/briefs/
 prefect_grace/state/state/
 prefect_grace/state/packets.yaml
 .grace_state/
+!sandbox/golden/
 sandbox/
 grace.db*
