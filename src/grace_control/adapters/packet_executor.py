@@ -217,7 +217,7 @@ class PacketExecutionAdapter:
                     executor_id=executor.get("executor_id", ""))
 
             agent_commit_sha = ""
-            if result.ok and result.worktree_path:
+            if result.worktree_path:
                 wt = Path(result.worktree_path)
                 if not wt.exists():
                     _log.warn("worktree_cleaned_before_accept", packet_id=packet_id)

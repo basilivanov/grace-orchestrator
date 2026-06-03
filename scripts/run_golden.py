@@ -11,7 +11,7 @@ from pathlib import Path
 import httpx
 import yaml
 
-TERMINAL = frozenset(("merged", "failed", "rejected", "blocked", "cancelled"))
+TERMINAL = frozenset(("merged", "failed", "rejected", "blocked", "cancelled", "accepted"))
 DEADLINE_S = int(os.environ.get("GRACE_GOLDEN_TIMEOUT", "1200"))
 
 
@@ -27,7 +27,8 @@ def main():
 
     feature_path = Path(args.feature_file).resolve()
     spec = yaml.safe_load(feature_path.read_text())
-    run_slug = feature_path.stem
+    run_slug = f"{feature_path.stem}-{int(time.time()) % 100000}"
+    spec["title"] = f"{spec.get('title', run_slug)} #{run_slug}"
     state_root = args.state_root or f"/tmp/grace-eval/{run_slug}"
     db_url = args.db_url or f"sqlite:///{state_root}/grace.db"
 
@@ -110,10 +111,10 @@ asyncio.run(m())
     )
 
     # 5. Poll results
-    print("Polling ", end="", flush=True)
+    print("\nPolling ", end="", flush=True)
     start = time.time()
     states: dict[str, str] = {}
-    last_line_empty = False
+    prev = ""
 
     while time.time() - start < DEADLINE_S:
         time.sleep(2)
@@ -131,13 +132,11 @@ asyncio.run(m())
             except Exception:
                 pass
 
-        # Print compact status
+        # Print only on state change
         current = " ".join(states.get(pid, "?") for pid in pids)
-        if current.strip():
+        if current != prev:
+            prev = current
             print(f"\n  {current}", end="", flush=True)
-            last_line_empty = False
-        elif not last_line_empty:
-            print(" .", end="", flush=True)
 
         # All terminal?
         if states and all(s in TERMINAL for s in states.values()):
