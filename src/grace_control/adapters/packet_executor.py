@@ -16,6 +16,7 @@
 # mapping:
 #   - class: ExecutionResult
 #   - class: PacketExecutionAdapter
+#   - function: _collect_changed_files
 # END_MODULE_MAP
 
 from __future__ import annotations
@@ -168,16 +169,14 @@ class PacketExecutionAdapter:
             _log.debug("packet_materialized", packet_id=packet_id, path=str(packet_path))
 
             # Build packet contract for registry + legacy runner
-            spec = packet_data.get("spec_json") or {}
-            scope_list = spec.get("scope", [])
-            if isinstance(scope_list, str):
-                scope_list = [scope_list]
-            scope_list = scope_list or ["src/grace_control/"]
-            frozen = spec.get("frozen_scope", ["src/prefect_grace/"])
+            from grace_control.core.contracts import build_packet_contract
+            pkt_contract = build_packet_contract(packet_data)
 
             result = await self._call_legacy_runner(
                 packet_path, state_root, worktree_root,
-                allowed_scope=scope_list, frozen_scope=frozen)
+                allowed_scope=pkt_contract.allowed_write_scope,
+                frozen_scope=pkt_contract.frozen_scope,
+                packet_contract=pkt_contract)
             _log.debug("legacy_runner_completed", packet_id=packet_id,
                 ok=result.ok, domain=result.domain_status,
                 errors=result.errors[:3], blocker=getattr(result, 'registry_reason', '')[:200])
@@ -210,69 +209,55 @@ class PacketExecutionAdapter:
 
             # ── Deterministic acceptance pipeline (replaces fake verifier/reviewer) ──
             try:
-                from grace_control.core.acceptance_pipeline import AcceptancePipeline
-                from grace_control.core.contracts import (
-                    AcceptanceProfile, ExecutionPacketContract, VerificationSpec,
-                )
-
-                pkt_contract = ExecutionPacketContract(
-                    packet_id=packet_id,
-                    title=packet_data.get("title", packet_id),
-                    allowed_write_scope=scope_list,
-                    frozen_scope=frozen,
-                    acceptance_profile=AcceptanceProfile(
-                        packet_data.get("acceptance_profile", "NORMAL")
-                    ),
-                    verification=VerificationSpec(
-                        t0=spec.get("verification", {}).get("t0", []) or [],
-                        t1=spec.get("verification", {}).get("t1", []) or spec.get("verification_commands", []),
-                        t2=spec.get("verification", {}).get("t2", []) or [],
-                    ),
-                    expected_evidence=spec.get("expected_evidence", []),
-                    metadata={"origin": spec.get("origin", ""),
-                              "session_id": spec.get("session_id", "")},
-                )
+                from grace_control.core.acceptance_pipeline import run_acceptance_pipeline
 
                 # Diff from worktree, not project_root — agent changes are there
-                from grace_control.core.scope_guard import ScopeGuard
-                worktree_repo = Path(result.worktree_path) if result.worktree_path else self.project_root
-                scope_guard = ScopeGuard(worktree_repo)
-                changed = scope_guard.get_changed_files() if result.worktree_path else []
-                pipe = AcceptancePipeline(repo_root=self.project_root, scope_guard=scope_guard)
+                wt_path = Path(result.worktree_path) if result.worktree_path else self.project_root
+                run_dir = state_root / "packets" / packet_id / "runs" / f"R{run_number:02d}"
 
-                accept_report = pipe.run(packet=pkt_contract, changed_files=changed,
-                    legacy_result={"ok": result.ok, "domain_status": result.domain_status},
-                    worktree_path=result.worktree_path or "",
+                accept_report = run_acceptance_pipeline(
+                    packet=pkt_contract,
+                    legacy_result=result,
+                    project_root=self.project_root,
+                    worktree_path=wt_path,
                     branch_name=result.branch_name or "",
-                    run_dir=str(state_root / "packets" / packet_id / "runs" / f"R{run_number:02d}"))
+                    run_dir=run_dir,
+                )
                 _log.info("acceptance_completed", packet_id=packet_id,
                     verdict=accept_report.final_verdict.value,
                     is_accepted=accept_report.is_accepted)
 
                 # Save acceptance report + evidence as JSON
-                import json as _json
-                ev_dir = state_root / "packets" / packet_id / "runs" / f"R{run_number:02d}"
-                ev_dir.mkdir(parents=True, exist_ok=True)
-                (ev_dir / "acceptance_report.json").write_text(
-                    _json.dumps(accept_report.to_dict(), indent=2, default=str))
-                if accept_report.verifier_report:
-                    (ev_dir / "verifier_report.json").write_text(
-                        _json.dumps(accept_report.verifier_report, indent=2, default=str))
-                if accept_report.reviewer_verdict:
-                    (ev_dir / "reviewer_verdict.json").write_text(
-                        _json.dumps(accept_report.reviewer_verdict, indent=2, default=str))
+                ev_dir = run_dir
+                accept_report_path = self._save_acceptance_report(packet_id, run_number, accept_report, state_root)
 
                 if not accept_report.is_accepted:
-                    return ExecutionResult(
-                        accepted=False,
-                        domain_status="rejected",
-                        reason="; ".join(accept_report.reasons or ["acceptance failed"]),
-                        evidence_path=str(ev_dir / "acceptance_report.json"),
-                        acceptance_report_path=str(ev_dir / "acceptance_report.json"),
-                        acceptance_verdict=accept_report.final_verdict.value,
-                        acceptance_summary=accept_report.reasons[0] if accept_report.reasons else "acceptance failed",
+                    execution_result = self._build_execution_result_from_acceptance(
+                        legacy_execution_result=None,
+                        acceptance_report=accept_report,
+                        acceptance_report_path=accept_report_path,
+                        worktree_path=result.worktree_path or "",
+                        branch_name=result.branch_name or "",
                         duration_ms=int((time.time() - start_time) * 1000),
                     )
+                    try:
+                        safe_legacy_dict = result.to_dict()
+                    except Exception:
+                        safe_legacy_dict = {"ok": result.ok, "domain_status": result.domain_status}
+                    with get_db() as db:
+                        existing = db.query(PacketRun).filter_by(id=run_id).first()
+                        if existing:
+                            existing.status = "rejected"
+                            existing.result_json = {
+                                "legacy_result": safe_legacy_dict,
+                                "acceptance_report": accept_report.to_dict(),
+                            }
+                            existing.evidence_path = execution_result.evidence_path
+                            existing.finished_at = datetime.utcnow()
+                            existing.duration_ms = execution_result.duration_ms
+                    _log.info("adapter_execute_done", packet_id=packet_id,
+                        accepted=False, duration_ms=execution_result.duration_ms)
+                    return execution_result
             except Exception as e:
                 _log.error("acceptance_pipeline_error", packet_id=packet_id, error=str(e)[:200])
                 return ExecutionResult(
@@ -286,34 +271,53 @@ class PacketExecutionAdapter:
                 )
 
             # Self-evolution guard check (additional checks for self-improvement)
-            if isinstance(spec, dict) and spec.get("origin") == "self_evolution":
+            spec_json = packet_data.get("spec_json") or {}
+            if isinstance(spec_json, dict) and spec_json.get("origin") == "self_evolution":
                 _log.info("self_evolution_guard_check", packet_id=packet_id)
                 from grace_control.core.self_evolution_guard import SelfEvolutionGuard
                 guard = SelfEvolutionGuard()
                 changed = _collect_changed_files(worktree_root)
-                guard_result = guard.check(changed, session_id=spec.get("session_id", ""))
+                guard_result = guard.check(changed, session_id=spec_json.get("session_id", ""))
                 if not guard_result.passed:
                     _log.warn("self_evolution_guard_blocked", packet_id=packet_id,
                         errors=guard_result.errors)
                     execution_result = ExecutionResult(
                         accepted=False, domain_status="rejected",
-                        errors=guard_result.errors, evidence_path=None,
+                        reason="; ".join(guard_result.errors),
+                        evidence_path="",
                         duration_ms=int((time.time() - start_time) * 1000),
                     )
                     return execution_result
                 _log.info("self_evolution_guard_passed", packet_id=packet_id)
 
-            execution_result = self._parse_result(result)
+            # Accepted path — build from acceptance_report, not _parse_result
+            execution_result = self._build_execution_result_from_acceptance(
+                legacy_execution_result=None,
+                acceptance_report=accept_report,
+                acceptance_report_path=accept_report_path,
+                worktree_path=result.worktree_path or "",
+                branch_name=result.branch_name or "",
+                duration_ms=int((time.time() - start_time) * 1000),
+            )
             evidence_path = self._save_evidence(packet_id, run_number, result.to_dict(), state_root)
             execution_result.evidence_path = evidence_path
             execution_result.duration_ms = int((time.time() - start_time) * 1000)
             self._save_agent_log(packet_id, run_number, result, state_root)
 
+            safe_legacy_dict = None
+            try:
+                safe_legacy_dict = result.to_dict()
+            except Exception:
+                safe_legacy_dict = {"ok": result.ok, "domain_status": result.domain_status}
+
             with get_db() as db:
                 existing = db.query(PacketRun).filter_by(id=run_id).first()
                 if existing:
-                    existing.status = "accepted" if execution_result.accepted else "rejected"
-                    existing.result_json = result.to_dict()
+                    existing.status = "accepted"
+                    existing.result_json = {
+                        "legacy_result": safe_legacy_dict,
+                        "acceptance_report": accept_report.to_dict(),
+                    }
                     existing.evidence_path = evidence_path
                     existing.finished_at = datetime.utcnow()
                     existing.duration_ms = execution_result.duration_ms
@@ -426,12 +430,19 @@ ruff check src/
     # END_FUNCTION_CONTRACT
     async def _call_legacy_runner(self, packet_path: Path, state_root: Path, worktree_root: Path,
                                    allowed_scope: list[str] | None = None,
-                                   frozen_scope: list[str] | None = None):
+                                   frozen_scope: list[str] | None = None,
+                                   packet_contract=None):
         from prefect_grace.platform.e2e_packet_runner import run_e2e_packet
 
         packet_id = packet_path.parent.name
 
         os.environ.setdefault("GRACE_ALLOW_SANDBOX_BYPASS", "true")
+
+        effective_allowed = allowed_scope
+        effective_frozen = frozen_scope
+        if packet_contract is not None:
+            effective_allowed = packet_contract.allowed_write_scope
+            effective_frozen = packet_contract.frozen_scope
 
         # Write packet to legacy registry (required by agent launcher)
         reg_dir = state_root / "state"
@@ -446,8 +457,8 @@ ruff check src/
                 "feature_id": packet_id.split("-W")[0] if "-W" in packet_id else "unknown",
                 "wave_id": "W01", "status": "ready", "phase": "PHASE-TEST",
                 "packet_path": str(packet_path),
-                "allowed_write_scope": allowed_scope or [],
-                "frozen_scope": frozen_scope or [],
+                "allowed_write_scope": effective_allowed or [],
+                "frozen_scope": effective_frozen or [],
                 "depends_on": [],
             }
             reg_file.write_text(yaml.dump(existing, default_flow_style=False))
@@ -521,6 +532,55 @@ ruff check src/
     # END_FUNCTION_CONTRACT
     def _save_evidence(self, packet_id: str, run_number: int, result: dict, state_root: Path) -> str:
         return str(state_root / "packets" / packet_id / "runs" / f"R{run_number:02d}")
+
+    # START_FUNCTION_CONTRACT
+    # name: _save_acceptance_report
+    # purpose: Save acceptance report as JSON to run directory.
+    # inputs: packet_id, run_number, report (AcceptanceReport), state_root.
+    # returns: acceptance_report.json path string.
+    # side_effects: Writes JSON file.
+    # emitted_logs: None.
+    # error_behavior: Never raises.
+    # END_FUNCTION_CONTRACT
+    def _save_acceptance_report(self, packet_id: str, run_number: int, report, state_root: Path) -> str:
+        import json as _json
+        ev_dir = state_root / "packets" / packet_id / "runs" / f"R{run_number:02d}"
+        ev_dir.mkdir(parents=True, exist_ok=True)
+        path = ev_dir / "acceptance_report.json"
+        path.write_text(_json.dumps(report.to_dict(), indent=2, default=str))
+        return str(path)
+
+    # START_FUNCTION_CONTRACT
+    # name: _build_execution_result_from_acceptance
+    # purpose: Build ExecutionResult from acceptance report and legacy result.
+    # inputs: legacy_execution_result, acceptance_report, acceptance_report_path.
+    # returns: ExecutionResult.
+    # side_effects: None.
+    # emitted_logs: None.
+    # error_behavior: Never raises.
+    # END_FUNCTION_CONTRACT
+    def _build_execution_result_from_acceptance(
+        self,
+        legacy_execution_result=None,
+        acceptance_report=None,
+        acceptance_report_path: str = "",
+        worktree_path: str = "",
+        branch_name: str = "",
+        duration_ms: int = 0,
+    ) -> ExecutionResult:
+        accepted = acceptance_report.is_accepted
+        return ExecutionResult(
+            accepted=accepted,
+            reason=None if accepted else acceptance_report.summary,
+            domain_status=acceptance_report.final_verdict.value,
+            worktree_path=worktree_path,
+            branch_name=branch_name,
+            evidence_path=acceptance_report_path if not accepted else "",
+            acceptance_report_path=acceptance_report_path,
+            acceptance_verdict=acceptance_report.final_verdict.value,
+            acceptance_summary=acceptance_report.summary,
+            duration_ms=duration_ms,
+        )
 
     def _save_agent_log(self, packet_id: str, run_number: int, result, state_root: Path) -> None:
         try:

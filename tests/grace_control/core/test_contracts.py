@@ -6,12 +6,12 @@ from grace_control.core.contracts import (
     AcceptanceReport,
     CommandResult,
     ExecutionPacketContract,
+    FinalVerdict,
     PacketVerdict,
     ScopeViolation,
     StageName,
     StageResult,
     StageStatus,
-    VerificationSpec,
     validate_acceptance_report,
     validate_packet_contract,
     validate_stage_result,
@@ -20,38 +20,38 @@ from grace_control.core.contracts import (
 
 class TestCommandResult:
     def test_passed_true_for_zero_exit(self):
-        cr = CommandResult(command=["echo"], cwd="/tmp", exit_code=0)
+        cr = CommandResult(command="echo", cwd="/tmp", exit_code=0)
         assert cr.passed is True
 
     def test_passed_false_for_nonzero(self):
-        cr = CommandResult(command=["false"], cwd="/tmp", exit_code=1)
+        cr = CommandResult(command="false", cwd="/tmp", exit_code=1)
         assert cr.passed is False
 
     def test_passed_false_for_127(self):
-        cr = CommandResult(command=["nonexist"], cwd="/tmp", exit_code=127)
+        cr = CommandResult(command="nonexist", cwd="/tmp", exit_code=127)
         assert cr.passed is False
 
 
 class TestAcceptanceReport:
     def test_is_accepted_true_for_accepted(self):
-        r = AcceptanceReport(packet_id="p1", final_verdict=PacketVerdict.ACCEPTED, stages=[])
+        r = AcceptanceReport(packet_id="p1", final_verdict=FinalVerdict.ACCEPTED, profile=AcceptanceProfile.NORMAL, stages=[])
         assert r.is_accepted is True
 
     def test_is_accepted_false_for_rework(self):
-        r = AcceptanceReport(packet_id="p1", final_verdict=PacketVerdict.REWORK_REQUIRED, stages=[])
+        r = AcceptanceReport(packet_id="p1", final_verdict=FinalVerdict.REWORK_REQUIRED, profile=AcceptanceProfile.NORMAL, stages=[])
         assert r.is_accepted is False
 
     def test_is_accepted_false_for_blocked(self):
-        r = AcceptanceReport(packet_id="p1", final_verdict=PacketVerdict.BLOCKED, stages=[])
+        r = AcceptanceReport(packet_id="p1", final_verdict=FinalVerdict.BLOCKED, profile=AcceptanceProfile.NORMAL, stages=[])
         assert r.is_accepted is False
 
     def test_to_dict_serializes(self):
-        r = AcceptanceReport(packet_id="p1", final_verdict=PacketVerdict.ACCEPTED,
-                            stages=[], reasons=["ok"])
+        r = AcceptanceReport(packet_id="p1", final_verdict=FinalVerdict.ACCEPTED,
+                            profile=AcceptanceProfile.NORMAL, stages=[], summary="ok")
         d = r.to_dict()
         assert d["packet_id"] == "p1"
         assert d["final_verdict"] == "accepted"
-        assert d["reasons"] == ["ok"]
+        assert d["summary"] == "ok"
 
 
 class TestPacketContract:
@@ -59,14 +59,14 @@ class TestPacketContract:
         p = ExecutionPacketContract(packet_id="p1", title="t",
             allowed_write_scope=["src/"], frozen_scope=["legacy/"],
             acceptance_profile=AcceptanceProfile.NORMAL,
-            verification=VerificationSpec(t1=[["pytest"]]))
+            verification={"t1": [["pytest"]]})
         assert validate_packet_contract(p) == []
 
     def test_valid_fast_without_commands(self):
         p = ExecutionPacketContract(packet_id="p1", title="t",
             allowed_write_scope=["src/"], frozen_scope=["legacy/"],
             acceptance_profile=AcceptanceProfile.FAST,
-            verification=VerificationSpec())
+            verification={})
         assert validate_packet_contract(p) == []
 
     def test_empty_packet_id(self):
@@ -97,14 +97,14 @@ class TestPacketContract:
         p = ExecutionPacketContract(packet_id="p1", title="t",
             allowed_write_scope=["src/"], frozen_scope=[],
             acceptance_profile=AcceptanceProfile.NORMAL,
-            verification=VerificationSpec())
+            verification={})
         assert "requires verification.t1" in " ".join(validate_packet_contract(p))
 
     def test_strict_requires_verification(self):
         p = ExecutionPacketContract(packet_id="p1", title="t",
             allowed_write_scope=["src/"], frozen_scope=[],
             acceptance_profile=AcceptanceProfile.STRICT,
-            verification=VerificationSpec())
+            verification={})
         assert "requires verification.t1" in " ".join(validate_packet_contract(p))
 
 
@@ -123,7 +123,7 @@ class TestStageResult:
     def test_failed_with_failed_command_passes(self):
         errs = validate_stage_result(StageResult(
             name=StageName.T0_SCOPE_AND_LINT, status=StageStatus.FAILED, summary="",
-            commands=[CommandResult(command=["x"], cwd="/", exit_code=1)]))
+            commands=[CommandResult(command="x", cwd="/", exit_code=1)]))
         assert errs == []
 
     def test_skipped_requires_reason(self):
@@ -146,16 +146,17 @@ class TestStageResult:
 
 class TestAcceptanceReportValidation:
     def test_accepted_requires_no_violations(self):
-        r = AcceptanceReport(packet_id="p1", final_verdict=PacketVerdict.ACCEPTED,
-                            stages=[], scope_violations=[ScopeViolation(path="x", reason="r", violation_type="out_of_scope")])
+        r = AcceptanceReport(packet_id="p1", final_verdict=FinalVerdict.ACCEPTED,
+                            profile=AcceptanceProfile.NORMAL, stages=[],
+                            scope_violations=["x: out of scope"])
         assert "must not have scope violations" in " ".join(validate_acceptance_report(r))
 
-    def test_non_accepted_requires_reasons(self):
-        r = AcceptanceReport(packet_id="p1", final_verdict=PacketVerdict.REWORK_REQUIRED,
-                            stages=[], reasons=[])
-        assert "must have reasons" in " ".join(validate_acceptance_report(r))
+    def test_non_accepted_requires_summary(self):
+        r = AcceptanceReport(packet_id="p1", final_verdict=FinalVerdict.REWORK_REQUIRED,
+                            profile=AcceptanceProfile.NORMAL, stages=[], summary="")
+        assert "must have summary" in " ".join(validate_acceptance_report(r))
 
-    def test_accepted_report_with_reasons_passes(self):
-        r = AcceptanceReport(packet_id="p1", final_verdict=PacketVerdict.REWORK_REQUIRED,
-                            stages=[], reasons=["T0 failed"])
-        assert "must have reasons" not in " ".join(validate_acceptance_report(r))
+    def test_accepted_report_with_summary_passes(self):
+        r = AcceptanceReport(packet_id="p1", final_verdict=FinalVerdict.REWORK_REQUIRED,
+                            profile=AcceptanceProfile.NORMAL, stages=[], summary="T0 failed")
+        assert "must have summary" not in " ".join(validate_acceptance_report(r))

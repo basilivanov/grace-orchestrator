@@ -3,6 +3,7 @@
 from grace_control.core.contracts import (
     AcceptanceProfile,
     CommandResult,
+    EvidenceRequirement,
     StageName,
     StageResult,
     StageStatus,
@@ -18,7 +19,7 @@ class TestEvidenceCollector:
         ec = self._collector()
         stage = StageResult(name=StageName.T1_TARGETED_TESTS, status=StageStatus.PASSED,
                            summary="ok",
-                           commands=[CommandResult(command=["pytest"], cwd="/", exit_code=0)])
+                           commands=[CommandResult(command="pytest", cwd="/", exit_code=0)])
         evidence = ec.collect_from_stage(stage)
         assert "command:pytest" in evidence
         assert "exit_code:0" in evidence
@@ -27,7 +28,7 @@ class TestEvidenceCollector:
         ec = self._collector()
         stage = StageResult(name=StageName.T1_TARGETED_TESTS, status=StageStatus.FAILED,
                            summary="fail",
-                           commands=[CommandResult(command=["pytest"], cwd="/", exit_code=1)],
+                           commands=[CommandResult(command="pytest", cwd="/", exit_code=1)],
                            blocking_issues=["reason"])
         evidence = ec.collect_from_stage(stage)
         assert "exit_code:1" in evidence
@@ -35,7 +36,7 @@ class TestEvidenceCollector:
     def test_normal_requires_passed_evidence(self):
         ec = self._collector()
         assert ec.has_required_evidence(
-            expected_evidence=["tests passed"],
+            expected_evidence=[EvidenceRequirement(id="tests", kind="command")],
             collected_evidence=["exit_code:0"],
             acceptance_profile=AcceptanceProfile.NORMAL,
         ) is True
@@ -43,7 +44,7 @@ class TestEvidenceCollector:
     def test_normal_no_passed_fails(self):
         ec = self._collector()
         assert ec.has_required_evidence(
-            expected_evidence=["tests passed"],
+            expected_evidence=[EvidenceRequirement(id="tests", kind="command")],
             collected_evidence=["exit_code:1"],
             acceptance_profile=AcceptanceProfile.NORMAL,
         ) is False
@@ -67,7 +68,7 @@ class TestEvidenceCollector:
     def test_failed_command_evidence_does_not_satisfy(self):
         ec = self._collector()
         assert ec.has_required_evidence(
-            expected_evidence=["tests"],
+            expected_evidence=[EvidenceRequirement(id="tests", kind="command")],
             collected_evidence=["exit_code:1"],
             acceptance_profile=AcceptanceProfile.NORMAL,
         ) is False

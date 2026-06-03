@@ -15,6 +15,8 @@
 # START_MODULE_MAP
 # mapping:
 #   - class: ScopeGuard
+#   - function: get_changed_files
+#   - function: check_scope
 # END_MODULE_MAP
 
 from __future__ import annotations
@@ -93,6 +95,51 @@ class ScopeGuard:
                 ))
 
         return violations
+
+
+def get_changed_files(worktree_path: Path, base_ref: str = "main") -> list[str]:
+    try:
+        cmd = ["git", "-C", str(worktree_path), "diff", "--name-only", f"{base_ref}...HEAD"]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        changed = [p.strip() for p in r.stdout.split("\n") if p.strip()]
+        if not changed:
+            cmd_fallback = ["git", "-C", str(worktree_path), "diff", "--name-only", base_ref]
+            r = subprocess.run(cmd_fallback, capture_output=True, text=True, timeout=15)
+            changed = [p.strip() for p in r.stdout.split("\n") if p.strip()]
+        untracked = subprocess.run(
+            ["git", "-C", str(worktree_path), "ls-files", "--others", "--exclude-standard"],
+            capture_output=True, text=True, timeout=10,
+        )
+        changed += [p.strip() for p in untracked.stdout.split("\n") if p.strip()]
+        return sorted(set(changed))
+    except Exception:
+        return []
+
+
+def check_scope(
+    changed_files: list[str],
+    allowed_write_scope: list[str],
+    frozen_scope: list[str],
+) -> list[str]:
+    violations: list[str] = []
+    if not allowed_write_scope:
+        for path in changed_files:
+            violations.append(f"{path}: missing allowed_write_scope")
+        return violations
+
+    for path in changed_files:
+        if _is_abs_or_parent(path):
+            violations.append(f"{path}: absolute or parent path not allowed")
+            continue
+
+        if _matches_any(path, frozen_scope):
+            violations.append(f"{path}: matches frozen scope")
+            continue
+
+        if not _matches_any(path, allowed_write_scope):
+            violations.append(f"{path}: not in allowed write scope")
+
+    return violations
 
 
 def _is_abs_or_parent(path: str) -> bool:
