@@ -156,21 +156,25 @@ def create_fixture_git_state(
     branch = git_cfg.branch_name
     result["branch_name"] = branch
 
-    if git_cfg.create_branch:
-        subprocess.run(
-            ["git", "branch", branch, git_cfg.base_branch],
-            cwd=str(target_repo_root), capture_output=True, timeout=10,
-        )
-
     wt_path = worktree_root / packet_id
     result["worktree_path"] = str(wt_path)
 
     if git_cfg.create_worktree:
         worktree_root.mkdir(parents=True, exist_ok=True)
-        subprocess.run(
-            ["git", "worktree", "add", str(wt_path), branch],
-            cwd=str(target_repo_root), capture_output=True, timeout=10,
-        )
+        if git_cfg.create_branch:
+            subprocess.run(
+                ["git", "branch", branch, git_cfg.base_branch],
+                cwd=str(target_repo_root), capture_output=True, timeout=10,
+            )
+            subprocess.run(
+                ["git", "worktree", "add", str(wt_path), branch],
+                cwd=str(target_repo_root), capture_output=True, timeout=10,
+            )
+        else:
+            subprocess.run(
+                ["git", "worktree", "add", "--detach", str(wt_path), git_cfg.base_branch],
+                cwd=str(target_repo_root), capture_output=True, timeout=10,
+            )
 
         for f in git_cfg.changed_files:
             fp = wt_path / f.path

@@ -1,0 +1,33 @@
+id: merge_missing_branch
+kind: golden_fixture
+start_stage: merge
+profile: FAST
+
+feature:
+  title: Merge missing branch
+  slug: merge-missing-branch
+
+packet:
+  title: Missing branch test
+  slug: missing-branch
+  state: accepted
+  acceptance_profile: FAST
+  scope:
+    - sandbox/golden/missing_branch/
+
+git:
+  init_target_repo: true
+  create_worktree: true
+  create_branch: false
+  branch_name: agent/nonexistent/test
+
+runs:
+  - attempt: 1
+    status: accepted
+    acceptance_report:
+      final_verdict: accepted
+      summary: ok
+
+expected:
+  merge_should_succeed: false
+  expected_error_contains: does not exist

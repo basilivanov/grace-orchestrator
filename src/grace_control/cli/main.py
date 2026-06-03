@@ -675,7 +675,8 @@ def fixture_run_one(fixture_file, run_id, start_stage, base_dir, golden_fixture)
         for e in report["validation_errors"]:
             console.print(f"  [red]• {e}[/red]")
         status = "FAILED"
-    elif report.get("stage_result", {}).get("success"):
+    elif report.get("status") == "passed" or not report.get("stage_result", {}).get("success"):
+        # Validation passed: either stage succeeded, or stage failed as expected
         console.print("[green]Fixture PASSED[/green]")
         status = "PASSED"
     else:

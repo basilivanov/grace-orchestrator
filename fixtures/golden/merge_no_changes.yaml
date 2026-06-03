@@ -1,0 +1,34 @@
+id: merge_no_changes
+kind: golden_fixture
+start_stage: merge
+profile: FAST
+
+feature:
+  title: Merge no changes
+  slug: merge-no-changes
+
+packet:
+  title: No changes test
+  slug: no-changes
+  state: accepted
+  acceptance_profile: FAST
+  scope:
+    - sandbox/golden/no_changes/
+
+git:
+  init_target_repo: true
+  create_worktree: true
+  create_branch: true
+  branch_name: agent/default/pkt_nochange/attempt-0001
+  no_commit_diff: true
+
+runs:
+  - attempt: 1
+    status: accepted
+    acceptance_report:
+      final_verdict: accepted
+      summary: ok
+
+expected:
+  merge_should_succeed: true
+  final_packet_state: merged
