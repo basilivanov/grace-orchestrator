@@ -245,6 +245,8 @@ async def merge_packet(packet_id: str, request: dict) -> dict:
     commit_sha = request.get("commit_sha", "")
     worktree_path = request.get("worktree_path", "")
     branch_name = request.get("branch_name", "")
+    import subprocess as _sp
+    from pathlib import Path
 
     with get_db() as db:
         packet = db.query(Packet).filter_by(id=packet_id).first()
@@ -256,58 +258,66 @@ async def merge_packet(packet_id: str, request: dict) -> dict:
             raise HTTPException(status_code=400,
                 detail=f"Can only merge ACCEPTED packets, got {current.value}")
 
+        repo = Path.cwd()
+        stashed = False
+
+        # Stash local changes before merge attempt
+        if worktree_path and branch_name:
+            try:
+                s = _sp.run(["git", "stash", "push", "-m", f"pre-merge-{packet.id[:20]}"],
+                            cwd=str(repo), capture_output=True, text=True, timeout=10)
+                stashed = s.returncode == 0 and "No local changes" not in s.stdout
+            except Exception:
+                pass
+
+        # Attempt git merge BEFORE state transition
+        merge_ok = True
+        if worktree_path and branch_name:
+            try:
+                mr = _sp.run(["git", "merge", branch_name, "--no-edit", "--no-ff"],
+                             cwd=str(repo), capture_output=True, text=True, timeout=30)
+                if mr.returncode != 0:
+                    merge_ok = False
+                    _log.warn("merge_failed", packet_id=packet.id, stderr=mr.stderr[:500])
+            except Exception as e:
+                merge_ok = False
+                _log.warn("merge_failed", packet_id=packet.id, error=str(e)[:200])
+
+        # Restore local changes
+        if stashed:
+            try:
+                pop = _sp.run(["git", "stash", "pop"],
+                              cwd=str(repo), capture_output=True, text=True, timeout=10)
+                if pop.returncode != 0:
+                    _sp.run(["git", "reset", "--hard", "HEAD"], cwd=str(repo),
+                            capture_output=True, timeout=10)
+                    _sp.run(["git", "stash", "pop"],
+                            cwd=str(repo), capture_output=True, timeout=10)
+            except Exception:
+                pass
+
+        # If git merge failed, do NOT transition to MERGED
+        if not merge_ok:
+            raise HTTPException(status_code=409,
+                detail={"merge_failed": f"git merge of {branch_name} failed"})
+
+        # State transition only after successful merge
         _state_machine.transition(current, PacketState.MERGED)
         packet.state = PacketState.MERGED.value
 
-        if worktree_path and branch_name:
+        # Clean up worktree (prefer git worktree remove over shutil.rmtree)
+        if worktree_path:
             try:
-                from pathlib import Path
-                import subprocess as _sp
                 wt = Path(worktree_path)
                 if wt.exists():
-                    repo = Path.cwd()
-
-                    # Stash local changes
-                    stashed = False
+                    import shutil
                     try:
-                        s = _sp.run(["git", "stash", "push", "-m", f"pre-merge-{packet.id[:20]}"],
-                                    cwd=str(repo), capture_output=True, text=True, timeout=10)
-                        stashed = s.returncode == 0 and "No local changes" not in s.stdout
+                        _sp.run(["git", "worktree", "remove", str(wt), "--force"],
+                                cwd=str(repo), capture_output=True, timeout=10)
                     except Exception:
                         pass
-
-                    # Merge agent's worktree branch into main
-                    try:
-                        mr = _sp.run(["git", "merge", branch_name, "--no-edit", "--no-ff"],
-                                     cwd=str(repo), capture_output=True, text=True, timeout=30)
-                        if mr.returncode == 0:
-                            _log.info("merge_success", packet_id=packet.id, branch=branch_name)
-                        else:
-                            _log.warn("merge_failed", packet_id=packet.id, stderr=mr.stderr[:200])
-                    except Exception:
-                        _log.warn("merge_failed", packet_id=packet.id)
-
-                    # Restore local changes
-                    if stashed:
-                        try:
-                            pop = _sp.run(["git", "stash", "pop"],
-                                          cwd=str(repo), capture_output=True, text=True, timeout=10)
-                            if pop.returncode != 0:
-                                # Stash pop failed — restore clean and try again
-                                _sp.run(["git", "reset", "--hard", "HEAD"], cwd=str(repo),
-                                        capture_output=True, timeout=10)
-                                _sp.run(["git", "stash", "pop"],
-                                        cwd=str(repo), capture_output=True, timeout=10)
-                        except Exception:
-                            pass
-
-                    # Clean up worktree
-                    try:
-                        import shutil
-                        if wt.exists():
-                            shutil.rmtree(wt)
-                    except Exception:
-                        pass
+                    if wt.exists():
+                        shutil.rmtree(wt)
             except Exception:
                 pass
 

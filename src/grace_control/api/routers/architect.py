@@ -167,6 +167,13 @@ async def create_plan(request: dict) -> dict:
                 enriched_spec = dict(pkt_spec)
                 enriched_spec["_context"] = context
 
+                # Propagate root-level verification/constraints into each packet
+                root_verification = spec.get("verification", [])
+                root_constraints = spec.get("constraints", {})
+                enriched_spec.setdefault("verification", root_verification)
+                enriched_spec.setdefault("frozen_scope",
+                    root_constraints.get("frozen_scope", ["src/prefect_grace/"]))
+
                 if spec.get("self_improvement") or spec.get("origin") == "self_evolution":
                     enriched_spec.setdefault("origin", spec.get("origin", "self_evolution"))
                     enriched_spec.setdefault("session_id", spec.get("session_id", ""))

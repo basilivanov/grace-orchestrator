@@ -271,8 +271,11 @@ asyncio.run(m())
     for pid in pids:
         r = c.get(f"/api/packets/{pid}")
         pkt = r.json()["data"]
-        r2 = c.get(f"/api/events?entity_type=packet&entity_id={pid}")
-        evs = r2.json()["data"]
+        try:
+            r2 = c.get(f"/api/events?entity_type=packet&entity_id={pid}")
+            evs = r2.json().get("data", []) if r2.status_code == 200 else []
+        except Exception:
+            evs = []
         results.append({"packet_id": pid, "state": pkt["state"],
                         "attempt_count": pkt["attempt_count"], "max_attempts": pkt["max_attempts"],
                         "profile": pkt["acceptance_profile"],
@@ -317,8 +320,11 @@ def eval_report(feature_id, api_url, output, json_out):
 
     results = []
     for p in pkts:
-        r2 = c.get(f"/api/events?entity_type=packet&entity_id={p['id']}")
-        evs = r2.json()["data"]
+        try:
+            r2 = c.get(f"/api/events?entity_type=packet&entity_id={p['id']}")
+            evs = r2.json().get("data", []) if r2.status_code == 200 else []
+        except Exception:
+            evs = []
         results.append({"packet_id": p["id"], "feature_id": p["feature_id"],
                         "title": p["title"], "state": p["state"],
                         "attempt_count": p["attempt_count"], "max_attempts": p["max_attempts"],

@@ -38,7 +38,7 @@ codex:
       model: deepseek/deepseek-v4-flash
       roles: [coder]
       priority: 100
-      reasoning: max
+      reasoning: medium
       metadata:
         complexity: simple
         provider: deepseek
@@ -86,7 +86,7 @@ codex:
       hard_timeout_seconds: 1200
       max_auto_resume_attempts: 1
     coder:
-      reasoning: high
+      reasoning: medium
       sandbox: danger-full-access
       approval: never
       stall_timeout_seconds: 300
