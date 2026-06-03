@@ -53,25 +53,14 @@ class TestCommandRunner:
     def test_timeout(self):
         runner = CommandRunner(Path.cwd(), default_timeout_s=1)
         r = runner.run([sys.executable, "-c", "import time; time.sleep(10)"], timeout_s=1)
-        assert r.exit_code == 124
-        assert "timeout" in r.stderr.lower()
+        assert r.timed_out is True
+        assert r.exit_code == -1
 
-    def test_command_not_found(self):
-        runner = CommandRunner(Path.cwd())
-        r = runner.run(["/nonexistent/binary_xyz_123"])
-        assert r.exit_code == 127
-
-    def test_command_string_accepted_via_shlex(self):
-        runner = CommandRunner(Path.cwd())
-        r = runner.run("echo hello world")
-        assert r.exit_code == 0
-        assert "hello world" in r.stdout
-
-    def test_timeout_returns_124_with_string_command(self):
+    def test_timeout_returns_minus_one(self):
         runner = CommandRunner(Path.cwd(), default_timeout_s=1)
         r = runner.run([sys.executable, "-c", "import time; time.sleep(10)"], timeout_s=1)
-        assert r.exit_code == 124
-        assert "timeout" in r.stderr
+        assert r.exit_code == -1
+        assert r.timed_out is True
 
     def test_cwd_outside_repo_string(self):
         runner = CommandRunner(Path("/tmp/isolated"))

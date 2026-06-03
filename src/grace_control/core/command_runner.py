@@ -39,6 +39,7 @@ class CommandRunner:
         *,
         cwd: Path | None = None,
         timeout_s: int | None = None,
+        output_dir: Path | None = None,
     ) -> CommandResult:
         # Normalize: string → list via shlex (safe, no shell=True)
         if isinstance(command, str):
@@ -73,28 +74,46 @@ class CommandRunner:
 
         timeout = timeout_s or self._default_timeout
         started = time.time()
+
+        # Write stdout/stderr to files if output_dir is specified
+        stdout_path = ""
+        stderr_path = ""
+        if output_dir:
+            output_dir.mkdir(parents=True, exist_ok=True)
+            cmd_id = len(list(output_dir.glob("cmd_*"))) + 1
+            stdout_path = str(output_dir / f"cmd_{cmd_id:03d}_stdout.log")
+            stderr_path = str(output_dir / f"cmd_{cmd_id:03d}_stderr.log")
+
         try:
-            proc = subprocess.run(
-                command,
-                cwd=str(cwd),
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-            )
+            if output_dir:
+                with open(stdout_path, "w") as out_f, open(stderr_path, "w") as err_f:
+                    proc = subprocess.run(
+                        command, cwd=str(cwd), timeout=timeout,
+                        stdout=out_f, stderr=err_f,
+                    )
+                stdout_text = open(stdout_path).read()
+                stderr_text = open(stderr_path).read()
+            else:
+                proc = subprocess.run(
+                    command, cwd=str(cwd), capture_output=True, text=True, timeout=timeout,
+                )
+                stdout_text = proc.stdout or ""
+                stderr_text = proc.stderr or ""
+
             duration = int((time.time() - started) * 1000)
             return CommandResult(
-                command=command,
-                cwd=str(cwd),
-                exit_code=proc.returncode,
-                stdout=proc.stdout or "",
-                stderr=proc.stderr or "",
-                duration_ms=duration,
+                command=command, cwd=str(cwd), exit_code=proc.returncode,
+                stdout=stdout_text, stderr=stderr_text,
+                stdout_path=stdout_path, stderr_path=stderr_path,
+                timed_out=False, duration_ms=duration,
             )
         except subprocess.TimeoutExpired:
             duration = int((time.time() - started) * 1000)
             return CommandResult(
-                command=command, cwd=str(cwd), exit_code=124,
-                stderr=f"timeout after {timeout}s", duration_ms=duration,
+                command=command, cwd=str(cwd), exit_code=-1,
+                stderr=f"timeout after {timeout}s",
+                stdout_path=stdout_path, stderr_path=stderr_path,
+                timed_out=True, duration_ms=duration,
             )
         except FileNotFoundError:
             return CommandResult(

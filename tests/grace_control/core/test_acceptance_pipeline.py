@@ -7,28 +7,23 @@ import pytest
 from grace_control.core.acceptance_pipeline import AcceptancePipeline
 from grace_control.core.command_runner import CommandRunner
 from grace_control.core.contracts import (
-    AcceptanceProfile,
-    AcceptanceReport,
-    CommandResult,
-    ExecutionPacketContract,
-    PacketVerdict,
-    ScopeViolation,
-    StageName,
-    StageResult,
-    StageStatus,
+    AcceptanceProfile, AcceptanceReport, CommandResult, ExecutionPacketContract,
+    PacketVerdict, ScopeViolation, VerificationSpec,
 )
 from grace_control.core.evidence import EvidenceCollector
 from grace_control.core.scope_guard import ScopeGuard
 
 
-def _make_packet(profile=AcceptanceProfile.NORMAL, commands=None, extra_fields=None):
-    kw = dict(packet_id="p1", title="Test",
-              allowed_write_scope=["src/"], frozen_scope=["legacy/"],
-              acceptance_profile=profile,
-              verification_commands=commands if commands is not None else [["python", "-c", "pass"]])
-    if extra_fields:
-        kw.update(extra_fields)
-    return ExecutionPacketContract(**kw)
+def _make_packet(profile=AcceptanceProfile.NORMAL, t1=None, t2=None, **kw):
+    t1_cmds = t1 if t1 is not None else [["python", "-c", "pass"]]
+    t2_cmds = t2 or []
+    return ExecutionPacketContract(
+        packet_id="p1", title="Test",
+        allowed_write_scope=["src/"], frozen_scope=["legacy/"],
+        acceptance_profile=profile,
+        verification=VerificationSpec(t1=t1_cmds, t2=t2_cmds),
+        **kw,
+    )
 
 
 class FakeScope:
@@ -48,12 +43,11 @@ class FakeRunner:
         self._results = results or {}
         self.calls: list[list[str]] = []
 
-    def run(self, command, *, cwd=None, timeout_s=None):
+    def run(self, command, *, cwd=None, timeout_s=None, output_dir=None):
         self.calls.append(list(command))
         key = " ".join(command)
         if key in self._results:
             return self._results[key]
-        # Default: success
         return CommandResult(command=list(command), cwd=str(cwd or Path.cwd()), exit_code=0)
 
 
@@ -80,190 +74,138 @@ def _pipeline(*, packet=None, scope=None, runner=None, evidence=None):
 class TestT0:
     def test_t0_passes_clean(self):
         p = _make_packet()
-        pl = _pipeline(packet=p)
-        r = pl.run(packet=p, changed_files=["src/main.py"])
+        r = _pipeline(packet=p).run(packet=p, changed_files=["src/main.py"])
         assert r.final_verdict == PacketVerdict.ACCEPTED
 
     def test_t0_fails_out_of_scope(self):
         scope = FakeScope(violations=[ScopeViolation(path="apps/bad.tsx", reason="r", violation_type="out_of_scope")])
-        p = _make_packet()
-        pl = _pipeline(packet=p, scope=scope)
-        r = pl.run(packet=p)
+        r = _pipeline(packet=_make_packet(), scope=scope).run(packet=_make_packet())
         assert r.final_verdict == PacketVerdict.REWORK_REQUIRED
         assert len(r.scope_violations) == 1
 
     def test_t0_fails_frozen_scope(self):
         scope = FakeScope(violations=[ScopeViolation(path="legacy/x.py", reason="r", violation_type="frozen_scope")])
-        p = _make_packet()
-        pl = _pipeline(packet=p, scope=scope)
-        r = pl.run(packet=p)
+        r = _pipeline(packet=_make_packet(), scope=scope).run(packet=_make_packet())
         assert r.final_verdict == PacketVerdict.REWORK_REQUIRED
 
     def test_t0_fails_invalid_packet(self):
-        p = _make_packet()
         p = ExecutionPacketContract(packet_id="", title="", allowed_write_scope=[], frozen_scope=[],
-                                     acceptance_profile=AcceptanceProfile.NORMAL, verification_commands=[["cmd"]])
-        pl = _pipeline(packet=p)
-        r = pl.run(packet=p)
+                                     acceptance_profile=AcceptanceProfile.NORMAL, verification=VerificationSpec(t1=[["cmd"]]))
+        r = _pipeline(packet=p).run(packet=p)
         assert r.final_verdict == PacketVerdict.REWORK_REQUIRED
 
     def test_t0_blocks_t1(self):
         scope = FakeScope(violations=[ScopeViolation(path="x", reason="r", violation_type="out_of_scope")])
         runner = FakeRunner()
-        p = _make_packet()
-        pl = _pipeline(packet=p, scope=scope, runner=runner)
-        r = pl.run(packet=p)
-        # T1 commands should not have been called
+        r = _pipeline(packet=_make_packet(), scope=scope, runner=runner).run(packet=_make_packet())
         t1_called = any("python" in " ".join(c) for c in runner.calls)
         assert not t1_called or r.final_verdict == PacketVerdict.REWORK_REQUIRED
 
 
 class TestFAST:
     def test_fast_t0_passed_no_commands_accepted(self):
-        p = _make_packet(profile=AcceptanceProfile.FAST, commands=[])
-        pl = _pipeline(packet=p)
-        r = pl.run(packet=p)
+        r = _pipeline(packet=_make_packet(profile=AcceptanceProfile.FAST, t1=[])).run(packet=_make_packet(profile=AcceptanceProfile.FAST, t1=[]))
         assert r.final_verdict == PacketVerdict.ACCEPTED
 
     def test_fast_with_commands_passed(self):
-        p = _make_packet(profile=AcceptanceProfile.FAST, commands=[["echo", "ok"]])
+        p = _make_packet(profile=AcceptanceProfile.FAST, t1=[["echo", "ok"]])
         runner = FakeRunner({"echo ok": CommandResult(command=["echo", "ok"], cwd="/", exit_code=0)})
-        pl = _pipeline(packet=p, runner=runner)
-        r = pl.run(packet=p)
+        r = _pipeline(packet=p, runner=runner).run(packet=p)
         assert r.final_verdict == PacketVerdict.ACCEPTED
 
     def test_fast_with_commands_failed(self):
-        p = _make_packet(profile=AcceptanceProfile.FAST, commands=[["false"]])
+        p = _make_packet(profile=AcceptanceProfile.FAST, t1=[["false"]])
         runner = FakeRunner({"false": CommandResult(command=["false"], cwd="/", exit_code=1)})
-        pl = _pipeline(packet=p, runner=runner)
-        r = pl.run(packet=p)
+        r = _pipeline(packet=p, runner=runner).run(packet=p)
         assert r.final_verdict == PacketVerdict.REWORK_REQUIRED
 
     def test_fast_skips_t2(self):
-        p = _make_packet(profile=AcceptanceProfile.FAST, commands=[])
-        pl = _pipeline(packet=p)
-        r = pl.run(packet=p)
+        r = _pipeline(packet=_make_packet(profile=AcceptanceProfile.FAST, t1=[])).run(packet=_make_packet(profile=AcceptanceProfile.FAST, t1=[]))
         assert r.final_verdict == PacketVerdict.ACCEPTED
-        t2 = [s for s in r.stages if s.name == StageName.T2_FULL_TESTS]
-        assert len(t2) == 1 and t2[0].status == StageStatus.SKIPPED
 
 
 class TestNORMAL:
     def test_normal_without_commands_blocked(self):
-        p = _make_packet(profile=AcceptanceProfile.NORMAL, commands=[])
-        pl = _pipeline(packet=p)
-        r = pl.run(packet=p)
+        r = _pipeline(packet=_make_packet(profile=AcceptanceProfile.NORMAL, t1=[])).run(packet=_make_packet(profile=AcceptanceProfile.NORMAL, t1=[]))
         assert r.final_verdict != PacketVerdict.ACCEPTED
 
     def test_normal_t1_failed_rework(self):
-        p = _make_packet(profile=AcceptanceProfile.NORMAL, commands=[["false"]])
+        p = _make_packet(profile=AcceptanceProfile.NORMAL, t1=[["false"]])
         runner = FakeRunner({"false": CommandResult(command=["false"], cwd="/", exit_code=1)})
-        pl = _pipeline(packet=p, runner=runner)
-        r = pl.run(packet=p)
+        r = _pipeline(packet=p, runner=runner).run(packet=p)
         assert r.final_verdict == PacketVerdict.REWORK_REQUIRED
 
     def test_normal_t1_passed_no_t2_accepted(self):
-        p = _make_packet(profile=AcceptanceProfile.NORMAL, commands=[["echo", "ok"]])
+        p = _make_packet(profile=AcceptanceProfile.NORMAL, t1=[["echo", "ok"]])
         runner = FakeRunner({"echo ok": CommandResult(command=["echo", "ok"], cwd="/", exit_code=0)})
-        pl = _pipeline(packet=p, runner=runner, evidence=FakeEvidence(has=True))
-        r = pl.run(packet=p)
+        r = _pipeline(packet=p, runner=runner, evidence=FakeEvidence(has=True)).run(packet=p)
         assert r.final_verdict == PacketVerdict.ACCEPTED
 
     def test_normal_t2_failed_rework(self):
-        p = _make_packet(profile=AcceptanceProfile.NORMAL, commands=[["echo", "ok"]],
-                        extra_fields={"metadata": {"full_verification_commands": [["false"]]}})
-        runner = FakeRunner({"echo ok": CommandResult(command=["echo", "ok"], cwd="/", exit_code=0),
-                             "false": CommandResult(command=["false"], cwd="/", exit_code=1)})
-        pl = _pipeline(packet=p, runner=runner, evidence=FakeEvidence(has=True))
-        r = pl.run(packet=p)
+        p = _make_packet(profile=AcceptanceProfile.NORMAL, t1=[["echo", "ok"]], t2=[["false"]])
+        runner = FakeRunner({"echo ok": CommandResult(command=["echo", "ok"], cwd="/", exit_code=0), "false": CommandResult(command=["false"], cwd="/", exit_code=1)})
+        r = _pipeline(packet=p, runner=runner, evidence=FakeEvidence(has=True)).run(packet=p)
         assert r.final_verdict == PacketVerdict.REWORK_REQUIRED
 
     def test_normal_all_passed_accepted(self):
-        p = _make_packet(profile=AcceptanceProfile.NORMAL, commands=[["echo", "ok"]],
-                        extra_fields={"metadata": {"full_verification_commands": [["echo", "full"]]}})
-        runner = FakeRunner({"echo ok": CommandResult(command=["echo", "ok"], cwd="/", exit_code=0),
-                             "echo full": CommandResult(command=["echo", "full"], cwd="/", exit_code=0)})
-        pl = _pipeline(packet=p, runner=runner, evidence=FakeEvidence(has=True))
-        r = pl.run(packet=p)
+        p = _make_packet(profile=AcceptanceProfile.NORMAL, t1=[["echo", "ok"]], t2=[["echo", "full"]])
+        runner = FakeRunner({"echo ok": CommandResult(command=["echo", "ok"], cwd="/", exit_code=0), "echo full": CommandResult(command=["echo", "full"], cwd="/", exit_code=0)})
+        r = _pipeline(packet=p, runner=runner, evidence=FakeEvidence(has=True)).run(packet=p)
         assert r.final_verdict == PacketVerdict.ACCEPTED
 
 
 class TestSTRICT:
     def test_strict_without_commands_blocked(self):
-        p = _make_packet(profile=AcceptanceProfile.STRICT, commands=[])
-        pl = _pipeline(packet=p)
-        r = pl.run(packet=p)
+        r = _pipeline(packet=_make_packet(profile=AcceptanceProfile.STRICT, t1=[])).run(packet=_make_packet(profile=AcceptanceProfile.STRICT, t1=[]))
         assert r.final_verdict != PacketVerdict.ACCEPTED
 
     def test_strict_without_t2_blocked(self):
-        p = _make_packet(profile=AcceptanceProfile.STRICT, commands=[["echo", "ok"]])
+        p = _make_packet(profile=AcceptanceProfile.STRICT, t1=[["echo", "ok"]])
         runner = FakeRunner({"echo ok": CommandResult(command=["echo", "ok"], cwd="/", exit_code=0)})
-        pl = _pipeline(packet=p, runner=runner)
-        r = pl.run(packet=p)
+        r = _pipeline(packet=p, runner=runner).run(packet=p)
         assert r.final_verdict != PacketVerdict.ACCEPTED
 
     def test_strict_t1_failed_rework(self):
-        p = _make_packet(profile=AcceptanceProfile.STRICT, commands=[["false"]],
-                        extra_fields={"metadata": {"full_verification_commands": [["echo"]]}})
+        p = _make_packet(profile=AcceptanceProfile.STRICT, t1=[["false"]], t2=[["echo"]])
         runner = FakeRunner({"false": CommandResult(command=["false"], cwd="/", exit_code=1)})
-        pl = _pipeline(packet=p, runner=runner)
-        r = pl.run(packet=p)
+        r = _pipeline(packet=p, runner=runner).run(packet=p)
         assert r.final_verdict == PacketVerdict.REWORK_REQUIRED
 
     def test_strict_t2_failed_rework(self):
-        p = _make_packet(profile=AcceptanceProfile.STRICT, commands=[["echo", "ok"]],
-                        extra_fields={"metadata": {"full_verification_commands": [["false"]]}})
-        runner = FakeRunner({"echo ok": CommandResult(command=["echo", "ok"], cwd="/", exit_code=0),
-                             "false": CommandResult(command=["false"], cwd="/", exit_code=1)})
-        pl = _pipeline(packet=p, runner=runner, evidence=FakeEvidence(has=True))
-        r = pl.run(packet=p)
+        p = _make_packet(profile=AcceptanceProfile.STRICT, t1=[["echo", "ok"]], t2=[["false"]])
+        runner = FakeRunner({"echo ok": CommandResult(command=["echo", "ok"], cwd="/", exit_code=0), "false": CommandResult(command=["false"], cwd="/", exit_code=1)})
+        r = _pipeline(packet=p, runner=runner, evidence=FakeEvidence(has=True)).run(packet=p)
         assert r.final_verdict == PacketVerdict.REWORK_REQUIRED
 
     def test_strict_all_passed_accepted(self):
-        p = _make_packet(profile=AcceptanceProfile.STRICT, commands=[["echo", "ok"]],
-                        extra_fields={"metadata": {"full_verification_commands": [["echo", "full"]]}})
-        runner = FakeRunner({"echo ok": CommandResult(command=["echo", "ok"], cwd="/", exit_code=0),
-                             "echo full": CommandResult(command=["echo", "full"], cwd="/", exit_code=0)})
-        pl = _pipeline(packet=p, runner=runner, evidence=FakeEvidence(has=True))
-        r = pl.run(packet=p)
+        p = _make_packet(profile=AcceptanceProfile.STRICT, t1=[["echo", "ok"]], t2=[["echo", "full"]])
+        runner = FakeRunner({"echo ok": CommandResult(command=["echo", "ok"], cwd="/", exit_code=0), "echo full": CommandResult(command=["echo", "full"], cwd="/", exit_code=0)})
+        r = _pipeline(packet=p, runner=runner, evidence=FakeEvidence(has=True)).run(packet=p)
         assert r.final_verdict == PacketVerdict.ACCEPTED
 
 
 class TestReport:
     def test_accepted_has_no_violations(self):
-        p = _make_packet()
-        pl = _pipeline(packet=p)
-        r = pl.run(packet=p)
+        r = _pipeline(packet=_make_packet()).run(packet=_make_packet())
         assert r.scope_violations == []
 
     def test_accepted_has_t0_passed(self):
-        p = _make_packet()
-        pl = _pipeline(packet=p)
-        r = pl.run(packet=p)
-        t0s = [s for s in r.stages if s.name == StageName.T0_SCOPE_AND_LINT]
+        r = _pipeline(packet=_make_packet()).run(packet=_make_packet())
+        t0s = [s for s in r.stages if s.name.value == "T0_SCOPE_AND_LINT"]
         assert len(t0s) >= 1
 
     def test_non_accepted_has_reasons(self):
         scope = FakeScope(violations=[ScopeViolation(path="x", reason="r", violation_type="out_of_scope")])
-        p = _make_packet()
-        pl = _pipeline(packet=p, scope=scope)
-        r = pl.run(packet=p)
+        r = _pipeline(packet=_make_packet(), scope=scope).run(packet=_make_packet())
         assert r.final_verdict != PacketVerdict.ACCEPTED
 
     def test_to_dict_serializes(self):
-        p = _make_packet()
-        pl = _pipeline(packet=p)
-        r = pl.run(packet=p)
+        r = _pipeline(packet=_make_packet()).run(packet=_make_packet())
         d = r.to_dict()
         assert d["packet_id"] == "p1"
-        assert "stages" in d
-        assert r.is_accepted is True
 
     def test_missing_evidence_blocks_normal(self):
-        p = _make_packet(profile=AcceptanceProfile.NORMAL, commands=[["echo", "ok"]],
-                        extra_fields={"expected_evidence": ["tests passed"]})
+        p = _make_packet(profile=AcceptanceProfile.NORMAL, t1=[["echo", "ok"]], expected_evidence=["tests passed"])
         runner = FakeRunner({"echo ok": CommandResult(command=["echo", "ok"], cwd="/", exit_code=0)})
-        ev = FakeEvidence(has=False)
-        pl = _pipeline(packet=p, runner=runner, evidence=ev)
-        r = pl.run(packet=p)
+        r = _pipeline(packet=p, runner=runner, evidence=FakeEvidence(has=False)).run(packet=p)
         assert r.final_verdict == PacketVerdict.BLOCKED

@@ -69,11 +69,14 @@ class CommandResult:
     exit_code: int
     stdout: str = ""
     stderr: str = ""
+    stdout_path: str = ""
+    stderr_path: str = ""
+    timed_out: bool = False
     duration_ms: int | None = None
 
     @property
     def passed(self) -> bool:
-        return self.exit_code == 0
+        return self.exit_code == 0 and not self.timed_out
 
 
 @dataclass(frozen=True)
@@ -95,13 +98,20 @@ class StageResult:
 
 
 @dataclass(frozen=True)
+class VerificationSpec:
+    t0: list[list[str]] = field(default_factory=list)
+    t1: list[list[str]] = field(default_factory=list)
+    t2: list[list[str]] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class ExecutionPacketContract:
     packet_id: str
     title: str
     allowed_write_scope: list[str]
     frozen_scope: list[str]
     acceptance_profile: AcceptanceProfile
-    verification_commands: list[list[str]] = field(default_factory=list)
+    verification: VerificationSpec = field(default_factory=VerificationSpec)
     expected_evidence: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -165,8 +175,8 @@ def validate_packet_contract(packet: ExecutionPacketContract) -> list[str]:
         if _has_abs_or_parent(p):
             errors.append(f"frozen_scope path invalid: {p}")
     if packet.acceptance_profile in (AcceptanceProfile.NORMAL, AcceptanceProfile.STRICT):
-        if not packet.verification_commands:
-            errors.append(f"{packet.acceptance_profile.value} requires verification_commands")
+        if not packet.verification.t1:
+            errors.append(f"{packet.acceptance_profile.value} requires verification.t1")
     return errors
 
 

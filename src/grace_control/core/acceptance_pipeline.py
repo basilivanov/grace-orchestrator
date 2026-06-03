@@ -75,6 +75,10 @@ class AcceptancePipeline:
         changed_files: list[str] | None = None,
         base_ref: str | None = None,
         head_ref: str | None = None,
+        legacy_result: dict[str, Any] | None = None,
+        worktree_path: str = "",
+        branch_name: str = "",
+        run_dir: str = "",
     ) -> AcceptanceReport:
         scope_violations: list[ScopeViolation] = []
 
@@ -164,6 +168,18 @@ class AcceptancePipeline:
                 reviewer_verdict=reviewer,
             )
 
+        # ── All passed but legacy runner failed → can't be ACCEPTED ──────────
+        if legacy_result and not legacy_result.get("ok", True):
+            return AcceptanceReport(
+                packet_id=packet.packet_id,
+                final_verdict=PacketVerdict.REWORK_REQUIRED,
+                stages=[t0.stage, t1_result, t2_result],
+                scope_violations=t0.scope_violations,
+                evidence_paths=ep,
+                reasons=["legacy runner execution failed"],
+                verifier_report=verifier_report,
+            )
+
         # ── All passed → ACCEPTED ────────────────────────────────────────────
         reviewer = ReviewerVerdict(
             packet_id=packet.packet_id,
@@ -211,7 +227,7 @@ class AcceptancePipeline:
                     commands=commands),
                 scope_violations=violations)
 
-        for cmd in self._t0_commands:
+        for cmd in (packet.verification.t0 if packet.verification.t0 else self._t0_commands):
             r = self._runner.run(cmd)
             commands.append(r)
             if not r.passed:
@@ -229,16 +245,17 @@ class AcceptancePipeline:
             scope_violations=violations)
 
     def _run_t1(self, packet: ExecutionPacketContract) -> StageResult:
-        commands = [self._runner.run(cmd) for cmd in packet.verification_commands]
+        cmds = packet.verification.t1
+        commands = [self._runner.run(cmd) for cmd in cmds]
 
-        if not packet.verification_commands:
+        if not cmds:
             if packet.acceptance_profile == AcceptanceProfile.FAST:
                 return StageResult(name=StageName.T1_TARGETED_TESTS, status=StageStatus.SKIPPED,
-                                  summary="FAST profile without targeted commands",
-                                  skipped_reason="FAST profile without targeted commands")
+                                  summary="FAST profile without T1 commands",
+                                  skipped_reason="FAST profile without T1 commands")
             return StageResult(name=StageName.T1_TARGETED_TESTS, status=StageStatus.FAILED,
-                              summary="NORMAL/STRICT requires verification commands",
-                              blocking_issues=["missing verification_commands for NORMAL/STRICT"])
+                              summary="NORMAL/STRICT requires verification.t1",
+                              blocking_issues=["missing verification.t1 for NORMAL/STRICT"])
 
         failed = [c for c in commands if not c.passed]
         if failed:
@@ -250,20 +267,20 @@ class AcceptancePipeline:
                           summary=f"T1 passed: {len(commands)} commands ok", commands=commands)
 
     def _run_t2(self, packet: ExecutionPacketContract) -> StageResult:
-        full_cmds = packet.metadata.get("full_verification_commands", []) if packet.metadata else []
-        if not full_cmds:
+        cmds = packet.verification.t2
+        if not cmds:
             if packet.acceptance_profile == AcceptanceProfile.STRICT:
                 return StageResult(name=StageName.T2_FULL_TESTS, status=StageStatus.FAILED,
-                                  summary="STRICT requires full verification commands",
-                                  blocking_issues=["missing full_verification_commands for STRICT"])
+                                  summary="STRICT requires verification.t2",
+                                  blocking_issues=["missing verification.t2 for STRICT"])
             if packet.acceptance_profile == AcceptanceProfile.NORMAL:
                 return StageResult(name=StageName.T2_FULL_TESTS, status=StageStatus.SKIPPED,
-                                  summary="NORMAL without full verification commands",
-                                  skipped_reason="no full_verification_commands configured")
+                                  summary="NORMAL without T2 commands",
+                                  skipped_reason="no verification.t2 configured")
             return StageResult(name=StageName.T2_FULL_TESTS, status=StageStatus.SKIPPED,
                               summary="FAST always skips T2", skipped_reason="FAST profile skips T2")
 
-        commands = [self._runner.run(cmd) for cmd in full_cmds]
+        commands = [self._runner.run(cmd) for cmd in cmds]
         failed = [c for c in commands if not c.passed]
         if failed:
             return StageResult(name=StageName.T2_FULL_TESTS, status=StageStatus.FAILED,

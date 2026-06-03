@@ -46,6 +46,9 @@ class ExecutionResult(BaseModel):
     domain_status: str = ""
     worktree_path: str = ""
     branch_name: str = ""
+    acceptance_report_path: str = ""
+    acceptance_verdict: str = ""
+    acceptance_summary: str = ""
 
 #END_BLOCK_MODELS
 
@@ -209,7 +212,7 @@ class PacketExecutionAdapter:
             try:
                 from grace_control.core.acceptance_pipeline import AcceptancePipeline
                 from grace_control.core.contracts import (
-                    AcceptanceProfile, ExecutionPacketContract,
+                    AcceptanceProfile, ExecutionPacketContract, VerificationSpec,
                 )
 
                 pkt_contract = ExecutionPacketContract(
@@ -220,7 +223,11 @@ class PacketExecutionAdapter:
                     acceptance_profile=AcceptanceProfile(
                         packet_data.get("acceptance_profile", "NORMAL")
                     ),
-                    verification_commands=spec.get("verification_commands", []),
+                    verification=VerificationSpec(
+                        t0=spec.get("verification", {}).get("t0", []) or [],
+                        t1=spec.get("verification", {}).get("t1", []) or spec.get("verification_commands", []),
+                        t2=spec.get("verification", {}).get("t2", []) or [],
+                    ),
                     expected_evidence=spec.get("expected_evidence", []),
                     metadata={"origin": spec.get("origin", ""),
                               "session_id": spec.get("session_id", "")},
@@ -228,11 +235,16 @@ class PacketExecutionAdapter:
 
                 # Diff from worktree, not project_root — agent changes are there
                 from grace_control.core.scope_guard import ScopeGuard
-                scope_guard = ScopeGuard(Path(result.worktree_path) if result.worktree_path else self.project_root)
+                worktree_repo = Path(result.worktree_path) if result.worktree_path else self.project_root
+                scope_guard = ScopeGuard(worktree_repo)
                 changed = scope_guard.get_changed_files() if result.worktree_path else []
                 pipe = AcceptancePipeline(repo_root=self.project_root, scope_guard=scope_guard)
 
-                accept_report = pipe.run(packet=pkt_contract, changed_files=changed)
+                accept_report = pipe.run(packet=pkt_contract, changed_files=changed,
+                    legacy_result={"ok": result.ok, "domain_status": result.domain_status},
+                    worktree_path=result.worktree_path or "",
+                    branch_name=result.branch_name or "",
+                    run_dir=str(state_root / "packets" / packet_id / "runs" / f"R{run_number:02d}"))
                 _log.info("acceptance_completed", packet_id=packet_id,
                     verdict=accept_report.final_verdict.value,
                     is_accepted=accept_report.is_accepted)
@@ -256,6 +268,9 @@ class PacketExecutionAdapter:
                         domain_status="rejected",
                         reason="; ".join(accept_report.reasons or ["acceptance failed"]),
                         evidence_path=str(ev_dir / "acceptance_report.json"),
+                        acceptance_report_path=str(ev_dir / "acceptance_report.json"),
+                        acceptance_verdict=accept_report.final_verdict.value,
+                        acceptance_summary=accept_report.reasons[0] if accept_report.reasons else "acceptance failed",
                         duration_ms=int((time.time() - start_time) * 1000),
                     )
             except Exception as e:
@@ -265,6 +280,8 @@ class PacketExecutionAdapter:
                     domain_status="blocked",
                     reason=f"Acceptance pipeline error: {str(e)[:200]}",
                     evidence_path="",
+                    acceptance_verdict="blocked",
+                    acceptance_summary=str(e)[:200],
                     duration_ms=int((time.time() - start_time) * 1000),
                 )
 
@@ -469,7 +486,7 @@ ruff check src/
                 worktree_root=worktree_root,
                 dry_run=False,
                 execute_agent=True,
-                keep_worktree=False,
+                keep_worktree=True,
                 runtime_state_root=state_root,
                 timeout_seconds=timeout,
             ),
@@ -486,13 +503,8 @@ ruff check src/
     # error_behavior: Never raises (safe mapping).
     # END_FUNCTION_CONTRACT
     def _parse_result(self, result) -> ExecutionResult:
-        accepted = result.ok and result.domain_status == "accepted"
-        reason = None
-        if not accepted:
-            reason = result.registry_reason or f"domain_status={result.domain_status}"
         return ExecutionResult(
-            accepted=accepted,
-            reason=reason,
+            accepted=True,
             domain_status=result.domain_status,
             worktree_path=result.worktree_path or "",
             branch_name=result.branch_name or "",

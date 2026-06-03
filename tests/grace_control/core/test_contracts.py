@@ -11,6 +11,7 @@ from grace_control.core.contracts import (
     StageName,
     StageResult,
     StageStatus,
+    VerificationSpec,
     validate_acceptance_report,
     validate_packet_contract,
     validate_stage_result,
@@ -58,14 +59,14 @@ class TestPacketContract:
         p = ExecutionPacketContract(packet_id="p1", title="t",
             allowed_write_scope=["src/"], frozen_scope=["legacy/"],
             acceptance_profile=AcceptanceProfile.NORMAL,
-            verification_commands=[["pytest"]])
+            verification=VerificationSpec(t1=[["pytest"]]))
         assert validate_packet_contract(p) == []
 
     def test_valid_fast_without_commands(self):
         p = ExecutionPacketContract(packet_id="p1", title="t",
             allowed_write_scope=["src/"], frozen_scope=["legacy/"],
             acceptance_profile=AcceptanceProfile.FAST,
-            verification_commands=[])
+            verification=VerificationSpec())
         assert validate_packet_contract(p) == []
 
     def test_empty_packet_id(self):
@@ -96,15 +97,15 @@ class TestPacketContract:
         p = ExecutionPacketContract(packet_id="p1", title="t",
             allowed_write_scope=["src/"], frozen_scope=[],
             acceptance_profile=AcceptanceProfile.NORMAL,
-            verification_commands=[])
-        assert "requires verification_commands" in " ".join(validate_packet_contract(p))
+            verification=VerificationSpec())
+        assert "requires verification.t1" in " ".join(validate_packet_contract(p))
 
     def test_strict_requires_verification(self):
         p = ExecutionPacketContract(packet_id="p1", title="t",
             allowed_write_scope=["src/"], frozen_scope=[],
             acceptance_profile=AcceptanceProfile.STRICT,
-            verification_commands=[])
-        assert "requires verification_commands" in " ".join(validate_packet_contract(p))
+            verification=VerificationSpec())
+        assert "requires verification.t1" in " ".join(validate_packet_contract(p))
 
 
 class TestStageResult:
