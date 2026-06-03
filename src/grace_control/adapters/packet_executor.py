@@ -188,7 +188,7 @@ class PacketExecutionAdapter:
 
             # Resolve base SHA for commit diff comparison
             import subprocess as _sp_base
-            base_ref = os.environ.get("GRACE_BASE_REF", "HEAD")
+            base_ref = os.environ.get("GRACE_BASE_REF", "main")
             base_sha = ""
             try:
                 sr = _sp_base.run(["git", "-C", str(self.project_root), "rev-parse", base_ref],
@@ -239,7 +239,7 @@ class PacketExecutionAdapter:
                     try:
                         # Check if there are already committed changes vs base
                         diff_base = base_sha if base_sha else base_ref
-                        diff_cmd = ["git", "diff", "--name-only", f"{diff_base}...HEAD"]
+                        diff_cmd = ["git", "diff", "--name-only", "HEAD"]
                         diff_r = _sp.run(diff_cmd, cwd=str(wt), capture_output=True, text=True, timeout=10)
                         committed_changes = [p.strip() for p in diff_r.stdout.split("\n") if p.strip()]
 
