@@ -186,6 +186,17 @@ class PacketExecutionAdapter:
             from grace_control.core.contracts import build_packet_contract
             pkt_contract = build_packet_contract(packet_data)
 
+            # Resolve base SHA for commit diff comparison
+            import subprocess as _sp_base
+            base_ref = os.environ.get("GRACE_BASE_REF", "HEAD")
+            base_sha = ""
+            try:
+                sr = _sp_base.run(["git", "-C", str(self.project_root), "rev-parse", base_ref],
+                                  capture_output=True, text=True, timeout=10)
+                base_sha = sr.stdout.strip() if sr.returncode == 0 else ""
+            except Exception:
+                pass
+
             result = await self._call_legacy_runner(
                 packet_path, state_root, worktree_root,
                 allowed_scope=pkt_contract.allowed_write_scope,
@@ -226,8 +237,8 @@ class PacketExecutionAdapter:
                 if is_git_wt:
                     try:
                         # Check if there are already committed changes vs base
-                        base = os.environ.get("GRACE_BASE_REF", "HEAD")
-                        diff_cmd = ["git", "diff", "--name-only", f"{base}...HEAD"]
+                        diff_base = base_sha if base_sha else base_ref
+                        diff_cmd = ["git", "diff", "--name-only", f"{diff_base}...HEAD"]
                         diff_r = _sp.run(diff_cmd, cwd=str(wt), capture_output=True, text=True, timeout=10)
                         committed_changes = [p.strip() for p in diff_r.stdout.split("\n") if p.strip()]
 
