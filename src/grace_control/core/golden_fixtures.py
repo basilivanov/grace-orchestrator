@@ -106,8 +106,13 @@ def assert_golden_fixture_allowed(base_dir: Path, fixture_path: Path) -> None:
         raise FixtureSafetyError("GRACE_GOLDEN_FIXTURE=1 is required")
 
     base_str = str(base_dir.resolve())
-    if not base_str.startswith("/tmp/grace-fixtures/"):
-        raise FixtureSafetyError(f"base_dir must be under /tmp/grace-fixtures/, got: {base_str}")
+    allowed_prefixes = ["/tmp/grace-fixtures/"]
+    env_override = os.environ.get("GRACE_GOLDEN_FIXTURE_BASE", "")
+    if env_override:
+        allowed_prefixes.append(env_override)
+    if not any(base_str.startswith(p) for p in allowed_prefixes):
+        raise FixtureSafetyError(
+            f"base_dir must be under {allowed_prefixes}, got: {base_str}")
 
     fp_str = str(fixture_path.resolve()).replace("\\", "/")
     allowed_contain = ("/fixtures/golden/", "/golden-fixtures/")
@@ -172,26 +177,19 @@ def create_fixture_git_state(
             fp.parent.mkdir(parents=True, exist_ok=True)
             fp.write_text(f.content)
 
-        if git_cfg.no_commit_diff:
-            subprocess.run(["git", "add", "-A"], cwd=str(wt_path), capture_output=True, timeout=10)
-            r = subprocess.run(
-                ["git", "commit", "-m", git_cfg.commit_message],
+        subprocess.run(["git", "add", "-A"], cwd=str(wt_path), capture_output=True, timeout=10)
+        r = subprocess.run(
+            ["git", "commit", "-m", git_cfg.commit_message],
+            cwd=str(wt_path), capture_output=True, text=True, timeout=10,
+        )
+        if r.returncode == 0 and not git_cfg.no_commit_diff:
+            r2 = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
                 cwd=str(wt_path), capture_output=True, text=True, timeout=10,
             )
+            result["agent_commit_sha"] = r2.stdout.strip() if r2.returncode == 0 else ""
         else:
-            subprocess.run(["git", "add", "-A"], cwd=str(wt_path), capture_output=True, timeout=10)
-            r = subprocess.run(
-                ["git", "commit", "-m", git_cfg.commit_message],
-                cwd=str(wt_path), capture_output=True, text=True, timeout=10,
-            )
-            if r.returncode == 0:
-                r2 = subprocess.run(
-                    ["git", "rev-parse", "HEAD"],
-                    cwd=str(wt_path), capture_output=True, text=True, timeout=10,
-                )
-                result["agent_commit_sha"] = r2.stdout.strip() if r2.returncode == 0 else ""
-            else:
-                result["agent_commit_sha"] = ""
+            result["agent_commit_sha"] = ""
 
     if git_cfg.dirty_uncommitted_file:
         df = wt_path / git_cfg.dirty_uncommitted_file
@@ -243,11 +241,13 @@ def seed_db_fixture(
                 "worktree_path": git_state.get("worktree_path", ""),
                 "branch_name": git_state.get("branch_name", ""),
             }
+            from datetime import timedelta
+            started = datetime.utcnow() - timedelta(seconds=30)
             db.add(PacketRun(
                 id=run_id, packet_id=packet_id, run_number=run_spec.attempt,
                 status=run_spec.status, result_json=result_json,
                 evidence_path="",
-                started_at=datetime.utcnow(), finished_at=datetime.utcnow(),
+                started_at=started, finished_at=datetime.utcnow(),
             ))
 
     return {}

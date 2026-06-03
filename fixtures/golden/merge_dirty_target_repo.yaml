@@ -35,3 +35,4 @@ runs:
 expected:
   merge_should_succeed: false
   final_packet_state: accepted
+  expected_error_contains: DIRTY_TARGET_REPO
