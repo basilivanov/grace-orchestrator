@@ -30,13 +30,13 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 
+from grace_control.api.ws_broadcast import broadcast_event
 from grace_control.core.event_recorder import record_event
 from grace_control.core.state_machine import PacketStateMachine
-from grace_control.core.structured_logger import GraceLogger, trace_context
+from grace_control.core.structured_logger import GraceLogger
 from grace_control.core.telegram_notify import notify_event
 from grace_control.db import get_db
 from grace_control.db.schema import Lease, Packet, PacketRun, PacketState, Worker
-from grace_control.api.ws_broadcast import broadcast_event
 
 router = APIRouter()
 _state_machine = PacketStateMachine()
@@ -243,6 +243,7 @@ async def cancel_packet(packet_id: str, request: dict) -> dict:
             _log.info("packet_cancelled", packet_id=packet.id, reason=reason)
             record_event("packet_cancelled", "packet", packet.id, {"reason": reason}, db=db)
             await notify_event("packet_cancelled", packet.id, reason=reason)
+            await broadcast_event("state_change", {"packet_id": packet.id, "state": "cancelled"})
 
             return {
                 "data": {"packet_id": packet.id, "state": packet.state, "reason": reason},
@@ -370,7 +371,9 @@ async def merge_packet(packet_id: str, request: dict) -> dict:
             if pr.returncode != 0:
                 _log.warn("merge_push_failed", packet_id=packet.id, stderr=pr.stderr[:200])
             else:
-                _log.debug("merge_pushed", packet_id=packet.id)
+                _log.info("merge_pushed", packet_id=packet.id)
+                record_event("packet_merge_pushed", "packet", packet.id,
+                             {"commit_sha": commit_sha, "target_repo": str(repo)})
         except Exception as e:
             _log.warn("merge_push_failed", packet_id=packet.id, error=str(e)[:200])
 
@@ -394,6 +397,7 @@ async def merge_packet(packet_id: str, request: dict) -> dict:
         record_event("packet_merged", "packet", packet.id,
                      {"commit_sha": commit_sha, "target_repo": str(repo), "branch": branch_name,
                       "worktree": worktree_path}, db=db)
+        await broadcast_event("state_change", {"packet_id": packet.id, "state": "merged"})
 
         return {
             "data": {"packet_id": packet.id, "state": packet.state, "commit_sha": commit_sha},

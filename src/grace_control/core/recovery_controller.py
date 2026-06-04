@@ -46,7 +46,7 @@ class RecoveryController:
         decision = decide_recovery(signal, policy)
 
         db_decision_id = self._persist_decision(packet_id, decision, signal)
-        self._emit_recovery_events(packet_id, signal, decision)
+        self._emit_recovery_events(packet_id, signal, decision, trace_id=trace_id)
 
         if allow_apply and self._enabled:
             await self._apply_decision(packet_id, decision)
@@ -185,13 +185,14 @@ class RecoveryController:
             db.flush()
         return decision_id
 
-    def _emit_recovery_events(self, packet_id: str, signal: FailureSignal, decision: RecoveryDecision):
+    def _emit_recovery_events(self, packet_id: str, signal: FailureSignal, decision: RecoveryDecision,
+                                trace_id: str | None = None):
         from grace_control.core.event_recorder import record_event
 
         record_event("recovery_classified", "packet", packet_id, {
             "failure_class": decision.failure_class.value,
             "signal": signal.model_dump(),
-        })
+        }, trace_id=trace_id)
 
         action_event_map = {
             RecoveryAction.RETRY_SAME_CODER: "recovery_retry_same_coder",
@@ -209,7 +210,7 @@ class RecoveryController:
             "action": decision.action.value,
             "reason": decision.reason,
             "next_executor_hint": decision.next_executor_hint,
-        })
+        }, trace_id=trace_id)
 
     async def _apply_decision(self, packet_id: str, decision: RecoveryDecision):
         method_map = {

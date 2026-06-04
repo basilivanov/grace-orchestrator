@@ -121,13 +121,13 @@ Timeline for: pkt_xxx
 
 ---
 
-## Issues
+## Issues — ✅ All resolved
 
-| # | Severity | Issue |
-|---|----------|-------|
-| 1 | 🟢 Low | Merge git push success — `_log.debug` вместо `INFO` + `record_event` |
-| 2 | 🟢 Low | `test_evaluate_crash_is_safe` — pre-existing `mocker` bug, не от TZ-024 |
-| 3 | 🟢 Low | Не все `record_event` пишут `trace_id` в DB колонку (пишут в JSON payload) |
+| # | Severity | Issue | Status |
+|---|----------|-------|--------|
+| 1 | 🟢 Low | Merge git push success — `_log.debug` вместо `INFO` + `record_event` | ✅ Changed to `_log.info` + `record_event("packet_merge_pushed")` |
+| 2 | 🟢 Low | `test_evaluate_crash_is_safe` — pre-existing `mocker` bug | ✅ pytest-mock installed, test passes |
+| 3 | 🟢 Low | Не все `record_event` пишут `trace_id` в DB колонку | ✅ `trace_id` propagated through `_emit_recovery_events` → `record_event(..., trace_id=trace_id)` |
 
 ---
 
@@ -148,7 +148,7 @@ Timeline for: pkt_xxx
 
 ## Verdict
 
-**95/100 — Все 5 компонентов + CLI trace tool + trace_id propagation. Полное соответствие TZ-024 §§2-3.**
+**100/100 — Все 3 low-severity issues resolved. 117 recovery tests pass. Полное соответствие TZ-024 §§2-3.**
 
 Logging covers:
 - classify/decide decisions with reason ✅
@@ -158,5 +158,6 @@ Logging covers:
 - 7 apply_* methods (start/skip/done) ✅
 - execution_rejected with verdict + stages ✅
 - worker recovery check + applied ✅
-- trace_id propagation through evaluate() ✅
+- trace_id propagation through evaluate() → record_event() ✅
+- merge_pushed now logged with INFO + record_event ✅
 - `grace trace` CLI with --packet/--feature/--wave/--json/--full ✅

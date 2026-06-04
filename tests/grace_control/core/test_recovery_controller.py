@@ -330,7 +330,7 @@ async def test_evaluate_emits_events():
     )
     emitted_events = []
 
-    def fake_emit(pid, sig, dec):
+    def fake_emit(pid, sig, dec, **kw):
         emitted_events.append(("emit", pid))
 
     with patch.object(ctrl, "build_signal", return_value=signal):
