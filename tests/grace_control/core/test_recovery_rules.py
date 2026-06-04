@@ -52,9 +52,18 @@ def test_attempt_gte_seven_new_architect():
 
 
 def test_attempt_eight_fallback():
-    route = evaluate_ladder(9)
-    assert route.action == RouteAction.NEW_ARCHITECT
-    assert route.rule_index == 0
+    ladder = RecoveryLadder(
+        rules=[
+            RecoveryRule(
+                condition=RouteCondition.ATTEMPT_GTE,
+                condition_value=99,
+                action=RouteAction.NEW_ARCHITECT,
+            ),
+        ],
+    )
+    route = evaluate_ladder(8, ladder)
+    assert route.action == RouteAction.RETRY_SAME_CODER
+    assert route.rule_index == -1
 
 
 def test_fallback_on_empty_ladder():
