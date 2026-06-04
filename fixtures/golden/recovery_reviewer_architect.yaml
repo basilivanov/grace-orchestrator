@@ -1,0 +1,19 @@
+id: recovery_reviewer_architect
+kind: golden_fixture
+start_stage: recovery
+packet:
+  title: Reviewer return architect
+  slug: recovery-reviewer-architect
+  state: rejected
+  acceptance_profile: STRICT
+runs:
+  - attempt: 1
+    status: rejected
+    domain_status: rejected
+    acceptance_report:
+      final_verdict: rejected
+      summary: reviewer return to architect
+expected:
+  reviewer_verdict: RETURN_TO_ARCHITECT
+  recovery_action: return_to_architect
+  recovery_failure_class: architect_repack_needed

@@ -1,0 +1,18 @@
+id: recovery_coder_fail_once
+kind: golden_fixture
+start_stage: recovery
+packet:
+  title: Recovery coder fail once
+  slug: recovery-coder-fail-once
+  state: rejected
+  acceptance_profile: NORMAL
+runs:
+  - attempt: 1
+    status: rejected
+    domain_status: rejected
+    acceptance_report:
+      final_verdict: rejected
+      summary: tests failed
+expected:
+  recovery_action: retry_same_coder
+  recovery_failure_class: retryable_coder

@@ -1,0 +1,18 @@
+id: recovery_missing_cli
+kind: golden_fixture
+start_stage: recovery
+packet:
+  title: Missing CLI blocker
+  slug: recovery-missing-cli
+  state: failed
+  acceptance_profile: FAST
+runs:
+  - attempt: 1
+    status: failed
+    domain_status: failed
+    acceptance_report:
+      final_verdict: failed
+      summary: "missing CLI binary: agy not found"
+expected:
+  recovery_action: block_feature
+  recovery_failure_class: true_blocker

@@ -1,0 +1,26 @@
+id: recovery_verifier_architect
+kind: golden_fixture
+start_stage: recovery
+packet:
+  title: Verifier return architect
+  slug: recovery-verifier-architect
+  state: rejected
+  acceptance_profile: NORMAL
+runs:
+  - attempt: 1
+    status: rejected
+    domain_status: rejected
+    acceptance_report:
+      final_verdict: rejected
+      summary: verifier return to architect
+runs:
+  - attempt: 1
+    status: rejected
+    domain_status: rejected
+    acceptance_report:
+      final_verdict: rejected
+      summary: verifier return to architect
+    evidence_verifier_verdict: RETURN_TO_ARCHITECT
+expected:
+  recovery_action: return_to_architect
+  recovery_failure_class: architect_repack_needed

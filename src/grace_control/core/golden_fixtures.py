@@ -28,6 +28,10 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from grace_control.core.uid import new_feature_uid, new_wave_uid, new_packet_uid
+from grace_control.core.feature_recovery import (
+    FailureClass, FailureSignal, RecoveryAction, RecoveryDecision,
+    RecoveryPolicy, classify_failure, decide_recovery,
+)
 
 
 class FixtureChangedFile(BaseModel):
@@ -40,6 +44,8 @@ class FixtureRun(BaseModel):
     status: str = "accepted"
     domain_status: str = "accepted"
     acceptance_report: dict[str, Any] = Field(default_factory=lambda: {"final_verdict": "accepted", "summary": "fixture"})
+    evidence_verifier_verdict: str | None = None
+    reviewer_verdict: str | None = None
     artifacts: list[dict[str, Any]] = Field(default_factory=list)
 
 
@@ -49,6 +55,8 @@ class FixtureExpected(BaseModel):
     expected_files_in_target: list[str] = Field(default_factory=list)
     forbidden_files_in_target: list[str] = Field(default_factory=list)
     expected_error_contains: str | None = None
+    recovery_action: str | None = None
+    recovery_failure_class: str | None = None
 
 
 class FixtureGit(BaseModel):
@@ -62,6 +70,7 @@ class FixtureGit(BaseModel):
     dirty_uncommitted_file: str | None = None
     no_commit_diff: bool = False
     conflict_with_branch_file: str | None = None
+    merge_error: str | None = None
 
 
 class FixturePacket(BaseModel):
@@ -283,6 +292,34 @@ def create_fixture_artifacts(state_root: Path, packet_id: str, run_spec: Fixture
     return str(run_path)
 
 
+def build_failure_signal_from_fixture(spec: FixtureSpec, *, packet_id: str, state_root: Path) -> FailureSignal:
+    signal_kw: dict[str, Any] = {
+        "feature_id": "",
+        "packet_id": packet_id,
+        "packet_state": spec.packet.state,
+        "domain_status": spec.runs[0].domain_status if spec.runs else "rejected",
+        "reason": spec.expected.expected_error_contains or spec.runs[0].acceptance_report.get("summary", ""),
+    }
+
+    if spec.runs:
+        run = spec.runs[0]
+        ar = run.acceptance_report or {}
+        signal_kw["domain_status"] = run.domain_status
+        signal_kw["acceptance_verdict"] = ar.get("final_verdict")
+        signal_kw["evidence_verifier_verdict"] = run.evidence_verifier_verdict
+        signal_kw["reviewer_verdict"] = run.reviewer_verdict
+
+    if spec.git.merge_error:
+        signal_kw["merge_error"] = spec.git.merge_error
+
+    signal_kw["attempt_count"] = spec.runs[0].attempt if spec.runs else 1
+    signal_kw["coder_attempt_count"] = len([r for r in spec.runs if r.status in ("rejected", "failed")])
+    signal_kw["acceptance_profile"] = spec.packet.acceptance_profile
+    signal_kw["previous_executor_ids"] = []
+
+    return FailureSignal(**{k: v for k, v in signal_kw.items() if v is not None})
+
+
 async def run_stage_from_fixture(
     spec: FixtureSpec,
     *,
@@ -442,6 +479,33 @@ async def run_stage_from_fixture(
         )
         return {"success": ok, "packet_state": pkt_state, "reviewer_verdict": rv_report.verdict.value}
 
+    if stage == "recovery":
+        try:
+            signal = build_failure_signal_from_fixture(spec, packet_id=packet_id, state_root=state_root)
+        except Exception as e:
+            return {"success": False, "error": f"recovery signal build error: {str(e)[:200]}"}
+        policy = RecoveryPolicy()
+        fc = classify_failure(signal)
+        decision = decide_recovery(signal, policy)
+
+        exp_action = spec.expected.recovery_action
+        exp_fc = spec.expected.recovery_failure_class
+
+        errors = []
+        if exp_action and decision.action.value != exp_action:
+            errors.append(f"expected recovery_action={exp_action}, got {decision.action.value}")
+        if exp_fc and fc.value != exp_fc:
+            errors.append(f"expected failure_class={exp_fc}, got {fc.value}")
+
+        return {
+            "success": not errors,
+            "failure_class": fc.value,
+            "recovery_action": decision.action.value,
+            "packet_state": spec.packet.state,
+            "reason": decision.reason,
+            "errors": errors,
+        }
+
     return {"success": False, "error": f"Unknown stage: {stage}"}
 
 
@@ -473,6 +537,9 @@ def validate_expected(spec: FixtureSpec, result: dict[str, Any], git_state: dict
         target = git_state.get("target_repo_root")
         if target and (Path(target) / fpath).exists():
             errors.append(f"forbidden file exists: {fpath}")
+
+    if result.get("errors"):
+        errors.extend(result["errors"])
 
     return errors
 

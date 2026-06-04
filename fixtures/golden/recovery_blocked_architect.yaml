@@ -1,0 +1,18 @@
+id: recovery_blocked_architect
+kind: golden_fixture
+start_stage: recovery
+packet:
+  title: Blocked architect repack
+  slug: recovery-blocked-architect
+  state: blocked
+  acceptance_profile: NORMAL
+runs:
+  - attempt: 1
+    status: rejected
+    domain_status: rejected
+    acceptance_report:
+      final_verdict: blocked
+      summary: scope impossible without editing API file
+expected:
+  recovery_action: return_to_architect
+  recovery_failure_class: architect_repack_needed

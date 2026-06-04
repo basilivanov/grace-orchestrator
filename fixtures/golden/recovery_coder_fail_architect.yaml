@@ -1,0 +1,36 @@
+id: recovery_coder_fail_architect
+kind: golden_fixture
+start_stage: recovery
+packet:
+  title: Recovery coder fail architect
+  slug: recovery-coder-fail-architect
+  state: rejected
+  acceptance_profile: NORMAL
+runs:
+  - attempt: 1
+    status: rejected
+    domain_status: rejected
+    acceptance_report:
+      final_verdict: rejected
+      summary: failed
+  - attempt: 2
+    status: rejected
+    domain_status: rejected
+    acceptance_report:
+      final_verdict: rejected
+      summary: failed
+  - attempt: 3
+    status: rejected
+    domain_status: rejected
+    acceptance_report:
+      final_verdict: rejected
+      summary: failed
+  - attempt: 4
+    status: rejected
+    domain_status: rejected
+    acceptance_report:
+      final_verdict: rejected
+      summary: failed
+expected:
+  recovery_action: return_to_architect
+  recovery_failure_class: retryable_coder

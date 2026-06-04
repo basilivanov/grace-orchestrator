@@ -1,0 +1,20 @@
+id: recovery_merge_retry
+kind: golden_fixture
+start_stage: recovery
+packet:
+  title: Merge retryable
+  slug: recovery-merge-retry
+  state: accepted
+  acceptance_profile: FAST
+runs:
+  - attempt: 1
+    status: accepted
+    domain_status: accepted
+    acceptance_report:
+      final_verdict: accepted
+      summary: ok
+git:
+  merge_error: timeout connecting to remote
+expected:
+  recovery_action: retry_merge
+  recovery_failure_class: merge_retryable

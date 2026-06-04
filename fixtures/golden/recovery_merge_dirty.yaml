@@ -1,0 +1,20 @@
+id: recovery_merge_dirty
+kind: golden_fixture
+start_stage: recovery
+packet:
+  title: Merge dirty blocker
+  slug: recovery-merge-dirty
+  state: accepted
+  acceptance_profile: FAST
+runs:
+  - attempt: 1
+    status: accepted
+    domain_status: accepted
+    acceptance_report:
+      final_verdict: accepted
+      summary: merge ok
+git:
+  merge_error: DIRTY_TARGET_REPO
+expected:
+  recovery_action: block_feature
+  recovery_failure_class: true_blocker
