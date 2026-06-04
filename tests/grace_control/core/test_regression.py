@@ -115,3 +115,31 @@ def test_regression_coder_ladder_yaml():
         assert "priority" in e
     priorities = [e["priority"] for e in executors]
     assert priorities == sorted(priorities, reverse=True)
+
+
+def test_regression_build_signal_no_detached_error():
+    """build_signal() must not raise DetachedInstanceError after session close.
+    Regression for TZ-023 §2.1 — all data eagerly read inside with get_db()."""
+    from grace_control.db.schema import PacketRun, PacketState
+    from grace_control.core.recovery_controller import RecoveryController
+
+    with get_db() as d:
+        make_feature(d, fid="R1")
+        make_wave(d, wid="WR1", fid="R1", order=1)
+        make_packet(d, pid="P-reg", fid="R1", wid="WR1", state=PacketState.REJECTED.value)
+        d.add(PacketRun(
+            id="RR01", packet_id="P-reg", run_number=1, status="rejected",
+            result_json={
+                "acceptance_report": {"final_verdict": "rework_required"},
+                "evidence_verifier_report": {"verdict": "PASS"},
+                "executor_id": "coder-flash",
+            },
+        ))
+        d.flush()
+
+    ctrl = RecoveryController()
+    signal = ctrl.build_signal("P-reg")
+    assert signal.packet_id == "P-reg"
+    assert signal.coder_attempt_count == 1
+    assert signal.acceptance_verdict == "rework_required"
+    assert signal.evidence_verifier_verdict == "PASS"
