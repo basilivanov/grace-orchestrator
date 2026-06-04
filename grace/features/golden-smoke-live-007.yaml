@@ -9,3 +9,9 @@ description: >
 constraints:
   frozen_scope:
     - src/prefect_grace/
+
+verification:
+  t0: []
+  t1:
+    - python3 -m pytest sandbox/golden/live_007/test_greet.py -q
+  t2: []

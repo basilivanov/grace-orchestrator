@@ -258,6 +258,8 @@ async def _call_architect_llm(task: str, context: dict, feature_slug: str,
 
     prompt = f"""You are a software architect planning code changes for a project.
 
+PRIMARY SOURCE OF TRUTH: the business requirement below. Codebase context is for reference only — do not generate packets unrelated to the requirement.
+
 Business requirement: {task}
 
 Codebase context:
@@ -280,7 +282,7 @@ Other files (paths only):
 {all_paths}
 
 Your job: create an execution plan as waves and packets.
-CRITICAL: scope MUST contain paths from the file listing above."""
+CRITICAL: scope MUST match the business requirement. Use paths from the file listing only if relevant to the task."""
 
 
     if self_improvement:
