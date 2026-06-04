@@ -132,7 +132,9 @@ async def run_reviewer_gate(
     full_prompt = f"{prompt_template}\n\n## Context\n\n" + "\n".join(prompt_parts)
 
     try:
-        raw = await run_llm(full_prompt, role="reviewer", model="deepseek/deepseek-v4-pro", cli="opencode")
+        from grace_control.core.executor_selector import resolve_model
+        executor = resolve_model("reviewer")
+        raw = await run_llm(full_prompt, role="reviewer", model=executor["model"], cli=executor["command"])
         return parse_reviewer_json(raw)
     except Exception as e:
         return skipped_reviewer_report(f"reviewer gate error: {e}")
