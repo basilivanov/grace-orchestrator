@@ -17,6 +17,7 @@
 #   - function: load_profiles
 #   - function: select_executor
 #   - function: get_escalation
+#   - function: resolve_model
 # END_MODULE_MAP
 
 from __future__ import annotations
@@ -60,3 +61,31 @@ def get_escalation(role: str) -> list[dict]:
     matching = [e for e in executors if role in e.get("roles", [])]
     matching.sort(key=lambda e: e.get("priority", 0), reverse=True)
     return matching
+
+
+# START_FUNCTION_CONTRACT
+# purpose: Resolve the highest priority executor for a given role.
+# inputs: role (str)
+# returns: dict with 'model', 'command', and 'kind'.
+# side_effects: None.
+# error_behavior: Returns default executor details if no match is found.
+# END_FUNCTION_CONTRACT
+def resolve_model(role: str) -> dict:
+    profiles = load_profiles()
+    executors = profiles.get("codex", {}).get("executors", [])
+    matching = [e for e in executors if role in e.get("roles", [])]
+    if not matching:
+        return {
+            "model": DEFAULT_MODEL,
+            "command": DEFAULT_EXECUTOR.get("command", "agy"),
+            "kind": "default"
+        }
+    
+    matching.sort(key=lambda e: e.get("priority", 0), reverse=True)
+    best = matching[0]
+    
+    return {
+        "model": best.get("model", DEFAULT_MODEL),
+        "command": best.get("command", DEFAULT_EXECUTOR.get("command", "agy")),
+        "kind": best.get("kind", "default")
+    }

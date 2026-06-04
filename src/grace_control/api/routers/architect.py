@@ -43,7 +43,7 @@ from grace_control.db.schema import Feature, Packet, PacketState, Wave
 router = APIRouter()
 _log = GraceLogger("architect")
 
-ARCHITECT_MODEL = "deepseek/deepseek-v4-pro"
+from grace_control.core.executor_selector import resolve_model
 ARCHITECT_TIMEOUT = int(os.environ.get("GRACE_ARCHITECT_TIMEOUT", "120"))
 
 
@@ -217,7 +217,7 @@ async def _warm_context(spec: dict, feature_id: str) -> dict:
 
     scene = sorted(scope_paths) if scope_paths else ["src/grace_control/"]
     try:
-        collector = ContextCollector(cli="opencode", model="deepseek/deepseek-v4-flash")
+        collector = ContextCollector(cli=resolve_model("context_collector")["command"], model=resolve_model("context_collector")["model"])
         code_ctx = await collector.collect(task_description=task_desc, target_scope=scene)
         ctx = {
             "summary": code_ctx.summary,
@@ -355,7 +355,7 @@ Respond ONLY with valid JSON (no markdown, no backticks):
 
     for attempt in range(2):
         try:
-            raw = await _run_opencode(prompt, ARCHITECT_MODEL)
+            raw = await _run_opencode(prompt, resolve_model("architect")["model"])
             plan = json.loads(raw)
             if "waves" not in plan:
                 plan["waves"] = []

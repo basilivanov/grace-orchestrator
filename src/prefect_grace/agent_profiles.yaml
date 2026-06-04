@@ -76,6 +76,17 @@ codex:
         complexity: simple
         provider: google
 
+    # ── Context Collector: opencode cheap (flash) ────────────────────────
+    - executor_id: context-collector-flash
+      kind: opencode
+      command: opencode
+      model: deepseek/deepseek-v4-flash
+      roles: [context_collector]
+      priority: 100
+      metadata:
+        complexity: simple
+        provider: deepseek
+
   # ── Role Configs ───────────────────────────────────────────────────────
   roles:
     architect:
