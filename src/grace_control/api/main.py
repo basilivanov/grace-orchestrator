@@ -153,23 +153,23 @@ async def dashboard_data():
                 packets = db.query(Packet).filter_by(feature_id=f.id, wave_id=w.id).all()
                 fw_packets = []
                 for p in packets:
-                    recovery_runs = db.query(PacketRun).filter_by(
+                    all_pkt_runs = db.query(PacketRun).filter_by(
                         packet_id=p.id
-                    ).filter(
-                        PacketRun.result_json.contains({"recovery": {}})
-                    ).order_by(PacketRun.run_number.desc()).limit(1).all()
+                    ).order_by(PacketRun.run_number.desc()).limit(5).all()
                     recovery_data = None
-                    if recovery_runs:
-                        rj = recovery_runs[0].result_json or {}
-                        rec = rj.get("recovery", {})
-                        recovery_data = {
-                            "failure_class": rec.get("failure_class", ""),
-                            "action": rec.get("action", ""),
-                            "reason": rec.get("reason", ""),
-                            "current_executor_id": rec.get("current_executor_id", ""),
-                            "next_executor_hint": rec.get("next_executor_hint", ""),
-                            "decision_id": rec.get("decision_id", ""),
-                        }
+                    for r in all_pkt_runs:
+                        rj = r.result_json or {}
+                        if rj.get("recovery"):
+                            rec = rj["recovery"]
+                            recovery_data = {
+                                "failure_class": rec.get("failure_class", ""),
+                                "action": rec.get("action", ""),
+                                "reason": rec.get("reason", ""),
+                                "current_executor_id": rec.get("current_executor_id", ""),
+                                "next_executor_hint": rec.get("next_executor_hint", ""),
+                                "decision_id": rec.get("decision_id", ""),
+                            }
+                            break
                     fw_packets.append({
                         "id": p.id, "title": p.title, "state": p.state,
                         "acceptance_profile": p.acceptance_profile,
