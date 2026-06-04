@@ -61,10 +61,12 @@ codex:
       command: agy
       model: gemini-3.5-flash
       roles: [coder]
-      priority: 50
-      provider: google
+      priority: 110
+      metadata:
+        complexity: simple
+        provider: google
 
-    # ── Coder #4: opencode premium (sonnet) ──────────────────────────────
+    # ── Coder #3: opencode premium (sonnet) ──────────────────────────────
     - executor_id: coder-sonnet
       kind: opencode
       command: opencode
