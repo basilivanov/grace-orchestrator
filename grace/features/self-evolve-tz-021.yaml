@@ -1,0 +1,126 @@
+title: TZ 021 — Unified Model Routing from agent_profiles.yaml
+description: >
+  Replace 4 hardcoded model/CLI references with resolve_model() from executor_selector.py
+  reading agent_profiles.yaml. Add 2 missing executors (verifier, context_collector).
+  Do NOT modify select_executor() or any existing test files.
+  Do NOT modify golden test YAMLs or acceptance pipeline.
+
+self_improvement: true
+origin: self_evolution
+session_id: self-evolve-tz-021
+affected_subsystem: core
+
+constraints:
+  frozen_scope:
+    - src/prefect_grace/
+  allowed_scope:
+    - src/prefect_grace/agent_profiles.yaml
+    - src/grace_control/core/executor_selector.py
+    - src/grace_control/api/routers/architect.py
+    - src/grace_control/core/evidence_verifier.py
+    - src/grace_control/core/reviewer_gate.py
+
+verification:
+  t0: []
+  t1:
+    - python3 -c "from grace_control.core.executor_selector import resolve_model; m=resolve_model('architect'); assert m['model']=='deepseek/deepseek-v4-pro'"
+    - python3 -c "from grace_control.core.executor_selector import resolve_model; m=resolve_model('verifier'); assert m['model']=='gemini-3.5-flash'"
+    - python3 -c "from grace_control.core.executor_selector import resolve_model; m=resolve_model('reviewer'); assert m['model']=='deepseek/deepseek-v4-pro'"
+    - python3 -c "from grace_control.core.executor_selector import resolve_model; m=resolve_model('context_collector'); assert m['model']=='deepseek/deepseek-v4-flash'"
+  t2: []
+
+waves:
+  - title: Phase 1 — agent_profiles YAML + executor_selector
+    packets:
+      - title: Add verifier + context_collector executors to YAML
+        description: >
+          In src/prefect_grace/agent_profiles.yaml, under codex.executors, add TWO new executors:
+
+          1. verifier-agy: kind=agy, command=agy, model=gemini-3.5-flash, roles=[verifier], priority=10
+          2. context-collector-flash: kind=opencode, command=opencode, model=deepseek/deepseek-v4-flash, roles=[context_collector], priority=10
+
+          Follow the existing YAML format exactly (same indentation, metadata block).
+          Do NOT modify any existing executors (architect-premium, reviewer-premium, coder-*).
+        scope:
+          - src/prefect_grace/agent_profiles.yaml
+        verification:
+          t0: []
+          t1:
+            - python3 -c "import yaml; d=yaml.safe_load(open('src/prefect_grace/agent_profiles.yaml')); roles=[r for e in d['codex']['executors'] for r in e['roles']]; assert 'verifier' in roles; assert 'context_collector' in roles"
+          t2: []
+        acceptance_profile: NORMAL
+
+      - title: Add resolve_model() to executor_selector.py
+        description: >
+          In src/grace_control/core/executor_selector.py, add a new public function resolve_model(role: str) -> dict.
+
+          Signature:
+            def resolve_model(role: str) -> dict:
+
+          Returns {"model": str, "command": str, "kind": str} for the first executor matching the role.
+          Picks highest priority executor. Falls back to DEFAULT_MODEL/DEFAULT_EXECUTOR if no match.
+
+          Do NOT modify select_executor(), get_escalation(), load_profiles(), or any existing code.
+          Add proper GRACE Canon headers (AI_HEADER, FUNCTION_CONTRACT, MODULE_MAP).
+          Add 'resolve_model' to MODULE_MAP at top of file.
+        scope:
+          - src/grace_control/core/executor_selector.py
+        verification:
+          t0: []
+          t1:
+            - python3 -c "from grace_control.core.executor_selector import resolve_model; m=resolve_model('architect'); assert m['model']=='deepseek/deepseek-v4-pro'; assert m['command']=='opencode'"
+            - python3 -c "from grace_control.core.executor_selector import resolve_model; m=resolve_model('nonexistent'); assert m['model'] in ('gemini-3.5-flash','default')"
+          t2: []
+        acceptance_profile: NORMAL
+
+  - title: Phase 2 — Replace hardcoded model references
+    packets:
+      - title: Replace architect.py hardcoded models
+        description: >
+          In src/grace_control/api/routers/architect.py:
+
+          1. DELETE the ARCHITECT_MODEL constant at line 46
+          2. At line 358, replace ARCHITECT_MODEL with resolve_model("architect")["model"]
+          3. At line 220, replace hardcoded model="deepseek/deepseek-v4-flash" and cli="opencode"
+             with resolve_model("context_collector"): model=executor["model"], cli=executor["command"]
+          4. Import resolve_model from grace_control.core.executor_selector
+
+          Do NOT change any other code in this file.
+        scope:
+          - src/grace_control/api/routers/architect.py
+        verification:
+          t0: []
+          t1:
+            - python3 -c "import ast; tree=ast.parse(open('src/grace_control/api/routers/architect.py').read()); names={n.id for n in ast.walk(tree) if isinstance(n,ast.Name)}; assert 'resolve_model' in names"
+          t2: []
+        acceptance_profile: NORMAL
+
+      - title: Replace verifier + reviewer hardcoded models
+        description: >
+          In src/grace_control/core/evidence_verifier.py (line 140):
+          Replace the hardcoded run_llm call:
+            run_llm(full_prompt, role="verifier", model="gemini-3.5-flash", cli="agy")
+          With:
+            from grace_control.core.executor_selector import resolve_model
+            executor = resolve_model("verifier")
+            run_llm(full_prompt, role="verifier", model=executor["model"], cli=executor["command"])
+
+          In src/grace_control/core/reviewer_gate.py (line 135):
+          Replace the hardcoded run_llm call:
+            run_llm(full_prompt, role="reviewer", model="deepseek/deepseek-v4-pro", cli="opencode")
+          With:
+            from grace_control.core.executor_selector import resolve_model
+            executor = resolve_model("reviewer")
+            run_llm(full_prompt, role="reviewer", model=executor["model"], cli=executor["command"])
+
+          Do NOT change any other code in these files.
+        scope:
+          - src/grace_control/core/evidence_verifier.py
+          - src/grace_control/core/reviewer_gate.py
+        verification:
+          t0: []
+          t1:
+            - python3 -c "import ast; t=ast.parse(open('src/grace_control/core/evidence_verifier.py').read()); assert any(isinstance(n,ast.Call) and hasattr(n.func,'id') and n.func.id=='resolve_model' for n in ast.walk(t))"
+            - python3 -c "import ast; t=ast.parse(open('src/grace_control/core/reviewer_gate.py').read()); assert any(isinstance(n,ast.Call) and hasattr(n.func,'id') and n.func.id=='resolve_model' for n in ast.walk(t))"
+          t2: []
+        acceptance_profile: NORMAL

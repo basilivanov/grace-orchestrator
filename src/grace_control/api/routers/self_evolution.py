@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -181,7 +182,6 @@ async def _run_evolution(session_id: str, title: str, description: str, constrai
         await broadcast_event("self_evolution_update", {"session_id": session_id, "status": "planning",
             "context": _context_to_dict(ctx)})
 
-        import httpx
         from grace_control.api.routers.architect import create_plan
 
         result = await create_plan({"feature_spec": {
@@ -207,6 +207,53 @@ async def _run_evolution(session_id: str, title: str, description: str, constrai
         _log.info("evolution_planned", session_id=session_id, feature_id=feature_id)
         await broadcast_event("self_evolution_update", {"session_id": session_id, "status": "executing",
             "feature_id": feature_id})
+
+        # ── Wait for execution completion ──
+        packet_ids = result["data"].get("packets", [])
+        terminal_states = frozenset(("merged", "failed", "rejected", "blocked", "cancelled"))
+        deadline = time.time() + 1800  # 30 min max
+        all_merged = False
+
+        while time.time() < deadline:
+            await asyncio.sleep(5)
+            states: dict[str, str] = {}
+            try:
+                from grace_control.db import get_db as _gdb
+                from grace_control.db.schema import Packet as _Pkt
+                with _gdb() as db:
+                    for pid in packet_ids:
+                        p = db.query(_Pkt).filter_by(id=pid).first()
+                        if p:
+                            states[pid] = p.state
+            except Exception:
+                continue
+
+            if not states:
+                continue
+
+            if all(s in terminal_states for s in states.values()):
+                all_merged = all(s == "merged" for s in states.values())
+                break
+
+        with get_db() as db:
+            s = db.query(SelfEvolutionSession).filter_by(id=session_id).first()
+            if s:
+                s.status = "completed" if all_merged else "executed"
+
+        if all_merged:
+            _log.info("evolution_completed", session_id=session_id, packets=len(packet_ids))
+            await broadcast_event("self_evolution_update", {"session_id": session_id, "status": "completed"})
+
+            # ── Hot-reload uvicorn after self-evolution merge ──
+            from grace_control.core.self_reload import GraceSelfReloader
+            reloader = GraceSelfReloader()
+            reload_result = await reloader.reload_after_merge(session_id)
+            _log.info("evolution_reload", session_id=session_id,
+                success=reload_result.success, message=reload_result.message)
+        else:
+            _log.warn("evolution_completed_with_failures", session_id=session_id,
+                states={pid: s for pid, s in states.items() if s != "merged"})
+            await broadcast_event("self_evolution_update", {"session_id": session_id, "status": "executed"})
 
     except Exception as e:
         with get_db() as db:
