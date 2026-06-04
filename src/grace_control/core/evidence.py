@@ -72,7 +72,8 @@ def _check_evidence_kind(
                 if cmd.exit_code != 0:
                     continue
                 if req.pattern:
-                    if req.pattern in cmd.command:
+                    haystack = f"{cmd.command}\n{cmd.stdout}\n{cmd.stderr}"
+                    if req.pattern in haystack:
                         return True
                 else:
                     return True

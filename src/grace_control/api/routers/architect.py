@@ -309,6 +309,7 @@ After ALL waves complete:
 6. depends_on: optional list of packet titles that must complete first (within same wave).
 7. Include `constraints` block with: frozen_scope (files NEVER to touch), forbidden_imports, python_version.
 8. Include `verification` list with shell commands to run (pytest, ruff, mypy).
+8a. CRITICAL for expected_evidence: pattern is matched against the full output of the verification command (command text + stdout + stderr). Use patterns that WILL appear there. Good: "test_auth.py" (in pytest command), "3 passed" (in pytest output), "All checks passed" (in ruff output). Bad: abstract ids like "auth_implemented" that don't appear in any command output.
 9. CRITICAL: Each packet MUST be small enough for a single agent run (~2-5 min, ~200 lines max). A task like "rebuild the entire dashboard" is TOO BIG. Split it into multiple small packets: "add status summary section", "add feature list column", "add packet detail tabs", "add artifact viewer", etc. Each packet touches 1-2 files, never the entire codebase.
 
 Respond ONLY with valid JSON (no markdown, no backticks):
