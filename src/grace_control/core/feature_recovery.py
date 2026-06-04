@@ -109,7 +109,9 @@ def classify_failure(signal: FailureSignal) -> FailureClass:
         return FailureClass.TRUE_BLOCKER
 
     if any(kw in reason for kw in ["missing cli", "missing api key", "auth failed",
-                                    "quota exceeded", "permission denied", "repository inaccessible"]):
+                                    "quota exceeded", "permission denied", "repository inaccessible",
+                                    "user decision required", "user approval required",
+                                    "security required", "billing required", "data-loss approval"]):
         return FailureClass.TRUE_BLOCKER
 
     # ── Evidence Verifier ───────────────────────────────────────────
@@ -168,7 +170,8 @@ def classify_failure(signal: FailureSignal) -> FailureClass:
     return FailureClass.ARCHITECT_ESCALATION_NEEDED
 
 
-def decide_recovery(signal: FailureSignal, policy: RecoveryPolicy) -> RecoveryDecision:
+def decide_recovery(signal: FailureSignal, policy: RecoveryPolicy | None = None) -> RecoveryDecision:
+    policy = policy or RecoveryPolicy()
     fc = classify_failure(signal)
 
     # ── TRUE_BLOCKER ────────────────────────────────────────────────
@@ -293,10 +296,24 @@ def decide_recovery(signal: FailureSignal, policy: RecoveryPolicy) -> RecoveryDe
             reason=f"unknown failure, retrying (attempt {signal.attempt_count + 1})",
         )
 
-    # ── Post-process: enforce never_downgrade_strict ────────────────
+    # ── Post-process: enforce never_downgrade_strict + populate audit ─
     decision.next_acceptance_profile = _safe_next_profile(
         signal.acceptance_profile, decision.next_acceptance_profile, policy
     )
+    branch_map = {
+        RecoveryAction.RETRY_SAME_CODER: "coder_ladder.retry_same",
+        RecoveryAction.SWITCH_CODER: "coder_ladder.switch_coder",
+        RecoveryAction.RETURN_TO_ARCHITECT: "architect_repack",
+        RecoveryAction.ESCALATE_ARCHITECT: "architect_escalate",
+        RecoveryAction.RETRY_VERIFIER: "verifier_retry",
+        RecoveryAction.RETRY_REVIEWER: "reviewer_retry",
+        RecoveryAction.RETRY_MERGE: "merge_retry",
+        RecoveryAction.BLOCK_FEATURE: "true_blocker",
+        RecoveryAction.NO_ACTION: "no_action",
+    }
+    decision.audit_payload.setdefault("policy", "default")
+    decision.audit_payload.setdefault("coder_attempt_count", signal.coder_attempt_count)
+    decision.audit_payload.setdefault("matched_branch", branch_map.get(decision.action, "unknown"))
     return decision
 
 

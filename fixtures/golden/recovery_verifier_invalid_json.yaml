@@ -1,0 +1,19 @@
+id: recovery_verifier_invalid_json
+kind: golden_fixture
+start_stage: recovery
+packet:
+  title: Verifier invalid JSON
+  slug: recovery-verifier-invalid-json
+  state: rejected
+  acceptance_profile: NORMAL
+runs:
+  - attempt: 1
+    status: rejected
+    domain_status: rejected
+    acceptance_report:
+      final_verdict: rejected
+      summary: verifier invalid json
+    evidence_verifier_verdict: INVALID_JSON
+expected:
+  recovery_action: retry_verifier
+  recovery_failure_class: retryable_verifier

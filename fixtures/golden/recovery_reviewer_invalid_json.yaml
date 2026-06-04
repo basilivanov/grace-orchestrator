@@ -1,0 +1,19 @@
+id: recovery_reviewer_invalid_json
+kind: golden_fixture
+start_stage: recovery
+packet:
+  title: Reviewer invalid JSON
+  slug: recovery-reviewer-invalid-json
+  state: rejected
+  acceptance_profile: STRICT
+runs:
+  - attempt: 1
+    status: rejected
+    domain_status: rejected
+    acceptance_report:
+      final_verdict: rejected
+      summary: reviewer invalid json
+    reviewer_verdict: INVALID_JSON
+expected:
+  recovery_action: retry_reviewer
+  recovery_failure_class: retryable_reviewer

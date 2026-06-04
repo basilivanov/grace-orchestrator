@@ -463,3 +463,28 @@ class TestSessionResume:
                                                     max_same_coder_attempts=2))
         assert d.action == RecoveryAction.SWITCH_CODER
         assert d.next_acceptance_profile is None or d.next_acceptance_profile == "STRICT"
+
+
+# ── Verbatim spec example tests (TZ-017 §11) ─────────────────────────────
+
+
+def test_verifier_invalid_json_retries_verifier():
+    signal = FailureSignal(
+        packet_state="rejected",
+        evidence_verifier_verdict="INVALID_JSON",
+        verifier_reject_count=0,
+    )
+    assert classify_failure(signal) == FailureClass.RETRYABLE_VERIFIER
+    decision = decide_recovery(signal, RecoveryPolicy())
+    assert decision.action == RecoveryAction.RETRY_VERIFIER
+
+
+def test_reviewer_invalid_json_retries_reviewer():
+    signal = FailureSignal(
+        packet_state="rejected",
+        reviewer_verdict="PARSE_ERROR",
+        reviewer_reject_count=0,
+    )
+    assert classify_failure(signal) == FailureClass.RETRYABLE_REVIEWER
+    decision = decide_recovery(signal, RecoveryPolicy())
+    assert decision.action == RecoveryAction.RETRY_REVIEWER
