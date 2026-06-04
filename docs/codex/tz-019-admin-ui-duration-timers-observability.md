@@ -160,9 +160,605 @@ GET /api/artifacts/{packet_id}/{run_id:path}
 
 ---
 
-## 3. Что нужно сделать
+## 3. Целевой UI на текущей реализации
 
-### 3.1 Переименовать видимую админку
+Это не новый дизайн с нуля. Нужно привести текущий `dashboard.html` к понятному виду, сохранив текущий стек:
+
+```text
+HTML
+CSS
+vanilla JavaScript
+/api/dashboard
+/api/packets/{packet_id}
+/api/events
+/api/packets/{packet_id}/runs/{run_id}/artifacts
+/ws
+```
+
+Не добавлять React/Vue/Svelte и не заводить отдельную фронтенд-сборку.
+
+---
+
+### 3.1 Desktop layout
+
+Оставить текущую 3-колоночную схему, но сделать её более понятной:
+
+```text
+┌─────────────────────────────────────────────────────────────────────┐
+│ GRACE Mission Control Center  Ready  Running  Merged  Failed Workers│
+│ Live / Offline   Last update   Legend   Self   Theme                │
+├────────────────────┬──────────────────────────┬─────────────────────┤
+│ Features           │ Selected feature          │ Packet inspector    │
+│                    │ Waves / Packets           │ Overview/Runs/...   │
+└────────────────────┴──────────────────────────┴─────────────────────┘
+```
+
+Колонки:
+
+```text
+Left panel  = список features
+Center panel = выбранная feature, waves и packets
+Right panel = inspector выбранного packet
+```
+
+Нельзя превращать экран в перегруженный cockpit. На верхнем уровне показывать только то, что нужно для выбора проблемы.
+
+---
+
+### 3.2 Header
+
+Header должен показывать:
+
+```text
+GRACE Mission Control Center
+Ready count
+Running count
+Merged count
+Failed count = failed + rejected
+Workers count
+WebSocket status: connecting / Live / Offline
+Last update time
+Legend
+Self
+Theme toggle
+```
+
+Правила:
+
+```text
+Live зелёный только когда WebSocket открыт.
+Offline красный, когда WebSocket закрыт.
+Polling /api/dashboard остаётся fallback и продолжает работать.
+Last update обновляется после успешного load().
+```
+
+Не показывать в header:
+
+```text
+длинные packet ids
+сырые JSON payloads
+полный worker list
+полный event log
+```
+
+---
+
+### 3.3 Left panel: Features
+
+Feature card должна быть компактной.
+
+Показывать:
+
+```text
+feature title
+feature UID
+feature slug, если есть
+created_at как короткая дата/время
+packet state counters
+needs attention badge, если есть failed/rejected/blocked packets
+recovery badge, если blocked_recovery_count > 0 или есть packet recovery
+```
+
+Пример:
+
+```text
+Mission Control Center polish
+feat_x7A... · mission-control-center · today 14:20
+Ready: 3  Running: 1  Failed: 1
+Needs attention: 1
+```
+
+Click behavior:
+
+```text
+click feature → select feature
+left selected card получает selected style
+center panel перерисовывает waves/packets
+right panel очищается, если packet не выбран
+mobile переходит на экран selected feature
+```
+
+Empty state:
+
+```text
+No features yet
+Run: grace architect plan feature.yaml
+```
+
+Loading state:
+
+```text
+Loading features...
+```
+
+Error state:
+
+```text
+Cannot load dashboard. Retrying via polling...
+```
+
+---
+
+### 3.4 Center panel: Selected feature / Waves / Packets
+
+Верх selected feature area:
+
+```text
+feature title
+feature UID
+feature slug
+created_at
+waves count
+packets count
+compact summary: ready/running/accepted/merged/rejected/failed/blocked
+```
+
+Пример:
+
+```text
+Mission Control Center polish
+feat_x7A... · mission-control-center · 2026-06-04 14:20
+3 waves · 12 packets · 1 running · 1 failed
+```
+
+Wave card:
+
+```text
+Wave 1: Foundation
+4 pkt · created 14:21
+```
+
+Packet row/card должна показывать:
+
+```text
+state dot
+packet title
+short packet UID
+created_at
+state label
+attempt_count / max_attempts
+small recovery marker if packet.recovery exists
+```
+
+Пример:
+
+```text
+● Fix recovery rendering
+pkt_abcd1234… · 14:31
+Running 2/3
+```
+
+Для failed/rejected/blocked packet визуально должно быть понятно, что это проблема.
+
+Click behavior:
+
+```text
+click packet → select packet
+center packet получает selected style
+right inspector loads /api/packets/{packet_id}
+mobile переходит на packet inspector screen
+```
+
+Empty selected feature:
+
+```text
+Select a feature
+```
+
+Feature без waves/packets:
+
+```text
+No packets in this feature
+```
+
+---
+
+### 3.5 Right panel: Packet inspector
+
+Right panel открывается после выбора packet.
+
+Верх inspector должен показывать:
+
+```text
+packet title
+state badge
+UID + copy button
+attempt_count / max_attempts
+acceptance_profile
+created_at
+updated_at
+age / updated-after human duration
+feature_id + copy button
+wave_id
+```
+
+Важно:
+
+```text
+Packet не имеет started_at/finished_at.
+Поэтому не писать `runtime`, если считаем created_at → updated_at.
+Писать `Age`, `Updated after`, `Approx. life` или русское `Возраст/обновлялся`.
+```
+
+Timeline:
+
+```text
+Показывать только реальные packet states:
+draft → ready → running → accepted → merged
+```
+
+Терминальные branches показывать отдельно:
+
+```text
+rejected
+blocked
+failed
+cancelled
+```
+
+Если хочется оставить claimed/evidence, то только как derived events, и только когда они реально найдены в `/api/events` или `result_json`.
+
+---
+
+### 3.6 Inspector tab: Overview
+
+Overview должен отвечать на вопрос: “что с packet сейчас?”
+
+Показывать:
+
+```text
+Status
+Last run status
+Last run duration human-readable, если duration_ms есть
+Last run evidence_path, если есть
+Runs count
+Next action, derived from current state
+Recovery block, если есть recovery
+```
+
+Next action можно оставить derived, без новых API fields:
+
+```text
+ready → Waiting for worker claim
+running → Agent executing
+accepted → Ready to merge
+merged → Complete
+failed → Needs manual/recovery decision
+rejected → Can retry / recovery may decide
+blocked → Blocked, inspect reason
+cancelled → Cancelled
+```
+
+Recovery block должен читать текущие snake_case поля:
+
+```text
+failure_class
+action
+reason
+current_executor_id
+next_executor_hint
+decision_id
+```
+
+Пример:
+
+```text
+Recovery
+retryable_coder · switch_coder
+Reason: T1 failed twice
+coder-flash → coder-strong
+Decision: recd-...
+```
+
+Если recovery отсутствует:
+
+```text
+Recovery: none
+```
+
+---
+
+### 3.7 Inspector tab: Runs
+
+Runs tab показывает все runs из `/api/packets/{packet_id}`.
+
+Для каждого run:
+
+```text
+Run number
+status
+executor_id, если API добавит или если брать из отдельного run endpoint/result_json
+started_at
+finished_at
+duration_ms as human duration
+evidence_path
+```
+
+Текущий packet detail не отдаёт executor_id в runs. Не писать в UI, что executor гарантированно доступен, пока не добавлен в response.
+
+Click behavior:
+
+```text
+click run → load artifacts for this run into Artifacts tab or switch to Artifacts tab
+```
+
+Empty state:
+
+```text
+No runs yet
+```
+
+---
+
+### 3.8 Inspector tab: Events
+
+Events tab использует текущий endpoint:
+
+```text
+GET /api/events?entity_type=packet&entity_id={packet_id}
+```
+
+Event row:
+
+```text
+time
+event readable label
+event_type raw small
+payload compact preview
+trace_id if exists
+```
+
+Readable labels для текущих событий:
+
+```text
+packet_claimed = Packet claimed by worker
+packet_released = Packet released
+packet_cancelled = Packet cancelled
+packet_merge_failed = Merge failed
+packet_merged = Packet merged
+recovery_classified = Recovery classified failure
+recovery_retry_same_coder = Recovery: retry same coder
+recovery_switch_coder = Recovery: switch coder
+recovery_return_to_architect = Recovery: return to architect
+recovery_escalate_architect = Recovery: escalate architect
+recovery_retry_verifier = Recovery: retry verifier
+recovery_retry_reviewer = Recovery: retry reviewer
+recovery_retry_merge = Recovery: retry merge
+recovery_block_feature = Recovery: block feature
+recovery_no_action = Recovery: no action
+self_evolution_update = Self-evolution update
+```
+
+Не добавлять обязательный severity field в этом TZ.
+
+Empty state:
+
+```text
+No events yet
+```
+
+Error state:
+
+```text
+Cannot load events
+```
+
+---
+
+### 3.9 Inspector tab: Artifacts
+
+Artifacts tab работает с текущими endpoints:
+
+```text
+GET /api/packets/{packet_id}/runs/{run_id}/artifacts
+GET /api/packets/{packet_id}/runs/{run_id}/artifacts/file?path=...&tail=200
+```
+
+Default state:
+
+```text
+Select a run to view artifacts
+```
+
+Если selected packet имеет runs, можно автоматически загрузить artifacts последнего run при открытии Artifacts tab.
+
+Artifact row:
+
+```text
+icon by type
+name/path
+size KB
+safe action
+```
+
+Text preview разрешён только для:
+
+```text
+log
+txt
+json
+md
+py
+yaml
+yml
+```
+
+Для image/file/binary:
+
+```text
+показать metadata
+не вызывать text preview
+показать сообщение: Preview is not available for this file type yet
+```
+
+Acceptance:
+
+```text
+click по image/binary artifact не вызывает read_text preview и не ломает UI/server.
+```
+
+---
+
+### 3.10 Self panel flow
+
+Self panel сейчас скрывает main dashboard и показывает форму self-evolution.
+
+Оставить текущий flow:
+
+```text
+click Self → show Self panel, hide dashboard
+click Self again → return dashboard
+```
+
+Self form:
+
+```text
+Title
+Description
+Acceptance profile: FAST/NORMAL/STRICT
+Max files
+Launch Self-Evolution
+```
+
+Sessions list card:
+
+```text
+title
+status
+session id
+feature_id link, if exists
+error, if exists
+context summary, if exists
+cancel button for non-terminal statuses
+```
+
+Status colors:
+
+```text
+completed = success
+executed = warning / completed with failures
+failed = error
+cancelled = neutral/error
+pending, collecting_context, planning, executing, verifying = in progress
+```
+
+Click feature link:
+
+```text
+close Self panel
+select produced feature in dashboard
+```
+
+---
+
+### 3.11 Legend modal
+
+Legend должна соответствовать реальным states:
+
+```text
+Draft
+Ready
+Running
+Accepted
+Merged
+Rejected
+Blocked
+Failed
+Cancelled
+```
+
+Если в UI не показывается Draft, можно не добавлять его в header counters, но Legend должна не противоречить DB states.
+
+---
+
+### 3.12 Mobile flow
+
+Mobile не должен быть сжатой таблицей.
+
+Текущий mobile flow сохранить:
+
+```text
+Screen 1: Features
+Screen 2: Selected feature / Waves / Packets
+Screen 3: Packet inspector
+```
+
+Навигация:
+
+```text
+Features → click feature → Waves/Packets
+Waves/Packets → click packet → Inspector
+Back from Inspector → Waves/Packets
+Back from Waves/Packets → Features
+```
+
+Mobile header/crumb:
+
+```text
+Features
+Features / {feature title}
+{feature title} / {packet title}
+```
+
+Mobile требования:
+
+```text
+packet title не должен обрезаться до полной нечитаемости
+state badge виден без горизонтального scroll
+tabs в inspector остаются touch-friendly
+Back button всегда возвращает на предыдущий уровень
+right panel не должен быть просто hidden без возможности открыть selected packet
+```
+
+---
+
+### 3.13 Loading, empty, error, offline states
+
+Для всех панелей должны быть понятные состояния:
+
+```text
+Loading dashboard...
+No features yet
+Select a feature
+No packets in this feature
+Select a packet
+No runs yet
+No events yet
+No artifacts
+Cannot load dashboard
+Cannot load packet
+Cannot load events
+Cannot load artifacts
+Offline, retrying...
+```
+
+Ошибки не должны ломать весь экран. Если не загрузился inspector, левая и центральная панели должны остаться рабочими.
+
+---
+
+## 4. Что нужно сделать
+
+### 4.1 Переименовать видимую админку
 
 В `dashboard.html` заменить:
 
@@ -178,7 +774,7 @@ logo `GRACE`
 GRACE Mission Control Center
 ```
 
-### 3.2 Починить `/api/dashboard`
+### 4.2 Починить `/api/dashboard`
 
 Добавить импорт `PacketRun`, чтобы dashboard не падал при сборке recovery data.
 
@@ -188,7 +784,7 @@ Acceptance:
 GET /api/dashboard возвращает 200, когда в БД есть features/packets/runs.
 ```
 
-### 3.3 Починить recovery block
+### 4.3 Починить recovery block
 
 API отдаёт snake_case:
 
@@ -214,7 +810,7 @@ Acceptance:
 Recovery block показывает failure_class, action, reason, current_executor_id, next_executor_hint.
 ```
 
-### 3.4 Починить статусы Self panel
+### 4.4 Починить статусы Self panel
 
 Backend использует статусы:
 
@@ -242,7 +838,7 @@ cancelled = cancelled
 pending/collecting_context/planning/executing/verifying = in progress
 ```
 
-### 3.5 Сделать timeline честным
+### 4.5 Сделать timeline честным
 
 Сейчас timeline показывает:
 
@@ -270,7 +866,7 @@ B. показывать claimed/evidence только как derived stage, ес
 
 Не показывать claimed/evidence как реальные состояния БД.
 
-### 3.6 Duration без фантазий
+### 4.6 Duration без фантазий
 
 Сейчас UI показывает raw seconds.
 
@@ -290,7 +886,7 @@ packet age = updated_at - created_at, но подписать как age/updated
 
 Не писать, что есть точное packet runtime, пока в Packet нет started_at/finished_at.
 
-### 3.7 Events tab
+### 4.7 Events tab
 
 Оставить совместимость с текущим Event schema:
 
@@ -298,30 +894,11 @@ packet age = updated_at - created_at, но подписать как age/updated
 timestamp, event_type, entity_type, entity_id, payload, trace_id
 ```
 
-Добавить readable labels для текущих событий:
-
-```text
-packet_claimed
-packet_released
-packet_cancelled
-packet_merge_failed
-packet_merged
-recovery_classified
-recovery_retry_same_coder
-recovery_switch_coder
-recovery_return_to_architect
-recovery_escalate_architect
-recovery_retry_verifier
-recovery_retry_reviewer
-recovery_retry_merge
-recovery_block_feature
-recovery_no_action
-self_evolution_update
-```
+Добавить readable labels для текущих событий, перечисленных в разделе UI Events.
 
 Не требовать severity column в этом TZ.
 
-### 3.8 Artifacts tab
+### 4.8 Artifacts tab
 
 Правило:
 
@@ -336,7 +913,7 @@ Acceptance:
 клик по image/binary artifact не ломает UI/server.
 ```
 
-### 3.9 WebSocket updates
+### 4.9 WebSocket updates
 
 Сейчас claim/release делают broadcast `state_change`.
 
@@ -351,7 +928,7 @@ Polling оставить как fallback.
 
 ---
 
-## 4. Out of scope
+## 5. Out of scope
 
 Не делать в этом TZ:
 
@@ -374,7 +951,7 @@ manual approve/reject controls
 
 ---
 
-## 5. Тесты
+## 6. Тесты
 
 Добавить минимальные тесты:
 
@@ -395,7 +972,7 @@ mobile smoke: feature → packet → inspector
 
 ---
 
-## 6. Acceptance checklist
+## 7. Acceptance checklist
 
 Готово, когда:
 
@@ -403,6 +980,8 @@ mobile smoke: feature → packet → inspector
 не создано tz-019b/tz-019c/addendum
 этот MD остался единственным TZ-019
 видимый UI = GRACE Mission Control Center
+Desktop layout: header + features + waves/packets + inspector
+Mobile flow: features → waves/packets → inspector
 /api/dashboard PacketRun bug исправлен
 recovery UI читает snake_case
 Self panel понимает completed/executed
@@ -417,7 +996,7 @@ cancel/merge обновляют dashboard через WS или polling
 
 ---
 
-## 7. Coder report
+## 8. Coder report
 
 Report format:
 
