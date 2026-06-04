@@ -76,6 +76,26 @@ codex:
         complexity: simple
         provider: google
 
+    - executor_id: verifier-agy
+      kind: agy
+      command: agy
+      model: gemini-3.5-flash
+      roles: [verifier]
+      priority: 10
+      metadata:
+        complexity: simple
+        provider: google
+
+    - executor_id: context-collector-flash
+      kind: opencode
+      command: opencode
+      model: deepseek/deepseek-v4-flash
+      roles: [context_collector]
+      priority: 10
+      metadata:
+        complexity: simple
+        provider: deepseek
+
   # ── Role Configs ───────────────────────────────────────────────────────
   roles:
     architect:
