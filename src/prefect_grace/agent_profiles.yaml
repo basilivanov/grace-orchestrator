@@ -61,10 +61,11 @@ codex:
       command: agy
       model: gemini-3.5-flash
       roles: [coder]
-      priority: 80
+      priority: 50
+      reasoning: max
       metadata:
-        complexity: simple
-        provider: google
+        complexity: medium
+        provider: anthropic
 
     # ── Coder #4: opencode premium (sonnet) ──────────────────────────────
     - executor_id: coder-sonnet
@@ -72,7 +73,7 @@ codex:
       command: opencode
       model: cliproxy/claude-sonnet-4-6
       roles: [coder]
-      priority: 50
+      priority: 80
       reasoning: max
       metadata:
         complexity: medium
