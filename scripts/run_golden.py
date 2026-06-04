@@ -88,10 +88,21 @@ def main():
         print("No packets to execute")
         sys.exit(1)
 
-    # 3. Register worker
+    # 3. Kill zombie worker subprocesses from previous runs
+    import subprocess as _sp
+    try:
+        r = _sp.run(["pgrep", "-a", "python"], capture_output=True, text=True, timeout=5)
+        for line in r.stdout.split("\n"):
+            if "Worker(worker_id" in line or "Worker(\"eval-w" in line or "worker.worker" in line:
+                pid = line.strip().split()[0]
+                try: _sp.run(["kill", "-9", pid], capture_output=True, timeout=2)
+                except Exception: pass
+    except Exception: pass
+
+    # 4. Register worker
     c.post("/api/workers/register", json={"worker_id": "golden-w0"})
 
-    # 4. Spawn worker subprocess
+    # 5. Spawn worker subprocess
     worker_env = {
         **os.environ,
         "PYTHONDONTWRITEBYTECODE": "1",

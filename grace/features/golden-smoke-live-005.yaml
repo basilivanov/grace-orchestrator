@@ -1,0 +1,51 @@
+title: Golden Smoke Live 005
+description: "Two-wave golden test: wave gate DRAFT→READY."
+
+constraints:
+  frozen_scope:
+    - src/prefect_grace/
+
+verification:
+  t0: []
+  t1: []
+  t2: []
+
+waves:
+  - title: Wave 1 — util
+    packets:
+      - title: Create util module
+        description: >
+          Create sandbox/golden/live_005/w1/w1_util.py with a function add(x, y) returning x + y.
+        scope:
+          - sandbox/golden/live_005/w1/
+        verification:
+          t0: []
+          t1:
+            - python3 -c "import sys; sys.path.insert(0,'sandbox/golden/live_005/w1'); from w1_util import add; assert add(2,3)==5"
+          t2: []
+        expected_evidence:
+          - id: w1_util_works
+            kind: command
+            required: true
+            pattern: from w1_util import add
+        acceptance_profile: FAST
+
+  - title: Wave 2 — test
+    packets:
+      - title: Create test for util
+        description: >
+          Create sandbox/golden/live_005/w2/test_w1_util.py that imports add from w1_util
+          (use sys.path.append('sandbox/golden/live_005/w1')) and asserts add(2,3)==5.
+        scope:
+          - sandbox/golden/live_005/w2/
+        verification:
+          t0: []
+          t1:
+            - python3 -c "import sys; sys.path.insert(0,'sandbox/golden/live_005/w1'); sys.path.insert(0,'sandbox/golden/live_005/w2'); from test_w1_util import test_add; test_add()"
+          t2: []
+        expected_evidence:
+          - id: test_passes
+            kind: command
+            required: true
+            pattern: test_w1_util
+        acceptance_profile: FAST
