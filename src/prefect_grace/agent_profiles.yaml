@@ -1,106 +1,94 @@
 version: 2
-# GRACE Control Plane — Model Configuration
-# Canonical reference: CANONICAL_DECISIONS.md, executor_selector.py
-
 codex:
   binary: agy
   workdir: /tmp/grace-orchestrator-export
-
   executors:
-    # ── Architect (opencode) ─────────────────────────────────────────────
-    - executor_id: architect-premium
-      kind: opencode
-      command: opencode
-      model: deepseek/deepseek-v4-pro
-      roles: [architect, reviewer]
-      priority: 10
-      reasoning: max
-      metadata:
-        complexity: complex
-        provider: deepseek
-
-    # ── Reviewer (opencode) ──────────────────────────────────────────────
-    - executor_id: reviewer-premium
-      kind: opencode
-      command: opencode
-      model: deepseek/deepseek-v4-pro
-      roles: [reviewer]
-      priority: 5
-      reasoning: max
-      metadata:
-        complexity: complex
-        provider: deepseek
-
-     # ── Coder #1: opencode cheap (flash) ─────────────────────────────────
-    - executor_id: coder-deepseek-flash
-      kind: opencode
-      command: opencode
-      model: deepseek/deepseek-v4-flash
-      roles: [coder]
-      priority: 100
-      reasoning: medium
-      metadata:
-        complexity: simple
-        provider: deepseek
-
-    # ── Coder #1b: opencode gemini 3.5 flash via cliproxy ─────────────────
-    - executor_id: coder-gemini-flash
-      kind: opencode
-      command: opencode
-      model: cliproxy/gemini-3-flash-agent
-      roles: [coder]
-      priority: 90
-      reasoning: medium
-      metadata:
-        complexity: simple
-        provider: cliproxy
-
-    # ── Coder #2: agy cheap (gemini flash) ───────────────────────────────
-    - executor_id: coder-agy-flash
-      kind: agy
-      command: agy
-      model: gemini-3.5-flash
-      roles: [coder]
-      priority: 110
-      metadata:
-        complexity: simple
-        provider: google
-
-    # ── Coder #3: opencode premium (sonnet) ──────────────────────────────
-    - executor_id: coder-sonnet
-      kind: opencode
-      command: opencode
-      model: cliproxy/claude-sonnet-4-6
-      roles: [coder]
-      priority: 80
-      reasoning: max
-      metadata:
-        complexity: medium
-        provider: anthropic
-
-    # ── Verifier: agy cheap ──────────────────────────────────────────────
-    - executor_id: verifier-cheap
-      kind: agy
-      command: agy
-      model: gemini-3.5-flash
-      roles: [verifier]
-      priority: 100
-      metadata:
-        complexity: simple
-        provider: google
-
-    # ── Context Collector: opencode cheap (flash) ────────────────────────
-    - executor_id: context-collector-flash
-      kind: opencode
-      command: opencode
-      model: deepseek/deepseek-v4-flash
-      roles: [context_collector]
-      priority: 100
-      metadata:
-        complexity: simple
-        provider: deepseek
-
-  # ── Role Configs ───────────────────────────────────────────────────────
+  - executor_id: architect-premium
+    kind: opencode
+    command: opencode
+    model: deepseek/deepseek-v4-pro
+    roles:
+    - architect
+    - reviewer
+    priority: 10
+    reasoning: max
+    metadata:
+      complexity: complex
+      provider: deepseek
+  - executor_id: reviewer-premium
+    kind: opencode
+    command: opencode
+    model: deepseek/deepseek-v4-pro
+    roles:
+    - reviewer
+    priority: 5
+    reasoning: max
+    metadata:
+      complexity: complex
+      provider: deepseek
+  - executor_id: coder-deepseek-flash
+    kind: opencode
+    command: opencode
+    model: deepseek/deepseek-v4-flash
+    roles:
+    - coder
+    priority: 100
+    reasoning: medium
+    metadata:
+      complexity: simple
+      provider: deepseek
+  - executor_id: coder-gemini-flash
+    kind: opencode
+    command: opencode
+    model: cliproxy/gemini-3-flash-agent
+    roles:
+    - coder
+    priority: 110
+    reasoning: medium
+    metadata:
+      complexity: simple
+      provider: cliproxy
+  - executor_id: coder-agy-flash
+    kind: agy
+    command: agy
+    model: gemini-3.5-flash
+    roles:
+    - coder
+    priority: 50
+    metadata:
+      complexity: simple
+      provider: google
+  - executor_id: coder-sonnet
+    kind: opencode
+    command: opencode
+    model: cliproxy/claude-sonnet-4-6
+    roles:
+    - coder
+    priority: 90
+    reasoning: max
+    metadata:
+      complexity: medium
+      provider: anthropic
+  - executor_id: verifier-cheap
+    kind: agy
+    command: agy
+    model: gemini-3.5-flash
+    roles:
+    - verifier
+    priority: 100
+    metadata:
+      complexity: simple
+      provider: google
+  - executor_id: context-collector-flash
+    kind: opencode
+    command: opencode
+    model: deepseek/deepseek-v4-flash
+    roles:
+    - context_collector
+    priority: 100
+    metadata:
+      complexity: simple
+      provider: deepseek
   roles:
     architect:
       reasoning: max
@@ -137,8 +125,6 @@ codex:
       stall_timeout_seconds: 300
       hard_timeout_seconds: 300
       max_auto_resume_attempts: 1
-
-# ── Verification Profiles ────────────────────────────────────────────────
 verification:
   backend_profiles:
     backend_quick: pytest tests/ -q --tb=short
@@ -148,6 +134,6 @@ verification:
   observability_profiles:
     grace_smoke: python3 scripts/verify_all.sh
   default_artifact_globs:
-    - test-results/**/*
-    - artifacts/**/*
-    - EVIDENCE/**/*
+  - test-results/**/*
+  - artifacts/**/*
+  - EVIDENCE/**/*
