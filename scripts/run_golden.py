@@ -48,7 +48,8 @@ def main():
             os.makedirs(f"{state_root}/worktrees", exist_ok=True)
         api_env = {**os.environ, "GRACE_DB_URL": db_url, "GRACE_AGENT_TIMEOUT": "1200",
                    "GRACE_CONTEXT_DISABLED": "true", "PYTHONDONTWRITEBYTECODE": "1",
-                   "GRACE_ALLOW_DIRTY_TARGET_MERGE": "true"}
+                   "GRACE_ALLOW_DIRTY_TARGET_MERGE": "true",
+                   "GRACE_RECOVERY_CONTROLLER_ENABLED": "true"}
         api_proc = subprocess.Popen(
             [sys.executable, "scripts/run_api.py"],
             env=api_env,
@@ -113,6 +114,7 @@ def main():
         "GRACE_WORKTREE_ROOT": f"{state_root}/worktrees",
         "GRACE_BASE_REF": os.environ.get("GRACE_BASE_REF", "main"),
         "GRACE_ALLOW_SANDBOX_BYPASS": "true",
+        "GRACE_RECOVERY_CONTROLLER_ENABLED": "true",
     }
     worker = subprocess.Popen(
         [sys.executable, "-c", f"""
