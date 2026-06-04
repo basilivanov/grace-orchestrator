@@ -10,6 +10,7 @@ Per TZ-017: Feature Recovery / Escalation Policy.
 | 3 | `phase-3-recovery-controller.md` | Live RecoveryController + API + worker integration | ⬜ Next |
 | 4 | `phase-4-session-resume-stubs.md` | Session resume data models + stubs | ⬜ After Phase 3 |
 | 5 | `phase-5-admin-event-integration.md` | Admin dashboard recovery display + event stream | ⬜ After Phase 3 |
+| 6 | `phase-6-routing-wrapper.md` | Thin routing metadata wrapper (no YAML engine) | ⬜ Last |
 
 ## File map
 
