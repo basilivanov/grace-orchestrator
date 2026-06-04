@@ -27,6 +27,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import subprocess
+import sys
 import time
 import uuid
 from datetime import datetime
@@ -208,6 +210,44 @@ async def _run_evolution(session_id: str, title: str, description: str, constrai
         await broadcast_event("self_evolution_update", {"session_id": session_id, "status": "executing",
             "feature_id": feature_id})
 
+        # ── Spawn worker subprocess if none are running ──
+        worker_proc = None
+        try:
+            from grace_control.db import get_db as _gdb2
+            from grace_control.db.schema import Worker as _Wkr
+            with _gdb2() as db:
+                active = db.query(_Wkr).filter_by(status="active").count()
+            if active == 0:
+                db_url = os.environ.get("GRACE_DB_URL", "")
+                state_root = os.environ.get("GRACE_STATE_ROOT", "/tmp/grace-eval")
+                worker_env = {**os.environ,
+                    "PYTHONDONTWRITEBYTECODE": "1",
+                    "PYTHONPATH": f"{Path.cwd()}/src",
+                    "GRACE_DB_URL": db_url,
+                    "GRACE_TARGET_REPO_ROOT": str(Path.cwd()),
+                    "GRACE_STATE_ROOT": state_root,
+                    "GRACE_WORKTREE_ROOT": f"{state_root}/worktrees",
+                    "GRACE_ALLOW_SANDBOX_BYPASS": "true",
+                }
+                ctrl_root = str(Path.cwd())
+                worker_proc = subprocess.Popen(
+                    [sys.executable, "-c", f"""
+import os, sys, asyncio
+sys.path.insert(0, "{ctrl_root}/src")
+os.environ["GRACE_ALLOW_SANDBOX_BYPASS"] = "true"
+from grace_control.db import init_db
+from grace_control.worker.worker import Worker
+init_db()
+w = Worker(worker_id="self-w0", api_url="http://localhost:8042")
+async def m(): await w.start()
+asyncio.run(m())
+"""],
+                    env=worker_env,
+                )
+                _log.info("evolution_worker_spawned", session_id=session_id, pid=worker_proc.pid)
+        except Exception as e:
+            _log.warn("evolution_worker_spawn_failed", session_id=session_id, error=str(e)[:200])
+
         # ── Wait for execution completion ──
         packet_ids = result["data"].get("packets", [])
         terminal_states = frozenset(("merged", "failed", "rejected", "blocked", "cancelled"))
@@ -254,6 +294,17 @@ async def _run_evolution(session_id: str, title: str, description: str, constrai
             _log.warn("evolution_completed_with_failures", session_id=session_id,
                 states={pid: s for pid, s in states.items() if s != "merged"})
             await broadcast_event("self_evolution_update", {"session_id": session_id, "status": "executed"})
+
+        # ── Clean up worker subprocess ──
+        if worker_proc:
+            try:
+                worker_proc.terminate()
+                worker_proc.wait(timeout=5)
+            except Exception:
+                try:
+                    worker_proc.kill()
+                except Exception:
+                    pass
 
     except Exception as e:
         with get_db() as db:
