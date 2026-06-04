@@ -137,7 +137,9 @@ async def run_evidence_verifier(
     full_prompt = f"{prompt_template}\n\n## Context\n\n" + "\n".join(prompt_parts)
 
     try:
-        raw = await run_llm(full_prompt, role="verifier", model="gemini-3.5-flash", cli="agy")
+        from grace_control.core.executor_selector import resolve_model
+        executor = resolve_model("verifier")
+        raw = await run_llm(full_prompt, role="verifier", model=executor["model"], cli=executor["command"])
         return parse_evidence_verifier_json(raw)
     except Exception as e:
         return skipped_evidence_report(f"evidence verifier error: {e}")

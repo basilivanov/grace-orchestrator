@@ -348,6 +348,17 @@ async def merge_packet(packet_id: str, request: dict) -> dict:
         _state_machine.transition(current, PacketState.MERGED)
         packet.state = PacketState.MERGED.value
 
+        # Push to origin so self-evolution / golden test merges are not lost
+        try:
+            pr = _sp.run(["git", "push", "origin", "main"],
+                         cwd=str(repo), capture_output=True, text=True, timeout=30)
+            if pr.returncode != 0:
+                _log.warn("merge_push_failed", packet_id=packet.id, stderr=pr.stderr[:200])
+            else:
+                _log.debug("merge_pushed", packet_id=packet.id)
+        except Exception as e:
+            _log.warn("merge_push_failed", packet_id=packet.id, error=str(e)[:200])
+
         # Clean up worktree (prefer git worktree remove over shutil.rmtree)
         if worktree_path:
             try:
