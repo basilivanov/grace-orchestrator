@@ -321,11 +321,12 @@ def decide_recovery(signal: FailureSignal, policy: RecoveryPolicy | None = None)
 
 def _next_executor_hint(signal: FailureSignal) -> str:
     prev = set(signal.previous_executor_ids)
-    ladder = ["coder-agy-sonnet", "coder-agy-flash", "coder-gemini-flash", "coder-deepseek-flash"]
-    for choice in ladder:
-        if choice not in prev:
-            return choice
-    return "coder-agy-sonnet"
+    from grace_control.core.executor_selector import get_escalation
+    for executor in get_escalation("coder"):
+        eid = executor.get("executor_id", "")
+        if eid and eid not in prev:
+            return eid
+    return "coder-deepseek-flash"
 
 
 # ── Phase 4: Session Resume Stubs ──────────────────────────────────────

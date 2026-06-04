@@ -66,13 +66,14 @@ codex:
         complexity: simple
         provider: google
 
-    # ── Coder #3: agy medium (sonnet) ────────────────────────────────────
-    - executor_id: coder-agy-sonnet
-      kind: agy
-      command: agy
-      model: claude-sonnet-4-6
+    # ── Coder #4: opencode premium (sonnet) ──────────────────────────────
+    - executor_id: coder-sonnet
+      kind: opencode
+      command: opencode
+      model: cliproxy/claude-sonnet-4-6
       roles: [coder]
       priority: 50
+      reasoning: max
       metadata:
         complexity: medium
         provider: anthropic

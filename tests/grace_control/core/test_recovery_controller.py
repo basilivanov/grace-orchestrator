@@ -76,7 +76,7 @@ def test_build_signal_counts_previous_attempts():
     runs = [
         MockRun("rejected", 3, {"executor_id": "coder-flash", "domain_status": "rejected"}),
         MockRun("failed", 2, {"executor_id": "coder-flash", "domain_status": "rejected"}),
-        MockRun("rejected", 1, {"executor_id": "coder-agy-sonnet", "domain_status": "rejected"}),
+        MockRun("rejected", 1, {"executor_id": "coder-sonnet", "domain_status": "rejected"}),
     ]
 
     with patch("grace_control.db.get_db") as mock_db:
@@ -205,7 +205,7 @@ def test_apply_switch_coder_stores_requested_executor():
         action=RecoveryAction.SWITCH_CODER,
         failure_class=FailureClass.RETRYABLE_CODER,
         reason="switch",
-        next_executor_hint="coder-agy-sonnet",
+        next_executor_hint="coder-sonnet",
     )
 
     with patch("grace_control.db.get_db") as mock_db:
@@ -218,7 +218,7 @@ def test_apply_switch_coder_stores_requested_executor():
 
         ctrl._apply_switch_coder("pkt_test", decision)
 
-    assert mock_packet.spec_json.get("recovery", {}).get("requested_executor_id") == "coder-agy-sonnet"
+    assert mock_packet.spec_json.get("recovery", {}).get("requested_executor_id") == "coder-sonnet"
 
 
 def test_apply_return_architect_sets_BLOCKED():
