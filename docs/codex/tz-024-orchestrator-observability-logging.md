@@ -169,7 +169,33 @@ _log.info("execution_rejected",
 )
 ```
 
-### 2.7 `trace_id` propagation
+### 2.8 `packets.py` — merge endpoint logging
+
+Уже есть (дополнить причиной):
+
+```python
+# _log.info("packet_merged") + record_event("packet_merged") — уже есть
+# Добавить: reason propagation при merge_failed
+
+_log.info("merge_failed",
+    packet_id=packet.id,
+    branch=branch_name,
+    worktree=worktree_path,
+    stderr=merge_stderr[:500],
+    target_repo=str(repo),
+    dirty_repo=(not allow_dirty),
+)
+```
+
+И при git push failure (я добавил `git push` в packets.py):
+
+```python
+_log.warn("merge_push_failed",
+    packet_id=packet.id,
+    stderr=pr.stderr[:200],
+    target_repo=str(repo),
+)
+```
 
 Добавить в `_maybe_apply_recovery`:
 
