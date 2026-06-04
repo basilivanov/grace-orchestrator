@@ -93,3 +93,19 @@ def test_recovery_rule_default_on_verdict():
     )
     assert rule.on_verdict["REWORK_TO_CODER"] == RouteAction.SWITCH_CODER.value
     assert rule.on_verdict["RETURN_TO_ARCHITECT"] == RouteAction.ARCHITECT_REPACK.value
+
+
+def test_architect_context_model_creation():
+    ctx = ArchitectContext(
+        original_spec={"scope": "src/"},
+        attempts=[{"run_number": 1, "status": "rejected"}],
+        acceptance_reports=[{"final_verdict": "rework_required"}],
+        verifier_reports=[{"verdict": "INVALID"}],
+        executor_ids=["coder-flash"],
+        changed_files=["src/main.py"],
+        summary="1 attempt, 1 coder",
+    )
+    assert ctx.original_spec["scope"] == "src/"
+    assert len(ctx.attempts) == 1
+    assert ctx.summary == "1 attempt, 1 coder"
+    assert "coder-flash" in ctx.executor_ids
