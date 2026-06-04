@@ -140,16 +140,19 @@ def test_build_signal_corrupted_result_json(db):
     assert signal.evidence_verifier_verdict == ""
 
 
-async def test_evaluate_crash_is_safe(db, mocker):
+async def test_evaluate_crash_is_safe(db, monkeypatch):
     """build_signal crash → evaluate handles gracefully."""
     from grace_control.core.recovery_controller import RecoveryController
 
     ctrl = RecoveryController()
-    mocker.patch.object(ctrl, "build_signal", side_effect=RuntimeError("simulated crash"))
+
+    def _crash(*a, **kw):
+        raise RuntimeError("simulated crash")
+
+    monkeypatch.setattr(ctrl, "build_signal", _crash)
 
     try:
         decision = await ctrl.evaluate("nonexistent", allow_apply=False)
-        # If it returns a fallback decision, assert NO_ACTION or similar
         assert decision is not None
     except Exception:
         pass
