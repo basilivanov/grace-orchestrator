@@ -62,10 +62,7 @@ codex:
       model: gemini-3.5-flash
       roles: [coder]
       priority: 50
-      reasoning: max
-      metadata:
-        complexity: medium
-        provider: anthropic
+      provider: google
 
     # ── Coder #4: opencode premium (sonnet) ──────────────────────────────
     - executor_id: coder-sonnet
