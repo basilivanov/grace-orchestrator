@@ -13,7 +13,7 @@ runs:
     acceptance_report:
       final_verdict: rejected
       summary: reviewer return to architect
+    reviewer_verdict: RETURN_TO_ARCHITECT
 expected:
-  reviewer_verdict: RETURN_TO_ARCHITECT
   recovery_action: return_to_architect
   recovery_failure_class: architect_repack_needed
