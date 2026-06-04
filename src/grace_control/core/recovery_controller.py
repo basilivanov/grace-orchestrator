@@ -205,7 +205,7 @@ class RecoveryController:
             sm.transition(PacketState(packet.state), PacketState.READY)
             packet.state = PacketState.READY.value
 
-            spec = packet.spec_json or {}
+            spec = dict(packet.spec_json or {})
             spec["recovery"] = {"requested_executor_id": decision.next_executor_hint}
             packet.spec_json = spec
             db.flush()
@@ -222,7 +222,7 @@ class RecoveryController:
             sm.transition(PacketState(packet.state), PacketState.BLOCKED)
             packet.state = PacketState.BLOCKED.value
 
-            spec = packet.spec_json or {}
+            spec = dict(packet.spec_json or {})
             spec["architect_repair"] = {
                 "reason": decision.reason,
                 "failure_class": decision.failure_class.value,
@@ -245,7 +245,7 @@ class RecoveryController:
 
             feature = db.query(Feature).filter_by(id=packet.feature_id).first()
             if feature:
-                spec = packet.spec_json or {}
+                spec = dict(packet.spec_json or {})
                 spec["recovery"] = {"blocked_reason": decision.reason}
                 packet.spec_json = spec
             db.flush()
@@ -258,7 +258,7 @@ class RecoveryController:
             packet = db.query(Packet).filter_by(id=packet_id).first()
             if not packet:
                 return
-            spec = packet.spec_json or {}
+            spec = dict(packet.spec_json or {})
             spec["recovery"] = {"retry_verifier": True}
             packet.spec_json = spec
             db.flush()
@@ -271,7 +271,7 @@ class RecoveryController:
             packet = db.query(Packet).filter_by(id=packet_id).first()
             if not packet:
                 return
-            spec = packet.spec_json or {}
+            spec = dict(packet.spec_json or {})
             spec["recovery"] = {"retry_reviewer": True}
             packet.spec_json = spec
             db.flush()

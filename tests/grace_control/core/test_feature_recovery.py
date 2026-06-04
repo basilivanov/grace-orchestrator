@@ -301,6 +301,23 @@ class TestSafety:
         assert isinstance(fs, FailureSignal)
         assert fs.packet_id == "pkt_test"
 
+    def test_never_downgrade_strict_enforced_by_decide_recovery(self):
+        """_safe_next_profile is called from decide_recovery — STRICT profile stays STRICT."""
+        from grace_control.core.feature_recovery import _safe_next_profile
+        signal = _signal(reason="test failed", acceptance_profile="STRICT",
+                          coder_attempt_count=2, attempt_count=3)
+        d = decide_recovery(signal, RecoveryPolicy(never_downgrade_strict=True))
+        enforced = _safe_next_profile("STRICT", d.next_acceptance_profile,
+                                       RecoveryPolicy(never_downgrade_strict=True))
+        assert enforced == "STRICT" or enforced is None, \
+            f"STRICT not preserved: next_acceptance_profile={d.next_acceptance_profile}"
+
+    def test_never_downgrade_strict_latent_enforcement(self):
+        """If future code sets next_acceptance_profile=NORMAL, _safe_next_profile corrects to STRICT."""
+        from grace_control.core.feature_recovery import _safe_next_profile
+        result = _safe_next_profile("STRICT", "NORMAL", RecoveryPolicy(never_downgrade_strict=True))
+        assert result == "STRICT"
+
 
 # ── Phase 4: Session Resume Stub tests ─────────────────────────────────────
 

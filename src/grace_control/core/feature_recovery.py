@@ -173,7 +173,7 @@ def decide_recovery(signal: FailureSignal, policy: RecoveryPolicy) -> RecoveryDe
 
     # ── TRUE_BLOCKER ────────────────────────────────────────────────
     if fc == FailureClass.TRUE_BLOCKER:
-        return RecoveryDecision(
+        decision = RecoveryDecision(
             action=RecoveryAction.BLOCK_FEATURE,
             failure_class=fc,
             reason=signal.reason or "true blocker",
@@ -181,110 +181,123 @@ def decide_recovery(signal: FailureSignal, policy: RecoveryPolicy) -> RecoveryDe
         )
 
     # ── ARCHITECT_ESCALATION_NEEDED ─────────────────────────────────
-    if fc == FailureClass.ARCHITECT_ESCALATION_NEEDED:
-        return RecoveryDecision(
+    elif fc == FailureClass.ARCHITECT_ESCALATION_NEEDED:
+        decision = RecoveryDecision(
             action=RecoveryAction.ESCALATE_ARCHITECT,
             failure_class=fc,
             reason=signal.reason or "repeated unknown failure",
         )
 
     # ── ARCHITECT_REPACK_NEEDED ─────────────────────────────────────
-    if fc == FailureClass.ARCHITECT_REPACK_NEEDED:
+    elif fc == FailureClass.ARCHITECT_REPACK_NEEDED:
         if signal.architect_repair_count >= policy.max_architect_repairs:
-            return RecoveryDecision(
+            decision = RecoveryDecision(
                 action=RecoveryAction.ESCALATE_ARCHITECT,
                 failure_class=FailureClass.ARCHITECT_ESCALATION_NEEDED,
                 reason=f"architect repair repeated {signal.architect_repair_count}x, escalating",
                 max_attempts_reached=True,
             )
-        return RecoveryDecision(
-            action=RecoveryAction.RETURN_TO_ARCHITECT,
-            failure_class=fc,
-            reason=signal.reason or "architect repack needed",
-            architect_instruction=f"Packet {signal.packet_id} failed: {signal.reason}",
-        )
+        else:
+            decision = RecoveryDecision(
+                action=RecoveryAction.RETURN_TO_ARCHITECT,
+                failure_class=fc,
+                reason=signal.reason or "architect repack needed",
+                architect_instruction=f"Packet {signal.packet_id} failed: {signal.reason}",
+            )
 
     # ── Coder ladders ──────────────────────────────────────────────
-    if fc == FailureClass.RETRYABLE_CODER:
+    elif fc == FailureClass.RETRYABLE_CODER:
         if signal.coder_attempt_count >= policy.max_total_coder_attempts:
-            return RecoveryDecision(
+            decision = RecoveryDecision(
                 action=RecoveryAction.RETURN_TO_ARCHITECT,
                 failure_class=FailureClass.ARCHITECT_REPACK_NEEDED,
                 reason=f"coder failed {signal.coder_attempt_count}x, returning to architect",
                 max_attempts_reached=True,
             )
-        if signal.coder_attempt_count >= policy.max_same_coder_attempts:
+        elif signal.coder_attempt_count >= policy.max_same_coder_attempts:
             if policy.allow_model_switch:
-                return RecoveryDecision(
+                decision = RecoveryDecision(
                     action=RecoveryAction.SWITCH_CODER,
                     failure_class=fc,
                     reason=f"coder failed {signal.coder_attempt_count}x, switching model",
                     next_executor_hint=_next_executor_hint(signal),
                 )
-            return RecoveryDecision(
+            else:
+                decision = RecoveryDecision(
+                    action=RecoveryAction.RETRY_SAME_CODER,
+                    failure_class=fc,
+                    reason=f"coder failed {signal.coder_attempt_count}x, model switch disabled, retrying same",
+                    next_executor_hint=signal.current_executor_id,
+                )
+        else:
+            decision = RecoveryDecision(
                 action=RecoveryAction.RETRY_SAME_CODER,
                 failure_class=fc,
-                reason=f"coder failed {signal.coder_attempt_count}x, model switch disabled, retrying same",
+                reason=f"coder failed (attempt {signal.coder_attempt_count + 1}), retrying same",
                 next_executor_hint=signal.current_executor_id,
             )
-        return RecoveryDecision(
-            action=RecoveryAction.RETRY_SAME_CODER,
-            failure_class=fc,
-            reason=f"coder failed (attempt {signal.coder_attempt_count + 1}), retrying same",
-            next_executor_hint=signal.current_executor_id,
-        )
 
     # ── Verifier ladders ────────────────────────────────────────────
-    if fc == FailureClass.RETRYABLE_VERIFIER:
+    elif fc == FailureClass.RETRYABLE_VERIFIER:
         if signal.verifier_reject_count >= policy.max_verifier_retries:
-            return RecoveryDecision(
+            decision = RecoveryDecision(
                 action=RecoveryAction.ESCALATE_ARCHITECT,
                 failure_class=FailureClass.ARCHITECT_ESCALATION_NEEDED,
                 reason=f"verifier failed {signal.verifier_reject_count}x, escalating",
                 max_attempts_reached=True,
             )
-        return RecoveryDecision(
-            action=RecoveryAction.RETRY_VERIFIER,
-            failure_class=fc,
-            reason=f"verifier retry #{signal.verifier_reject_count + 1}",
-        )
+        else:
+            decision = RecoveryDecision(
+                action=RecoveryAction.RETRY_VERIFIER,
+                failure_class=fc,
+                reason=f"verifier retry #{signal.verifier_reject_count + 1}",
+            )
 
     # ── Reviewer ladders ────────────────────────────────────────────
-    if fc == FailureClass.RETRYABLE_REVIEWER:
+    elif fc == FailureClass.RETRYABLE_REVIEWER:
         if signal.reviewer_reject_count >= policy.max_reviewer_retries:
-            return RecoveryDecision(
+            decision = RecoveryDecision(
                 action=RecoveryAction.ESCALATE_ARCHITECT,
                 failure_class=FailureClass.ARCHITECT_ESCALATION_NEEDED,
                 reason=f"reviewer failed {signal.reviewer_reject_count}x, escalating",
                 max_attempts_reached=True,
             )
-        return RecoveryDecision(
-            action=RecoveryAction.RETRY_REVIEWER,
-            failure_class=fc,
-            reason=f"reviewer retry #{signal.reviewer_reject_count + 1}",
-        )
+        else:
+            decision = RecoveryDecision(
+                action=RecoveryAction.RETRY_REVIEWER,
+                failure_class=fc,
+                reason=f"reviewer retry #{signal.reviewer_reject_count + 1}",
+            )
 
     # ── Merge ladders ───────────────────────────────────────────────
-    if fc == FailureClass.MERGE_RETRYABLE:
+    elif fc == FailureClass.MERGE_RETRYABLE:
         if signal.merge_attempt_count >= policy.max_merge_retries:
-            return RecoveryDecision(
+            decision = RecoveryDecision(
                 action=RecoveryAction.BLOCK_FEATURE,
                 failure_class=FailureClass.TRUE_BLOCKER,
                 reason=f"merge failed {signal.merge_attempt_count}x, blocking",
                 max_attempts_reached=True,
             )
-        return RecoveryDecision(
-            action=RecoveryAction.RETRY_MERGE,
-            failure_class=fc,
-            reason=f"merge retry #{signal.merge_attempt_count + 1}",
-        )
+        else:
+            decision = RecoveryDecision(
+                action=RecoveryAction.RETRY_MERGE,
+                failure_class=fc,
+                reason=f"merge retry #{signal.merge_attempt_count + 1}",
+            )
 
     # ── UNKNOWN_RETRYABLE ──────────────────────────────────────────
-    return RecoveryDecision(
-        action=RecoveryAction.RETRY_SAME_CODER,
-        failure_class=fc,
-        reason=f"unknown failure, retrying (attempt {signal.attempt_count + 1})",
+    else:
+        decision = RecoveryDecision(
+            action=RecoveryAction.RETRY_SAME_CODER,
+            failure_class=fc,
+            reason=f"unknown failure, retrying (attempt {signal.attempt_count + 1})",
+        )
+
+    # ── Post-process: enforce never_downgrade_strict ────────────────
+    decision.next_acceptance_profile = _safe_next_profile(
+        signal.acceptance_profile, decision.next_acceptance_profile, policy
     )
+    return decision
 
 
 def _next_executor_hint(signal: FailureSignal) -> str:
