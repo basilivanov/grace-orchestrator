@@ -1,691 +1,669 @@
-# TZ 017 — Feature Recovery / Escalation Policy for reliable feature delivery
+# TZ 017 — Feature Recovery / Escalation Policy
 
 Audience: Flash coder / literal executor.
 
-Status: **DO NOT IMPLEMENT UNTIL CURRENT GOLDEN SERIES IS STABLE.**
+Status: **single source of truth for recovery**.
 
-Goal: add a deterministic recovery/escalation layer so a feature keeps moving toward DONE when packets fail, instead of getting stuck after one failed model/agent attempt. This must preserve all safety gates: no bypassing scope guard, deterministic acceptance, STRICT reviewer, dirty merge checks, or true blockers.
+Goal: make feature delivery resilient: retry or reroute retryable failures, switch weak executors when needed, return impossible packets to architect, and stop only on true blockers. This must preserve all safety gates: scope guard, deterministic acceptance, STRICT reviewer, dirty merge checks, and merge conflict safety.
 
-This is a full-scope specification for later implementation. For now, only keep it in `docs/codex/` and do not wire it into live runs until FAST/NORMAL/STRICT golden tests are green.
-
----
-
-## 0. Product intent
-
-We want the system to be persistent and resilient:
-
-```text
-feature should keep moving while failures are retryable
-feature should stop only when there is a true blocker
-```
-
-Examples of retryable failures:
-
-```text
-coder missed part of TZ
-unit tests failed
-acceptance failed
-verifier found missing evidence
-reviewer rejected implementation
-LLM returned invalid JSON
-timeout/stall happened
-selected model is weak for this packet
-architect made packet too large
-architect made scope/verification slightly wrong
-```
-
-Examples of true blockers:
-
-```text
-missing credentials / missing CLI / missing repo access
-user decision required
-TZ contradicts itself and cannot be safely inferred
-requested change requires unsafe/destructive action
-merge conflict cannot be resolved deterministically
-scope is impossible without expanding allowed scope
-security/payment/auth/data-loss risk requires explicit approval
-```
-
-Failure is not automatically a blocker. A blocker is a classified terminal condition.
+Important: this spec must follow the current implementation. Do not replace working recovery policy code with a new broad rules engine.
 
 ---
 
-## 1. High-level design
+## 0. Current implementation baseline
 
-Add a recovery policy layer that sits above packet attempts and below feature orchestration.
-
-Suggested module:
+Assume Phase 1 is already implemented or being reviewed:
 
 ```text
 src/grace_control/core/feature_recovery.py
+FailureClass
+RecoveryAction
+FailureSignal
+RecoveryDecision
+RecoveryPolicy
+classify_failure(...)
+decide_recovery(...)
+_next_executor_hint(...)
+build_failure_signal_from_fixture(...)
 ```
 
-It should not call LLMs directly in the first implementation. It should be deterministic and testable.
-
-Input:
+Reported baseline:
 
 ```text
-feature_id
-packet_id
-packet state/result
-attempt history
-failure reason/category
-acceptance profile
-executor history
-architect repair history
-configured policy limits
+25 recovery policy tests pass
+14 recovery fixture YAMLs exist/work
 ```
 
-Output:
-
-```text
-next action:
-  retry same coder
-  switch coder/model
-  return to architect for repack
-  escalate architect/reviewer critique
-  retry verifier
-  retry reviewer
-  retry merge
-  block feature
-  mark done/no action
-```
-
-Normal worker/API should remain simple. Recovery policy should decide *what to schedule next*, not bypass gates.
+Therefore future work must extend this implementation, not recreate conflicting abstractions.
 
 ---
 
-## 2. Non-goals / safety rules
+## 1. Phase map
+
+Use these phases:
+
+```text
+Phase 1 — deterministic policy core            DONE / current baseline
+Phase 2 — recovery fixture YAMLs               DONE or required baseline
+Phase 3 — live RecoveryController wiring       next implementation phase
+Phase 4 — session resume context stubs         scaffold only, no live LLM wiring
+Phase 5 — admin/event observability            reads recovery data/events
+Phase 6 — optional routing policy wrapper      future, thin wrapper only
+```
+
+Do not implement Phase 6 before Phase 3/4 are stable.
+
+---
+
+## 2. Non-goals and safety rules
 
 Do not bypass scope guard.
 Do not bypass deterministic acceptance.
 Do not bypass reviewer for STRICT packets.
 Do not force-merge on dirty target repo.
-Do not mutate packet state manually without audit.
-Do not silently expand packet scope.
-Do not silently rewrite user TZ.
-Do not treat security/auth/billing/data-loss issues as retryable implementation failures.
+Do not auto-resolve merge conflicts.
+Do not lower STRICT to NORMAL/FAST.
 Do not let recovery loops run forever.
-Do not call expensive premium models before cheaper deterministic checks have failed.
-
-The policy can retry/escalate work, but cannot lower safety.
+Do not add a second competing recovery/routing engine.
+Do not replace `classify_failure` / `decide_recovery` with YAML logic.
 
 ---
 
-## 3. Core data models
+## 3. Existing policy core remains authoritative
 
-Create in:
+The following functions remain the core API:
+
+```python
+def classify_failure(signal: FailureSignal) -> FailureClass: ...
+def decide_recovery(signal: FailureSignal, policy: RecoveryPolicy | None = None) -> RecoveryDecision: ...
+```
+
+Any future routing/config layer must call these or wrap them. It must not fork separate semantics.
+
+Valid extension pattern:
 
 ```text
-src/grace_control/core/feature_recovery.py
+FailureSignal
+→ classify_failure(...)
+→ decide_recovery(...)
+→ optional route metadata decoration
+→ RecoveryDecision / RouteDecision for controller/UI
 ```
 
-### 3.1 FailureClass
+Invalid extension pattern:
 
-```python
-class FailureClass(str, Enum):
-    RETRYABLE_CODER = "retryable_coder"
-    RETRYABLE_VERIFIER = "retryable_verifier"
-    RETRYABLE_REVIEWER = "retryable_reviewer"
-    ARCHITECT_REPACK_NEEDED = "architect_repack_needed"
-    ARCHITECT_ESCALATION_NEEDED = "architect_escalation_needed"
-    MERGE_RETRYABLE = "merge_retryable"
-    TRUE_BLOCKER = "true_blocker"
-    UNKNOWN_RETRYABLE = "unknown_retryable"
-```
-
-### 3.2 RecoveryAction
-
-```python
-class RecoveryAction(str, Enum):
-    RETRY_SAME_CODER = "retry_same_coder"
-    SWITCH_CODER = "switch_coder"
-    RETURN_TO_ARCHITECT = "return_to_architect"
-    ESCALATE_ARCHITECT = "escalate_architect"
-    RETRY_VERIFIER = "retry_verifier"
-    RETRY_REVIEWER = "retry_reviewer"
-    RETRY_MERGE = "retry_merge"
-    BLOCK_FEATURE = "block_feature"
-    NO_ACTION = "no_action"
-```
-
-### 3.3 RecoveryDecision
-
-```python
-class RecoveryDecision(BaseModel):
-    action: RecoveryAction
-    failure_class: FailureClass
-    reason: str
-    next_executor_hint: str | None = None
-    next_acceptance_profile: str | None = None
-    architect_instruction: str | None = None
-    reviewer_instruction: str | None = None
-    max_attempts_reached: bool = False
-    audit_payload: dict[str, Any] = Field(default_factory=dict)
-```
-
-### 3.4 FailureSignal
-
-```python
-class FailureSignal(BaseModel):
-    feature_id: str
-    packet_id: str
-    packet_state: str
-    domain_status: str | None = None
-    reason: str | None = None
-    acceptance_verdict: str | None = None
-    evidence_verifier_verdict: str | None = None
-    reviewer_verdict: str | None = None
-    merge_error: str | None = None
-    blocked_reason: str | None = None
-    acceptance_profile: str | None = None
-    attempt_count: int = 0
-    coder_attempt_count: int = 0
-    architect_repair_count: int = 0
-    reviewer_reject_count: int = 0
-    verifier_reject_count: int = 0
-    merge_attempt_count: int = 0
-    current_executor_id: str | None = None
-    previous_executor_ids: list[str] = Field(default_factory=list)
-    changed_files: list[str] = Field(default_factory=list)
-```
-
-### 3.5 RecoveryPolicy
-
-```python
-class RecoveryPolicy(BaseModel):
-    max_same_coder_attempts: int = 2
-    max_total_coder_attempts: int = 4
-    max_architect_repairs: int = 2
-    max_reviewer_retries: int = 2
-    max_verifier_retries: int = 2
-    max_merge_retries: int = 2
-    allow_profile_escalation: bool = True
-    allow_model_switch: bool = True
+```text
+FailureSignal
+→ unrelated YAML rules engine
+→ different action semantics
 ```
 
 ---
 
-## 4. Failure classification rules
+## 4. RecoveryPolicy is the only threshold source
 
-Add function:
+Retry/escalation limits must live in `RecoveryPolicy`.
 
-```python
-def classify_failure(signal: FailureSignal) -> FailureClass:
-    ...
-```
-
-### 4.1 Deterministic acceptance failures
-
-If acceptance failed because tests failed, command failed, pycompile failed, evidence missing, no changes produced, or T1/T2 failed:
+Default fields:
 
 ```text
-FailureClass.RETRYABLE_CODER
+max_same_coder_attempts = 2
+max_total_coder_attempts = 4
+max_architect_repairs = 2
+max_verifier_retries = 2
+max_reviewer_retries = 2
+max_merge_retries = 2
+allow_profile_escalation = true
+allow_model_switch = true
+never_downgrade_strict = true
 ```
 
-Unless reason contains impossible scope / forbidden scope / contradictory packet.
+Do not introduce duplicate stop guards such as separate `max_same_failure_class_repeats` or `max_total_recovery_steps` unless they are explicitly added to `RecoveryPolicy` and tested there.
 
-### 4.2 Scope violations
+If a future config file exists, it must hydrate `RecoveryPolicy`, not bypass it.
 
-Scope violations are usually coder retryable if the packet scope is correct and coder wrote outside it:
+Optional future config shape:
 
-```text
-scope violation: wrote docs/extra.md outside allowed scope
-→ RETRYABLE_CODER
+```yaml
+recovery:
+  enabled: false
+  policy:
+    max_same_coder_attempts: 2
+    max_total_coder_attempts: 4
+    max_architect_repairs: 2
+    max_verifier_retries: 2
+    max_reviewer_retries: 2
+    max_merge_retries: 2
+    never_downgrade_strict: true
 ```
 
-But if verifier/reviewer says the requested implementation cannot be done within scope:
+---
+
+## 5. Classification semantics
+
+Keep existing semantics from Phase 1.
+
+Required examples:
 
 ```text
+T1/T2 failed                         → RETRYABLE_CODER
+no_changes_produced                  → RETRYABLE_CODER
+coder wrote outside allowed scope     → RETRYABLE_CODER
+packet impossible within scope        → ARCHITECT_REPACK_NEEDED
+verifier REWORK_TO_CODER              → RETRYABLE_CODER
+verifier RETURN_TO_ARCHITECT          → ARCHITECT_REPACK_NEEDED
+reviewer REWORK_TO_CODER              → RETRYABLE_CODER
+reviewer RETURN_TO_ARCHITECT          → ARCHITECT_REPACK_NEEDED
+verifier/reviewer invalid JSON        → RETRYABLE_VERIFIER / RETRYABLE_REVIEWER
+dirty target repo                     → TRUE_BLOCKER
+merge conflict                        → TRUE_BLOCKER
+transient merge/API error             → MERGE_RETRYABLE
+missing CLI/API key/auth              → TRUE_BLOCKER
+unknown first failure                 → UNKNOWN_RETRYABLE
+repeated unknown failure              → ESCALATE_OR_BLOCK via policy
+```
+
+---
+
+## 6. Decision semantics
+
+Keep existing `RecoveryAction` semantics:
+
+```text
+RETRY_SAME_CODER
+SWITCH_CODER
 RETURN_TO_ARCHITECT
-scope impossible without editing API file
-→ ARCHITECT_REPACK_NEEDED
-```
-
-### 4.3 Evidence Verifier decisions
-
-```text
-PASS → NO_ACTION
-REWORK_TO_CODER → RETRYABLE_CODER
-RETURN_TO_ARCHITECT → ARCHITECT_REPACK_NEEDED
-invalid JSON / parser fail → RETRYABLE_VERIFIER, then switch verifier if repeated
-```
-
-### 4.4 Reviewer decisions
-
-```text
-PASS → NO_ACTION
-REWORK_TO_CODER → RETRYABLE_CODER
-RETURN_TO_ARCHITECT → ARCHITECT_REPACK_NEEDED
-invalid JSON / parser fail → RETRYABLE_REVIEWER, then switch reviewer if repeated
-```
-
-### 4.5 Merge failures
-
-```text
-DIRTY_TARGET_REPO → TRUE_BLOCKER or MERGE_RETRYABLE depending source
-merge conflict → TRUE_BLOCKER unless explicit auto-resolve strategy exists
-branch missing → MERGE_RETRYABLE first, then TRUE_BLOCKER
-worktree missing → MERGE_RETRYABLE in golden-debug only, TRUE_BLOCKER in normal mode
-```
-
-Default:
-
-```text
-merge endpoint 409 due dirty target repo → TRUE_BLOCKER
-merge endpoint transient network/API error → MERGE_RETRYABLE
-```
-
-### 4.6 Infrastructure/auth/access failures
-
-```text
-missing CLI binary
-missing API key
-auth failed
-quota exceeded
-rate limit exceeded
-repository inaccessible
-permission denied
-```
-
-Classification:
-
-```text
-TRUE_BLOCKER
-```
-
-Exception:
-
-```text
-single transient timeout/stall → retry same/switch executor based on counts
-```
-
-### 4.7 Unknown failures
-
-Unknown failures should be retryable once, then escalated.
-
-```text
-first unknown → UNKNOWN_RETRYABLE
-repeated unknown → ARCHITECT_ESCALATION_NEEDED or TRUE_BLOCKER based on safety
-```
-
----
-
-## 5. Recovery decision rules
-
-Add function:
-
-```python
-def decide_recovery(signal: FailureSignal, policy: RecoveryPolicy) -> RecoveryDecision:
-    ...
-```
-
-### 5.1 Coder retry ladder
-
-```text
-coder failure #1:
-  RETRY_SAME_CODER
-  include failure summary and acceptance report in next prompt
-
-coder failure #2:
-  RETRY_SAME_CODER or SWITCH_CODER depending same executor failure count
-
-coder failure #3:
-  SWITCH_CODER to stronger/different provider
-
-coder failure #4:
-  RETURN_TO_ARCHITECT for repack/split
-```
-
-Default exact policy:
-
-```text
-coder_attempt_count < 2 → RETRY_SAME_CODER
-coder_attempt_count >= 2 and total < 4 → SWITCH_CODER
-coder_attempt_count >= 4 → RETURN_TO_ARCHITECT
-```
-
-### 5.2 Model switch ladder
-
-Initial coder preference can remain existing selector/priority.
-
-Recovery hints:
-
-```text
-coder-flash failed twice → coder-agy-flash or coder-agy-sonnet
-coder-agy-flash failed → coder-agy-sonnet
-coder-agy-sonnet failed → architect repack
-```
-
-Do not hardcode only these names in core logic. Use executor registry if available. But tests can use these fixture ids.
-
-### 5.3 Architect repack ladder
-
-If packet repeatedly fails or scope is impossible:
-
-```text
-RETURN_TO_ARCHITECT
-```
-
-Architect instruction should include:
-
-```text
-- original packet
-- failure history
-- acceptance reports
-- changed files attempted
-- exact reason
-- ask for smaller packet or corrected scope/verification
-```
-
-If architect repair already happened twice:
-
-```text
 ESCALATE_ARCHITECT
+RETRY_VERIFIER
+RETRY_REVIEWER
+RETRY_MERGE
+BLOCK_FEATURE
+NO_ACTION
 ```
 
-Escalation means premium architect/reviewer critique, not user blocker yet.
-
-### 5.4 Verifier retry ladder
-
-If verifier fails due parser/invalid JSON/timeout:
+Default ladder:
 
 ```text
-verifier_reject_count < 2 → RETRY_VERIFIER
-else → switch verifier if available or ESCALATE_ARCHITECT
+coder_attempt_count < max_same_coder_attempts
+  → RETRY_SAME_CODER
+
+coder_attempt_count >= max_same_coder_attempts and attempt_count < max_total_coder_attempts
+  → SWITCH_CODER
+
+attempt_count >= max_total_coder_attempts
+  → RETURN_TO_ARCHITECT
+
+architect_repair_count >= max_architect_repairs
+  → ESCALATE_ARCHITECT
+
+merge_attempt_count < max_merge_retries and failure is merge_retryable
+  → RETRY_MERGE
+
+true blocker
+  → BLOCK_FEATURE
 ```
 
-If verifier returns REWORK_TO_CODER:
-
-```text
-route to coder ladder
-```
-
-If verifier returns RETURN_TO_ARCHITECT:
-
-```text
-route to architect ladder
-```
-
-### 5.5 Reviewer retry ladder
-
-If reviewer fails due parser/invalid JSON/timeout:
-
-```text
-reviewer_reject_count < 2 → RETRY_REVIEWER
-else → ESCALATE_ARCHITECT
-```
-
-If reviewer returns REWORK_TO_CODER:
-
-```text
-route to coder ladder
-```
-
-If reviewer returns RETURN_TO_ARCHITECT:
-
-```text
-route to architect ladder
-```
-
-### 5.6 Merge retry ladder
-
-```text
-transient merge/API error and merge_attempt_count < 2 → RETRY_MERGE
-DIRTY_TARGET_REPO → BLOCK_FEATURE
-merge conflict → BLOCK_FEATURE
-missing branch/worktree in normal mode → BLOCK_FEATURE
-```
-
-Do not auto-resolve conflicts in this task.
+Tests must verify custom `RecoveryPolicy` values change decisions.
 
 ---
 
-## 6. Integration points
+## 7. Phase 2 — recovery fixture YAMLs
 
-Do not wire a complex new controller deeply into production flow in the first patch.
+Recovery fixture YAMLs are required and must remain compatible with the implemented `build_failure_signal_from_fixture(...)` helper.
 
-### Phase 1 implementation: deterministic library + tests only
-
-Implement:
+Required fixture rules:
 
 ```text
-src/grace_control/core/feature_recovery.py
-tests/grace_control/core/test_feature_recovery.py
+live under fixtures/golden/
+use start_stage: recovery
+use readable title/slug only
+must not hardcode generated feat_/wave_/pkt_ IDs
+must include failure_signal
+must include runs/history when needed
+must include expected.recovery
+must not run real LLMs or agents
 ```
 
-No live orchestration changes yet, except optional report/log helper.
-
-This is the minimum safe implementation.
-
-### Phase 2 later: API/worker integration
-
-Later, worker/API can call recovery policy when packet reaches:
+Minimum scenario families:
 
 ```text
-rejected
-blocked
-accepted but merge failed
-reviewer rejected
-verifier rejected
+coder fail once → retry same coder
+coder fail twice → switch coder
+coder fail four times → return to architect
+merge dirty target → true blocker / block feature
+transient merge → retry merge under limit
+blocked packet retry denied
+verifier return_to_architect
+reviewer rework_to_coder
+STRICT profile never downgraded
 ```
 
-But do not add autonomous scheduling in this first task unless explicitly requested.
+If fixture count changes, update this section rather than creating another TZ file.
 
 ---
 
-## 7. Optional helper: build signal from result_json
+## 8. Phase 3 — live RecoveryController
 
-Add helper:
+Next implementation phase.
 
-```python
-def build_failure_signal_from_packet_run(packet_run: Any, packet: Any | None = None) -> FailureSignal:
-    ...
-```
-
-It should read:
+Add:
 
 ```text
-packet_run.status
-packet_run.result_json.acceptance_report
-packet_run.result_json.evidence_verifier_report
-packet_run.result_json.reviewer_report
-packet_run.result_json.agent_commit_sha
-packet.attempt_count
-packet.acceptance_profile
+src/grace_control/core/recovery_controller.py
+src/grace_control/api/routers/recovery.py
+src/grace_control/worker/recovery_client.py  # optional
 ```
 
-If this is too much for first implementation, skip it and only implement pure model/rules.
+High-level flow:
+
+```text
+packet rejected / blocked / failed / merge failed
+→ build FailureSignal from packet/run/result_json/events
+→ classify_failure(...)
+→ decide_recovery(...)
+→ persist RecoveryDecision
+→ emit recovery events
+→ apply safe action
+```
+
+Feature flag:
+
+```text
+GRACE_RECOVERY_CONTROLLER_ENABLED=true|false
+```
+
+Rollout:
+
+```text
+A. disabled by default
+B. enabled for staged recovery fixtures
+C. enabled for STRICT self-improvement
+D. enabled for normal feature execution
+```
+
+Controller must not call an unrelated routing engine.
 
 ---
 
-## 8. Audit events
+## 9. Recovery persistence
 
-When integrated later, every recovery decision must emit an audit event:
+Preferred table:
 
 ```text
+recovery_decisions
+  id = rec_<nanoid>
+  feature_id
+  wave_id
+  packet_id
+  run_id
+  attempt_number
+  failure_class
+  action
+  reason
+  current_executor_id
+  next_executor_hint
+  acceptance_profile
+  next_acceptance_profile
+  status: proposed/applied/failed/skipped/superseded
+  payload_json
+  created_at
+  applied_at
+```
+
+Temporary fallback is allowed only for a small patch:
+
+```text
+PacketRun.result_json["recovery"] + DB events
+```
+
+But admin/API must be able to return recovery history reliably.
+
+---
+
+## 10. Phase 3 live actions
+
+### RETRY_SAME_CODER
+
+```text
+packet → READY
+next attempt uses same executor when possible
+```
+
+### SWITCH_CODER
+
+```text
+packet → READY
+set requested executor for next attempt
+```
+
+Canonical field:
+
+```text
+Packet.spec_json["recovery"]["requested_executor_id"]
+```
+
+Worker/executor selection must honor it. Do not silently reuse the same failing executor after `SWITCH_CODER`.
+
+### RETURN_TO_ARCHITECT
+
+```text
+stop normal coder retry loop
+store architect repair request payload
+packet → BLOCKED or architect_repack_needed equivalent
+```
+
+Do not run architect LLM automatically in first controller patch.
+
+### ESCALATE_ARCHITECT
+
+```text
+packet/feature marked escalated or blocked
+```
+
+### RETRY_VERIFIER / RETRY_REVIEWER
+
+```text
+rerun verifier/reviewer only if independent stage runner exists
+otherwise store retry-requested metadata for later/admin
+```
+
+### RETRY_MERGE
+
+```text
+only for MERGE_RETRYABLE and below max_merge_retries
+```
+
+### BLOCK_FEATURE
+
+```text
+packet → BLOCKED
+feature recovery summary blocked=true
+```
+
+---
+
+## 11. Recovery API
+
+Add:
+
+```text
+POST /api/recovery/evaluate/{packet_id}
+GET /api/recovery/packets/{packet_id}
+GET /api/recovery/features/{feature_id}
+```
+
+POST behavior:
+
+```text
+load packet/history
+build FailureSignal
+classify/decide
+persist decision
+apply only if apply=true and feature flag allows
+emit event
+return decision
+```
+
+Response includes:
+
+```text
+packet_id
+decision_id
+failure_class
+action
+reason
+next_executor_hint
+status
+```
+
+---
+
+## 12. Recovery events
+
+Emit structured events for admin UI:
+
+```text
+recovery_signal_built
+recovery_classified
 recovery_decision_made
 recovery_retry_same_coder
 recovery_switch_coder
 recovery_return_to_architect
 recovery_escalate_architect
-recovery_block_feature
+recovery_retry_verifier
+recovery_retry_reviewer
 recovery_retry_merge
+recovery_block_feature
+recovery_no_action
+recovery_apply_failed
 ```
 
-Payload:
-
-```json
-{
-  "feature_id": "...",
-  "packet_id": "...",
-  "failure_class": "retryable_coder",
-  "action": "switch_coder",
-  "reason": "coder failed deterministic acceptance twice",
-  "current_executor_id": "coder-flash",
-  "next_executor_hint": "coder-agy-sonnet",
-  "attempt_count": 3
-}
-```
-
-No audit integration required in Phase 1 unless easy.
-
----
-
-## 9. Report shape for future integration
-
-When integrated, feature report should include:
-
-```json
-"recovery": {
-  "enabled": true,
-  "decisions": [
-    {
-      "packet_id": "...",
-      "failure_class": "retryable_coder",
-      "action": "switch_coder",
-      "reason": "..."
-    }
-  ]
-}
-```
-
-Do not implement report integration in Phase 1 unless very small.
-
----
-
-## 10. Tests required
-
-Create:
+Payload includes:
 
 ```text
-tests/grace_control/core/test_feature_recovery.py
-```
-
-Add tests for classification:
-
-```text
-test_acceptance_test_failure_is_retryable_coder
-test_no_changes_produced_is_retryable_coder
-test_scope_violation_by_coder_is_retryable_coder
-test_scope_impossible_is_architect_repack_needed
-test_verifier_rework_to_coder_is_retryable_coder
-test_verifier_return_to_architect_is_architect_repack_needed
-test_reviewer_rework_to_coder_is_retryable_coder
-test_reviewer_return_to_architect_is_architect_repack_needed
-test_dirty_target_repo_is_true_blocker
-test_merge_conflict_is_true_blocker
-test_transient_merge_error_is_merge_retryable
-test_missing_cli_is_true_blocker
-test_unknown_first_failure_is_unknown_retryable
-```
-
-Add tests for decisions:
-
-```text
-test_first_coder_failure_retries_same_coder
-test_second_coder_failure_switches_coder
-test_fourth_coder_failure_returns_to_architect
-test_repeated_architect_repair_escalates_architect
-test_verifier_parser_fail_retries_verifier
-test_reviewer_parser_fail_retries_reviewer
-test_repeated_reviewer_parser_fail_escalates_architect
-test_merge_retryable_retries_until_limit
-test_merge_retry_limit_blocks_feature
-test_true_blocker_blocks_feature
-test_strict_profile_does_not_downgrade_to_normal_or_fast
-```
-
-Add tests for safety invariants:
-
-```text
-test_recovery_never_returns_action_to_skip_acceptance
-test_recovery_never_returns_action_to_skip_scope_guard
-test_recovery_never_lowers_acceptance_profile
-test_recovery_can_escalate_acceptance_profile_to_strict
-test_recovery_decision_contains_reason
+feature_id, wave_id, packet_id, run_id, attempt_number
+failure_class, action, reason
+current_executor_id, next_executor_hint
+acceptance_profile, next_acceptance_profile
+trigger
 ```
 
 ---
 
-## 11. Acceptance criteria for Phase 1
+## 13. Phase 4 — session resume stubs only
 
-Done only if:
+Do not implement live session memory yet.
 
-1. `feature_recovery.py` exists with FailureClass, RecoveryAction, FailureSignal, RecoveryPolicy, RecoveryDecision.
-2. `classify_failure(...)` is deterministic and unit-tested.
-3. `decide_recovery(...)` is deterministic and unit-tested.
-4. Coder retry ladder works.
-5. Verifier/reviewer retry and architect-return routing work.
-6. Merge retry/blocker classification works.
-7. True blockers always produce `BLOCK_FEATURE`.
-8. Policy never emits unsafe bypass actions.
-9. Tests do not call real LLMs, git, opencode, agy, or API server.
-10. Existing tests still pass.
+Add only contracts/stubs so future retries can pass session context cleanly.
 
----
-
-## 12. Do not do in this task
-
-Do not wire automatic recovery into worker live loop yet.
-Do not mutate DB state automatically.
-Do not create new packet attempts automatically.
-Do not call architect/reviewer/coder from recovery module.
-Do not bypass acceptance/reviewer/scope/merge gates.
-Do not implement conflict auto-resolution.
-Do not add manual override commands.
-Do not run real agents in tests.
-Do not change golden behavior.
-
----
-
-## 13. Suggested implementation order
-
-1. Create `feature_recovery.py` with enums/models only.
-2. Add `classify_failure(...)` with simple rule checks.
-3. Add `decide_recovery(...)` using policy counters.
-4. Add tests for classification.
-5. Add tests for decisions.
-6. Add safety invariant tests.
-7. Run full test suite.
-
----
-
-## 14. Future Phase 2 outline, not for this task
-
-Later TZ should integrate this with orchestration:
+Required models:
 
 ```text
-packet rejected → build FailureSignal → decide_recovery → schedule action
-blocked → decide if architect repack or true blocker
-merge failed → retry merge or block
-architect repair → create revised packets
-model switch → pass requested_executor to next attempt
+RecoverySessionSnapshot
+TaskResumeContext
+SessionResumeSummary
 ```
 
-Potential future files:
+Required fields:
 
 ```text
-src/grace_control/core/feature_recovery.py
-src/grace_control/api/routers/recovery.py
-src/grace_control/worker/recovery_controller.py
+session_id, feature_id, wave_id, packet_id, run_id, attempt_number
+role, executor_id, model, started_at, finished_at, status
+summary_human, failure_reason, changed_files, artifacts
+acceptance_report_path, evidence_report_path, reviewer_report_path
+recovery_decision_id, previous_attempts_summary, full_context_json
 ```
 
-But Phase 1 is only core policy and tests.
+Stub functions:
+
+```python
+def build_session_snapshot(packet_run, packet=None) -> RecoverySessionSnapshot: ...
+def build_task_resume_context(packet, decision, history) -> TaskResumeContext: ...
+def render_resume_summary(context: TaskResumeContext) -> str: ...
+```
+
+No LLM calls. No automatic prompt injection. No `build_resume_context: true` live behavior yet.
+
+Future controller may ask for resume context, but Phase 4 only prepares the structure.
 
 ---
 
-## 15. Final coder report format
+## 14. Phase 5 — admin/event integration
 
-Coder must report:
+Admin UI must eventually show:
 
 ```text
+latest RecoveryDecision
+failure_class/action/reason
+old executor → new executor for switch coder
+blocker reason
+return_to_architect / escalation reason
+session resume availability after Phase 4
+```
+
+Detailed UI requirements remain in:
+
+```text
+docs/codex/tz-019c-admin-event-stream-and-recovery-observability.md
+```
+
+---
+
+## 15. Future optional routing policy wrapper
+
+A universal routing layer may be useful later, but it must be a thin wrapper around the current implementation.
+
+Allowed future design:
+
+```text
+RecoveryPolicy config
++ classify_failure(...)
++ decide_recovery(...)
++ optional metadata: matched_rule_id, display_reason, session_context_mode
+```
+
+Not allowed now:
+
+```text
+new YAML rules engine replacing classify_failure/decide_recovery
+new RouteContext with duplicate counters
+new stop guards not backed by RecoveryPolicy
+admin/routing/session abstractions before controller works
+```
+
+If future routing is added, it must:
+
+```text
+reuse FailureSignal
+reuse RecoveryPolicy
+reuse RecoveryDecision or extend it compatibly
+prove custom config changes decisions
+not add another source of truth
+```
+
+Session context mode is future metadata only until Phase 4 stubs and Phase 3 controller are stable.
+
+---
+
+## 16. Required tests
+
+Keep existing tests and add only phase-appropriate tests.
+
+Phase 1/2 tests:
+
+```text
+classification tests
+decision tests
+custom RecoveryPolicy tests
+fixture YAML parsing tests
+build_failure_signal_from_fixture tests
+STRICT never downgraded tests
+```
+
+Phase 3 tests:
+
+```text
+RecoveryController builds signal from latest run
+persists decision
+emits recovery events
+RETRY_SAME_CODER sets READY
+SWITCH_CODER sets requested executor
+RETURN_TO_ARCHITECT exits coder loop
+RETRY_MERGE respects max_merge_retries
+TRUE_BLOCKER blocks packet/feature
+worker calls controller behind flag
+```
+
+Phase 4 tests:
+
+```text
+session snapshot contains run identity
+snapshot contains executor/model/status
+resume context contains previous attempts summary
+resume context contains recovery decision
+resume summary is human-readable
+artifact paths are preserved
+no LLM calls
+```
+
+No recovery tests may run real LLMs/agents.
+
+---
+
+## 17. Acceptance criteria by phase
+
+Phase 1 done:
+
+```text
+feature_recovery.py exists
+classify_failure/decide_recovery tested
+RecoveryPolicy configurable
+custom policy tests pass
+```
+
+Phase 2 done:
+
+```text
+recovery fixture YAMLs exist and parse
+fixtures create/represent UID-based Feature/Wave/Packet/PacketRun state
+fixtures validate expected.recovery
+```
+
+Phase 3 done:
+
+```text
+RecoveryController exists
+RecoveryDecision persisted
+API exists
+worker integration behind flag exists
+SWITCH_CODER requested executor wired
+recovery events emitted
+```
+
+Phase 4 done:
+
+```text
+session resume models/stubs exist
+tests pass
+no live wiring
+```
+
+Phase 5 done:
+
+```text
+admin/API shows recovery summary/events
+session resume availability visible when implemented
+```
+
+---
+
+## 18. Do not do
+
+```text
+Do not create separate 017b/017c/017d recovery specs.
+Do not replace implemented policy core.
+Do not implement a complex YAML rules engine now.
+Do not add live session resume before controller is stable.
+Do not introduce duplicate stop counters outside RecoveryPolicy.
+Do not enable live recovery globally before staged fixtures pass.
+```
+
+---
+
+## 19. Final coder report format
+
+```text
+Phase implemented: 1/2/3/4/5
 Files changed
-Phase implemented: 1 only / more
-Failure classes implemented: yes/no
-Recovery decision policy implemented: yes/no
-Safety invariant tests added: yes/no
-Tests added
+Existing feature_recovery.py preserved: yes/no
+RecoveryPolicy custom tests added: yes/no
+Recovery fixture YAMLs updated: yes/no
+RecoveryController added: yes/no
+Recovery API added: yes/no
+Worker integration behind flag: yes/no
+SWITCH_CODER requested executor wired: yes/no
+Recovery events emitted: yes/no
+Session resume stubs added: yes/no
 Tests run
-Any remaining blockers
+Remaining blockers
 ```
