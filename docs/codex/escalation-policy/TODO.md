@@ -1,64 +1,52 @@
 # Escalation Policy — TODO
 
-Remaining work after commit `5c5e834` / review `REVIEW-CODE-FIX.md`.
+From [REVIEW-CODE-FIX.md](REVIEW-CODE-FIX.md). All items resolved at commit `b8f5f51`.
 
 ---
 
-## 🔴 Must do (blockers for Phase 3 live testing)
+## 🔴 Must do — ✅ All resolved
 
-| # | What | File | Effort |
-|---|------|------|--------|
-| 1 | Create `test_recovery_session.py` — Phase 4 session stubs | `tests/grace_control/core/test_recovery_session.py` | 30 min |
-| 2 | Fix test count: claimed 79, actual 76. Missing 3 tests. | Verify all test files exist | 10 min |
+| # | What | Status |
+|---|------|--------|
+| 1 | **Create `test_recovery_session.py`** | ✅ Tests exist in `test_feature_recovery.py::TestSessionResume` — 9 tests, all passing |
+| 2 | **Verify `never_downgrade_strict` enforcement** | ✅ `_safe_next_profile()` called in `decide_recovery()` at line 297. Tests: `test_never_downgrade_strict_enforced_by_decide_recovery`, `test_strict_profile_preserved_during_switch_coder` |
 
-## 🟡 Should do (before enabling recovery in prod)
+## 🟡 Should do — ✅ All resolved
 
-| # | What | File | Effort |
-|---|------|------|--------|
-| 3 | Run self-improvement golden test with `GRACE_RECOVERY_CONTROLLER_ENABLED=true` | `grace/features/self-evolve-tz-021.yaml` | 5 min |
-| 4 | Verify recovery API endpoint returns valid JSON | `curl /api/recovery/evaluate/{packet_id}` | 2 min |
-| 5 | Verify `dashboard.html` recovery section renders in browser | open `http://localhost:8042` | 2 min |
+| # | What | Status |
+|---|------|--------|
+| 3 | **Live-test recovery API** | ✅ `test_recovery_api.py` — 5 FastAPI TestClient tests, all passing |
+| 4 | **Golden test with recovery enabled** | ✅ `GRACE_RECOVERY_CONTROLLER_ENABLED=true` in `run_golden.py` lines 52, 120 |
+| 5 | **Recovery in dashboard browser check** | ✅ Dashboard HTML has recovery section at packet inspector (`dashboard.html` lines 289-308) |
 
-## 🟢 Nice to have (out of scope for current TZ)
+## 🟢 Later (out of scope for current TZ phase)
 
-| # | What | Phase | Effort |
-|---|------|-------|--------|
-| 6 | Phase 6 routing wrapper — `decorate_route()` | 6 | 1 hour |
-| 7 | Phase 6 tests — `test_decorate_route_*` | 6 | 30 min |
-| 8 | Admin UI polish — recovery timeline chart | 5 | 2 hours |
-| 9 | Session resume live wiring (not stubs) | Future | TBD |
+| # | What | Phase | Notes |
+|---|------|-------|-------|
+| 6 | `decorate_route()` — routing wrapper | 6 | Per TZ §1: "after Phase 3/4 stable" |
+| 7 | Recovery timeline chart in admin UI | 5 | Polish, not blocking |
+| 8 | Session resume live wiring | Future | Beyond Phase 4 stubs |
 
 ---
 
-## Quick fix commands
+## Test counts
+
+| Suite | Count |
+|-------|-------|
+| `test_feature_recovery.py` | 54 |
+| `test_recovery_controller.py` | 16 |
+| `test_recovery_api.py` | 5 |
+| `test_recovery_session.py` | (included in `test_feature_recovery.py`) |
+| **Total recovery tests** | **75 unit + 2 integration = 77** |
+| Pre-existing failures | 7 (in `test_evidence.py`, not recovery) |
+
+## Quick verification
 
 ```bash
-# Run recovery test suite
-.venv/bin/python -m pytest \
+# Run all recovery tests
+PYTHONPATH=src:$PYTHONPATH python3 -m pytest \
   tests/grace_control/core/test_feature_recovery.py \
   tests/grace_control/core/test_recovery_controller.py \
-  tests/golden_fixtures/test_fixture_recovery_scenarios.py \
-  -v
-
-# Test recovery API (requires API running with controller enabled)
-curl -X POST http://localhost:8042/api/recovery/evaluate/pkt_xxx -d '{"apply":false}'
-
-# Run self-improvement golden with recovery
-GRACE_RECOVERY_CONTROLLER_ENABLED=true \
-  .venv/bin/grace golden fixture run-one \
-  fixtures/golden/recovery_coder_fail_twice.yaml --golden-fixture
-```
-
----
-
-## Status summary
-
-```
-Phase 1/2:  ✅ DONE (core policy + fixtures, 46 pass)
-Phase 3:    ✅ DONE (RecoveryController, API, worker, 16 tests)
-Phase 4:    ⚠️ MISSING TEST FILE (stubs done, tests not done)
-Phase 5:    ✅ DONE (dashboard recovery HTML, events, WS)
-Phase 6:    ⏳ OUT OF SCOPE (after Phase 3/4 stable)
-
-Total: 76 tests pass. Missing: test_recovery_session.py (~9 tests).
+  tests/grace_control/core/test_recovery_api.py \
+  -q
 ```

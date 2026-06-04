@@ -437,3 +437,29 @@ class TestSessionResume:
         assert snap.evidence_report_path == "/tmp/ev.json"
         assert snap.reviewer_report_path == "/tmp/rv.json"
         assert snap.recovery_decision_id == "recd_abc"
+
+    def test_packet_missing_fields_does_not_crash(self):
+        class MinimalRun:
+            id = "run_001"
+            packet_id = "pkt_test"
+            run_number = 1
+            status = "rejected"
+            result_json = {}
+            started_at = None
+            finished_at = None
+
+        snap = build_session_snapshot(MinimalRun(), packet=None)
+        assert snap.packet_id == "pkt_test"
+        assert snap.feature_id == ""
+        assert snap.attempt_number == 1
+        assert snap.executor_id == ""
+        assert snap.failure_reason == ""
+
+    def test_strict_profile_preserved_during_switch_coder(self):
+        signal = _signal(reason="test failed", acceptance_profile="STRICT",
+                          coder_attempt_count=2, attempt_count=3,
+                          current_executor_id="coder-flash")
+        d = decide_recovery(signal, RecoveryPolicy(never_downgrade_strict=True,
+                                                    max_same_coder_attempts=2))
+        assert d.action == RecoveryAction.SWITCH_CODER
+        assert d.next_acceptance_profile is None or d.next_acceptance_profile == "STRICT"
