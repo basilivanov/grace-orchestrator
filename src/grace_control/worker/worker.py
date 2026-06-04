@@ -123,8 +123,8 @@ class Worker:
 
                         if status == "rejected":
                             self.log.warn("packet_rejected", packet_id=packet_id, reason=result.reason)
-                            self._handle_rejection(packet_id)
                             await self._maybe_apply_recovery(packet_id)
+                            self._handle_rejection(packet_id)
                         elif status == "blocked":
                             self.log.warn("packet_blocked", packet_id=packet_id, reason=result.reason)
                             await self._maybe_apply_recovery(packet_id)

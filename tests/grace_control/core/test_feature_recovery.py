@@ -216,7 +216,7 @@ class TestDecisions:
 
 class TestSafety:
     def test_recovery_never_returns_action_to_skip_acceptance(self):
-        never_skip = {RecoveryAction.NO_ACTION, RecoveryAction.BLOCK_FEATURE}
+        never_skip = {RecoveryAction.NO_ACTION, RecoveryAction.BLOCK_FEATURE, RecoveryAction.NEW_ARCHITECT}
         for action in RecoveryAction:
             assert action in never_skip or action in (
                 RecoveryAction.RETRY_SAME_CODER,
@@ -242,6 +242,7 @@ class TestSafety:
                 RecoveryAction.RETRY_REVIEWER,
                 RecoveryAction.RETRY_MERGE,
                 RecoveryAction.BLOCK_FEATURE,
+                RecoveryAction.NEW_ARCHITECT,
             ), f"Action {action} might bypass scope guard"
 
     def test_recovery_never_lowers_acceptance_profile(self):

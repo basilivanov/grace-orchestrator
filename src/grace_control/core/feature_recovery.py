@@ -33,6 +33,7 @@ class RecoveryAction(str, Enum):
     RETRY_REVIEWER = "retry_reviewer"
     RETRY_MERGE = "retry_merge"
     BLOCK_FEATURE = "block_feature"
+    NEW_ARCHITECT = "new_architect"
     NO_ACTION = "no_action"
 
 
@@ -63,6 +64,7 @@ class FailureSignal(BaseModel):
     attempt_count: int = 0
     coder_attempt_count: int = 0
     architect_repair_count: int = 0
+    architect_switch_count: int = 0
     reviewer_reject_count: int = 0
     verifier_reject_count: int = 0
     merge_attempt_count: int = 0

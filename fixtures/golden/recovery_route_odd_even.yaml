@@ -1,0 +1,31 @@
+id: recovery_route_odd_even
+kind: golden_fixture
+start_stage: recovery
+profile: NORMAL
+
+packet:
+  title: Odd/even routing test
+  slug: recovery-route-odd-even
+  state: rejected
+  acceptance_profile: NORMAL
+
+runs:
+  - attempt: 1
+    status: rejected
+    acceptance_report:
+      final_verdict: rework_required
+      summary: T1 failed
+  - attempt: 2
+    status: rejected
+    acceptance_report:
+      final_verdict: rework_required
+      summary: T1 failed again
+
+expected:
+  recovery_route:
+    attempt_1:
+      action: RETRY_SAME_CODER
+      skip_verifier: true
+    attempt_2:
+      action: RUN_VERIFIER
+      skip_verifier: false

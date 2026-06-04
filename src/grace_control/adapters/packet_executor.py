@@ -326,8 +326,24 @@ class PacketExecutionAdapter:
 
                 # ── Deterministic fail branch (skips verifier + reviewer) ──
                 if not accept_report.is_accepted:
-                    ev_report = skipped_evidence_report("deterministic acceptance failed")
-                    rv_report = skipped_reviewer_report("deterministic acceptance failed")
+                    from grace_control.core.recovery_rules import evaluate_ladder
+                    route = evaluate_ladder(packet_data.get("attempt_count", 1))
+
+                    if route.skip_verifier:
+                        ev_report = skipped_evidence_report("odd attempt skips verifier per ladder")
+                        rv_report = skipped_reviewer_report("deterministic acceptance failed")
+                    else:
+                        from grace_control.core.evidence_verifier import run_evidence_verifier
+                        ev_report = await run_evidence_verifier(
+                            packet=pkt_contract,
+                            acceptance_report=accept_report,
+                            worktree_path=wt_path,
+                            run_dir=run_dir,
+                            changed_files=changed_files,
+                            artifacts=artifacts,
+                        )
+                        rv_report = skipped_reviewer_report("deterministic acceptance failed")
+
                     execution_result = self._build_execution_result_from_acceptance(
                         legacy_execution_result=None,
                         acceptance_report=accept_report,

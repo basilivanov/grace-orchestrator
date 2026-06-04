@@ -172,6 +172,7 @@ class RecoveryController:
             RecoveryAction.RETRY_REVIEWER: self._apply_retry_reviewer,
             RecoveryAction.RETRY_MERGE: self._apply_retry_merge,
             RecoveryAction.BLOCK_FEATURE: self._apply_block_feature,
+            RecoveryAction.NEW_ARCHITECT: self._apply_new_architect,
             RecoveryAction.NO_ACTION: self._apply_no_action,
         }
         method = method_map.get(decision.action, self._apply_no_action)
@@ -291,3 +292,57 @@ class RecoveryController:
 
     def _apply_no_action(self, packet_id: str, decision: RecoveryDecision = None):
         pass
+
+    def _build_architect_context(self, packet, db) -> dict:
+        from grace_control.db.schema import PacketRun
+
+        runs = db.query(PacketRun).filter_by(packet_id=packet.id).order_by(
+            PacketRun.run_number.desc()
+        ).limit(20).all()
+
+        context = {
+            "original_spec": packet.spec_json or {},
+            "attempts": [],
+            "acceptance_reports": [],
+            "verifier_reports": [],
+            "executor_ids": [],
+            "changed_files": [],
+        }
+        for run in runs:
+            rj = run.result_json or {}
+            context["attempts"].append({"run_number": run.run_number, "status": run.status})
+            acc = rj.get("acceptance_report")
+            if acc:
+                context["acceptance_reports"].append(acc)
+            ev = rj.get("evidence_verifier_report")
+            if ev:
+                context["verifier_reports"].append(ev)
+            eid = rj.get("executor_id", "")
+            if eid and eid not in context["executor_ids"]:
+                context["executor_ids"].append(eid)
+
+        context["summary"] = (
+            f"{len(runs)} attempts, "
+            f"{len(context['executor_ids'])} coders, "
+            f"{len(context['acceptance_reports'])} acceptance reports"
+        )
+        return context
+
+    def _apply_new_architect(self, packet_id: str, decision: RecoveryDecision):
+        from grace_control.db import get_db
+        from grace_control.db.schema import Packet, PacketState
+
+        with get_db() as db:
+            packet = db.query(Packet).filter_by(id=packet_id).first()
+            if not packet:
+                return
+            sm = PacketStateMachine()
+            sm.transition(PacketState(packet.state), PacketState.BLOCKED)
+            packet.state = PacketState.BLOCKED.value
+
+            architect_ctx = self._build_architect_context(packet, db)
+            spec = dict(packet.spec_json or {})
+            spec["recovery"] = spec.get("recovery", {})
+            spec["recovery"]["new_architect"] = architect_ctx
+            packet.spec_json = spec
+            db.flush()
