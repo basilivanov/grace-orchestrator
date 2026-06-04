@@ -31,7 +31,7 @@ codex:
         complexity: complex
         provider: deepseek
 
-    # ── Coder #1: opencode cheap (flash) ─────────────────────────────────
+     # ── Coder #1: opencode cheap (flash) ─────────────────────────────────
     - executor_id: coder-flash
       kind: opencode
       command: opencode
@@ -42,6 +42,18 @@ codex:
       metadata:
         complexity: simple
         provider: deepseek
+
+    # ── Coder #1b: opencode gemini 3.5 flash via cliproxy ─────────────────
+    - executor_id: coder-gemini-flash
+      kind: opencode
+      command: opencode
+      model: cliproxy/gemini-3-flash-agent
+      roles: [coder]
+      priority: 90
+      reasoning: medium
+      metadata:
+        complexity: simple
+        provider: cliproxy
 
     # ── Coder #2: agy cheap (gemini flash) ───────────────────────────────
     - executor_id: coder-agy-flash
