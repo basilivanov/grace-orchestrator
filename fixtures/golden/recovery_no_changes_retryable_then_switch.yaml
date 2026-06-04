@@ -1,0 +1,24 @@
+id: recovery_no_changes_retryable_then_switch
+kind: golden_fixture
+start_stage: recovery
+packet:
+  title: Recovery no changes retryable then switch
+  slug: recovery-no-changes-switch
+  state: rejected
+  acceptance_profile: NORMAL
+runs:
+  - attempt: 1
+    status: rejected
+    domain_status: rejected
+    acceptance_report:
+      final_verdict: rejected
+      summary: no changes produced
+  - attempt: 2
+    status: rejected
+    domain_status: rejected
+    acceptance_report:
+      final_verdict: rejected
+      summary: no changes produced again
+expected:
+  recovery_action: switch_coder
+  recovery_failure_class: retryable_coder

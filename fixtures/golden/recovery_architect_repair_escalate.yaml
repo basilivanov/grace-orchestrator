@@ -1,0 +1,30 @@
+id: recovery_architect_repair_escalate
+kind: golden_fixture
+start_stage: recovery
+packet:
+  title: Recovery architect repair escalate
+  slug: recovery-architect-escalate
+  state: rejected
+  acceptance_profile: NORMAL
+runs:
+  - attempt: 1
+    status: rejected
+    domain_status: rejected
+    acceptance_report:
+      final_verdict: rejected
+      summary: scope impossible without expanding allowed scope
+  - attempt: 2
+    status: rejected
+    domain_status: rejected
+    acceptance_report:
+      final_verdict: rejected
+      summary: scope impossible after architect repair
+  - attempt: 3
+    status: rejected
+    domain_status: rejected
+    acceptance_report:
+      final_verdict: rejected
+      summary: scope impossible third time
+expected:
+  recovery_action: escalate_architect
+  recovery_failure_class: architect_repack_needed

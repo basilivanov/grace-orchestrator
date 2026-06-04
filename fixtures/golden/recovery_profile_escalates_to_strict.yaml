@@ -1,0 +1,19 @@
+id: recovery_profile_escalates_to_strict
+kind: golden_fixture
+start_stage: recovery
+packet:
+  title: Recovery profile escalates to strict
+  slug: recovery-profile-strict
+  state: blocked
+  acceptance_profile: FAST
+runs:
+  - attempt: 1
+    status: rejected
+    domain_status: rejected
+    acceptance_report:
+      final_verdict: rejected
+      summary: core change requires STRICT profile but was FAST
+    evidence_verifier_verdict: RETURN_TO_ARCHITECT
+expected:
+  recovery_action: return_to_architect
+  recovery_failure_class: architect_repack_needed

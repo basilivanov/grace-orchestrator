@@ -99,19 +99,6 @@ def classify_failure(signal: FailureSignal) -> FailureClass:
                                     "quota exceeded", "permission denied", "repository inaccessible"]):
         return FailureClass.TRUE_BLOCKER
 
-    if state == "blocked":
-        if "scope impossible" in reason or "cannot be done" in reason:
-            return FailureClass.ARCHITECT_REPACK_NEEDED
-        return FailureClass.TRUE_BLOCKER
-
-    # ── Merge failures ─────────────────────────────────────────────
-    if merge_err:
-        if "branch" in merge_err or "worktree" in merge_err:
-            return FailureClass.MERGE_RETRYABLE
-        if "timeout" in merge_err or "connection" in merge_err or "transient" in merge_err:
-            return FailureClass.MERGE_RETRYABLE
-        return FailureClass.TRUE_BLOCKER
-
     # ── Evidence Verifier ───────────────────────────────────────────
     if ev_verdict == "RETURN_TO_ARCHITECT":
         return FailureClass.ARCHITECT_REPACK_NEEDED
@@ -127,6 +114,20 @@ def classify_failure(signal: FailureSignal) -> FailureClass:
         return FailureClass.RETRYABLE_CODER
     if rv_verdict == "PASS":
         return FailureClass.UNKNOWN_RETRYABLE
+
+    # ── Blocked state ──────────────────────────────────────────────
+    if state == "blocked":
+        if "scope impossible" in reason or "cannot be done" in reason:
+            return FailureClass.ARCHITECT_REPACK_NEEDED
+        return FailureClass.TRUE_BLOCKER
+
+    # ── Merge failures ─────────────────────────────────────────────
+    if merge_err:
+        if "branch" in merge_err or "worktree" in merge_err:
+            return FailureClass.MERGE_RETRYABLE
+        if "timeout" in merge_err or "connection" in merge_err or "transient" in merge_err:
+            return FailureClass.MERGE_RETRYABLE
+        return FailureClass.TRUE_BLOCKER
 
     # ── Scope guard violations ──────────────────────────────────────
     if state in ("rejected", "failed") and "scope" in reason:

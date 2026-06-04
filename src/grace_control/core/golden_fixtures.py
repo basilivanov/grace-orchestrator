@@ -20,7 +20,7 @@ import os
 import subprocess
 import tempfile
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -266,12 +266,12 @@ def seed_db_fixture(
                 "branch_name": git_state.get("branch_name", ""),
             }
             from datetime import timedelta
-            started = datetime.utcnow() - timedelta(seconds=30)
+            started =     datetime.now(timezone.utc) - timedelta(seconds=30)
             db.add(PacketRun(
                 id=run_id, packet_id=packet_id, run_number=run_spec.attempt,
                 status=run_spec.status, result_json=result_json,
                 evidence_path="",
-                started_at=started, finished_at=datetime.utcnow(),
+                started_at=started, finished_at=    datetime.now(timezone.utc),
             ))
 
     return {}
@@ -314,6 +314,10 @@ def build_failure_signal_from_fixture(spec: FixtureSpec, *, packet_id: str, stat
 
     signal_kw["attempt_count"] = spec.runs[0].attempt if spec.runs else 1
     signal_kw["coder_attempt_count"] = len([r for r in spec.runs if r.status in ("rejected", "failed")])
+    signal_kw["architect_repair_count"] = len([
+        r for r in spec.runs
+        if r.status in ("rejected", "failed") and "scope impossible" in (r.acceptance_report.get("summary", "") or "").lower()
+    ])
     signal_kw["acceptance_profile"] = spec.packet.acceptance_profile
     signal_kw["previous_executor_ids"] = []
 
