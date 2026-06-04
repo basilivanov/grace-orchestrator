@@ -1048,17 +1048,23 @@ class PacketExecutionAdapter:
 
 
 def _collect_changed_files(worktree_root: Path) -> list[Path]:
-    changed = []
-    src = worktree_root / "src" / "grace_control"
-    if src.exists():
-        for f in src.rglob("*.py"):
-            if "__pycache__" not in str(f):
-                changed.append(f)
-    ui_dir = worktree_root / "src" / "grace_control" / "ui"
-    if ui_dir.exists():
-        for f in ui_dir.rglob("*"):
-            if f.is_file() and "__pycache__" not in str(f):
-                changed.append(f)
-    return changed
+    import subprocess
+    try:
+        # Modified tracked files
+        r = subprocess.run(
+            ["git", "diff", "--name-only", "HEAD"],
+            cwd=str(worktree_root), capture_output=True, text=True, timeout=10,
+        )
+        paths = [p.strip() for p in r.stdout.split("\n") if p.strip()]
+        # Untracked files
+        r = subprocess.run(
+            ["git", "ls-files", "--others", "--exclude-standard"],
+            cwd=str(worktree_root), capture_output=True, text=True, timeout=10,
+        )
+        paths += [p.strip() for p in r.stdout.split("\n") if p.strip()]
+        changed = [worktree_root / p for p in set(paths)]
+        return [p for p in changed if p.exists()]
+    except Exception:
+        return []
 
 #END_BLOCK_ADAPTER

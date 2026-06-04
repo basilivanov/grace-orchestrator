@@ -1,0 +1,40 @@
+title: Golden Smoke Live 004
+description: "Real self-improvement golden test: add utility function to grace_control core."
+
+self_improvement: true
+origin: self_evolution
+session_id: golden-smoke-004
+affected_subsystem: core
+
+constraints:
+  frozen_scope:
+    - src/prefect_grace/
+
+verification:
+  t0: []
+  t1:
+    - env PYTHONPATH=src python3 -c "from grace_control.core.hello import greet; assert greet() == 'hello from self-evolution'"
+  t2: []
+
+waves:
+  - title: Core evolution
+    packets:
+      - title: Add hello module to core
+        description: >
+          Create a new file src/grace_control/core/hello.py with a function greet()
+          that returns 'hello from self-evolution'. Add proper GRACE Canon headers
+          (AI_HEADER, MODULE_CONTRACT, FUNCTION_CONTRACT, MODULE_MAP).
+          Do NOT modify src/prefect_grace/ or context_collector.py or self_evolution_guard.py.
+        scope:
+          - src/grace_control/core/
+        verification:
+          t0: []
+          t1:
+            - env PYTHONPATH=src python3 -c "from grace_control.core.hello import greet; assert greet() == 'hello from self-evolution'"
+          t2: []
+        expected_evidence:
+          - id: hello_module_importable
+            kind: command
+            required: true
+            pattern: from grace_control.core.hello import greet
+        acceptance_profile: NORMAL
