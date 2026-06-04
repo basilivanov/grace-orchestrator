@@ -34,6 +34,7 @@ from pathlib import Path
 from fastapi import APIRouter
 
 from grace_control.core.context_collector import ContextCollector
+from grace_control.core.executor_selector import resolve_model
 from grace_control.core.dag_validator import validate_dag
 from grace_control.core.structured_logger import GraceLogger
 from grace_control.db import get_db
@@ -43,7 +44,6 @@ from grace_control.db.schema import Feature, Packet, PacketState, Wave
 router = APIRouter()
 _log = GraceLogger("architect")
 
-ARCHITECT_MODEL = "deepseek/deepseek-v4-pro"
 ARCHITECT_TIMEOUT = int(os.environ.get("GRACE_ARCHITECT_TIMEOUT", "120"))
 
 
@@ -217,7 +217,8 @@ async def _warm_context(spec: dict, feature_id: str) -> dict:
 
     scene = sorted(scope_paths) if scope_paths else ["src/grace_control/"]
     try:
-        collector = ContextCollector(cli="opencode", model="deepseek/deepseek-v4-flash")
+        executor = resolve_model("context_collector")
+        collector = ContextCollector(cli=executor["command"], model=executor["model"])
         code_ctx = await collector.collect(task_description=task_desc, target_scope=scene)
         ctx = {
             "summary": code_ctx.summary,
@@ -355,7 +356,7 @@ Respond ONLY with valid JSON (no markdown, no backticks):
 
     for attempt in range(2):
         try:
-            raw = await _run_opencode(prompt, ARCHITECT_MODEL)
+            raw = await _run_opencode(prompt, resolve_model("architect")["model"])
             plan = json.loads(raw)
             if "waves" not in plan:
                 plan["waves"] = []
