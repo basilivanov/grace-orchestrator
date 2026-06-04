@@ -55,6 +55,8 @@ packet cards
 packet inspector
 вкладки inspector: Overview, Runs, Events, Artifacts
 recovery block в Overview
+  recovery ladder info: odd attempts → RETRY_SAME_CODER (skip verifier),
+    even attempts → RUN_VERIFIER (classify problem), attempt 7 → NEW_ARCHITECT
 ```
 
 Текущие PacketState из схемы:
@@ -460,6 +462,15 @@ next_executor_hint
 decision_id
 ```
 
+Возможные действия (action):
+```text
+RETRY_SAME_CODER, SWITCH_CODER, RETURN_TO_ARCHITECT,
+ESCALATE_ARCHITECT, RETRY_VERIFIER, RETRY_REVIEWER,
+RETRY_MERGE, BLOCK_FEATURE, NEW_ARCHITECT, NO_ACTION
+```
+
+Для `NEW_ARCHITECT` в spec_json может быть поле `new_architect.architect_context.summary` — показывать его в админке если есть.
+
 Пример:
 
 ```text
@@ -546,6 +557,7 @@ recovery_retry_reviewer = Recovery: retry reviewer
 recovery_retry_merge = Recovery: retry merge
 recovery_block_feature = Recovery: block feature
 recovery_no_action = Recovery: no action
+recovery_new_architect = Recovery: switch architect
 self_evolution_update = Self-evolution update
 ```
 
