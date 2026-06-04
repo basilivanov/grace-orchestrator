@@ -1,207 +1,85 @@
-# Review: TZ-022 — Pydantic Recovery Ladder (commit 4693f81)
+# Review: TZ-022 — Pydantic Recovery Ladder (commit ab123c1)
 
-Review of commit `4693f81` against `docs/codex/tz-022-pydantic-recovery-ladder.md`.
+Review of commit `ab123c1` against `docs/codex/tz-022-pydantic-recovery-ladder.md`.
 
 Date: 2026-06-04
 
 ---
 
-## Summary
+## What changed from review v2
 
-| Metric | Value |
-|--------|-------|
-| New files | 3 (recovery_rules.py, test_recovery_rules.py, fixture YAML) |
-| Changed files | 5 (feature_recovery.py, recovery_controller.py, packet_executor.py, worker.py, test_feature_recovery.py) |
-| Total lines | +352 / -4 |
-| Tests | 96 passed (85 existing + 11 new) |
-| TZ compliance | ⚠️ 12/14 criteria |
-
----
-
-## TZ §2 — recovery_rules.py ✅
-
-| Model | Required | Present | Match |
-|-------|----------|---------|-------|
-| RouteCondition | ODD_ATTEMPT, EVEN_ATTEMPT, ATTEMPT_GTE | ✅ same | ✅ |
-| RouteAction | 6 actions + NEW_ARCHITECT | ✅ same | ✅ |
-| RecoveryRule | condition, condition_value, action, skip_verifier, on_verdict | ✅ same | ✅ |
-| RecoveryLadder | rules, max_coders=3, switch_architect_on_attempt=7 | ✅ same | ✅ |
-| RecoveryLadder.default() | 3 rules | ✅ 3 rules | ✅ |
-| RecoveryRoute | rule_index, condition, action, skip_verifier, max_coders, on_verdict | ✅ same | ✅ |
-| ArchitectContext | 6 fields | ✅ same | ✅ |
-| evaluate_ladder() | pure function, returns RecoveryRoute | ✅ implemented | ✅ |
-| GRACE Canon | AI_HEADER, MODULE_CONTRACT, MODULE_MAP | ✅ present | ✅ |
-
-### ATTEMPT_GTE placement (line 75)
-
-`RecoveryLadder.default()` places `ATTEMPT_GTE(7)` FIRST in the rules list. This means attempt 7+ matches ATTEMPT_GTE before ODD(7). ✅ Correct precedence.
+| Metric | Review v2 (a885b7e) | This (ab123c1) |
+|--------|--------------------|-----------------|
+| rules tests | 11 | **12** |
+| total tests | 96 | **97** |
+| missing tests | 2 | **1** (test_attempt_eight_fallback) |
+| criteria | 12/14 | **13/14** |
 
 ---
 
-## TZ §3 — Profile interaction ✅
+## New tests added
 
-Profile interaction is implemented correctly in `packet_executor.py`:
-
-```python
-if route.skip_verifier:
-    ev_report = skipped_evidence_report("odd attempt skips verifier per ladder")
-else:
-    ev_report = await run_evidence_verifier(...)
-```
-
-After the verifier gate, the existing profile-based routing (FAST→skip, NORMAL→verifier, STRICT→verifier+reviewer) continues unchanged.
-
-| Profile | Odd (skip_verifier=true) | Even (skip_verifier=false) | Reviewer |
-|---------|--------------------------|---------------------------|----------|
-| FAST | verifier SKIP ✅ | verifier SKIP (FAST) ✅ | SKIP ✅ |
-| NORMAL | verifier SKIP ✅ | verifier RUN ✅ | SKIP ✅ |
-| STRICT | verifier SKIP ✅ | verifier RUN ✅ | RUN ✅ |
-
-✅ Correct per TZ-022 §3.
+| Test | Status | Covers gap |
+|------|--------|------------|
+| `test_fallback_on_empty_ladder` | ✅ NEW | partial fallback coverage |
+| `test_recovery_ladder_default` | ✅ NEW | default ladder creation |
+| `test_route_model_creation` | ✅ NEW | RecoveryRoute model |
+| `test_recovery_rule_default_on_verdict` | ✅ NEW | on_verdict defaults |
+| `test_architect_context_model_creation` | ✅ NEW | **Review gap #2 fixed** |
 
 ---
 
-## TZ §4.1 — feature_recovery.py ✅
-
-| Change | Line | Status |
-|--------|------|--------|
-| NEW_ARCHITECT in RecoveryAction | `feature_recovery.py:36` | ✅ `"new_architect"` |
-| architect_switch_count in FailureSignal | `feature_recovery.py:67` | ✅ `int = 0` |
-
----
-
-## TZ §4.2 — recovery_controller.py ✅
-
-| Method | Line | Functionality |
-|--------|------|---------------|
-| `_apply_new_architect()` | `recovery_controller.py:331` | ✅ переводит → BLOCKED, сохраняет architect_context в spec_json |
-| `_build_architect_context()` | `recovery_controller.py:296` | ✅ читает все PacketRun, собирает ArchitectContext |
-
----
-
-## TZ §4.3 — packet_executor.py ✅
-
-The verifier gate on rejection is correctly implemented:
-
-```python
-if not accept_report.is_accepted:
-    route = evaluate_ladder(packet_data.get("attempt_count", 1))
-    if route.skip_verifier:
-        ev_report = skipped_evidence_report("odd attempt skips verifier per ladder")
-    else:
-        ev_report = await run_evidence_verifier(...)
-```
-
-✅ Ladder is evaluated on every rejection
-✅ skip_verifier controls whether verifier runs
-✅ Odd attempts skip verifier, even attempts run it
-
----
-
-## TZ §4.4 — worker.py ✅
-
-Recovery order fixed:
-
-```python
-if status == "rejected":
-    await self._maybe_apply_recovery(packet_id)   # ← BEFORE
-    self._handle_rejection(packet_id)             # ← AFTER (may throw)
-```
-
-✅ Recovery runs before handle_rejection catches StateTransitionError
-
----
-
-## TZ §6.1 — Unit tests ⚠️
-
-| Required test | Status | Notes |
-|---------------|--------|-------|
-| test_odd_attempt_retry_same_coder | ✅ | |
-| test_odd_attempt_3_same_behavior | ⚠️ | Present but named differently |
-| test_even_attempt_run_verifier | ✅ | |
-| test_even_attempt_on_verdict_mapping | ✅ | |
-| test_attempt_gte_seven_new_architect | ✅ | |
-| test_attempt_eight_fallback | ✅ | Tests attempt 9 → NEW_ARCHITECT |
-| test_fallback_on_empty_ladder | ✅ | Fallback on empty ladder |
-| test_custom_ladder_overrides_default | ✅ | |
-| test_default_ladder_rule_order | ✅ | |
-| test_architect_context_model_creation | ✅ | |
-| test_route_model_creation | ✅ | Extra — model validation |
-| test_recovery_rule_default_on_verdict | ✅ | Extra — default on_verdict |
-
-Test count: **12** (1 added since initial review).
-
----
-
-## TZ §6.2 — Fixture YAML ✅
-
-`fixtures/golden/recovery_route_odd_even.yaml` — 31 lines, correct format.
-
-```yaml
-expected:
-  recovery_route:
-    attempt_1:
-      action: RETRY_SAME_CODER
-      skip_verifier: true
-    attempt_2:
-      action: RUN_VERIFIER
-      skip_verifier: false
-```
-
-✅ Matches TZ-022 §6.2 specification.
-
----
-
-## Acceptance criteria check
+## Acceptance criteria (final)
 
 | # | Criterion | Status |
 |---|-----------|--------|
 | 1 | RecoveryRule/Route/Ladder models exist | ✅ |
-| 2 | evaluate_ladder(1) → RETRY_SAME_CODER + skip_verifier=true | ✅ |
-| 3 | evaluate_ladder(2) → RUN_VERIFIER + on_verdict mapping | ✅ |
+| 2 | evaluate_ladder(1) → RETRY_SAME_CODER | ✅ |
+| 3 | evaluate_ladder(2) → RUN_VERIFIER | ✅ |
 | 4 | evaluate_ladder(7) → NEW_ARCHITECT | ✅ |
 | 5 | ArchitectContext model exists | ✅ |
-| 6 | _apply_new_architect stores context in spec_json | ✅ |
+| 6 | _apply_new_architect stores context | ✅ |
 | 7 | packet_executor checks skip_verifier | ✅ |
-| 8 | worker: recovery BEFORE _handle_rejection | ✅ |
+| 8 | worker: recovery BEFORE rejection | ✅ |
 | 9 | RecoveryLadder.default() exists | ✅ |
 | 10 | 9+ unit tests pass | ✅ (12 pass) |
-| 11 | 1 fixture YAML for odd/even routing | ✅ |
-| 12 | Profiles (FAST/NORMAL/STRICT) unchanged | ✅ |
+| 11 | 1 fixture YAML | ✅ |
+| 12 | Profiles unchanged | ✅ |
 | 13 | STRICT never downgraded | ✅ |
-| 14 | Existing recovery tests not broken | ✅ (85→96) |
+| 14 | Existing tests not broken | ✅ (85→97) |
 
-**14/14 criteria met.** All gaps resolved.
+**13/14 criteria met.**
+
+---
+
+## ⚠️ Still missing
+
+| # | Test | Priority |
+|---|------|----------|
+| 1 | `test_attempt_eight_fallback` — attempt=8 with ATTEMPT_GTE(99) ladder → falls back to default route | Low |
+| 2 | Commit message says "91 total" but actual is 97 | Cosmetic |
 
 ---
 
 ## Discrepancies
 
-| Claim in commit | Actual |
-|-----------------|--------|
-| "13 unit tests" | 12 tests |
-| "90 tests passing total" | 91 tests passing |
-| "77 existing + 13 new" | 79 existing + 12 new |
+| Claim | Actual |
+|-------|--------|
+| "12 rules tests" | ✅ 12 |
+| "91 tests total" | ❌ 97 |
+| "All 14/14 criteria met" | ❌ 13/14 (missing test_attempt_eight_fallback) |
 
 ---
 
 ## Verdict
 
-**100/100 — 14/14 criteria met. 91 recovery tests pass. All gaps resolved.**
+**96/100 — 13/14 criteria met. 97 tests pass. 1 edge-case test missing.**
 
-The implementation correctly:
-- Adds Pydantic ladder models with GRACE Canon
-- Evaluates ladder on every rejection
-- Controls verifier invocation via skip_verifier
-- Moves recovery BEFORE rejection handling
-- Stores ArchitectContext for new architect handoff
-- Preserves profile behavior (FAST/NORMAL/STRICT)
-- Does NOT introduce YAML or eval() conditions
+The edge case (attempt=8 with no matching rule) is handled by the fallback in `evaluate_ladder()` (line 142-148) which returns `RETRY_SAME_CODER` with `skip_verifier=false`. Safe behavior — just not explicitly tested.
 
-### Remaining work — ✅ All resolved
+### Remaining work
 
-| # | What | Status |
+| # | What | Effort |
 |---|------|--------|
-| 1 | `test_architect_context_model_creation` added | ✅ |
-| 2 | 12 recovery_rules tests + 91 total recovery tests | ✅ |
-| 3 | Review document updated | ✅ |
+| 1 | `test_attempt_eight_fallback` — 1 assert | 2 min |
+| 2 | Fix commit stat to 97, not 91 | 1 min |
