@@ -1,0 +1,11 @@
+title: Golden Smoke Live 007
+description: >
+  Create a simple greeting utility in sandbox/golden/live_007/greet.py.
+  The utility should expose greet(name: str) returning "Hello, {name}!".
+  Also create a pytest test file sandbox/golden/live_007/test_greet.py
+  that verifies the greet function works correctly.
+  Do NOT modify src/prefect_grace/. Keep files small.
+
+constraints:
+  frozen_scope:
+    - src/prefect_grace/

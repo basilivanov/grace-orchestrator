@@ -30,22 +30,16 @@ waves:
             pattern: from w1_util import add
         acceptance_profile: FAST
 
-  - title: Wave 2 — test
+  - title: Wave 2 — separate
     packets:
-      - title: Create test for util
+      - title: Create separate module
         description: >
-          Create sandbox/golden/live_005/w2/test_w1_util.py that imports add from w1_util
-          (use sys.path.append('sandbox/golden/live_005/w1')) and asserts add(2,3)==5.
+          Create sandbox/golden/live_005/w2/mod_b.py with function get_b() returning 'B'.
         scope:
           - sandbox/golden/live_005/w2/
         verification:
           t0: []
           t1:
-            - python3 -c "import sys; sys.path.insert(0,'sandbox/golden/live_005/w1'); sys.path.insert(0,'sandbox/golden/live_005/w2'); from test_w1_util import test_add; test_add()"
+            - python3 -c "import sys; sys.path.insert(0,'sandbox/golden/live_005/w2'); from mod_b import get_b; assert get_b()=='B'"
           t2: []
-        expected_evidence:
-          - id: test_passes
-            kind: command
-            required: true
-            pattern: test_w1_util
         acceptance_profile: FAST

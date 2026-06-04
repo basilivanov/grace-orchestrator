@@ -10,24 +10,24 @@ waves:
     packets:
       - title: Create module A
         description: >
-          Create sandbox/golden/live_006/mod_a.py with function get_a() returning 'A'.
+          Create sandbox/golden/live_006/a/mod_a.py with function get_a() returning 'A'.
         scope:
-          - sandbox/golden/live_006/
+          - sandbox/golden/live_006/a/
         verification:
           t0: []
           t1:
-            - python3 -c "import sys; sys.path.insert(0,'sandbox/golden/live_006'); from mod_a import get_a; assert get_a()=='A'"
+            - python3 -c "import sys; sys.path.insert(0,'sandbox/golden/live_006/a'); from mod_a import get_a; assert get_a()=='A'"
           t2: []
         acceptance_profile: FAST
 
       - title: Create module B
         description: >
-          Create sandbox/golden/live_006/mod_b.py with function get_b() returning 'B'.
+          Create sandbox/golden/live_006/b/mod_b.py with function get_b() returning 'B'.
         scope:
-          - sandbox/golden/live_006/
+          - sandbox/golden/live_006/b/
         verification:
           t0: []
           t1:
-            - python3 -c "import sys; sys.path.insert(0,'sandbox/golden/live_006'); from mod_b import get_b; assert get_b()=='B'"
+            - python3 -c "import sys; sys.path.insert(0,'sandbox/golden/live_006/b'); from mod_b import get_b; assert get_b()=='B'"
           t2: []
         acceptance_profile: FAST

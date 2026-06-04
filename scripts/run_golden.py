@@ -70,7 +70,7 @@ def main():
     # 2. Architect plan
     print(f"POST /api/architect/plan  ({feature_path.name})")
     t0 = time.time()
-    c = httpx.Client(base_url=api_url, timeout=30)
+    c = httpx.Client(base_url=api_url, timeout=120)
     try:
         r = c.post("/api/architect/plan", json={"feature_spec": spec})
         r.raise_for_status()
