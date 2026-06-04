@@ -264,7 +264,7 @@ def decide_recovery(signal: FailureSignal, policy: RecoveryPolicy) -> RecoveryDe
 
 def _next_executor_hint(signal: FailureSignal) -> str:
     prev = set(signal.previous_executor_ids)
-    ladder = ["coder-agy-sonnet", "coder-agy-flash", "coder-flash"]
+    ladder = ["coder-agy-sonnet", "coder-agy-flash", "coder-deepseek-flash"]
     for choice in ladder:
         if choice not in prev:
             return choice

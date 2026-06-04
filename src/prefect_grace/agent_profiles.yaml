@@ -32,7 +32,7 @@ codex:
         provider: deepseek
 
      # ── Coder #1: opencode cheap (flash) ─────────────────────────────────
-    - executor_id: coder-flash
+    - executor_id: coder-deepseek-flash
       kind: opencode
       command: opencode
       model: deepseek/deepseek-v4-flash
