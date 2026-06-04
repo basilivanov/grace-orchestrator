@@ -21,6 +21,10 @@
 
 from __future__ import annotations
 
+from grace_control.core.structured_logger import GraceLogger
+
+_log = GraceLogger("acceptance")
+
 import os
 from pathlib import Path
 
@@ -238,6 +242,12 @@ class AcceptancePipeline:
             r = self._runner.run(cmd, output_dir=output_dir, cwd=cwd)
             commands.append(r)
             if not r.passed:
+                _log.info("t0_command_failed",
+                    command=" ".join(cmd)[:200],
+                    exit_code=r.exit_code,
+                    stderr=r.stderr[:500],
+                    stdout=r.stdout[:500],
+                )
                 return _T0Result(
                     stage=StageResult(name=StageName.T0_SCOPE_AND_LINT,
                         status=StageStatus.FAILED, summary="T0 cheap check failed",
@@ -272,10 +282,17 @@ class AcceptancePipeline:
 
         failed = [c for c in commands if not c.passed]
         if failed:
+            for c in failed:
+                _log.info("t1_command_failed",
+                    command=c.command[:200],
+                    exit_code=c.exit_code,
+                    stderr=c.stderr[:500],
+                    stdout=c.stdout[:500],
+                )
             return StageResult(name=StageName.T1_TARGETED_TESTS, status=StageStatus.FAILED,
                               summary=f"T1 failed: {len(failed)}/{len(commands)} commands failed",
                               commands=commands,
-                              blocking_issues=[f"command failed: {c.command} ({c.exit_code})" for c in failed])
+                              blocking_issues=[f"command failed: {c.command} (exit={c.exit_code}) stderr={c.stderr[:200]} stdout={c.stdout[:200]}" for c in failed])
         return StageResult(name=StageName.T1_TARGETED_TESTS, status=StageStatus.PASSED,
                           summary=f"T1 passed: {len(commands)} commands ok", commands=commands)
 
@@ -296,9 +313,16 @@ class AcceptancePipeline:
         commands = [self._runner.run(cmd, output_dir=run_dir, cwd=cwd) for cmd in cmds]
         failed = [c for c in commands if not c.passed]
         if failed:
+            for c in failed:
+                _log.info("t2_command_failed",
+                    command=c.command[:200],
+                    exit_code=c.exit_code,
+                    stderr=c.stderr[:500],
+                    stdout=c.stdout[:500],
+                )
             return StageResult(name=StageName.T2_FULL_TESTS, status=StageStatus.FAILED,
                               summary=f"T2 failed: {len(failed)}/{len(commands)} commands failed",
                               commands=commands,
-                              blocking_issues=[f"full check failed: {c.command} ({c.exit_code})" for c in failed])
+                              blocking_issues=[f"full check failed: {c.command} (exit={c.exit_code}) stderr={c.stderr[:200]} stdout={c.stdout[:200]}" for c in failed])
         return StageResult(name=StageName.T2_FULL_TESTS, status=StageStatus.PASSED,
                           summary=f"T2 passed: {len(commands)} commands ok", commands=commands)

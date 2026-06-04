@@ -164,19 +164,29 @@ class Worker:
 
     async def _maybe_apply_recovery(self, packet_id: str):
         controller_enabled = os.environ.get("GRACE_RECOVERY_CONTROLLER_ENABLED", "false") == "true"
-        if controller_enabled:
-            from grace_control.core.recovery_controller import RecoveryController
-            ctrl = RecoveryController()
-            try:
-                decision = await asyncio.wait_for(
-                    ctrl.evaluate(packet_id, allow_apply=True),
-                    timeout=30,
-                )
-                self.log.info("recovery_applied",
-                    packet_id=packet_id, action=decision.action.value)
-            except Exception as e:
-                self.log.error("recovery_apply_failed",
-                    packet_id=packet_id, error=str(e)[:200])
+        self.log.info("recovery_check",
+            packet_id=packet_id,
+            controller_enabled=controller_enabled,
+        )
+        if not controller_enabled:
+            return
+        from grace_control.core.recovery_controller import RecoveryController
+        ctrl = RecoveryController()
+        try:
+            decision = await asyncio.wait_for(
+                ctrl.evaluate(packet_id, allow_apply=True),
+                timeout=30,
+            )
+            self.log.info("recovery_applied",
+                packet_id=packet_id,
+                action=decision.action.value,
+                reason=decision.reason,
+            )
+        except Exception as e:
+            self.log.error("recovery_apply_failed",
+                packet_id=packet_id,
+                error=str(e)[:500],
+            )
 
     async def _heartbeat_loop(self):
         while self.running:

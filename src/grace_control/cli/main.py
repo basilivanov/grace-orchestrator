@@ -18,6 +18,8 @@ import yaml
 from rich.console import Console
 from rich.table import Table
 
+from grace_control.cli.trace import trace as trace_cmd
+
 console = Console()
 DEFAULT_API_URL = "http://localhost:8042"
 
@@ -699,3 +701,7 @@ def _handle_error(e, json_out):
 
 if __name__ == "__main__":
     cli()
+
+
+# Register trace command
+cli.add_command(trace_cmd)

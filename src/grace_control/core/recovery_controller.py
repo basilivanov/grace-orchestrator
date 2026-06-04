@@ -23,6 +23,9 @@ from grace_control.core.feature_recovery import (
     decide_recovery,
 )
 from grace_control.core.state_machine import PacketStateMachine
+from grace_control.core.structured_logger import GraceLogger, get_trace_id
+
+_log = GraceLogger("recovery_controller")
 
 
 class RecoveryController:
@@ -31,7 +34,12 @@ class RecoveryController:
         self._root = project_root or Path.cwd()
         self._enabled = os.environ.get("GRACE_RECOVERY_CONTROLLER_ENABLED", "false").lower() == "true"
 
-    async def evaluate(self, packet_id: str, allow_apply: bool = False) -> RecoveryDecision:
+    async def evaluate(self, packet_id: str, allow_apply: bool = False, trace_id: str | None = None) -> RecoveryDecision:
+        _log.info("evaluate_start",
+            packet_id=packet_id,
+            allow_apply=allow_apply,
+            trace_id=trace_id,
+        )
         signal = self.build_signal(packet_id)
         policy = RecoveryPolicy()
         fc = classify_failure(signal)
@@ -44,6 +52,15 @@ class RecoveryController:
             await self._apply_decision(packet_id, decision)
 
         decision.audit_payload["decision_id"] = db_decision_id
+
+        _log.info("recovery_decision_applied",
+            packet_id=packet_id,
+            action=decision.action.value,
+            failure_class=decision.failure_class.value,
+            reason=decision.reason or "",
+            next_executor_hint=decision.next_executor_hint or "",
+            allow_apply=allow_apply,
+        )
         return decision
 
     def build_signal(self, packet_id: str) -> FailureSignal:
@@ -117,6 +134,15 @@ class RecoveryController:
                     merge_count += 1
                 if "architect" in (r.get("domain_status") or ""):
                     architect_repairs += 1
+
+        _log.info("build_signal",
+            packet_id=packet_id,
+            runs_count=len(runs),
+            coder_attempt_count=coder_count,
+            executor_ids=executor_ids,
+            verifier_rejects=verifier_reject,
+            acceptance_verdict=acc.get("final_verdict", ""),
+        )
 
         return FailureSignal(
             feature_id=p_feature_id,
@@ -205,25 +231,31 @@ class RecoveryController:
             method(packet_id, decision)
 
     def _apply_retry_same_coder(self, packet_id: str, decision: RecoveryDecision = None):
+        _log.info("apply_retry_same_coder_start", packet_id=packet_id)
         from grace_control.db import get_db
         from grace_control.db.schema import Packet, PacketState
 
         with get_db() as db:
             packet = db.query(Packet).filter_by(id=packet_id).first()
             if not packet:
+                _log.warn("apply_retry_same_coder_skip", packet_id=packet_id, reason="packet_not_found")
                 return
             sm = PacketStateMachine()
             sm.transition(PacketState(packet.state), PacketState.READY)
             packet.state = PacketState.READY.value
             db.flush()
+        _log.info("apply_retry_same_coder_done", packet_id=packet_id, new_state="ready")
 
     def _apply_switch_coder(self, packet_id: str, decision: RecoveryDecision):
+        _log.info("apply_switch_coder_start", packet_id=packet_id,
+            requested_executor=decision.next_executor_hint)
         from grace_control.db import get_db
         from grace_control.db.schema import Packet, PacketState
 
         with get_db() as db:
             packet = db.query(Packet).filter_by(id=packet_id).first()
             if not packet:
+                _log.warn("apply_switch_coder_skip", packet_id=packet_id, reason="packet_not_found")
                 return
             sm = PacketStateMachine()
             sm.transition(PacketState(packet.state), PacketState.READY)
@@ -233,14 +265,19 @@ class RecoveryController:
             spec["recovery"] = {"requested_executor_id": decision.next_executor_hint}
             packet.spec_json = spec
             db.flush()
+        _log.info("apply_switch_coder_done", packet_id=packet_id,
+            new_state="ready", requested_executor=decision.next_executor_hint)
 
     def _apply_return_to_architect(self, packet_id: str, decision: RecoveryDecision):
+        _log.info("apply_return_to_architect_start", packet_id=packet_id,
+            reason=decision.reason[:100] if decision.reason else "")
         from grace_control.db import get_db
         from grace_control.db.schema import Packet, PacketState
 
         with get_db() as db:
             packet = db.query(Packet).filter_by(id=packet_id).first()
             if not packet:
+                _log.warn("apply_return_to_architect_skip", packet_id=packet_id, reason="packet_not_found")
                 return
             sm = PacketStateMachine()
             sm.transition(PacketState(packet.state), PacketState.BLOCKED)
@@ -254,14 +291,18 @@ class RecoveryController:
             }
             packet.spec_json = spec
             db.flush()
+        _log.info("apply_return_to_architect_done", packet_id=packet_id, new_state="blocked")
 
     def _apply_block_feature(self, packet_id: str, decision: RecoveryDecision):
+        _log.info("apply_block_feature_start", packet_id=packet_id,
+            reason=decision.reason[:100] if decision.reason else "")
         from grace_control.db import get_db
         from grace_control.db.schema import Packet, PacketState, Feature
 
         with get_db() as db:
             packet = db.query(Packet).filter_by(id=packet_id).first()
             if not packet:
+                _log.warn("apply_block_feature_skip", packet_id=packet_id, reason="packet_not_found")
                 return
             sm = PacketStateMachine()
             sm.transition(PacketState(packet.state), PacketState.BLOCKED)
@@ -273,48 +314,58 @@ class RecoveryController:
                 spec["recovery"] = {"blocked_reason": decision.reason}
                 packet.spec_json = spec
             db.flush()
+        _log.info("apply_block_feature_done", packet_id=packet_id, new_state="blocked")
 
     def _apply_retry_verifier(self, packet_id: str, decision: RecoveryDecision = None):
+        _log.info("apply_retry_verifier_start", packet_id=packet_id)
         from grace_control.db import get_db
         from grace_control.db.schema import Packet
 
         with get_db() as db:
             packet = db.query(Packet).filter_by(id=packet_id).first()
             if not packet:
+                _log.warn("apply_retry_verifier_skip", packet_id=packet_id, reason="packet_not_found")
                 return
             spec = dict(packet.spec_json or {})
             spec["recovery"] = {"retry_verifier": True}
             packet.spec_json = spec
             db.flush()
+        _log.info("apply_retry_verifier_done", packet_id=packet_id)
 
     def _apply_retry_reviewer(self, packet_id: str, decision: RecoveryDecision = None):
+        _log.info("apply_retry_reviewer_start", packet_id=packet_id)
         from grace_control.db import get_db
         from grace_control.db.schema import Packet
 
         with get_db() as db:
             packet = db.query(Packet).filter_by(id=packet_id).first()
             if not packet:
+                _log.warn("apply_retry_reviewer_skip", packet_id=packet_id, reason="packet_not_found")
                 return
             spec = dict(packet.spec_json or {})
             spec["recovery"] = {"retry_reviewer": True}
             packet.spec_json = spec
             db.flush()
+        _log.info("apply_retry_reviewer_done", packet_id=packet_id)
 
     def _apply_retry_merge(self, packet_id: str, decision: RecoveryDecision = None):
+        _log.info("apply_retry_merge_start", packet_id=packet_id)
         from grace_control.db import get_db
         from grace_control.db.schema import Packet, PacketState
 
         with get_db() as db:
             packet = db.query(Packet).filter_by(id=packet_id).first()
             if not packet:
+                _log.warn("apply_retry_merge_skip", packet_id=packet_id, reason="packet_not_found")
                 return
             sm = PacketStateMachine()
             sm.transition(PacketState(packet.state), PacketState.ACCEPTED)
             packet.state = PacketState.ACCEPTED.value
             db.flush()
+        _log.info("apply_retry_merge_done", packet_id=packet_id, new_state="accepted")
 
     def _apply_no_action(self, packet_id: str, decision: RecoveryDecision = None):
-        pass
+        _log.info("apply_no_action", packet_id=packet_id)
 
     def _build_architect_context(self, packet, db) -> dict:
         from grace_control.db.schema import PacketRun
@@ -352,12 +403,14 @@ class RecoveryController:
         return context
 
     def _apply_new_architect(self, packet_id: str, decision: RecoveryDecision):
+        _log.info("apply_new_architect_start", packet_id=packet_id)
         from grace_control.db import get_db
         from grace_control.db.schema import Packet, PacketState
 
         with get_db() as db:
             packet = db.query(Packet).filter_by(id=packet_id).first()
             if not packet:
+                _log.warn("apply_new_architect_skip", packet_id=packet_id, reason="packet_not_found")
                 return
             sm = PacketStateMachine()
             sm.transition(PacketState(packet.state), PacketState.BLOCKED)
@@ -369,3 +422,4 @@ class RecoveryController:
             spec["recovery"]["new_architect"] = architect_ctx
             packet.spec_json = spec
             db.flush()
+        _log.info("apply_new_architect_done", packet_id=packet_id, new_state="blocked")

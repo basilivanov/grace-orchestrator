@@ -1001,8 +1001,20 @@ class PacketExecutionAdapter:
                     existing.finished_at = datetime.now(timezone.utc)
                     existing.duration_ms = duration_ms
                     existing.executor_id = executor_id
+                    self._log_rejection(status, acceptance_report, accept_dict)
         except Exception:
             _log.warn("update_run_result_failed", run_id=run_id, status=status)
+
+    def _log_rejection(self, status: str, accept_report, accept_dict: dict):
+        if status != "accepted" and accept_dict:
+            stages = [s.get("name", "?") for s in accept_dict.get("stages", [])]
+            _log.info("execution_rejected",
+                verdict=accept_dict.get("final_verdict", "?"),
+                summary=accept_dict.get("summary", "")[:200],
+                stages=stages,
+                evidence_issues=accept_dict.get("evidence_issues", []),
+                scope_violations=accept_dict.get("scope_violations", []),
+            )
 
     # START_FUNCTION_CONTRACT
     # name: _finish_early_rejected_run

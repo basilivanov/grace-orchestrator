@@ -12,6 +12,10 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from grace_control.core.structured_logger import GraceLogger
+
+_log = GraceLogger("feature_recovery")
+
 
 class FailureClass(str, Enum):
     RETRYABLE_CODER = "retryable_coder"
@@ -104,7 +108,21 @@ def classify_failure(signal: FailureSignal) -> FailureClass:
     ev_verdict = signal.evidence_verifier_verdict
     rv_verdict = signal.reviewer_verdict
 
-    # ── True blockers ──────────────────────────────────────────────
+    fc = _classify(signal, reason, state, domain, merge_err, ev_verdict, rv_verdict)
+
+    _log.info("classify_failure",
+        packet_id=signal.packet_id,
+        failure_class=fc.value,
+        packet_state=state,
+        reason=signal.reason or "",
+        ev_verdict=ev_verdict or "",
+        rv_verdict=rv_verdict or "",
+        merge_error=signal.merge_error or "",
+    )
+    return fc
+
+
+def _classify(signal, reason, state, domain, merge_err, ev_verdict, rv_verdict) -> FailureClass:
     if merge_err and "dirty_target_repo" in merge_err:
         return FailureClass.TRUE_BLOCKER
     if merge_err and "conflict" in merge_err:
@@ -316,6 +334,16 @@ def decide_recovery(signal: FailureSignal, policy: RecoveryPolicy | None = None)
     decision.audit_payload.setdefault("policy", "default")
     decision.audit_payload.setdefault("coder_attempt_count", signal.coder_attempt_count)
     decision.audit_payload.setdefault("matched_branch", branch_map.get(decision.action, "unknown"))
+
+    _log.info("decide_recovery",
+        packet_id=signal.packet_id,
+        action=decision.action.value,
+        failure_class=decision.failure_class.value,
+        reason=decision.reason or "",
+        next_executor_hint=decision.next_executor_hint or "",
+        coder_attempt_count=signal.coder_attempt_count,
+        max_attempts_reached=decision.max_attempts_reached,
+    )
     return decision
 
 
