@@ -216,6 +216,11 @@ async def _warm_context(spec: dict, feature_id: str) -> dict:
                 scope_paths.add(s)
 
     scene = sorted(scope_paths) if scope_paths else ["src/grace_control/"]
+    # If task_desc references a specific file (e.g. docs/codex/tz-019-...md), include its directory
+    if task_desc.endswith(".md") and "/" in task_desc:
+        doc_dir = "/".join(task_desc.split("/")[:-1]) + "/"
+        if doc_dir not in scene:
+            scene.append(doc_dir)
     try:
         collector = ContextCollector(cli=resolve_model("context_collector")["command"], model=resolve_model("context_collector")["model"])
         code_ctx = await collector.collect(task_description=task_desc, target_scope=scene)
