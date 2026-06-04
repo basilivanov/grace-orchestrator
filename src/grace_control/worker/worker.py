@@ -124,8 +124,10 @@ class Worker:
                         if status == "rejected":
                             self.log.warn("packet_rejected", packet_id=packet_id, reason=result.reason)
                             self._handle_rejection(packet_id)
+                            await self._maybe_apply_recovery(packet_id)
                         elif status == "blocked":
                             self.log.warn("packet_blocked", packet_id=packet_id, reason=result.reason)
+                            await self._maybe_apply_recovery(packet_id)
 
                     except asyncio.TimeoutError:
                         self.log.error("execution_timed_out", packet_id=packet_id,
@@ -159,6 +161,22 @@ class Worker:
         except StateTransitionError:
             mark_failed(packet_id, "Max retry attempts reached")
             self.log.warn("max_retries_reached", packet_id=packet_id)
+
+    async def _maybe_apply_recovery(self, packet_id: str):
+        controller_enabled = os.environ.get("GRACE_RECOVERY_CONTROLLER_ENABLED", "false") == "true"
+        if controller_enabled:
+            from grace_control.core.recovery_controller import RecoveryController
+            ctrl = RecoveryController()
+            try:
+                decision = await asyncio.wait_for(
+                    ctrl.evaluate(packet_id, allow_apply=True),
+                    timeout=30,
+                )
+                self.log.info("recovery_applied",
+                    packet_id=packet_id, action=decision.action.value)
+            except Exception as e:
+                self.log.error("recovery_apply_failed",
+                    packet_id=packet_id, error=str(e)[:200])
 
     async def _heartbeat_loop(self):
         while self.running:

@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from enum import Enum
 from typing import Any
 
@@ -79,6 +80,18 @@ class RecoveryPolicy(BaseModel):
     max_merge_retries: int = 2
     allow_profile_escalation: bool = True
     allow_model_switch: bool = True
+    never_downgrade_strict: bool = True
+
+
+NO_CHANGES_PATTERNS = ("no changes", "no_changes", "no_changes_produced", "no changes produced")
+
+
+def _safe_next_profile(current: str | None, proposed: str | None, policy: RecoveryPolicy) -> str | None:
+    if proposed is None:
+        return None
+    if policy.never_downgrade_strict and current == "STRICT" and proposed != "STRICT":
+        return "STRICT"
+    return proposed
 
 
 def classify_failure(signal: FailureSignal) -> FailureClass:
@@ -106,6 +119,8 @@ def classify_failure(signal: FailureSignal) -> FailureClass:
         return FailureClass.RETRYABLE_CODER
     if ev_verdict == "PASS":
         return FailureClass.UNKNOWN_RETRYABLE
+    if ev_verdict:
+        return FailureClass.RETRYABLE_VERIFIER
 
     # ── Reviewer ────────────────────────────────────────────────────
     if rv_verdict == "RETURN_TO_ARCHITECT":
@@ -114,6 +129,8 @@ def classify_failure(signal: FailureSignal) -> FailureClass:
         return FailureClass.RETRYABLE_CODER
     if rv_verdict == "PASS":
         return FailureClass.UNKNOWN_RETRYABLE
+    if rv_verdict:
+        return FailureClass.RETRYABLE_REVIEWER
 
     # ── Blocked state ──────────────────────────────────────────────
     if state == "blocked":
@@ -137,7 +154,7 @@ def classify_failure(signal: FailureSignal) -> FailureClass:
 
     # ── Deterministic acceptance ────────────────────────────────────
     if state in ("rejected", "failed") and domain in ("rejected", "runner_error"):
-        if "no changes" in reason or "test" in reason or "command" in reason or "evidence" in reason:
+        if any(p in reason for p in NO_CHANGES_PATTERNS) or "test" in reason or "command" in reason or "evidence" in reason:
             return FailureClass.RETRYABLE_CODER
         if "pycompile" in reason or "syntax" in reason:
             return FailureClass.RETRYABLE_CODER
@@ -197,11 +214,18 @@ def decide_recovery(signal: FailureSignal, policy: RecoveryPolicy) -> RecoveryDe
                 max_attempts_reached=True,
             )
         if signal.coder_attempt_count >= policy.max_same_coder_attempts:
+            if policy.allow_model_switch:
+                return RecoveryDecision(
+                    action=RecoveryAction.SWITCH_CODER,
+                    failure_class=fc,
+                    reason=f"coder failed {signal.coder_attempt_count}x, switching model",
+                    next_executor_hint=_next_executor_hint(signal),
+                )
             return RecoveryDecision(
-                action=RecoveryAction.SWITCH_CODER,
+                action=RecoveryAction.RETRY_SAME_CODER,
                 failure_class=fc,
-                reason=f"coder failed {signal.coder_attempt_count}x, switching model",
-                next_executor_hint=_next_executor_hint(signal),
+                reason=f"coder failed {signal.coder_attempt_count}x, model switch disabled, retrying same",
+                next_executor_hint=signal.current_executor_id,
             )
         return RecoveryDecision(
             action=RecoveryAction.RETRY_SAME_CODER,
@@ -270,3 +294,113 @@ def _next_executor_hint(signal: FailureSignal) -> str:
         if choice not in prev:
             return choice
     return "coder-agy-sonnet"
+
+
+# ── Phase 4: Session Resume Stubs ──────────────────────────────────────
+
+
+class RecoverySessionSnapshot(BaseModel):
+    """Snapshot of a failed session for future resume."""
+    session_id: str = ""
+    feature_id: str
+    wave_id: str = ""
+    packet_id: str
+    run_id: str = ""
+    attempt_number: int = 1
+    role: str = "coder"
+    executor_id: str = ""
+    model: str = ""
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    status: str = ""
+    summary_human: str = ""
+    failure_reason: str = ""
+    changed_files: list[str] = Field(default_factory=list)
+    artifacts: list[str] = Field(default_factory=list)
+    acceptance_report_path: str = ""
+    evidence_report_path: str = ""
+    reviewer_report_path: str = ""
+    recovery_decision_id: str = ""
+    previous_attempts_summary: list[str] = Field(default_factory=list)
+    full_context_json: dict[str, Any] = Field(default_factory=dict)
+
+
+class TaskResumeContext(BaseModel):
+    """Resume context for a specific task/packet retry."""
+    task_id: str = ""
+    packet_id: str
+    feature_id: str
+    role: str = "coder"
+    previous_attempts: list[RecoverySessionSnapshot] = Field(default_factory=list)
+    recovery_decision: dict[str, Any] = Field(default_factory=dict)
+    executor_hint: str = ""
+    failure_summary: str = ""
+    architect_instruction: str = ""
+    session_resume_available: bool = False
+    build_resume_context: bool = False
+
+
+class SessionResumeSummary(BaseModel):
+    """Human-readable summary of session resume context for admin UI."""
+    packet_id: str
+    attempt_number: int
+    previous_executors: list[str] = Field(default_factory=list)
+    failure_reason: str = ""
+    action: str = ""
+    resume_available: bool = False
+    context_size_kb: int = 0
+
+
+def build_session_snapshot(packet_run: Any, packet: Any = None) -> RecoverySessionSnapshot:
+    rj = packet_run.result_json or {}
+    acc = rj.get("acceptance_report", {})
+    rec = rj.get("recovery", {})
+
+    return RecoverySessionSnapshot(
+        feature_id=getattr(packet, "feature_id", "") if packet else "",
+        wave_id=getattr(packet, "wave_id", "") if packet else "",
+        packet_id=packet_run.packet_id,
+        run_id=packet_run.id,
+        attempt_number=packet_run.run_number,
+        status=packet_run.status,
+        executor_id=rj.get("executor_id", ""),
+        model=rj.get("model", ""),
+        started_at=getattr(packet_run, "started_at", None),
+        finished_at=getattr(packet_run, "finished_at", None),
+        failure_reason=rj.get("reason", ""),
+        acceptance_report_path=rj.get("acceptance_report_path", ""),
+        evidence_report_path=rj.get("evidence_verifier_report_path", ""),
+        reviewer_report_path=rj.get("reviewer_report_path", ""),
+        recovery_decision_id=rec.get("decision_id", ""),
+        summary_human=f"Attempt {packet_run.run_number}: {packet_run.status} — {rj.get('reason', '')[:200]}",
+    )
+
+
+def build_task_resume_context(
+    packet: Any,
+    decision: RecoveryDecision | None = None,
+    history: list[RecoverySessionSnapshot] | None = None,
+) -> TaskResumeContext:
+    return TaskResumeContext(
+        packet_id=packet.id if hasattr(packet, "id") else "",
+        feature_id=getattr(packet, "feature_id", ""),
+        role="coder",
+        previous_attempts=history or [],
+        recovery_decision=decision.model_dump() if decision else {},
+        executor_hint=(decision.next_executor_hint or "") if decision else "",
+        failure_summary=(decision.reason or "") if decision else "",
+        architect_instruction=(decision.architect_instruction or "") if decision else "",
+        session_resume_available=False,
+        build_resume_context=False,
+    )
+
+
+def render_resume_summary(context: TaskResumeContext) -> str:
+    parts = [f"Packet {context.packet_id}: {len(context.previous_attempts)} previous attempts"]
+    if context.failure_summary:
+        parts.append(f"Failure: {context.failure_summary[:200]}")
+    if context.executor_hint:
+        parts.append(f"Next executor: {context.executor_hint}")
+    if context.architect_instruction:
+        parts.append(f"Architect: {context.architect_instruction[:200]}")
+    return "\n".join(parts)

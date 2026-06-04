@@ -75,6 +75,20 @@ async def get_packet(packet_id: str) -> dict:
         if not p:
             raise HTTPException(status_code=404, detail="Packet not found")
         runs = db.query(PacketRun).filter_by(packet_id=packet_id).all()
+        recovery_data = None
+        for r in runs:
+            rj = r.result_json or {}
+            rec = rj.get("recovery", {})
+            if rec:
+                recovery_data = {
+                    "failure_class": rec.get("failure_class", ""),
+                    "action": rec.get("action", ""),
+                    "reason": rec.get("reason", ""),
+                    "current_executor_id": rec.get("current_executor_id", ""),
+                    "next_executor_hint": rec.get("next_executor_hint", ""),
+                    "decision_id": rec.get("decision_id", ""),
+                }
+                break
         return {
             "data": {
                 "id": p.id, "feature_id": p.feature_id, "wave_id": p.wave_id,
@@ -83,6 +97,7 @@ async def get_packet(packet_id: str) -> dict:
                 "acceptance_profile": p.acceptance_profile,
                 "attempt_count": p.attempt_count, "max_attempts": p.max_attempts,
                 "spec_json": p.spec_json,
+                "recovery": recovery_data,
                 "runs": [
                     {
                         "id": r.id, "run_number": r.run_number, "status": r.status,

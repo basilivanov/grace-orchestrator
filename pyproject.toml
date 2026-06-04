@@ -184,10 +184,11 @@ warn_return_any = true
 warn_unused_ignores = true
 
 [tool.pytest.ini_options]
-testpaths = ["src/prefect_grace/tests"]
+testpaths = ["tests", "src/prefect_grace/tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+asyncio_mode = "auto"
 addopts = [
     "-v",
     "--strict-markers",

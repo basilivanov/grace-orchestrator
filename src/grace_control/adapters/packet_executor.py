@@ -24,7 +24,7 @@ from __future__ import annotations
 import asyncio
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
 
@@ -144,11 +144,11 @@ class PacketExecutionAdapter:
                 _log.debug("run_already_exists", packet_id=packet_id, run_id=run_id)
                 # Still update status to running
                 existing_run.status = "running"
-                existing_run.started_at = datetime.utcnow()
+                existing_run.started_at = datetime.now(timezone.utc)
             else:
                 packet_run = PacketRun(
                     id=run_id, packet_id=packet_id, run_number=run_number,
-                    worker_id=worker_id, status="running", started_at=datetime.utcnow(),
+                    worker_id=worker_id, status="running", started_at=datetime.now(timezone.utc),
                 )
                 db.add(packet_run)
 
@@ -174,7 +174,20 @@ class PacketExecutionAdapter:
         from grace_control.core.executor_selector import select_executor
 
         tier = route_packet(packet_data.get("acceptance_profile", "NORMAL"), packet_data.get("spec_json"))
-        executor = select_executor("coder", attempt=packet_data.get("attempt_count", 1) + 1)
+        spec_json = packet_data.get("spec_json") or {}
+        recovery = spec_json.get("recovery", {}) if isinstance(spec_json, dict) else {}
+        requested_executor_id = recovery.get("requested_executor_id")
+        if isinstance(spec_json, dict) and requested_executor_id:
+            from grace_control.core.executor_selector import load_profiles
+            profiles = load_profiles()
+            executors = profiles.get("codex", {}).get("executors", [])
+            matching = [e for e in executors if e.get("executor_id") == requested_executor_id]
+            if matching:
+                executor = matching[0]
+            else:
+                executor = select_executor("coder", attempt=packet_data.get("attempt_count", 1) + 1)
+        else:
+            executor = select_executor("coder", attempt=packet_data.get("attempt_count", 1) + 1)
         packet_data["_executor"] = executor
         packet_data["_tier"] = tier.value
 
@@ -653,7 +666,7 @@ class PacketExecutionAdapter:
                 existing = db.query(PacketRun).filter_by(id=run_id).first()
                 if existing:
                     existing.status = "failed"
-                    existing.finished_at = datetime.utcnow()
+                    existing.finished_at = datetime.now(timezone.utc)
                     existing.duration_ms = int((time.time() - start_time) * 1000)
             raise
 
@@ -969,7 +982,7 @@ class PacketExecutionAdapter:
                         "agent_commit_sha": commit_sha,
                     }
                     existing.evidence_path = evidence_path
-                    existing.finished_at = datetime.utcnow()
+                    existing.finished_at = datetime.now(timezone.utc)
                     existing.duration_ms = duration_ms
                     existing.executor_id = executor_id
         except Exception:

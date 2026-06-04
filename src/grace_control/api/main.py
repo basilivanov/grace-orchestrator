@@ -34,7 +34,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from grace_control.api.routers import architect, features, packets, workers, self_evolution
+from grace_control.api.routers import architect, features, packets, recovery, self_evolution, workers
 from grace_control.db import init_db
 
 _lease_task = None
@@ -99,6 +99,7 @@ app.include_router(packets.router, prefix="/api/packets", tags=["packets"])
 app.include_router(workers.router, prefix="/api/workers", tags=["workers"])
 app.include_router(architect.router, prefix="/api/architect", tags=["architect"])
 app.include_router(self_evolution.router, prefix="/api/self", tags=["self-evolution"])
+app.include_router(recovery.router, prefix="/api/recovery", tags=["recovery"])
 
 #END_BLOCK_APP
 
@@ -150,22 +151,49 @@ async def dashboard_data():
             fw = []
             for w in waves:
                 packets = db.query(Packet).filter_by(feature_id=f.id, wave_id=w.id).all()
+                fw_packets = []
+                for p in packets:
+                    recovery_runs = db.query(PacketRun).filter_by(
+                        packet_id=p.id
+                    ).filter(
+                        PacketRun.result_json.contains({"recovery": {}})
+                    ).order_by(PacketRun.run_number.desc()).limit(1).all()
+                    recovery_data = None
+                    if recovery_runs:
+                        rj = recovery_runs[0].result_json or {}
+                        rec = rj.get("recovery", {})
+                        recovery_data = {
+                            "failure_class": rec.get("failure_class", ""),
+                            "action": rec.get("action", ""),
+                            "reason": rec.get("reason", ""),
+                            "current_executor_id": rec.get("current_executor_id", ""),
+                            "next_executor_hint": rec.get("next_executor_hint", ""),
+                            "decision_id": rec.get("decision_id", ""),
+                        }
+                    fw_packets.append({
+                        "id": p.id, "title": p.title, "state": p.state,
+                        "acceptance_profile": p.acceptance_profile,
+                        "attempt_count": p.attempt_count, "max_attempts": p.max_attempts,
+                        "feature_id": p.feature_id, "wave_id": p.wave_id,
+                        "created_at": p.created_at.isoformat() + "Z" if p.created_at else None,
+                        "updated_at": p.updated_at.isoformat() + "Z" if p.updated_at else None,
+                        "recovery": recovery_data,
+                    })
                 fw.append({
                     "id": w.id, "title": w.title, "order": w.order, "status": w.status,
-                    "packets": [
-                        {"id": p.id, "title": p.title, "state": p.state,
-                         "acceptance_profile": p.acceptance_profile,
-                         "attempt_count": p.attempt_count, "max_attempts": p.max_attempts,
-                         "feature_id": p.feature_id, "wave_id": p.wave_id,
-                         "created_at": p.created_at.isoformat() + "Z" if p.created_at else None,
-                         "updated_at": p.updated_at.isoformat() + "Z" if p.updated_at else None}
-                        for p in packets
-                    ],
+                    "packets": fw_packets,
                     "created_at": w.created_at.isoformat() + "Z" if w.created_at else None,
                 })
+            blocked_recovery_count = sum(
+                1 for w in fw for p in w["packets"]
+                if p["state"] == "blocked"
+                and p.get("recovery") and p["recovery"].get("blocked_reason")
+            )
             result_features.append({
-                "id": f.id, "slug": f.slug, "title": f.title, "status": f.status, "waves": fw,
+                "id": f.id, "slug": f.slug, "title": f.title, "status": f.status,
+                "waves": fw,
                 "created_at": f.created_at.isoformat() + "Z" if f.created_at else None,
+                "blocked_recovery_count": blocked_recovery_count,
             })
 
         # Stats
@@ -185,7 +213,8 @@ async def dashboard_data():
 
 
 @app.get("/api/events")
-async def list_events(entity_type: str = "", entity_id: str = "", limit: int = 100):
+async def list_events(entity_type: str = "", entity_id: str = "",
+                       event_type: str = "", limit: int = 100):
     from grace_control.db import get_db as _gdb
     from grace_control.db.schema import Event
 
@@ -195,6 +224,11 @@ async def list_events(entity_type: str = "", entity_id: str = "", limit: int = 1
             q = q.filter_by(entity_type=entity_type)
         if entity_id:
             q = q.filter_by(entity_id=entity_id)
+        if event_type:
+            if event_type.startswith("recovery_"):
+                q = q.filter(Event.event_type.like("recovery_%"))
+            else:
+                q = q.filter_by(event_type=event_type)
         events = q.limit(limit).all()
         return {
             "data": [

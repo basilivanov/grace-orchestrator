@@ -294,7 +294,18 @@ function renderOverview(d,s){
     ${lr?`<b>Last run:</b> ${lr.status}${lr.duration_ms?` · ${(lr.duration_ms/1000).toFixed(1)}s`:''}<br>`:''}
     ${lr&&lr.evidence_path?`<b>Evidence:</b> <span style=font-family:var(--mono);font-size:10px>${lr.evidence_path}</span><br>`:''}
     <b>Runs:</b> ${d.runs?d.runs.length:0} &nbsp; <b>Next:</b> ${next}
-  </div>`;
+  </div>
+  ${d.recovery?`<div class=recovery-section style="margin-top:8px;padding:8px;background:var(--card);border-radius:6px;border:1px solid var(--bd)">
+    <b style=font-size:11px>Recovery</b>
+    <div style=font-size:11px;margin-top:4px>
+      <span class=badge style="display:inline-block;padding:2px 6px;border-radius:3px;background:var(--y)20;color:var(--y);font-size:10px;font-weight:600">${d.recovery.failureClass||'none'}</span>
+      <span style=margin-left:4px>${d.recovery.action||'-'}</span>
+    </div>
+    <div style=font-size:10px;color:var(--gr);margin-top:2px>${d.recovery.reason||''}</div>
+    <div style=font-size:10px;color:var(--gr);margin-top:2px>
+      ${d.recovery.currentExecutorId||'?'} → ${d.recovery.nextExecutorHint||'?'}
+    </div>
+  </div>`:''}`;
 }
 function renderRuns(d){
   if(!d.runs||!d.runs.length)return'<div class=empt>No runs</div>';
@@ -462,7 +473,7 @@ async function cancelSESession(sid){
 function connectWS(){
   ws=new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/ws`);
   ws.onopen=()=>{$('ws-stat').innerHTML='<span class=ws-dot style=background:var(--g)></span>Live'};
-  ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.type==='state_change')load();if(m.type==='self_evolution_update'){if(seActive)loadSESessions()}};
+  ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.type==='state_change')load();if(m.type==='self_evolution_update'){if(seActive)loadSESessions()}if(m.type==='recovery_update'&&selPid){renderInspector(selPid)}};
   ws.onclose=()=>{setTimeout(connectWS,2000);$('ws-stat').innerHTML='<span class=ws-dot style=background:var(--r)></span>Offline'};
 }
 load();connectWS();setInterval(load,5000);

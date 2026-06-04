@@ -24,6 +24,21 @@ from datetime import datetime, timezone
 from grace_control.db import get_db
 from grace_control.db.schema import Event
 
+RECOVERY_EVENT_TYPES = frozenset([
+    "recovery_classified",
+    "recovery_decision_made",
+    "recovery_retry_same_coder",
+    "recovery_switch_coder",
+    "recovery_return_to_architect",
+    "recovery_escalate_architect",
+    "recovery_retry_verifier",
+    "recovery_retry_reviewer",
+    "recovery_retry_merge",
+    "recovery_block_feature",
+    "recovery_no_action",
+    "recovery_apply_failed",
+])
+
 
 def record_event(
     event_type: str,
