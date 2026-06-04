@@ -62,51 +62,74 @@ class RecoveryController:
             if not runs:
                 raise ValueError(f"No runs for packet: {packet_id}")
 
+            # Eagerly read all needed fields inside the session
+            p_feature_id = packet.feature_id
+            p_id = packet.id
+            p_state = packet.state
+            p_profile = packet.acceptance_profile
+            p_attempt = packet.attempt_count
+
             latest = runs[0]
-            result = latest.result_json or {}
+            result = dict(latest.result_json or {})
 
-        legacy = result.get("legacy_result", {})
-        acc = result.get("acceptance_report", {})
-        ev = result.get("evidence_verifier_report", {})
-        rv = result.get("reviewer_report", {})
+            legacy = result.get("legacy_result", {})
+            if isinstance(legacy, dict):
+                legacy = dict(legacy)
+            else:
+                legacy = {}
+            acc = result.get("acceptance_report", {})
+            if isinstance(acc, dict):
+                acc = dict(acc)
+            else:
+                acc = {}
+            ev = result.get("evidence_verifier_report", {})
+            if isinstance(ev, dict):
+                ev = dict(ev)
+            else:
+                ev = {}
+            rv = result.get("reviewer_report", {})
+            if isinstance(rv, dict):
+                rv = dict(rv)
+            else:
+                rv = {}
 
-        executor_ids = []
-        prev_ids = []
-        coder_count = 0
-        verifier_reject = 0
-        reviewer_reject = 0
-        merge_count = 0
-        architect_repairs = 0
+            executor_ids = []
+            prev_ids = []
+            coder_count = 0
+            verifier_reject = 0
+            reviewer_reject = 0
+            merge_count = 0
+            architect_repairs = 0
 
-        for run in runs:
-            r = run.result_json or {}
-            exec_id = r.get("executor_id", "")
-            if exec_id and exec_id not in executor_ids:
-                executor_ids.append(exec_id)
-            prev_ids.append(exec_id)
-            if run.status in ("rejected", "failed"):
-                coder_count += 1
-            if "verifier" in (r.get("domain_status") or ""):
-                verifier_reject += 1
-            if "reviewer" in (r.get("domain_status") or ""):
-                reviewer_reject += 1
-            if "merge" in (r.get("domain_status") or ""):
-                merge_count += 1
-            if "architect" in (r.get("domain_status") or ""):
-                architect_repairs += 1
+            for run in runs:
+                r = dict(run.result_json or {})
+                exec_id = r.get("executor_id", "")
+                if exec_id and exec_id not in executor_ids:
+                    executor_ids.append(exec_id)
+                prev_ids.append(exec_id)
+                if run.status in ("rejected", "failed"):
+                    coder_count += 1
+                if "verifier" in (r.get("domain_status") or ""):
+                    verifier_reject += 1
+                if "reviewer" in (r.get("domain_status") or ""):
+                    reviewer_reject += 1
+                if "merge" in (r.get("domain_status") or ""):
+                    merge_count += 1
+                if "architect" in (r.get("domain_status") or ""):
+                    architect_repairs += 1
 
         return FailureSignal(
-            feature_id=packet.feature_id,
-            packet_id=packet.id,
-            packet_state=packet.state,
+            feature_id=p_feature_id,
+            packet_id=p_id,
+            packet_state=p_state,
             domain_status=legacy.get("domain_status", ""),
             reason=result.get("reason", ""),
             acceptance_verdict=acc.get("final_verdict", ""),
             evidence_verifier_verdict=ev.get("verdict", ""),
             reviewer_verdict=rv.get("verdict", ""),
             merge_error=result.get("merge_error", ""),
-            acceptance_profile=packet.acceptance_profile,
-            attempt_count=packet.attempt_count,
+            acceptance_profile=p_profile,
+            attempt_count=p_attempt,
             coder_attempt_count=coder_count,
             architect_repair_count=architect_repairs,
             verifier_reject_count=verifier_reject,
