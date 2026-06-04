@@ -1,8 +1,18 @@
-# TZ 019 — GRACE Mission Control Center: admin UI, observability, artifacts, durations, self-improvement
+# TZ 019 — GRACE Mission Control Center: admin UI observability, stages, events, recovery
 
 Audience: Flash coder / literal executor.
 
-Goal: build a calm, readable, operational admin UI for `grace-orchestrator` that shows what is happening with features, waves, packets, runs/attempts, artifacts, evidence, events, durations, live timers, and self-improvement work.
+This is the single canonical TZ for the GRACE admin UI work.
+
+It replaces and consolidates:
+
+```text
+docs/codex/tz-019-admin-ui-duration-timers-observability.md
+docs/codex/tz-019b-admin-ui-stage-actor-status-observability.md
+docs/codex/tz-019c-admin-event-stream-and-recovery-observability.md
+```
+
+After this consolidation, `tz-019b-*` and `tz-019c-*` must not be recreated. Any future admin UI observability changes belong in this file or in a new numbered TZ.
 
 Interface name:
 
@@ -10,57 +20,78 @@ Interface name:
 GRACE Mission Control Center
 ```
 
-This task is about admin UI/data/API/test foundation. It must not change orchestration semantics, retry policy, acceptance pipeline, merge behavior, or safety gates.
+Goal: make the current `grace-orchestrator` admin UI operationally useful for watching long-running GRACE work. The UI must show features, waves, packets, runs/attempts, artifacts, evidence, events, active stage/actor, live durations, recovery decisions, and self-improvement work in one calm interface.
+
+This task is UI/API/data/test observability work. It must not change orchestration semantics, retry policy, deterministic acceptance, reviewer gates, merge behavior, or safety gates.
 
 ---
 
-## 0. Product intent
+## 0. Current implementation baseline
 
-The user must quickly understand:
+Do not implement this as a greenfield dashboard. The current code already contains important pieces that must be kept and extended.
 
-```text
-1. What is running now.
-2. Where problems are.
-3. Which packets are ready, running, failed/rejected, accepted, or merged.
-4. Which attempts happened and how long every attempt took.
-5. Where artifacts are: logs, evidence, diff, screenshots, test output.
-6. Why a packet was accepted, rejected, failed, blocked, or stuck.
-7. Which tasks are self-improvement and therefore modify GRACE itself.
-8. How long the feature/wave/packet has already been running.
-```
-
-Main user scenario:
+Already implemented in current codebase:
 
 ```text
-User sees a problem
-→ clicks packet
-→ sees current state and reason
-→ opens Runs/Artifacts
-→ understands what happened
+FastAPI app
+HTML template dashboard
+vanilla JavaScript dashboard code
+/api/packets/
+/api/workers/
+/api/dashboard/v2
+/api/events
+/api/artifacts/{packet_id}/{run_id:path}
+/ws WebSocket endpoint
+src/grace_control/api/ws_broadcast.py
+src/grace_control/api/routers/recovery.py
+RecoveryController
+Recovery session stubs
+packet inspector recovery section
+recovery_* event filtering
 ```
 
-Priority:
+Existing Dashboard v2 capabilities to preserve:
 
 ```text
-runs + artifacts + events + durations + tests
+WebSocket real-time updates
+initial REST fetch for packets/workers/health
+state_change broadcasts on claim/release/cancel/merge
+stats cards
+timeline dots: ready → running → accepted → merged
+packet artifact/evidence modal
+worker status display
+tooltips
 ```
 
-Without these, UI becomes a pretty empty shell.
+Existing recovery capabilities to preserve:
+
+```text
+POST /api/recovery/evaluate/{packet_id}
+GET /api/recovery/packets/{packet_id}
+GET /api/recovery/features/{feature_id}
+Dashboard API includes packet recovery data
+Packet detail includes recovery data
+/api/events supports recovery_* prefix filtering
+WebSocket can broadcast recovery_update
+PacketExecutor can honor spec_json.recovery.requested_executor_id
+Recovery session stubs exist but session_resume_available=false
+```
+
+Therefore this TZ is mainly about consolidation and completion:
+
+```text
+rename/shape the UI as GRACE Mission Control Center
+move from flat packet table toward feature → wave → packet hierarchy
+show duration and live timer fields everywhere they matter
+show active_stage, active_role, executor/model/provider and next_action
+show compact live events and full filtered event history
+show recovery/stability status without raw JSON hunting
+add tests that catch JavaScript/template regressions
+```
 
 ---
 
-## 1. Stack constraints
-
-Keep current stack:
-
-```text
-FastAPI
-HTML/templates
-CSS
-vanilla JavaScript
-current backend/control plane
-Playwright for browser tests
-```
+## 1. Non-goals and safety constraints
 
 Do not add:
 
@@ -69,18 +100,67 @@ React
 Vue
 Svelte
 separate frontend build stack
-new workflow engine
 heavy dashboard library
-websockets-only architecture without polling fallback
+new workflow engine
+websockets-only design without REST/polling fallback
+new recovery engine competing with RecoveryController
+new acceptance semantics
+new merge semantics
 ```
 
-Use WebSocket if already available, but keep polling fallback.
+Do not bypass:
+
+```text
+scope guard
+deterministic acceptance
+reviewer gates
+STRICT packet protections
+merge preflight
+human/safety blockers
+```
+
+Do not auto-cancel or auto-recover anything as part of UI warnings. Stuck detection in this TZ is display-only unless existing recovery policy explicitly decides otherwise.
 
 ---
 
-## 2. Core UX principle
+## 2. Product intent
 
-The UI must not be overloaded.
+The user must understand in a few seconds:
+
+```text
+1. What is running now.
+2. Where problems are.
+3. Which features/waves/packets are ready, running, accepted, merged, rejected, failed, blocked, or stale.
+4. Which role/agent/model is active now.
+5. Which stage is active now.
+6. How long the feature/wave/packet/stage/attempt has been running.
+7. Which attempts happened and how long each took.
+8. Where artifacts are: logs, evidence, diff, screenshots, test output.
+9. Why a packet was accepted, rejected, failed, blocked, retried, switched, returned to architect, or merged.
+10. Which tasks are self-improvement and therefore modify GRACE itself.
+```
+
+Main user path:
+
+```text
+User sees a problem
+→ clicks feature or packet
+→ sees state, stage, actor, next action, duration, last reason
+→ opens Runs / Artifacts / Events / Recovery
+→ understands what happened without reading raw logs first
+```
+
+Priority:
+
+```text
+runs + artifacts + events + durations + stage/actor + recovery + tests
+```
+
+Without these, the dashboard is only a pretty shell.
+
+---
+
+## 3. UX principle
 
 Main principle:
 
@@ -91,18 +171,45 @@ Overview first → Detail on click → Deep debug only when needed
 Meaning:
 
 ```text
-Main screen: summary + feature list + selected feature packets.
-Packet click: detailed state, runs, artifacts, events, spec.
-Deep debug: raw JSON, full event payloads, full logs, artifact previews.
+Main screen: status summary + feature list + selected feature waves/packets + compact live events.
+Packet click: current state, current stage, actor, runs, artifacts, events, recovery, spec.
+Deep debug: raw JSON, full payloads, full logs, artifact previews.
 ```
 
-Do not build a dense cockpit that shows workers, events, artifacts, counters, shortcuts, legends, raw JSON, and logs all at once.
+Do not show every worker, every event payload, every ID, every artifact, every shortcut, and raw JSON at the top level.
 
 ---
 
-## 3. Identity model: UID vs slug
+## 4. Stack constraints
 
-The control plane uses NanoID-style UIDs as canonical IDs:
+Keep current stack:
+
+```text
+FastAPI
+HTML templates
+CSS
+vanilla JavaScript
+current backend/control plane
+Playwright/browser tests
+Python unit tests
+```
+
+Use WebSocket when available, but keep REST fallback:
+
+```text
+/ws for live state/recovery updates
+/api/dashboard/v2 for full snapshot
+/api/packets/{packet_id} for packet detail
+/api/events for filtered history
+```
+
+If WebSocket disconnects, UI must visibly show offline/reconnecting and keep a polling fallback.
+
+---
+
+## 5. Identity model: UID vs slug
+
+Canonical IDs are NanoID-style UIDs:
 
 ```text
 Feature.id = feat_<nanoid>
@@ -118,7 +225,7 @@ Wave.slug
 Packet.slug
 ```
 
-UI links/actions/API calls must use UID values.
+UI links, API calls, buttons, packet detail, event filters, artifact fetches, and recovery calls must use UID values.
 
 Display both in detail views:
 
@@ -128,13 +235,11 @@ Slug: admin-ui-timers
 UID: feat_AbC123xYz9
 ```
 
-Do not derive IDs from title/slug/order.
-Do not parse `W01`, `P01`, or `FEAT-...` from IDs.
-Use wave/packet order fields for display labels like `W01` and `P01`.
+Do not derive IDs from title/slug/order. Do not parse `W01`, `P01`, or `FEAT-...` from IDs. Use explicit order fields only for display labels.
 
 ---
 
-## 4. Information model
+## 6. Information hierarchy
 
 UI hierarchy:
 
@@ -166,35 +271,68 @@ packet execution logic
 artifact handling
 ```
 
+Self-improvement work must be visibly labeled because it is higher-risk than ordinary target-project work.
+
 ---
 
-## 5. Desktop layout
+## 7. Desktop layout
 
-Default desktop layout: calm 2-column layout.
+Default desktop layout: calm two-column layout plus compact live events.
 
 ```text
-┌──────────────────────────────────────────────────────────────┐
-│ GRACE Mission Control Center      Live · 2 running · 1 failed │
-├──────────────────────────────────────────────────────────────┤
-│ Status Summary                                                │
-│ [Running 2] [Ready 5] [Needs attention 1] [Merged 12]         │
-├───────────────────────┬──────────────────────────────────────┤
-│ Features              │ Selected Feature                     │
-│                       │ Waves / Packets                      │
-└───────────────────────┴──────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────────┐
+│ GRACE Mission Control Center      Live · 2 running · 1 failed · 3 workers │
+├────────────────────────────────────────────────────────────────────────────┤
+│ Status Summary                                                            │
+│ [Running 2] [Ready 5] [Needs attention 1] [Merged 12] [Workers 3/1 stale] │
+├───────────────────────┬──────────────────────────────────┬────────────────┤
+│ Features              │ Selected Feature                 │ Live Events    │
+│                       │ Waves / Packets                  │ latest 20      │
+└───────────────────────┴──────────────────────────────────┴────────────────┘
 ```
 
-A third diagnostics column is allowed only as advanced mode/drawer, not default.
+If the third events panel makes the screen overloaded, it may collapse into a right drawer or bottom panel, but compact live events must remain discoverable and visible enough to show current activity.
+
+Do not use a dense cockpit by default.
 
 ---
 
-## 6. Top bar
+## 8. Mobile layout
 
-Top bar shows only essentials:
+Mobile must not be a squeezed desktop table.
+
+Mobile structure:
+
+```text
+Top status summary
+Feature cards
+Selected feature screen
+Packet cards
+Packet detail tabs
+Events tab
+Artifacts tab
+Recovery tab
+```
+
+Mobile requirements:
+
+```text
+No horizontal-only tables for core flow
+Packet row/card title remains readable
+State/stage/actor visible without opening raw JSON
+Last 3 feature events visible on feature screen
+Full events available in packet detail Events tab
+```
+
+---
+
+## 9. Top bar and status summary
+
+Top bar shows essentials only:
 
 ```text
 GRACE Mission Control Center
-Live / Offline
+Live / Offline / Reconnecting
 Running
 Ready
 Needs attention
@@ -221,11 +359,7 @@ status legend
 raw JSON
 ```
 
----
-
-## 7. Status Summary
-
-Show compact summary cards:
+Status summary cards:
 
 ```text
 Running: 2
@@ -233,9 +367,8 @@ Ready: 5
 Needs attention: 1
 Merged: 12
 Workers: 3 active · 1 stale
+Recovery: 1 active
 ```
-
-Goal: user understands in 3 seconds whether system is healthy.
 
 `Needs attention` includes:
 
@@ -247,20 +380,274 @@ stale worker
 stuck running
 missing artifacts after finished run
 self-improvement packet waiting for reviewer/human approval
+active recovery decision
 ```
 
 ---
 
-## 8. Duration and live timer requirements
+## 10. Feature list
 
-The admin UI must clearly show time spent.
+Feature cards show:
 
-Required questions:
+```text
+title
+slug
+packet count
+compact status
+progress bar
+elapsed/duration human time
+active roles summary
+longest-running packet if any
+warning badge if problems
+recovery badge if active
+self-improvement badge if applicable
+```
+
+Example:
+
+```text
+GRACE Mission Control Center        Self-improvement
+12 packets · 7 merged · 2 running · 1 blocked
+Active now: coder 1 · verifier 1
+Longest: Add artifact viewer · coder-agent · 15 минут 12 секунд
+Recovery: switch coder 3 минуты назад
+```
+
+Do not show here:
+
+```text
+all packet IDs
+raw JSON
+full event log
+full artifact list
+```
+
+---
+
+## 11. Selected feature area
+
+Selected feature shows waves and packets.
+
+Example:
+
+```text
+SolarSage Onboarding
+UID: feat_AbC123xYz9
+Slug: solarsage-onboarding
+Elapsed: 18 минут 12 секунд
+Recovery: inactive
+
+Wave 1 · Foundation · Идёт 12 минут 30 секунд
+✓ Auth migration              merged       duration 4 минуты 10 секунд
+▶ Artifacts viewer            running      coder-agent · coder-flash · stage 2 минуты 04 секунды
+○ Dashboard polish            ready        waiting 5 минут 11 секунд
+
+Wave 2 · UI
+! Mobile layout               failed       T1 failed · duration 7 минут 14 секунд · recovery: retry same coder
+○ Timeline                    ready
+```
+
+Packets should be compact rows/cards, not huge tiles.
+
+---
+
+## 12. Packet lifecycle, active stage, active role
+
+Separate three concepts:
+
+```text
+1. Packet lifecycle state
+   READY / CLAIMED / RUNNING / EVIDENCE / REVIEW / ACCEPTED / MERGING / MERGED / REJECTED / BLOCKED / FAILED / CANCELLED
+
+2. Active stage
+   architect_plan / coder_agent / deterministic_acceptance / evidence_verifier / reviewer / merge / retry / blocked_waiting_user / etc.
+
+3. Active actor/role
+   architect / coder / deterministic_acceptance / evidence_verifier / reviewer / merge_worker / recovery_controller / system / user
+```
+
+Do not collapse all of this into only `state=running`.
+
+Readable examples:
+
+```text
+Running · coder-agent · coder-flash · 6 минут 12 секунд
+Evidence · evidence-verifier · verifier-flash · 1 минута 04 секунды
+Accepted · waiting for merge · 12 секунд
+Rejected · deterministic T1 failed · recovery: retry same coder
+```
+
+---
+
+## 13. Canonical display states
+
+Use existing DB states if already present. UI/API may normalize display labels without forcing migrations.
+
+Canonical display labels:
+
+```text
+READY       → Ready
+CLAIMED     → Claimed
+RUNNING     → Running
+EVIDENCE    → Evidence
+REVIEW      → Review
+ACCEPTED    → Accepted
+MERGING     → Merging
+MERGED      → Merged
+REJECTED    → Rejected
+BLOCKED     → Blocked
+FAILED      → Failed
+CANCELLED   → Cancelled
+```
+
+If code does not have separate `REVIEW` or `MERGING` packet states, render based on state + active_stage:
+
+```text
+state=running + active_stage=reviewer → Review
+state=accepted + active_stage=merge_apply → Merging / waiting merge
+```
+
+---
+
+## 14. Active stage values
+
+Expose `active_stage` on dashboard, packet detail, run/attempt, and event responses where possible.
+
+Allowed values:
+
+```text
+none
+architect_context
+architect_plan
+architect_repair
+packet_ready
+worker_claim
+coder_agent
+git_change_detection
+deterministic_t0
+deterministic_t1
+deterministic_t2
+deterministic_acceptance
+evidence_verifier
+reviewer
+merge_preflight
+merge_apply
+merge_verify
+retry_scheduled
+return_to_architect
+blocked_waiting_user
+blocked_safety
+completed
+failed
+```
+
+MVP minimum:
+
+```text
+packet_ready
+worker_claim
+coder_agent
+deterministic_acceptance
+evidence_verifier
+reviewer
+merge_apply
+retry_scheduled
+return_to_architect
+blocked_safety
+completed
+failed
+```
+
+---
+
+## 15. Active role / actor values
+
+Expose `active_role` or `active_actor`.
+
+Allowed role values:
+
+```text
+system
+architect
+context_builder
+coder
+deterministic_acceptance
+evidence_verifier
+reviewer
+merge_worker
+recovery_controller
+user
+unknown
+```
+
+Also expose executor/model/provider when available:
+
+```json
+{
+  "active_role": "coder",
+  "active_executor_id": "coder-flash",
+  "active_model": "deepseek-chat",
+  "active_provider": "openrouter"
+}
+```
+
+For deterministic/internal stages:
+
+```json
+{
+  "active_role": "deterministic_acceptance",
+  "active_executor_id": "internal",
+  "active_model": null,
+  "active_provider": null
+}
+```
+
+Do not fake model/provider. Use null when unknown.
+
+---
+
+## 16. Next action
+
+Expose human-readable `next_action` for packet rows and detail views.
+
+Examples:
+
+```text
+waiting for worker claim
+coder is editing files in worktree
+running deterministic checks T1
+waiting for evidence verifier
+waiting for reviewer
+ready to merge
+merge preflight running
+returning to architect for repack
+blocked: user decision required
+blocked: safety gate failed
+retry scheduled
+completed
+```
+
+API field:
+
+```json
+{
+  "next_action": "running deterministic checks T1"
+}
+```
+
+This is not a command. It is a UI explanation.
+
+---
+
+## 17. Duration and live timer requirements
+
+The UI must answer:
 
 ```text
 How long has this feature been running?
 How long has this wave been running?
 How long has this packet been running?
+How long has this current stage been running?
 How long did each attempt take, including failed attempts?
 Where exactly is time being spent?
 ```
@@ -268,8 +655,8 @@ Where exactly is time being spent?
 The UI must show:
 
 ```text
-1. live elapsed timers for active feature/wave/packet
-2. final durations for terminal feature/wave/packet
+1. live elapsed timers for active feature/wave/packet/stage
+2. final durations for terminal feature/wave/packet/stage/attempt
 3. per-attempt duration for every run, including failed/rejected attempts
 4. queued/waiting time where useful
 ```
@@ -280,6 +667,7 @@ Examples:
 Feature: Идёт 12 минут 08 секунд
 Wave 1: Идёт 07 минут 22 секунды
 Packet: Идёт 03 минуты 10 секунд
+Stage: coder-agent · 02 минуты 04 секунды
 Attempt #1 — failed — 7 минут 14 секунд
 Attempt #2 — failed — 6 минут 59 секунд
 Attempt #3 — accepted — 8 минут 03 секунды
@@ -289,11 +677,11 @@ Failed attempts must never disappear after retry.
 
 ---
 
-## 9. Human-readable duration format
+## 18. Human-readable duration helper
 
-Add shared duration formatting helper.
+Add or reuse shared duration formatting helper.
 
-Suggested backend file:
+Preferred backend file:
 
 ```text
 src/grace_control/ui/time_format.py
@@ -332,13 +720,13 @@ If full pluralization is too expensive for MVP, use one consistent short format 
 26м 30с
 ```
 
-Do not show raw seconds as the primary display.
+Do not show raw seconds as primary UI text.
 
 ---
 
-## 10. Timestamp and duration data model
+## 19. Timestamp and duration semantics
 
-Audit existing schema first. Reuse existing timestamp fields if present.
+Audit existing schema first. Reuse existing timestamp fields when present.
 
 Required logical timestamps:
 
@@ -346,1304 +734,822 @@ Required logical timestamps:
 Feature: created_at, started_at, finished_at, updated_at
 Wave: created_at, started_at, finished_at, updated_at
 Packet: created_at, started_at, finished_at, updated_at
-PacketRun/Attempt: created_at, started_at, finished_at, attempt_number, status
+PacketRun/Attempt: created_at, started_at, finished_at, attempt_number/run_number, status
+Stage history: stage, role, started_at, finished_at, duration
 ```
 
 If exact fields already exist under different names, do not duplicate. Add computed API fields instead.
 
-If started/finished fields are missing, add minimal safe fields:
+Duration rules:
 
 ```text
-started_at set when entity enters active/running lifecycle
-finished_at set when entity reaches terminal state
+completed duration = finished_at - started_at
+live elapsed = now - started_at when active and no finished_at
+waiting duration = now - created_at when not started
+attempt duration = per PacketRun started_at/finished_at/duration_ms
+stage duration = stage finished_at - stage started_at, or now - stage_started_at if active
 ```
 
-Terminal states include:
-
-```text
-merged
-rejected
-blocked
-cancelled
-completed
-failed
-```
-
-Do not alter state machine semantics.
+Do not reset packet `started_at` on retry unless creating a new attempt record. Do not overwrite old attempt durations.
 
 ---
 
-## 11. Duration semantics
+## 20. Stage history / timeline
 
-Completed duration:
+Packet detail must show stage history, not only final state.
 
-```text
-if started_at and finished_at:
-  duration_seconds = finished_at - started_at
-  display: Длилось: 26 минут 30 секунд
-```
-
-Live elapsed duration:
-
-```text
-if started_at and no finished_at and active:
-  elapsed_seconds = now - started_at
-  display: Идёт: 07 минут 12 секунд
-```
-
-Queued/waiting duration:
-
-```text
-if created_at and no started_at:
-  waiting_seconds = now - created_at
-  display: Ожидает: 03 минуты 04 секунды
-```
-
-Attempt duration:
-
-```text
-attempt started_at/finished_at = per-attempt runtime
-packet started_at/finished_at = whole packet lifecycle runtime
-wave started_at/finished_at = aggregate wave lifecycle runtime
-feature started_at/finished_at = aggregate feature lifecycle runtime
-```
-
-Do not reset packet `started_at` on retry unless this is a new attempt record.
-Do not overwrite old attempt durations.
-
----
-
-## 12. Left column: Features
-
-Feature list example:
-
-```text
-SolarSage Onboarding
-14 packets
-1 running · 1 failed · elapsed 18 минут 12 секунд
-
-DeepCalm Avito
-8 packets
-all ok · duration 42 минуты 10 секунд
-
-GRACE Self-Improvement       Self-improvement
-3 packets
-waiting for review
-```
-
-For each feature show:
-
-```text
-title
-packets count
-compact status
-progress bar
-elapsed/duration human time
-warning badge if problems
-Self-improvement badge if applicable
-```
-
-Do not show here:
-
-```text
-all packet IDs
-raw JSON
-full event log
-artifacts list
-```
-
----
-
-## 13. Selected Feature area
-
-Selected feature shows waves/packets.
-
-Example:
-
-```text
-SolarSage Onboarding
-UID: feat_AbC123xYz9
-Slug: solarsage-onboarding
-Elapsed: 18 минут 12 секунд
-
-Wave 1 · Foundation · Идёт 12 минут 30 секунд
-✓ Auth migration              merged      duration 4 минуты 10 секунд
-▶ Artifacts viewer            running     elapsed 2 минуты 04 секунды
-○ Dashboard polish            ready       waiting 5 минут 11 секунд
-
-Wave 2 · UI
-! Mobile layout               failed      duration 7 минут 14 секунд
-○ Timeline                    ready
-```
-
-Packets should be compact rows/cards, not large tiles.
-
-For each packet row show:
-
-```text
-short title
-state
-attempt count
-elapsed/duration
-last reason if failed/rejected
-artifact count indicator
-self-improvement badge if applicable
-```
-
-Example:
-
-```text
-▶ Artifacts viewer     running     attempt 2/3     elapsed 2 минуты 04 секунды     artifacts: 6
-! Mobile layout        failed      tests failed     duration 7 минут 14 секунд     artifacts: 4
-```
-
----
-
-## 14. Packet Detail opening
-
-Packet detail opens only after clicking a packet.
-
-Desktop:
-
-```text
-right drawer or full-width detail panel below board
-```
-
-Mobile:
-
-```text
-separate drill-down screen
-```
-
-Packet detail header example:
-
-```text
-Packet: Artifacts viewer
-UID: pkt_XyZ123AbC9
-Slug: artifacts-viewer
-State: RUNNING
-Attempt: 2/3
-Worker: worker-a13f
-Elapsed: 2 минуты 04 секунды
-Next: waiting for worker release
-```
-
-Tabs:
-
-```text
-Overview | Runs | Artifacts | Events | Spec
-```
-
----
-
-## 15. Packet Detail: Overview
-
-Overview shows only the most important things:
-
-```text
-goal
-current state
-next action
-last run result
-failure/rejection reason
-acceptance profile
-worker/executor
-started/finished time
-elapsed/duration
-artifact count
-```
-
-Example:
-
-```text
-Goal:
-Show logs, diffs and test output for each run.
-
-Current:
-Running, waiting for worker release.
-
-Timing:
-Started 20:11:02
-Elapsed 2 минуты 04 секунды
-
-Last run:
-Rejected, tests failed after 7 минут 14 секунд.
-
-Artifacts:
-6 files available.
-```
-
----
-
-## 16. Packet Detail: Timeline
-
-Timeline shows packet lifecycle.
-
-Successful scenario:
-
-```text
-Ready → Claimed → Running → Evidence → Accepted → Merged
-```
-
-Rejected/retry scenario:
-
-```text
-Ready → Running → Rejected after 7 минут 14 секунд → Retry Ready
-```
-
-Failed terminal:
-
-```text
-Ready → Running → Failed after 3 минуты 20 секунд
-```
-
-Timeline should be simple, text-first, and readable. Do not make complex graphs.
-
----
-
-## 17. Packet Detail: Runs / Attempts
-
-Runs tab shows every attempt, including failed attempts.
-
-Columns:
-
-```text
-Attempt
-Status
-Executor/model
-Started
-Finished
-Duration
-Summary/reason
-Artifacts
-Report link
-```
-
-Example:
-
-```text
-#1  failed    coder-flash       20:11:02 → 20:18:16   7 минут 14 секунд   T1 failed        artifacts: 6
-#2  failed    coder-flash       20:19:05 → 20:26:04   6 минут 59 секунд   no_changes       artifacts: 4
-#3  accepted  coder-agy-sonnet  20:27:10 → 20:35:13   8 минут 03 секунды acceptance passed artifacts: 8
-```
-
-No attempt row should disappear after retry.
-
----
-
-## 18. Packet Detail: Artifacts
-
-Artifacts are not shown on the main screen, only artifact count indicator.
-
-Artifacts tab groups:
-
-```text
-Logs
-- stdout.log
-- stderr.log
-
-Evidence
-- evidence.json
-
-Diff
-- diff.patch
-
-Images
-- screenshot.png
-```
-
-For each artifact show:
-
-```text
-name
-type
-size
-preview button
-download button
-copy path button
-```
-
-Preview rules:
-
-```text
-text/log: tail by default + show full
-JSON: pretty print
-image: thumbnail + open preview
-patch/diff: monospace view
-```
-
----
-
-## 19. Packet Detail: Events
-
-Main screen must not show full event log.
-
-Overview may show last 3 events:
-
-```text
-12:01 Execution started
-12:03 Tests failed after 2 минуты 10 секунд
-12:04 Retry scheduled
-```
-
-Full Events tab shows:
-
-```text
-timestamp
-event type
-human-readable message
-collapsed payload
-trace_id with copy button
-```
-
-Filters:
-
-```text
-lifecycle
-worker
-errors
-merge
-notifications
-```
-
----
-
-## 20. Packet Detail: Spec
-
-Spec tab shows readable `spec_json`:
-
-```text
-title
-scope
-acceptance criteria
-expected changes
-non-goals
-risk/complexity
-raw JSON/YAML collapsed
-```
-
-Raw JSON is collapsed by default.
-
----
-
-## 21. Self-improvement support
-
-Self-improvement packets must be visibly different from product packets.
-
-Feature list:
-
-```text
-GRACE Self-Improvement        Self-improvement
-3 packets
-1 running · 1 waiting approval
-```
-
-Packet row:
-
-```text
-! Fix artifact run id     self-improvement     waiting reviewer     elapsed 5 минут 10 секунд
-```
-
-Detail safety banner:
-
-```text
-Self-improvement packet: changes GRACE itself.
-Do not auto-merge without required gates.
-```
-
-Detail fields:
-
-```text
-affected subsystem
-risk level
-required gates
-reviewer status
-human approval status
-rollback note
-artifacts/evidence
-```
-
-Example:
-
-```text
-Affected subsystem: Mission Control UI
-Risk: Medium
-Required gates: JS syntax, backend tests, Playwright smoke, reviewer
-Rollback: revert packet branch
-```
-
-Checklist:
-
-```text
-Required gates
-✓ JS syntax check
-✓ Backend tests
-✓ API contract tests
-✓ Playwright smoke
-✓ Mobile viewport test
-○ Reviewer approval
-○ Human approval
-```
-
-Acceptance:
-
-```text
-self-improvement feature visible in feature list
-self-improvement packet has badge
-safety banner visible in detail
-affected subsystem visible
-required gates checklist visible
-passed/missing gates visible
-self-improvement packets cannot be confused with product packets
-```
-
----
-
-## 22. Mobile layout
-
-Do not try to fit desktop dashboard onto mobile.
-
-Use drill-down:
-
-```text
-Screen 1: Features
-Screen 2: Waves / Packets
-Screen 3: Packet Detail
-Screen 4: Artifacts / Logs
-```
-
-Requirements:
-
-```text
-390px without horizontal scroll
-430px without horizontal scroll
-sticky top bar
-back button
-breadcrumb
-large packet rows
-bottom tabs only in packet detail
-artifacts/logs on separate screen
-minimum counters
-IDs shortened in summary, full UID via tap/copy
-live timers visible but compact
-```
-
----
-
-## 23. API: dashboard endpoint
-
-Add:
-
-```text
-GET /api/dashboard/v2
-```
-
-Response shape:
+For each run/attempt, expose or derive:
 
 ```json
 {
-  "system": {
-    "health": "ok",
-    "live": true,
-    "last_event_at": "...",
-    "active_workers": 1,
-    "stale_workers": 0
-  },
-  "stats": {
-    "features": 3,
-    "waves": 7,
-    "packets_total": 24,
-    "ready": 5,
-    "running": 2,
-    "accepted": 1,
-    "merged": 12,
-    "rejected": 1,
-    "failed": 1,
-    "needs_attention": 2
-  },
-  "features": []
+  "stage_history": [
+    {
+      "stage": "worker_claim",
+      "role": "system",
+      "started_at": "...",
+      "finished_at": "...",
+      "duration_human": "2 секунды",
+      "summary": "worker claimed packet"
+    },
+    {
+      "stage": "coder_agent",
+      "role": "coder",
+      "executor_id": "coder-flash",
+      "started_at": "...",
+      "finished_at": "...",
+      "duration_human": "6 минут 12 секунд",
+      "summary": "agent produced worktree changes"
+    },
+    {
+      "stage": "deterministic_acceptance",
+      "role": "deterministic_acceptance",
+      "started_at": "...",
+      "finished_at": "...",
+      "duration_human": "18 секунд",
+      "summary": "T0/T1/T2 passed"
+    }
+  ]
 }
 ```
 
-Feature/wave/packet objects should include computed timing fields where applicable:
+If a full stage-history table does not exist yet, derive MVP history from events and PacketRun `result_json`. New runs should record explicit stage transition events.
+
+---
+
+## 21. Packet row requirements
+
+Compact packet row/card must show enough status without opening detail.
+
+Required fields:
+
+```text
+status icon/text
+short title
+lifecycle state
+active stage
+active role/actor
+executor/model if available
+attempt count
+stage elapsed
+packet elapsed/duration
+last reason if failed/rejected/blocked
+artifact count
+recovery hint if active
+self-improvement badge if applicable
+```
+
+Example rows:
+
+```text
+▶ Add artifact viewer   Running · coder-agent · coder-flash   stage 6м 12с · packet 15м 12с   attempt 2/3   artifacts: 3
+◐ Evidence checks       Evidence · verifier · verifier-flash  stage 1м 04с · packet 18м 33с   attempt 1/3   artifacts: 5
+◆ Reviewer gate         Review · reviewer · codex-5.2         stage 2м 15с · packet 21м 10с   attempt 1/3   artifacts: 7
+✓ Merge API hardening   Merged                                duration 9м 40с                attempts 1/3   artifacts: 9
+! Mobile layout         Rejected · T1 failed                  duration 7м 14с                recovery: retry same coder
+⛔ Git merge             Blocked · dirty target repo           after 12с                      attempts 1/3
+```
+
+Do not render only:
+
+```text
+running
+```
+
+---
+
+## 22. Packet detail
+
+Clicking a packet opens detail as route, drawer, or modal. It must be usable on desktop and mobile.
+
+Required sections/tabs:
+
+```text
+Overview
+Runs / Attempts
+Artifacts / Evidence
+Events
+Recovery / Stability
+Spec
+Raw JSON
+```
+
+Overview shows:
+
+```text
+title
+UID / slug
+lifecycle state
+active stage
+active role
+executor/model/provider
+next_action
+elapsed/duration
+attempt count
+last reason
+recovery summary
+artifact count
+latest 5 packet events
+```
+
+Runs / Attempts shows every run, not only the latest:
+
+```text
+Attempt #1 — failed — coder-flash — 7 минут 14 секунд
+Attempt #2 — failed — coder-flash — 6 минут 59 секунд
+Attempt #3 — running — coder-strong — stage coder-agent 2 минуты 01 секунда
+```
+
+Artifacts / Evidence shows:
+
+```text
+artifact type
+path/name
+run/attempt
+created_at if known
+preview/open action
+copy path action
+missing artifact warning if expected but absent
+```
+
+---
+
+## 23. Always-visible event stream
+
+Mission Control must include a compact live event stream.
+
+Desktop behavior:
+
+```text
+Compact Live Events panel shows latest 20 events for selected feature.
+Packet detail Overview shows latest 5 packet events.
+Events tab shows full filtered event list.
+```
+
+Mobile behavior:
+
+```text
+Feature screen shows latest 3 feature events.
+Packet detail has Events tab.
+```
+
+The events panel must not overwhelm the main dashboard, but the user must see live activity without opening raw logs.
+
+---
+
+## 24. Event types
+
+Normalize or emit event types for all major stages.
+
+Architect/context:
+
+```text
+context_builder_started
+context_builder_completed
+context_builder_failed
+architect_started
+architect_generated_plan
+architect_failed
+architect_repair_started
+architect_repair_completed
+architect_repair_failed
+```
+
+Worker/coder:
+
+```text
+packet_ready
+packet_claimed
+coder_agent_started
+coder_agent_completed
+coder_agent_failed
+worktree_created
+worktree_reused
+branch_created
+change_detection_started
+change_detection_completed
+scope_guard_started
+scope_guard_passed
+scope_guard_failed
+```
+
+Deterministic acceptance:
+
+```text
+acceptance_started
+acceptance_t0_started
+acceptance_t0_passed
+acceptance_t0_failed
+acceptance_t1_started
+acceptance_t1_passed
+acceptance_t1_failed
+acceptance_t2_started
+acceptance_t2_passed
+acceptance_t2_failed
+acceptance_completed
+acceptance_rejected
+```
+
+Evidence verifier:
+
+```text
+evidence_verifier_started
+evidence_verifier_completed
+evidence_verifier_failed
+evidence_verifier_rework_to_coder
+evidence_verifier_return_to_architect
+```
+
+Reviewer:
+
+```text
+reviewer_started
+reviewer_completed
+reviewer_failed
+reviewer_accepted
+reviewer_rework_to_coder
+reviewer_return_to_architect
+reviewer_blocked
+```
+
+Merge:
+
+```text
+merge_requested
+merge_preflight_started
+merge_preflight_passed
+merge_preflight_failed
+merge_started
+merge_completed
+merge_failed
+merge_conflict
+merge_dirty_target_repo
+merge_missing_worktree
+merge_missing_branch
+packet_merged
+```
+
+Stage tracking:
+
+```text
+stage_started
+stage_finished
+stage_failed
+```
+
+Recovery/stability:
+
+```text
+recovery_signal_built
+recovery_classified
+recovery_decision_made
+recovery_retry_same_coder
+recovery_switch_coder
+recovery_return_to_architect
+recovery_escalate_architect
+recovery_retry_verifier
+recovery_retry_reviewer
+recovery_retry_merge
+recovery_block_feature
+recovery_no_action
+recovery_update
+```
+
+---
+
+## 25. Event payload requirements
+
+Events must be DB-backed, not only logs.
+
+Each major event should include as much context as known:
+
+```json
+{
+  "feature_id": "feat_...",
+  "feature_slug": "...",
+  "wave_id": "wave_...",
+  "packet_id": "pkt_...",
+  "run_id": "run_...",
+  "attempt_number": 2,
+  "role": "coder",
+  "executor_id": "coder-flash",
+  "model": "deepseek-chat",
+  "provider": "openrouter",
+  "stage": "coder_agent",
+  "status": "started",
+  "summary": "Coder agent started",
+  "trace_id": "...",
+  "payload": {}
+}
+```
+
+If model/provider are unknown, use null. Do not fake them.
+
+For deterministic stages:
+
+```text
+role = deterministic_acceptance
+executor_id = internal
+model = null
+provider = null
+```
+
+---
+
+## 26. Event display
+
+Every event row must include:
+
+```text
+time
+scope/entity: feature/wave/packet/run
+stage
+role/actor
+executor/model if available
+status/result
+human summary
+expandable payload
+trace_id copy button if available
+```
+
+Example event rows:
+
+```text
+12:01:02  Architect   deepseek-v4-pro      started planning feature
+12:01:18  Architect   deepseek-v4-pro      generated 3 waves / 12 packets
+12:02:01  Worker      worker-a13f          claimed pkt_AbC123
+12:02:02  Coder       coder-flash          started coder-agent, attempt #1
+12:08:14  Coder       coder-flash          completed after 6 минут 12 секунд
+12:08:15  Acceptance  T1                   started pytest
+12:08:42  Acceptance  T1                   failed after 27 секунд
+12:08:43  Recovery    switch_coder          coder-flash → coder-strong
+```
+
+Do not display only raw event names.
+
+---
+
+## 27. Event severity and filters
+
+Normalize severity:
+
+```text
+info
+success
+warning
+error
+blocked
+recovery
+```
+
+Examples:
+
+```text
+agent started → info
+acceptance passed → success
+retry scheduled → warning
+merge failed → error
+true blocker → blocked
+switch coder → recovery
+```
+
+Color may help, but text labels must always be present.
+
+Events tab filters:
+
+```text
+All
+Lifecycle
+Agents
+Acceptance
+Verifier
+Reviewer
+Merge
+Recovery
+Errors
+```
+
+Current `/api/events` already supports `entity_type`, `entity_id`, `event_type`, and `recovery_*` prefix filtering. Extend it if needed, do not replace it blindly.
+
+Preferred additional filters:
+
+```text
+feature_id
+wave_id
+packet_id
+run_id
+stage
+role
+severity
+limit
+```
+
+---
+
+## 28. Recovery / Stability UI
+
+Mission Control must show feature-stability state, not only packet state.
+
+Current code already has RecoveryController and recovery API endpoints. UI should surface them clearly.
+
+Feature summary should show:
+
+```text
+Recovery: active / inactive
+Retries: 2 coder, 0 verifier, 0 reviewer, 1 merge
+Last recovery: switched coder 3 минуты назад
+Blocked: no / yes
+```
+
+Packet row should show recovery hint if active:
+
+```text
+! Tests failed · recovery: retry same coder
+! Tests failed twice · recovery: switch coder
+⤴ Scope impossible · returning to architect
+⛔ Dirty target repo · true blocker
+```
+
+Packet detail Recovery / Stability block:
+
+```text
+Recovery / Stability
+Failure class: retryable_coder
+Decision: switch coder
+Reason: T1 failed twice
+Previous executor: coder-flash
+Next executor: coder-strong
+Attempt: 3/4
+Decision ID: rec_...
+```
+
+If no recovery decision:
+
+```text
+Recovery: inactive
+```
+
+---
+
+## 29. Recovery API contract
+
+Keep existing endpoints:
+
+```text
+POST /api/recovery/evaluate/{packet_id}
+GET /api/recovery/packets/{packet_id}
+GET /api/recovery/features/{feature_id}
+```
+
+Dashboard/packet responses should include recovery summary:
+
+```json
+{
+  "recovery": {
+    "active": true,
+    "failure_class": "retryable_coder",
+    "action": "switch_coder",
+    "reason": "T1 failed twice",
+    "current_executor_id": "coder-flash",
+    "next_executor_hint": "coder-strong",
+    "decision_id": "..."
+  }
+}
+```
+
+When `action=switch_coder`, current code may store next executor under:
+
+```text
+spec_json.recovery.requested_executor_id
+```
+
+Do not hardcode executor IDs outside configured executor/profile selection.
+
+---
+
+## 30. Dashboard API additions
+
+Update `/api/dashboard/v2` feature/wave/packet objects without removing existing fields.
+
+Feature-level recommended fields:
 
 ```json
 {
   "id": "feat_...",
-  "slug": "admin-ui-timers",
-  "title": "Admin UI timers",
+  "slug": "...",
+  "title": "...",
+  "status": "running",
+  "state_label": "Running",
+  "packet_counts": {},
+  "active_roles": {},
+  "longest_running_packet": {},
+  "recent_events": [],
+  "recovery_summary": {},
+  "elapsed_seconds": 123,
+  "elapsed_human": "2 минуты 03 секунды"
+}
+```
+
+Packet-level recommended fields:
+
+```json
+{
+  "id": "pkt_...",
+  "title": "...",
   "state": "running",
-  "created_at": "...",
-  "started_at": "...",
-  "finished_at": null,
-  "duration_seconds": null,
-  "elapsed_seconds": 422,
-  "duration_human": null,
-  "elapsed_human": "7 минут 02 секунды"
+  "state_label": "Running",
+  "active_stage": "coder_agent",
+  "active_stage_label": "Coder agent",
+  "active_role": "coder",
+  "active_role_label": "Coder",
+  "active_executor_id": "coder-flash",
+  "active_model": "deepseek-chat",
+  "active_provider": "openrouter",
+  "active_stage_started_at": "...",
+  "active_stage_elapsed_seconds": 372,
+  "active_stage_elapsed_human": "6 минут 12 секунд",
+  "packet_elapsed_seconds": 912,
+  "packet_elapsed_human": "15 минут 12 секунд",
+  "next_action": "coder is editing files in worktree",
+  "last_reason": null,
+  "artifact_count": 3,
+  "recovery": null
 }
 ```
-
-For terminal states:
-
-```json
-{
-  "duration_seconds": 1590,
-  "duration_human": "26 минут 30 секунд",
-  "elapsed_seconds": null,
-  "elapsed_human": null
-}
-```
-
-Keep old `/api/dashboard` if needed, but new UI should use `/api/dashboard/v2`.
 
 ---
 
-## 24. API: packet detail endpoint
+## 31. Packet detail API additions
 
-Add/extend:
+Update `/api/packets/{packet_id}` without removing existing fields.
 
-```text
-GET /api/packets/{packet_id}
-```
-
-Response includes:
+Recommended shape:
 
 ```json
 {
-  "packet": {},
-  "feature": {},
-  "wave": {},
-  "runs": [],
-  "events": [],
+  "packet": {
+    "id": "pkt_...",
+    "state": "running",
+    "active_stage": "coder_agent",
+    "active_role": "coder",
+    "active_executor_id": "coder-flash",
+    "active_stage_elapsed_human": "6 минут 12 секунд",
+    "next_action": "coder is editing files in worktree",
+    "recovery": null
+  },
+  "runs": [
+    {
+      "attempt_number": 2,
+      "status": "running",
+      "active_stage": "coder_agent",
+      "active_role": "coder",
+      "duration_human": "—",
+      "stage_history": []
+    }
+  ],
   "artifacts": [],
-  "next_action": "waiting_for_worker",
-  "self_improvement": {
-    "enabled": false,
-    "affected_subsystem": null,
-    "risk_level": null,
-    "required_gates": [],
-    "rollback_note": null
-  }
-}
-```
-
-For runs/attempts include timing fields:
-
-```json
-{
-  "attempt_number": 1,
-  "status": "failed",
-  "started_at": "...",
-  "finished_at": "...",
-  "duration_seconds": 434,
-  "duration_human": "7 минут 14 секунд",
-  "executor_id": "coder-flash",
-  "summary": "scope guard failed"
-}
-```
-
-For regular packets:
-
-```json
-"self_improvement": {"enabled": false}
-```
-
----
-
-## 25. API: artifact endpoints
-
-Add/fix:
-
-```text
-GET /api/packets/{packet_id}/runs/{run_id}/artifacts
-GET /api/packets/{packet_id}/runs/{run_id}/artifacts/file?path=...
-```
-
-Requirements:
-
-```text
-run_id works as R01 and full packet_id-R01, or choose one canonical format and document it
-frontend/backend use one canonical format
-endpoint must not double-prefix run ID
-if run not found → clear error
-UI shows "Run not found", not "No artifacts"
-```
-
-Regression must catch bug shape:
-
-```text
-packet_id-packet_id-R01
-```
-
----
-
-## 26. Frontend structure
-
-Keep vanilla JS.
-
-Suggested files:
-
-```text
-src/grace_control/ui/static/
-  dashboard.js
-  api.js
-  state.js
-  render_features.js
-  render_packets.js
-  render_packet_detail.js
-  render_artifacts.js
-  mobile_nav.js
-  timers.js
-  dashboard.css
-```
-
-If no JS build exists, one physical JS file is acceptable, but it must be clearly structured by sections.
-
----
-
-## 27. Live timer implementation
-
-Use client-side timers with data attributes.
-
-Rendered HTML example:
-
-```html
-<span class="live-duration" data-started-at="2026-06-03T18:10:12Z" data-finished-at="">
-  7 минут 02 секунды
-</span>
-```
-
-JS behavior:
-
-```text
-Every 1 second:
-  find .live-duration elements
-  if data-finished-at exists: keep final duration
-  else compute now - started_at
-  update text using the same visible formatting rules
-```
-
-Server and JS formatter must use the same visible format.
-
-If full Russian pluralization in JS is too much, use the same short unit format on both backend and frontend.
-
----
-
-## 28. Auto-refresh
-
-Requirements:
-
-```text
-WebSocket updates dashboard state if available
-polling fallback remains
-refresh does not reset selected feature
-refresh does not reset selected packet
-refresh does not reset selected tab
-offline websocket shows "Offline, retrying"
-live timers continue updating between data refreshes
-```
-
-MVP options:
-
-```text
-Option A: page/section auto-refresh every 10 seconds
-Option B: HTMX-like partial refresh every 5–10 seconds if existing pattern exists
-Option C: fetch JSON endpoint every 5 seconds
-```
-
-Choose the smallest existing pattern.
-
-Do not introduce React.
-Do not overbuild websockets.
-
----
-
-## 29. Empty/error states
-
-Required states:
-
-```text
-no features
-no packets
-no runs
-no artifacts
-API error
-WebSocket offline
-worker stale
-run not found
-artifact file missing
-self-improvement gates missing
-missing timing fields
-invalid timestamp
-```
-
-Show human-readable message instead of white screen/raw exception.
-
----
-
-## 30. Visual style
-
-Style:
-
-```text
-Calm, sparse, readable, operational.
-```
-
-Requirements:
-
-```text
-fewer colors
-more whitespace
-max 4 summary cards on first screen
-compact packet rows
-status badges with text
-IDs small monospace only in detail
-logs monospace only
-raw JSON collapsed
-important info not only in tooltip
-color not the only signal
-human-readable durations, not raw seconds
-```
-
-Do not build:
-
-```text
-Dense cockpit, many widgets, many colors, everything everywhere.
-```
-
----
-
-## 31. Static JavaScript syntax tests
-
-Check all JS files:
-
-```bash
-node --check src/grace_control/ui/static/dashboard.js
-node --check src/grace_control/ui/static/api.js
-node --check src/grace_control/ui/static/state.js
-node --check src/grace_control/ui/static/render_features.js
-node --check src/grace_control/ui/static/render_packets.js
-node --check src/grace_control/ui/static/render_packet_detail.js
-node --check src/grace_control/ui/static/render_artifacts.js
-node --check src/grace_control/ui/static/mobile_nav.js
-node --check src/grace_control/ui/static/timers.js
-```
-
-If only one JS file exists, check that file.
-
-Acceptance:
-
-```text
-CI fails on unclosed quote
-CI fails on broken template literal
-CI fails on invalid JS syntax
-```
-
----
-
-## 32. HTML/template smoke tests
-
-Backend smoke test:
-
-```text
-GET /
-GET /static/dashboard.js
-GET /static/dashboard.css
-GET /api/dashboard/v2
-```
-
-Acceptance:
-
-```text
-/ returns 200
-HTML contains GRACE Mission Control Center
-JS/CSS connected
-JS/CSS return 200
-/api/dashboard/v2 returns valid JSON
-```
-
----
-
-## 33. API contract tests
-
-Cover:
-
-```text
-GET /api/dashboard/v2
-GET /api/packets/{packet_id}
-GET /api/packets/{packet_id}/runs/{run_id}/artifacts
-GET /api/packets/{packet_id}/runs/{run_id}/artifacts/file?path=...
-```
-
-Dashboard required fields:
-
-```json
-{
-  "system": {},
-  "stats": {},
-  "features": []
-}
-```
-
-Packet detail required fields:
-
-```json
-{
-  "packet": {},
-  "runs": [],
   "events": [],
-  "artifacts": [],
-  "next_action": ""
+  "recovery": null
 }
 ```
 
-Self-improvement packet required fields:
+---
+
+## 32. WebSocket behavior
+
+Keep existing `/ws` endpoint and `broadcast_event()` mechanism.
+
+WebSocket messages should include enough data for the dashboard to update compact state:
 
 ```json
 {
-  "self_improvement": {
-    "enabled": true,
-    "affected_subsystem": "",
-    "risk_level": "",
-    "required_gates": []
-  }
+  "type": "state_change",
+  "packet_id": "pkt_...",
+  "state": "running",
+  "active_stage": "coder_agent",
+  "active_role": "coder",
+  "worker_id": "worker-a13f"
 }
 ```
 
-Timing contract fields:
+Recovery update example:
+
+```json
+{
+  "type": "recovery_update",
+  "packet_id": "pkt_...",
+  "action": "switch_coder",
+  "reason": "T1 failed twice"
+}
+```
+
+When WebSocket disconnects:
 
 ```text
-elapsed_seconds / elapsed_human for active entities
-duration_seconds / duration_human for terminal entities
-run duration_human for every attempt
+show Reconnecting / Offline indicator
+retry connection
+continue periodic REST snapshot refresh
+never leave stale Live indicator active
 ```
 
 ---
 
-## 34. Artifact regression tests
+## 33. Stuck detection
 
-Check both variants if compatibility is required:
+Add UI warnings for suspicious long-running stages.
 
-```text
-run_id = R01
-run_id = packet_id-R01
-```
-
-Acceptance:
+Thresholds should be constants or config:
 
 ```text
-artifacts found correctly
-endpoint does not double-prefix
-run not found returns clear error
-UI shows Run not found, not No artifacts
-regression fails for packet_id-packet_id-R01
+coder_agent > 20 min → warn
+acceptance > 5 min → warn
+verifier > 10 min → warn
+reviewer > 15 min → warn
+merge > 2 min → warn
+claimed > 2 min without running → warn
 ```
+
+Examples:
+
+```text
+⚠ coder-agent running 28 минут — possibly stuck
+⚠ claimed 4 минуты — worker may be stale
+```
+
+This TZ only displays warnings. It must not auto-cancel, auto-merge, or bypass recovery policy.
 
 ---
 
-## 35. Duration/timer tests
+## 34. Artifact requirements
 
-Create/update:
+The dashboard already has packet artifact/evidence modal behavior. Extend it into a clearer packet detail section.
+
+Artifact display must show:
 
 ```text
-tests/grace_control/ui/test_time_format.py
-tests/api/test_admin_duration_fields.py
-tests/ui/test_admin_duration_rendering.py
+run/attempt
+artifact type
+filename/path
+summary if available
+created_at if available
+open/preview action
+copy path action
+missing expected artifact warning
 ```
+
+Common artifact categories:
+
+```text
+logs
+evidence
+diff
+screenshots
+test output
+review report
+acceptance report
+raw result_json
+```
+
+If artifact content is too large, show metadata and provide explicit open/download/preview action.
+
+---
+
+## 35. JavaScript/template safety tests
+
+We had real regressions where JavaScript/template mistakes were visible only after opening the admin UI. This TZ must include tests that catch those earlier.
 
 Required tests:
 
 ```text
-test_format_duration_59_seconds
-test_format_duration_26_minutes_30_seconds
-test_format_duration_1_hour_2_minutes_3_seconds
-test_format_duration_days_hours_minutes_seconds
-test_format_duration_invalid_returns_dash
-test_compute_completed_duration
-test_compute_live_elapsed_duration
-test_compute_waiting_duration
-test_feature_running_has_elapsed_human
-test_feature_completed_has_duration_human
-test_wave_running_has_elapsed_human
-test_packet_running_has_elapsed_human
-test_failed_attempt_keeps_duration_human
-test_attempts_table_includes_failed_attempts
-test_admin_links_use_uid_not_slug
-test_wave_display_order_not_parsed_from_uid
-test_packet_display_order_not_parsed_from_uid
+template renders without syntax-breaking quotes
+inline JavaScript parses successfully
+Dashboard page loads in browser test
+Dashboard can render empty data
+Dashboard can render demo data with ready/running/accepted/merged/rejected/failed/blocked
+Packet click opens detail/modal/drawer
+WebSocket disconnect does not crash UI
+REST fallback still works
+Event filters do not throw JS errors
+Recovery block renders active and inactive states
+Mobile viewport smoke test
 ```
 
-Use fixed fake `now`, not real clock.
+Preferred test levels:
+
+```text
+Python unit tests for API shaping/formatters
+JS syntax smoke test for dashboard template
+Playwright test for actual browser rendering
+```
+
+Do not rely only on backend unit tests for UI work.
 
 ---
 
-## 36. Playwright tests
+## 36. Demo/fixture data for UI tests
 
-Playwright is mandatory acceptance gate.
-
-### Test 1 — dashboard opens
+Tests should include representative packets:
 
 ```text
-Open /
-Check GRACE Mission Control Center title
-Fail on pageerror
-Fail on console.error
+ready packet
+running coder packet
+running verifier packet
+running reviewer packet
+accepted waiting merge packet
+merged packet
+rejected T1 failed packet
+blocked safety packet
+packet with recovery switch coder
+self-improvement packet
+packet with artifacts
+packet with missing expected artifact
 ```
 
-### Test 2 — overview renders
+This is needed so the UI does not only work for the happy path.
 
-With seed/demo data:
+---
 
-```text
-Status Summary visible
-Feature list visible
-Selected Feature visible
-Wave list visible
-Packet rows visible
-feature/wave/packet timers visible
-```
+## 37. Acceptance checklist
 
-### Test 3 — packet detail opens
+Implementation is done only when this checklist is true:
 
 ```text
-Click packet
-Check Packet Detail
-Check Overview tab
-Check Runs tab
-Check Artifacts tab
-Check Events tab
-Check Spec tab
-```
-
-### Test 4 — runs and durations visible
-
-```text
-Open packet with multiple attempts
-Check failed attempt row exists
-Check failed attempt duration visible
-Check running/current attempt elapsed visible if active
-```
-
-### Test 5 — artifacts visible
-
-```text
-Open packet with artifact fixtures
-Go to Artifacts tab
-Check artifacts list
-Open stdout.log preview
-Check preview text
-```
-
-### Test 6 — refresh does not reset selection
-
-```text
-Open Packet Detail
-Go to Artifacts tab
-Simulate refresh/websocket update
-Check selected packet remains
-Check selected tab remains
-Check live timer still updates
-```
-
-### Test 7 — mobile viewport
-
-Viewports:
-
-```text
-390x844
-430x932
-768x1024
-1440x900
-```
-
-Acceptance:
-
-```text
-no horizontal scroll
-feature list opens
-packets open
-packet detail opens
-bottom tabs work
-artifacts available
-timers remain readable
-```
-
-### Test 8 — self-improvement visible
-
-With seed data:
-
-```text
-GRACE Self-Improvement visible in feature list
-Self-improvement badge visible
-Packet detail shows safety banner
-Required gates checklist visible
+One canonical TZ-019 file exists
+Old tz-019b and tz-019c addendum files are removed
+Dashboard visible title says GRACE Mission Control Center
+Existing Dashboard v2 WebSocket behavior still works
+REST fallback still works
+Feature → Wave → Packet hierarchy visible or prepared in /api/dashboard/v2
+Packet rows show state + active stage + active role, not just state
+Packet rows show duration/elapsed information
+Packet detail shows runs/attempts and failed attempts remain visible
+Packet detail shows artifacts/evidence
+Packet detail shows events
+Packet detail shows recovery/stability block
+Live Events panel or compact event area is visible
+Recovery events render as human text, not only raw event names
+Self-improvement work is visibly labeled
+Stuck warnings are display-only
+No orchestration/acceptance/merge safety semantics are changed
+JS syntax/template smoke tests exist
+Playwright/browser smoke test exists
+Mobile viewport smoke test exists
+Existing tests still pass
 ```
 
 ---
 
-## 37. Console error gate
+## 38. Report format for coder
 
-All Playwright tests must:
-
-```text
-fail on pageerror
-fail on console.error
-```
-
-Any runtime JS error fails the test.
-
-Whitelists only with explicit comment.
-
----
-
-## 38. Demo data / fixtures
-
-Add seed/demo scenario:
+When implementing this TZ, report:
 
 ```text
-1 normal feature
-1 self-improvement feature
-3 waves
-8-12 packets
-1 running packet
-1 rejected packet
-1 failed packet
-1 accepted packet
-1 merged packet
-1 packet with multiple runs
-1 packet with artifacts
-1 stale worker
-1 self-improvement packet waiting for reviewer
-```
-
-Artifact fixtures:
-
-```text
-stdout.log
-stderr.log
-tests.txt
-evidence.json
-diff.patch
-screenshot.png
-```
-
-Timing fixtures:
-
-```text
-feature running for 1 hour 12 minutes 05 seconds
-wave running for 26 minutes 30 seconds
-packet running for 7 minutes 14 seconds
-failed attempt duration 6 minutes 59 seconds
-accepted attempt duration 8 minutes 03 seconds
-queued packet waiting 3 minutes 04 seconds
-```
-
-Use demo data for:
-
-```text
-local manual check
-Playwright
-regression tests
-screenshots
-```
-
----
-
-## 39. CI acceptance gate
-
-CI must include:
-
-```text
-Backend tests
-JS syntax tests
-API contract tests
-Duration/timer unit tests
-Artifact regression tests
-Playwright smoke tests
-Playwright mobile tests
-Self-improvement UI tests
-```
-
-Mission Control Center is not ready if:
-
-```text
-backend tests green but Playwright red
-JS syntax check fails
-console errors exist
-artifacts do not open
-mobile has horizontal scroll
-packet detail does not show runs/events/artifacts
-failed attempts are hidden
-attempt durations missing
-feature/wave/packet timers missing
-self-improvement packet has no badge/checklist/safety banner
-```
-
----
-
-## 40. Implementation plan
-
-### Wave 1 — Data/API + test foundation
-
-```text
-Rename UI to GRACE Mission Control Center
-Add /api/dashboard/v2
-Extend packet detail endpoint
-Add timing computed fields to dashboard/detail responses
-Fix artifact run id mismatch
-Add self-improvement fields to packet detail
-Add JS syntax check
-Add backend smoke tests
-Add API contract tests
-Add duration/timer tests
-Add artifact regression tests
-Add basic Playwright setup
-Add fail-on-console-error/pageerror gate
-```
-
-### Wave 2 — Simplified desktop UI
-
-```text
-Top bar
-Status summary
-Feature list
-Selected feature view
-Compact wave/packet rows
-Feature/wave/packet live timers
-Remove overloaded 3-column cockpit default
-Packet detail opens by click
-Desktop Playwright smoke tests
-```
-
-### Wave 3 — Packet Detail + Runs + Artifacts
-
-```text
-Overview tab
-Runs tab with all attempts and durations
-Artifacts tab
-Events tab
-Spec tab
-Artifact preview
-JSON preview
-Image preview
-Empty/error states
-Artifact Playwright tests
-```
-
-### Wave 4 — Self-improvement UI
-
-```text
-GRACE Self-Improvement feature mode
-Self-improvement badge
-Safety banner in Packet Detail
-Required gates checklist
-Affected subsystem/risk/rollback fields
-Playwright tests for self-improvement
-```
-
-### Wave 5 — Mobile
-
-```text
-Mobile drill-down navigation
-Feature screen
-Waves/Packets screen
-Packet Detail screen
-Artifacts/Logs screen
-Bottom tabs
-390px/430px viewport tests
-No horizontal scroll gate
-Mobile timer readability
-```
-
-### Wave 6 — Stability / polish / docs
-
-```text
-Demo seed data
-WebSocket/polling refresh tests
-Accessibility/basic UX checks
-README update
-Final screenshots
-CI gate cleanup
-```
-
----
-
-## 41. Acceptance criteria
-
-Mission Control Center is ready only if:
-
-```text
-1. / opens without JS errors.
-2. All JS files pass node --check.
-3. Playwright fails on pageerror and console.error.
-4. Main screen is not overloaded.
-5. Main screen shows summary, features, selected feature.
-6. Feature row/card shows elapsed or final duration.
-7. Wave row/card shows elapsed or final duration.
-8. Packet row/card shows elapsed or final duration.
-9. Packet detail opens by click.
-10. Overview explains current packet state.
-11. Runs tab shows every attempt.
-12. Failed/rejected attempts remain visible after retry.
-13. Every attempt has human-readable duration.
-14. Running feature/wave/packet has live updating timer.
-15. Terminal feature/wave/packet has final duration.
-16. Artifacts tab shows real artifacts.
-17. Events tab shows human-readable lifecycle.
-18. Spec tab shows readable spec_json.
-19. Refresh/WebSocket does not reset selected feature/packet/tab.
-20. Artifact regression covers R01 and packet_id-R01.
-21. Mobile 390px has no horizontal scroll.
-22. Self-improvement feature visible separately.
-23. Self-improvement packet has badge.
-24. Self-improvement detail has safety banner.
-25. Self-improvement detail has required gates checklist.
-26. Empty/error states covered by tests.
-27. CI fails if frontend runtime is broken.
-28. UID model respected: links/actions use feat_/wave_/pkt_, slug is display only.
-29. No logic parses W01/P01/FEAT- from IDs.
-30. User understands in 3–5 seconds what is running, what failed, what is ready, where the problem packet is, where artifacts are, and which tasks modify GRACE itself.
-```
-
----
-
-## 42. Do not do in this task
-
-```text
-Do not change retry policy.
-Do not change worker execution semantics.
-Do not change acceptance pipeline behavior.
-Do not change merge behavior.
-Do not implement recovery/escalation.
-Do not introduce React/Vue/Svelte.
-Do not require real agent runs in tests.
-Do not show raw seconds as primary UI.
-Do not derive IDs from title/slug/order.
-Do not hide failed attempts.
-```
-
----
-
-## 43. Final coder report format
-
-Coder must report:
-
-```text
+Summary
 Files changed
-Dashboard v2 API implemented: yes/no
-Packet detail endpoint extended: yes/no
-Artifact endpoints fixed: yes/no
-Duration formatter implemented: yes/no
-Feature timer shown: yes/no
-Wave timer shown: yes/no
-Packet timer shown: yes/no
-Attempt durations shown including failed attempts: yes/no
-Live timer JS added: yes/no
-Self-improvement UI added: yes/no
-Mobile layout implemented/tested: yes/no
-UID links/actions preserved: yes/no
+Existing code reused
+API fields added
+UI sections added
+Events rendered
+Recovery rendered
+Duration/timer behavior
 JS syntax tests added: yes/no
 Playwright tests added: yes/no
 Tests run
 Remaining blockers
 ```
+
+---
+
+## 39. Notes for future TZs
+
+Future improvements should be separate TZs if they change behavior rather than observability:
+
+```text
+interactive retry/recover buttons
+manual approve/reject actions
+real session resume beyond stubs
+worker control actions
+policy editing UI
+self-improvement approval workflow
+```
+
+This file is the observability/admin UI specification, not a new control-plane behavior policy.
