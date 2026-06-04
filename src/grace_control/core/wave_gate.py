@@ -49,7 +49,7 @@ def check_wave_gates() -> int:
                     if not current_packets:
                         continue
 
-                    terminal_states = {PacketState.MERGED, PacketState.FAILED, PacketState.CANCELLED, PacketState.REJECTED}
+                    terminal_states = {PacketState.MERGED, PacketState.FAILED, PacketState.CANCELLED, PacketState.REJECTED, PacketState.BLOCKED}
                     all_done = all(
                         PacketState(p.state) in terminal_states
                         for p in current_packets
