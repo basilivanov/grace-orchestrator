@@ -58,7 +58,7 @@ def test_load_project_config_missing_file_returns_defaults(tmp_path, monkeypatch
     assert cfg.api.port == 8042
     assert cfg.api.host == "127.0.0.1"
     assert cfg.git.base_branch == "main"
-    assert cfg.execution.backend == "api"
+    assert cfg.execution.backend == "cli"
 
 
 def test_load_project_config_overrides_defaults(tmp_path, monkeypatch):

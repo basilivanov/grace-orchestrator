@@ -1,127 +1,103 @@
-# ############################################################################
-# AI_HEADER: api_routers_agents
-# ROLE: HTTP binding for AgentGatewayService — POST /api/agents/run.
-#       W7 of source/codex/tz-api-first-cleanup-waves-w0-w11.md.
-# ############################################################################
-
+# AI_HEADER: api_routers_agents — POST /api/agents/run (W7 UniversalCliAgentBackend)
 # START_MODULE_CONTRACT
-# purpose: Expose AgentGatewayService over HTTP for direct invocation and
-#          for the ApiAgentBackend smoke path. Never imports provider SDKs.
-# inputs: RunRequest JSON body {packet_id, role, model, provider,
-#         worktree_path, packet_markdown, timeout_seconds}.
-# returns: RunResponse JSON — see payload below.
-# side_effects: Writes .agent_gateway.log to worktree_path.
-# emitted_logs: agent_run_request.
-# error_behavior: 400 on invalid provider; never raises otherwise.
+# purpose: Execute a CLI agent via UniversalCliAgentBackend or ApiAgentBackend
+#          based on the executor_id lookup in agent_profiles.yaml.
+#          API/OpenAPI remains the only public control plane.
+# inputs: RunRequest {packet_id, executor_id, role, model, effort, worktree_path, ...}.
+# returns: RunResponse.
+# side_effects: Spawns subprocess via the selected backend.
+# error_behavior: 400 on invalid request; backend errors in response body.
 # END_MODULE_CONTRACT
-
 # START_MODULE_MAP
-# mapping:
-#   - router: APIRouter
-#     routes:
-#       - POST /run
-#   - class: RunRequest
-#   - class: RunResponse
-#   - function: _to_response
+# mapping:   - router: APIRouter   - class: RunRequest   - class: RunResponse
 # END_MODULE_MAP
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from grace_control.agent import select_backend
+from grace_control.agent.backend import ExecutionRequest
 from grace_control.core.structured_logger import GraceLogger
-from grace_control.services.agent_gateway_service import (
-    VALID_PROVIDERS,
-    AgentGatewayService,
-)
 
 _log = GraceLogger("agents_router")
-
 router = APIRouter(tags=["agents"])
-_svc = AgentGatewayService()
 
 
 class RunRequest(BaseModel):
-    """Body of POST /api/agents/run."""
     packet_id: str
+    executor_id: str = "coder_opencode"
     role: str = "coder"
     model: str = ""
-    provider: str = "mock"
+    effort: str = ""
     worktree_path: str = ""
     packet_markdown: str = ""
-    timeout_seconds: int = 600
+    timeout_seconds: int = 900
     max_retries: int = 0
 
 
 class RunResponse(BaseModel):
-    """Response of POST /api/agents/run. Mirrors the gateway output."""
     accepted: bool
-    domain_status: str
-    stdout: str
-    stderr: str
-    messages: list[dict[str, Any]] = Field(default_factory=list)
-    changed_files: list[str] = Field(default_factory=list)
-    reason: str = ""
+    domain_status: str = ""
+    executor_id: str = ""
+    command_preview: list[str] = Field(default_factory=list)
+    exit_code: int = -1
+    stdout: str = ""
+    stderr: str = ""
+    stdout_path: str = ""
+    stderr_path: str = ""
+    worktree_path: str = ""
+    branch_name: str = ""
     duration_ms: int = 0
-    attempts: int = 0
+    reason: str = ""
     artifacts: list[str] = Field(default_factory=list)
 
 
-# START_FUNCTION_CONTRACT
-# name: _to_response
-# purpose: Map a gateway output dict to the public RunResponse shape.
-# inputs: out (dict — AgentGatewayService.dispatch output).
-# returns: RunResponse.
-# side_effects: None.
-# emitted_logs: None.
-# error_behavior: Never raises.
-# END_FUNCTION_CONTRACT
-def _to_response(out: dict[str, Any]) -> RunResponse:
-    accepted = bool(out.get("accepted"))
-    return RunResponse(
-        accepted=accepted,
-        domain_status="accepted" if accepted else "rejected",
-        stdout=out.get("stdout", ""),
-        stderr=out.get("stderr", ""),
-        messages=list(out.get("messages") or []),
-        changed_files=list(out.get("changed_files") or []),
-        reason=out.get("reason", "") or "",
-        duration_ms=int(out.get("duration_ms", 0)),
-        attempts=int(out.get("attempts", 0)),
-        artifacts=[str(p) for p in (out.get("changed_files") or [])],
-    )
-
-
-# START_FUNCTION_CONTRACT
-# name: run_agent
-# purpose: HTTP wrapper around AgentGatewayService.dispatch.
-# inputs: req (RunRequest).
-# returns: RunResponse.
-# side_effects: Writes .agent_gateway.log to req.worktree_path.
-# emitted_logs: agent_run_request, agent_run_response.
-# error_behavior: 400 on invalid provider; never raises otherwise.
-# END_FUNCTION_CONTRACT
 @router.post("/run", response_model=RunResponse)
 def run_agent(req: RunRequest) -> RunResponse:
-    if req.provider not in VALID_PROVIDERS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"unknown provider: {req.provider!r}; expected one of {sorted(VALID_PROVIDERS)}",
-        )
-    _log.info("agent_run_request", packet_id=req.packet_id,
-        provider=req.provider, model=req.model, role=req.role,
-        timeout_s=req.timeout_seconds, max_retries=req.max_retries)
-    out = _svc.dispatch(
-        provider=req.provider, model=req.model, role=req.role,
-        packet_id=req.packet_id, packet_markdown=req.packet_markdown,
-        worktree_path=Path(req.worktree_path) if req.worktree_path else Path("."),
-        timeout_seconds=req.timeout_seconds, max_retries=req.max_retries,
+    _log.info("agent_run_request", packet_id=req.packet_id, executor_id=req.executor_id)
+
+    from grace_control.core.executor_selector import load_profiles
+    profiles = load_profiles()
+    executors = profiles.get("codex", {}).get("executors", [])
+    matching = [e for e in executors if e.get("executor_id") == req.executor_id]
+    if not matching:
+        raise HTTPException(status_code=400, detail=f"unknown executor_id: {req.executor_id}")
+    executor = dict(matching[0])
+
+    if req.model:
+        executor["model"] = req.model
+    if req.effort:
+        executor["effort"] = req.effort
+    executor.setdefault("timeout_seconds", req.timeout_seconds)
+
+    import asyncio
+    backend = select_backend("cli")
+    er = ExecutionRequest(
+        packet_id=req.packet_id,
+        spec={"role": req.role, "packet_markdown": req.packet_markdown},
+        worktree_path=None, branch_name="",
+        executor=executor, timeout_s=req.timeout_seconds,
     )
-    _log.info("agent_run_response", packet_id=req.packet_id,
-        accepted=out.get("accepted"), attempts=out.get("attempts", 0),
-        duration_ms=out.get("duration_ms", 0))
-    return _to_response(out)
+
+    result = asyncio.run(backend.run(er))
+
+    return RunResponse(
+        accepted=result.accepted,
+        domain_status=result.domain_status,
+        executor_id=executor.get("executor_id", ""),
+        command_preview=result.evidence.get("command_preview", []) if isinstance(result.evidence, dict) else [],
+        exit_code=result.evidence.get("exit_code", -1) if isinstance(result.evidence, dict) else -1,
+        stdout=result.stdout,
+        stderr=result.stderr,
+        stdout_path=result.evidence.get("stdout_path", "") if isinstance(result.evidence, dict) else "",
+        stderr_path=result.evidence.get("stderr_path", "") if isinstance(result.evidence, dict) else "",
+        worktree_path=str(result.worktree_path) if result.worktree_path else "",
+        branch_name=result.branch_name,
+        duration_ms=result.duration_ms,
+        reason=result.reason,
+        artifacts=result.evidence.get("artifacts", []) if isinstance(result.evidence, dict) else [],
+    )

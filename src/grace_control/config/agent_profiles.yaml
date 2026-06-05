@@ -1,8 +1,7 @@
 version: 2
-# W7: top-level provider default makes profiles backend-agnostic.
-# ApiAgentBackend reads `provider` to pick a provider hook; the legacy
-# codex CLI still works because executors keep their `kind:`/`command:`
-# fields for backward compat.
+# W7 (revised): declarative agent profiles for UniversalCliAgentBackend.
+# The `agents:` section is used by UniversalCliAgentBackend.
+# The `codex:` section is kept for back-compat with executor_selector.
 default_provider: openai
 codex:
   binary: agy
@@ -130,6 +129,47 @@ codex:
       stall_timeout_seconds: 300
       hard_timeout_seconds: 300
       max_auto_resume_attempts: 1
+
+# W7 (revised): UniversalCliAgentBackend profiles — declarative, no CLI names in code.
+agents:
+  coder_opencode:
+    backend: cli
+    command:
+      - opencode
+      - run
+      - "--model"
+      - "{model}"
+      - "--effort"
+      - "{effort}"
+    model: "codex-5.1"
+    effort: "high"
+    cwd: "{worktree_path}"
+    timeout_seconds: 900
+    env:
+      OPENAI_API_KEY: "${OPENAI_API_KEY}"
+      OPENAI_BASE_URL: "${OPENAI_BASE_URL}"
+    input:
+      mode: stdin
+      template: "{packet_markdown}"
+    output:
+      collect_stdout: true
+      collect_stderr: true
+      artifacts:
+        - "."
+  coder_agy:
+    backend: cli
+    command:
+      - agy
+      - run
+      - "--model"
+      - "{model}"
+      - "--effort"
+      - "{effort}"
+    model: "gemini-3.5-flash"
+    effort: "medium"
+    cwd: "{worktree_path}"
+    timeout_seconds: 900
+
 verification:
   backend_profiles:
     backend_quick: pytest tests/ -q --tb=short
