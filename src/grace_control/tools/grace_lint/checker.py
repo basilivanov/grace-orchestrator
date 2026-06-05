@@ -194,6 +194,10 @@ def lint_text(
     if _rule_enabled("GRC103", rules_enabled):
         violations += _check_state_mutation(content, path, al)
 
+    # GRC104
+    if _rule_enabled("GRC104", rules_enabled):
+        violations += _check_router_db_loops(content, path, al)
+
     # GRC105
     if _rule_enabled("GRC105", rules_enabled):
         violations += _check_hardcoded_tmp(content, path, al)
@@ -395,6 +399,20 @@ def _check_blocks(content: str, lines: list[str], path: str, al: dict) -> list[V
     if len(start_blocks) == 0:
         violations.append(Violation("GRC108", f"module is {len(lines)} lines but has no START_BLOCK sections", path, 1))
     return violations
+
+
+def _check_router_db_loops(content: str, path: str, al: dict) -> list[Violation]:
+    """GRC104: routers must not contain heavy DB aggregation loops (for/db.query)."""
+    violations = []
+    if "routers/" not in path:
+        return violations
+    if _is_allowed("GRC104", path, al):
+        return violations
+    for i, line in enumerate(content.split("\n"), 1):
+        s = line.strip()
+        if "for " in s and ("db.query" in s or "self._db" in s):
+            violations.append(Violation("GRC104", f"router contains DB loop: {s[:60]}", path, i))
+    return violations
 # END_BLOCK_RULES_100
 
 
@@ -403,5 +421,6 @@ DEFAULT_RULES: list[str] = [
     "GRC010", "GRC011", "GRC012",
     "GRC020", "GRC021", "GRC030",
     "GRC100", "GRC101", "GRC102", "GRC103",
+    "GRC104",
     "GRC105", "GRC106", "GRC108",
 ]

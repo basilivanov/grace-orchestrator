@@ -22,8 +22,10 @@ Enforced by `scripts/grace_lint.py` (thin wrapper around
 | `GRC101` | No `subprocess` outside service/tests/scripts boundary | `src/grace_control/` | `.grace/lint_allowlist.yaml` |
 | `GRC102` | No `prefect_grace` import in runtime code | `src/grace_control/` | `.grace/lint_allowlist.yaml` |
 | `GRC103` | No `Packet.state` mutation outside `PacketService` | `src/grace_control/` (-services/tests) | `.grace/lint_allowlist.yaml` |
+| `GRC104` | No `for`/`db.query` loop in routers | `api/routers/` | `.grace/lint_allowlist.yaml` |
 | `GRC105` | No hardcoded `/tmp/grace-*` paths | `src/grace_control/` | `.grace/lint_allowlist.yaml` |
 | `GRC106` | No hardcoded `"main"` / `"origin"` outside config | `src/grace_control/` | `.grace/lint_allowlist.yaml` |
+| `GRC107` | Generated docs in sync | `docs/` | Covered by `make docs-check` |
 | `GRC108` | Modules > 300 lines must have `START_BLOCK` sections | `src/grace_control/` | `.grace/lint_allowlist.yaml` |
 
 ## Allowlist
