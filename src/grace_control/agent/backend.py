@@ -39,6 +39,7 @@ class ExecutionRequest:
     timeout_s: int = 600
     session_dir: Path | None = None
     trace_id: str = ""
+    evidence_dir: Path | None = None  # canonical run evidence path (W12)
 
 
 @dataclass

@@ -249,3 +249,54 @@ def test_stdin_input_mode_sends_markdown():
         assert "hello from stdin" in result.get("stdout", ""), f"stdout={result['stdout']!r} stderr={result['stderr']!r}"
 
     asyncio.run(_check())
+
+
+# ── W12: evidence_dir ──────────────────────────────────────────────────
+
+
+def test_agent_artifacts_written_to_evidence_dir(tmp_path):
+    """When run_dir is provided, stdout/stderr artifacts go there."""
+    import asyncio
+    from pathlib import Path
+    from grace_control.services.agent_run_service import AgentRunService
+    svc = AgentRunService()
+    ed = tmp_path / "evidence"
+    ed.mkdir(parents=True)
+
+    async def _check():
+        result = await svc.run(
+            {"command": ["echo", "hello-artifact"], "model": "t", "effort": "low"},
+            packet_id="p-evd", worktree_path=Path("."), state_root=Path("/tmp"),
+            packet_markdown="", timeout_seconds=5, run_dir=ed,
+        )
+        assert result["accepted"] is True
+        so = ed / "agent_stdout.log"
+        assert so.exists(), f"stdout not at {so}, artifacts: {result['artifacts']}"
+        assert "hello-artifact" in so.read_text()
+
+    asyncio.run(_check())
+
+
+def test_executor_request_passes_evidence_dir(tmp_path):
+    """ExecutionRequest.evidence_dir is passed through to artifact collector."""
+    import asyncio
+    from pathlib import Path
+    from grace_control.agent.backend import ExecutionRequest
+    from grace_control.services.agent_run_service import AgentRunService
+
+    ed = tmp_path / "runs" / "R01"
+    svc = AgentRunService()
+
+    async def _check():
+        result = await svc.run(
+            {"command": ["echo", "evidence-ok"], "model": "t", "effort": "low"},
+            packet_id="pkt-evidence", worktree_path=Path("."),
+            state_root=Path("/tmp"), packet_markdown="",
+            timeout_seconds=5, run_dir=ed,
+        )
+        so = ed / "agent_stdout.log"
+        assert so.exists(), f"stdout not found at {so}"
+        assert "evidence-ok" in so.read_text()
+        assert result["accepted"] is True
+
+    asyncio.run(_check())

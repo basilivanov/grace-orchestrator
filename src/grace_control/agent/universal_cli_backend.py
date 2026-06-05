@@ -44,6 +44,7 @@ class UniversalCliAgentBackend(ExecutionBackend):
             state_root=request.session_dir or Path("."),
             packet_markdown=packet_markdown,
             timeout_seconds=request.timeout_s,
+            run_dir=request.evidence_dir,
         )
 
         accepted = bool(out.get("accepted"))

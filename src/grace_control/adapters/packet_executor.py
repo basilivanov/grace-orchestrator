@@ -69,7 +69,8 @@ class PacketExecutionAdapter:
             from grace_control.config.settings import settings
             base_ref = settings.base_branch
             base_sha = self._inspector.base_sha(self.project_root, base_ref)
-            result = await self._call_executor(packet_path, pkt_contract, run_number, base_ref, base_sha, executor)
+            evidence_dir = self.state_root / "packets" / packet_id / "runs" / f"R{run_number:02d}"
+            result = await self._call_executor(packet_path, pkt_contract, run_number, base_ref, base_sha, executor, evidence_dir)
             _log.debug("executor_run_completed", packet_id=packet_id, ok=result.ok, errors=result.errors[:2])
 
             wt_ok, agent_commit_sha = self._inspected_worktree(result, pkt_contract, packet_id, packet_data["attempt_count"])
@@ -222,7 +223,7 @@ class PacketExecutionAdapter:
         return er
 
     async def _call_executor(self, packet_path: Path, packet_contract, attempt: int,
-                             base_ref: str, base_sha: str, executor: dict):
+                             base_ref: str, base_sha: str, executor: dict, evidence_dir: Path | None = None):
         from grace_control.agent.backend import ExecutionRequest
         pid = packet_path.parent.name
         eff = packet_contract.allowed_write_scope; slug = _attempt_slug(pid, attempt)
@@ -231,5 +232,6 @@ class PacketExecutionAdapter:
         req = ExecutionRequest(packet_id=pid,
             spec={"attempt_count":attempt,"base_ref":base_ref,"allowed_write_scope":eff or [],"frozen_scope":packet_contract.frozen_scope or []},
             worktree_path=self.worktree_root / slug, branch_name=_attempt_branch(pid, attempt),
-            scope_paths=list(eff or []), executor=executor, timeout_s=settings.agent_timeout_seconds, session_dir=self.state_root)
+            scope_paths=list(eff or []), executor=executor, timeout_s=settings.agent_timeout_seconds,
+            session_dir=self.state_root, evidence_dir=evidence_dir)
         return await self._backend.run(req)
