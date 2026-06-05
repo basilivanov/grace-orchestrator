@@ -24,7 +24,7 @@ import os
 from contextlib import contextmanager
 from pathlib import Path
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from .schema import Base
@@ -39,7 +39,8 @@ SessionLocal = None
 # inputs:
 #   db_url: SQLite URL or None (defaults to sqlite:///{cwd}/grace.db).
 # returns: None.
-# side_effects: Creates engine, SessionLocal, Base.metadata.create_all.
+# side_effects: Creates engine, SessionLocal, Base.metadata.create_all, runs
+#               SQLite migrations for columns added after the DB was created.
 # emitted_logs: None.
 # error_behavior: None at this level (SQLAlchemy handles connection errors).
 # END_FUNCTION_CONTRACT
@@ -64,8 +65,37 @@ def init_db(db_url: str | None = None) -> None:
             dbapi_conn.execute("PRAGMA journal_mode=WAL")
     SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
     Base.metadata.create_all(engine)
+    _run_sqlite_column_migrations(engine)
 
 #END_BLOCK_INIT
+
+#START_BLOCK_MIGRATIONS
+# Per-column additive migrations for SQLite. Kept here (not in Alembic) until
+# Alembic is introduced — these are idempotent ALTERs that are safe to run on
+# every startup. Each entry: (table, column, SQL DDL fragment).
+_SQLITE_COLUMN_MIGRATIONS: list[tuple[str, str, str]] = [
+    ("features", "degraded_reason", "ALTER TABLE features ADD COLUMN degraded_reason TEXT"),
+]
+
+
+def _run_sqlite_column_migrations(eng) -> None:
+    """Inspect existing tables and apply missing column ALTERs.
+
+    Only runs on SQLite. No-op on other dialects. Runs AFTER
+    Base.metadata.create_all so brand-new DBs already have all columns.
+    """
+    if not eng.dialect.name == "sqlite":
+        return
+    insp = inspect(eng)
+    with eng.begin() as conn:
+        for table, column, ddl in _SQLITE_COLUMN_MIGRATIONS:
+            if not insp.has_table(table):
+                continue
+            cols = {c["name"] for c in insp.get_columns(table)}
+            if column in cols:
+                continue
+            conn.execute(text(ddl))
+#END_BLOCK_MIGRATIONS
 
 
 #START_BLOCK_SESSION

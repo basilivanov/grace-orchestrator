@@ -32,14 +32,12 @@ from fastapi.responses import JSONResponse
 
 from grace_control.api.ws_broadcast import broadcast_event
 from grace_control.core.event_recorder import record_event
-from grace_control.core.state_machine import PacketStateMachine
 from grace_control.core.structured_logger import GraceLogger
 from grace_control.core.telegram_notify import notify_event
 from grace_control.db import get_db
 from grace_control.db.schema import Lease, Packet, PacketRun, PacketState, Worker
 
 router = APIRouter()
-_state_machine = PacketStateMachine()
 _log = GraceLogger("packets")
 
 
@@ -133,7 +131,7 @@ async def claim_packet(request: dict) -> dict:
 
     for packet in ready:
         try:
-            lease = await svc.claim(packet.id, worker_id)
+            result = await svc.claim(packet.id, worker_id)
         except StateTransitionError:
             continue
         except PacketNotFoundError:
@@ -141,10 +139,11 @@ async def claim_packet(request: dict) -> dict:
 
         return {
             "data": {
-                "packet_id": packet.id,
-                "spec": packet.spec_json,
-                "lease_id": lease.id,
-                "expires_at": lease.expires_at.isoformat() + "Z",
+                "packet_id": result.packet_id,
+                "spec": result.spec,
+                "lease_id": result.lease_id,
+                "expires_at": result.expires_at.isoformat() + "Z",
+                "attempt": result.attempt,
             },
             "timestamp": datetime.utcnow().isoformat() + "Z",
         }
@@ -188,45 +187,46 @@ async def release_packet(packet_id: str, request: dict) -> dict:
 
 @router.post("/{packet_id}/cancel")
 async def cancel_packet(packet_id: str, request: dict) -> dict:
-    """Cancel packet: READY/RUNNING/REJECTED → CANCELLED. Releases lease if present."""
+    """Cancel packet: any non-terminal state → CANCELLED. Delegates to PacketService.
+
+    The router only translates service exceptions to HTTP responses. All DB
+    state work (transition + lease release + worker cleanup) is owned by
+    `PacketService.cancel` (P1#4 from post-refactor audit).
+    """
+    from grace_control.services.packet_service import (
+        PacketNotFoundError,
+        PacketService,
+        StateTransitionError,
+    )
+
+    reason = request.get("reason", "No reason provided")
+
     try:
-        reason = request.get("reason", "No reason provided")
+        svc = PacketService()
+        result = await svc.cancel(packet_id, reason)
+    except PacketNotFoundError:
+        raise HTTPException(status_code=404, detail="Packet not found")
+    except StateTransitionError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
-        with get_db() as db:
-            packet = db.query(Packet).filter_by(id=packet_id).first()
-            if not packet:
-                raise HTTPException(status_code=404, detail="Packet not found")
-
-            current = PacketState(packet.state)
-            if current in (PacketState.MERGED, PacketState.FAILED, PacketState.BLOCKED, PacketState.CANCELLED):
-                raise HTTPException(status_code=400, detail=f"Cannot cancel terminal packet: {current.value}")
-
-            lease = db.query(Lease).filter_by(packet_id=packet_id).first()
-            if lease:
-                db.delete(lease)
-                worker = db.query(Worker).filter_by(id=lease.worker_id).first()
-                if worker:
-                    worker.current_packet_id = None
-
-            _state_machine.transition(current, PacketState.CANCELLED)
-            packet.state = PacketState.CANCELLED.value
-
-            _log.info("packet_cancelled", packet_id=packet.id, reason=reason)
-            record_event("packet_cancelled", "packet", packet.id, {"reason": reason}, db=db)
-            await notify_event("packet_cancelled", packet.id, reason=reason)
-            await broadcast_event("state_change", {"packet_id": packet.id, "state": "cancelled"})
-
-            return {
-                "data": {"packet_id": packet.id, "state": packet.state, "reason": reason},
-                "timestamp": datetime.utcnow().isoformat() + "Z",
-            }
-    except HTTPException:
-        raise
+    # Best-effort observability; never fail cancel on these.
+    try:
+        record_event("packet_cancelled", "packet", result.packet_id, {"reason": reason})
     except Exception:
-        return JSONResponse(
-            {"error": {"code": "INTERNAL_ERROR", "message": "Cancel failed"}},
-            status_code=500,
-        )
+        pass
+    try:
+        await notify_event("packet_cancelled", result.packet_id, reason=reason)
+    except Exception:
+        pass
+    try:
+        await broadcast_event("state_change", {"packet_id": result.packet_id, "state": "cancelled"})
+    except Exception:
+        pass
+
+    return {
+        "data": {"packet_id": result.packet_id, "state": result.state, "reason": reason},
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+    }
 
 
 @router.post("/{packet_id}/merge")
@@ -288,7 +288,10 @@ async def merge_packet(packet_id: str, request: dict) -> dict:
 
     if worktree_path:
         from pathlib import Path as _P
-        await svc.cleanup_worktree(_P(worktree_path), branch_name)
+        await svc.cleanup_worktree(
+            _P(worktree_path), branch_name,
+            target_repo_root=_P(target_repo_root) if target_repo_root else None,
+        )
 
     _log.info("packet_merged", packet_id=packet_id,
         commit_sha=result.commit_sha, target_repo=result.target_repo)

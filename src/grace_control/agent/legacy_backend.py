@@ -7,6 +7,8 @@
 # purpose: Wrap prefect_grace.platform.e2e_packet_runner.run_e2e_packet behind
 #          the ExecutionBackend Protocol so packet_executor does not depend on
 #          legacy code directly. This is the boundary of the legacy isolation.
+#          Also owns legacy-specific helpers (worktree cleanup, branch format)
+#          that `packet_executor.py` used to duplicate.
 # inputs: ExecutionRequest.
 # returns: ExecutionResult with accepted/domain_status from legacy E2E result.
 # side_effects: Spawns subprocess via legacy codex_launcher; writes packet_registry.yaml.
@@ -17,12 +19,16 @@
 # START_MODULE_MAP
 # mapping:
 #   - class: LegacyPrefectBackend
+#   - function: legacy_branch_name
+#   - function: legacy_prepare_worktree
 # END_MODULE_MAP
 
 from __future__ import annotations
 
 import asyncio
 import os
+import shutil
+import subprocess
 from functools import partial
 from pathlib import Path
 
@@ -33,6 +39,53 @@ _log = GraceLogger("legacy_backend")
 
 # The single, sanctioned import of legacy code in the entire new control plane.
 from prefect_grace.platform.e2e_packet_runner import run_e2e_packet  # noqa: E402
+
+
+# P2#8: single source of truth for the legacy branch name. The same string
+# lived inlined in packet_executor.py and packet_materializer.py before this
+# was moved into the legacy boundary. Re-exported from packet_materializer for
+# back-compat with any code that still imports it from there.
+LEGACY_BRANCH_FORMAT = "agent/default/{packet_id}/{attempt_slug}"
+
+
+def legacy_branch_name(packet_id: str, attempt_slug: str) -> str:
+    """Return the legacy branch name for a packet attempt."""
+    return LEGACY_BRANCH_FORMAT.format(packet_id=packet_id, attempt_slug=attempt_slug)
+
+
+def legacy_prepare_worktree(
+    project_root: Path,
+    packet_id: str,
+    attempt_slug: str,
+) -> tuple[Path, str]:
+    """Best-effort cleanup of stale worktree/branch from a previous attempt.
+
+    Returns (worktree_path, branch_name). Both are derived from the canonical
+    LEGACY_BRANCH_FORMAT so callers don't construct them by hand.
+    Never raises — failures are swallowed and logged.
+    """
+    wt_path = Path(project_root) / f"{packet_id}-{attempt_slug}"
+    branch = legacy_branch_name(packet_id, attempt_slug)
+    try:
+        subprocess.run(
+            ["git", "-C", str(project_root), "worktree", "prune"],
+            capture_output=True, timeout=10,
+        )
+        if wt_path.exists():
+            subprocess.run(
+                ["git", "-C", str(project_root), "worktree", "remove",
+                 str(wt_path), "--force"],
+                capture_output=True, timeout=10,
+            )
+            shutil.rmtree(wt_path, ignore_errors=True)
+        subprocess.run(
+            ["git", "-C", str(project_root), "branch", "-D", branch],
+            capture_output=True, timeout=10,
+        )
+    except Exception as e:
+        _log.warn("legacy_prepare_worktree_failed",
+            packet_id=packet_id, error=str(e)[:200])
+    return wt_path, branch
 
 
 class LegacyPrefectBackend:
@@ -69,7 +122,11 @@ class LegacyPrefectBackend:
                         dry_run=False,
                         execute_agent=True,
                         attempt=_extract_attempt(request),
-                        base_ref="HEAD",
+                        # P2#9: forward base_ref from the orchestrator-supplied
+                        # spec. Previously hard-coded to "HEAD", which broke
+                        # diff/scope checks when the run is supposed to be
+                        # against `main` or `GRACE_BASE_REF`.
+                        base_ref=request.spec.get("base_ref") or "HEAD",
                         keep_worktree=True,
                         runtime_state_root=_resolve_state_root(request),
                         timeout_seconds=request.timeout_s,

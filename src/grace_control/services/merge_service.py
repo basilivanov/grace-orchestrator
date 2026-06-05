@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from grace_control.core.structured_logger import GraceLogger
+from grace_control.db.schema import PacketState
 from grace_control.services.git_service import GitService
 
 _log = GraceLogger("merge_service")
@@ -106,7 +107,9 @@ class MergeService:
         commit_sha = self._git.current_sha(repo)
 
         try:
-            await svc.transition(packet_id, target_state=None, reason=f"merge_complete:{commit_sha[:8]}")
+            await svc.transition(
+                packet_id, PacketState.MERGED, reason=f"merge_complete:{commit_sha[:8]}",
+            )
         except Exception as e:
             _log.warn("merge_state_transition_failed",
                 packet_id=packet_id, error=str(e)[:200])
@@ -116,10 +119,34 @@ class MergeService:
 
         return MergeResult(True, packet_id, commit_sha, str(repo), branch_name, target_branch)
 
-    async def cleanup_worktree(self, worktree_path: Path, branch: str) -> None:
-        """Best-effort cleanup of worktree after merge. Logs failures, never raises."""
+    async def cleanup_worktree(
+        self,
+        worktree_path: Path,
+        branch: str,
+        target_repo_root: Path | None = None,
+    ) -> None:
+        """Best-effort cleanup of worktree after merge. Logs failures, never raises.
+
+        Order (P1#7):
+        1. `git worktree remove --force` — unregister from `git worktree list`.
+        2. `shutil.rmtree` — fallback if the path still exists.
+        3. `git worktree prune` — drop stale admin files in `.git/worktrees/`.
+
+        If `target_repo_root` is None, falls back to legacy behaviour (rmtree
+        only); callers that have a repo handle should pass it.
+        """
         try:
             wt = worktree_path.resolve()
+            if target_repo_root is not None:
+                repo = Path(target_repo_root).resolve()
+                remove = self._git.worktree_remove(repo, wt, force=True)
+                if not remove.success:
+                    _log.warn("worktree_git_remove_failed",
+                        worktree=str(wt), stderr=remove.stderr[:200])
+                prune = self._git.worktree_prune(repo)
+                if not prune.success:
+                    _log.warn("worktree_prune_failed",
+                        repo=str(repo), stderr=prune.stderr[:200])
             if wt.exists():
                 import shutil
                 shutil.rmtree(wt, ignore_errors=True)

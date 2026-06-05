@@ -35,6 +35,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from grace_control.api.routers import architect, features, packets, recovery, self_evolution, workers
+from grace_control.config.settings import settings
 from grace_control.db import init_db
 
 _lease_task = None
@@ -44,8 +45,9 @@ _UI_DIR = Path(__file__).parent.parent / "ui"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _lease_task
-    db_url = os.environ.get("GRACE_DB_URL")
-    init_db(db_url)
+    # P2#10: read DB URL and loop intervals from the centralized settings
+    # module instead of hard-coded env reads / magic numbers.
+    init_db(settings.database_url)
     from grace_control.core.lease_manager import lease_expiration_loop
     _lease_task = asyncio.create_task(lease_expiration_loop())
     from grace_control.core.wave_gate import check_wave_gates as _gate_loop
@@ -56,7 +58,7 @@ async def lifespan(app: FastAPI):
             try: _gate_loop()
             except Exception as e:
                 _loop_log.error("wave_gate_loop_error", error=str(e)[:500])
-            await asyncio.sleep(30)
+            await asyncio.sleep(settings.wave_gate_interval_seconds)
     asyncio.create_task(_gate_task())
     from grace_control.core.feature_gate import check_feature_completion
     async def _feature_task():
@@ -64,7 +66,7 @@ async def lifespan(app: FastAPI):
             try: check_feature_completion()
             except Exception as e:
                 _loop_log.error("feature_gate_loop_error", error=str(e)[:500])
-            await asyncio.sleep(60)
+            await asyncio.sleep(settings.feature_gate_interval_seconds)
     asyncio.create_task(_feature_task())
     yield
     if _lease_task:
@@ -344,11 +346,10 @@ async def health():
 
 #START_BLOCK_MAIN
 def main():
-    port = int(os.environ.get("GRACE_API_PORT", "8042"))
     uvicorn.run(
         "grace_control.api.main:app",
-        host="127.0.0.1",
-        port=port,
+        host=settings.api_host,
+        port=settings.api_port,
         reload=False,
     )
 

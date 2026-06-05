@@ -26,8 +26,11 @@ from pathlib import Path
 import yaml
 
 
-# Branch format shared with WorktreeService.
-BRANCH_FORMAT = "agent/default/{packet_id}/{attempt_slug}"
+# Branch format shared with WorktreeService. The canonical home for this
+# constant is `grace_control.agent.legacy_backend.LEGACY_BRANCH_FORMAT` (P2#8
+# from post-refactor audit). `BRANCH_FORMAT` is kept here as a re-export for
+# back-compat with code that imported it from this module.
+from grace_control.agent.legacy_backend import LEGACY_BRANCH_FORMAT as BRANCH_FORMAT  # noqa: E402,F401
 
 
 class PacketMaterializer:

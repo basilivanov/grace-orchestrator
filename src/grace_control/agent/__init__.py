@@ -48,7 +48,10 @@ def select_backend(backend_name: str = "") -> ExecutionBackend:
         ValueError: if backend_name is not in {"legacy", "new"}.
     """
     if not backend_name:
-        from grace_control.config import settings as _settings
+        # Import the instance via the submodule path so we don't pick up the
+        # package attribute (which Python would resolve to the submodule itself
+        # in `from grace_control.config import settings`).
+        from grace_control.config.settings import settings as _settings
         backend_name = _settings.execution_backend
 
     if backend_name not in _VALID:

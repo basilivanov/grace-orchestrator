@@ -48,12 +48,18 @@ def check_wave_gates() -> int:
                 if not current_packets:
                     continue
 
-                done_states = {PacketState.MERGED, PacketState.CANCELLED, PacketState.BLOCKED_FINAL}
+                # Next wave opens only when all packets are MERGED or intentionally
+                # CANCELLED by policy. BLOCKED_FINAL is treated as a degraded/stop
+                # condition — it signals architect intervention is needed, not
+                # permission to continue dependent work (P1#5 from post-refactor
+                # audit).
+                done_states = {PacketState.MERGED, PacketState.CANCELLED}
                 degraded_states = {
                     PacketState.FAILED,
                     PacketState.REJECTED,
                     PacketState.BLOCKED,
                     PacketState.BLOCKED_RECOVERABLE,
+                    PacketState.BLOCKED_FINAL,
                 }
                 all_done = all(
                     PacketState(p.state) in done_states for p in current_packets

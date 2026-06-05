@@ -25,6 +25,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Optional
 
@@ -42,6 +43,36 @@ class PacketNotFoundError(Exception):
 
 class MaxRetriesReachedError(StateTransitionError):
     """Raised when a packet has reached its max_attempts and cannot retry."""
+
+
+@dataclass(frozen=True)
+class ClaimResult:
+    """Session-safe DTO returned by PacketService.claim().
+
+    ORM `Lease` cannot survive session close under the default
+    `expire_on_commit=True`; using a frozen dataclass here means callers
+    (e.g. packets router) can serialize fields without triggering
+    `DetachedInstanceError`.
+    """
+    packet_id: str
+    lease_id: int
+    worker_id: str
+    expires_at: datetime
+    spec: dict[str, Any]
+    attempt: int
+
+
+@dataclass(frozen=True)
+class CancelResult:
+    """Session-safe DTO returned by PacketService.cancel().
+
+    Same reasoning as ClaimResult: callers (router, tests) may read fields
+    after the underlying session is closed.
+    """
+    packet_id: str
+    state: str
+    reason: str
+    previous_state: str
 
 
 def _record_event(db, event_type: str, entity_id: str, payload: dict) -> None:
@@ -122,8 +153,13 @@ class PacketService:
         asyncio.create_task(self._broadcast(packet_id, to_state.value, reason))
         return packet
 
-    async def claim(self, packet_id: str, worker_id: str) -> Lease:
-        """Claim a packet: DRAFT/REJECTED/BLOCKED_RECOVERABLE→READY→RUNNING, creates lease."""
+    async def claim(self, packet_id: str, worker_id: str) -> ClaimResult:
+        """Claim a packet: DRAFT/REJECTED/BLOCKED_RECOVERABLE→READY→RUNNING, creates lease.
+
+        Returns a `ClaimResult` DTO (frozen dataclass) — never the live ORM
+        `Lease` — so callers can serialize fields after the session closes
+        without `DetachedInstanceError` (P0#3 from post-refactor audit).
+        """
         with self._db_factory() as db:
             packet = db.query(Packet).filter_by(id=packet_id).with_for_update().first()
             if not packet:
@@ -148,23 +184,49 @@ class PacketService:
                     raise StateTransitionError(f"Packet {packet_id} already leased to {existing.worker_id}")
                 db.delete(existing)
 
+            expires_at = datetime.utcnow() + timedelta(minutes=15)
             lease = Lease(
                 packet_id=packet_id,
                 worker_id=worker_id,
-                expires_at=datetime.utcnow() + timedelta(minutes=15),
+                expires_at=expires_at,
             )
             db.add(lease)
             worker = db.query(Worker).filter_by(id=worker_id).first()
             if worker:
                 worker.current_packet_id = packet_id
+
+            # Snapshot all values needed by callers before commit; after commit
+            # SQLAlchemy expires attributes and any access to the ORM `lease`
+            # outside this session will raise DetachedInstanceError.
+            result = ClaimResult(
+                packet_id=packet_id,
+                lease_id=lease.id,  # may be None for non-pk backends — see flush below
+                worker_id=worker_id,
+                expires_at=expires_at,
+                spec=dict(packet.spec_json or {}),
+                attempt=packet.attempt_count,
+            )
+
             _record_event(db, "packet_claimed", packet_id, {
                 "worker_id": worker_id, "attempt": packet.attempt_count
             })
+
+            db.flush()  # populate lease.id without committing yet
+            if lease.id is not None:
+                result = ClaimResult(
+                    packet_id=result.packet_id,
+                    lease_id=lease.id,
+                    worker_id=result.worker_id,
+                    expires_at=result.expires_at,
+                    spec=result.spec,
+                    attempt=result.attempt,
+                )
+
             _log.info("packet_claimed", packet_id=packet_id, worker_id=worker_id,
                 attempt=packet.attempt_count)
             db.commit()
             asyncio.create_task(self._broadcast(packet_id, "running", f"claim:{worker_id}"))
-            return lease
+            return result
 
     async def release(self, packet_id: str, status: str, result: dict[str, Any]) -> None:
         """Release a packet from RUNNING to terminal/next state based on status."""
@@ -223,3 +285,53 @@ class PacketService:
         """Move packet to BLOCKED_RECOVERABLE (retryable) or BLOCKED_FINAL (terminal)."""
         target = PacketState.BLOCKED_RECOVERABLE if recoverable else PacketState.BLOCKED_FINAL
         return await self.transition(packet_id, target, reason=reason)
+
+    TERMINAL_STATES: frozenset[PacketState] = frozenset({
+        PacketState.MERGED,
+        PacketState.FAILED,
+        PacketState.BLOCKED_FINAL,
+        PacketState.CANCELLED,
+    })
+
+    async def cancel(self, packet_id: str, reason: str = "") -> CancelResult:
+        """Cancel a packet: any non-terminal state → CANCELLED. Releases lease.
+
+        Returns a `CancelResult` DTO (frozen dataclass) so callers can read
+        fields after the session closes without `DetachedInstanceError`.
+
+        Raises:
+            PacketNotFoundError: packet_id not in DB.
+            StateTransitionError: packet is already in a terminal state.
+        """
+        with self._db_factory() as db:
+            packet = db.query(Packet).filter_by(id=packet_id).first()
+            if not packet:
+                raise PacketNotFoundError(packet_id)
+            current = PacketStateMachine.normalize_state(packet.state)
+            if current in self.TERMINAL_STATES:
+                raise StateTransitionError(
+                    f"Cannot cancel terminal packet: {current.value}"
+                )
+            await self._transition_in_session(
+                db, packet_id, PacketState.CANCELLED, reason=f"cancel:{reason}",
+            )
+            lease = db.query(Lease).filter_by(packet_id=packet_id).first()
+            released_worker_id: str | None = None
+            if lease:
+                released_worker_id = lease.worker_id
+                db.delete(lease)
+            if released_worker_id:
+                worker = db.query(Worker).filter_by(id=released_worker_id).first()
+                if worker:
+                    worker.current_packet_id = None
+
+            result = CancelResult(
+                packet_id=packet_id,
+                state=PacketState.CANCELLED.value,
+                reason=reason,
+                previous_state=current.value,
+            )
+            db.commit()
+            _log.info("packet_cancelled", packet_id=packet_id, reason=reason)
+            asyncio.create_task(self._broadcast(packet_id, "cancelled", f"cancel:{reason}"))
+            return result

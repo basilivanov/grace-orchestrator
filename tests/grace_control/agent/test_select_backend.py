@@ -31,13 +31,18 @@ def test_select_backend_unknown_raises():
 
 def test_select_backend_default_reads_settings(monkeypatch):
     """Empty name → reads grace_control.config.settings.execution_backend."""
-    from grace_control.config import settings
+    # Import the instance, not the submodule. The package has both
+    # `grace_control.config.settings` (the module) and a `settings` attribute
+    # (the GraceSettings instance); bare `from grace_control.config import
+    # settings` resolves to the submodule.
+    from grace_control.config import GraceSettings
+    from grace_control.config.settings import settings as cfg
 
-    monkeypatch.setattr(settings, "execution_backend", BACKEND_NEW)
+    monkeypatch.setattr(cfg, "execution_backend", BACKEND_NEW)
     backend = select_backend()
     assert isinstance(backend, NewDirectBackend)
 
-    monkeypatch.setattr(settings, "execution_backend", BACKEND_LEGACY)
+    monkeypatch.setattr(cfg, "execution_backend", BACKEND_LEGACY)
     backend = select_backend()
     assert isinstance(backend, LegacyPrefectBackend)
 

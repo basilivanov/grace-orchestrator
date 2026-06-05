@@ -131,23 +131,12 @@ class PacketExecutionAdapter:
             run_number = packet.attempt_count
             run_id = f"{packet_id}-R{run_number:02d}"
 
-            # Clean git state for this attempt BEFORE anything
-            import subprocess as _sp
-            import shutil
+            # Clean git state for this attempt BEFORE anything. P2#8: legacy
+            # worktree/branch handling lives in `legacy_backend.legacy_prepare_worktree`
+            # so packet_executor stays focused on orchestration.
             attempt_slug = f"attempt-{run_number:04d}"
-            try:
-                _sp.run(["git", "-C", str(self.project_root), "worktree", "prune"],
-                        capture_output=True, timeout=10)
-                wt_path = self.worktree_root / f"{packet_id}-{attempt_slug}"
-                if wt_path.exists():
-                    _sp.run(["git", "-C", str(self.project_root), "worktree", "remove",
-                            str(wt_path), "--force"], capture_output=True, timeout=10)
-                    shutil.rmtree(wt_path, ignore_errors=True)
-                branch = f"agent/default/{packet_id}/{attempt_slug}"
-                _sp.run(["git", "-C", str(self.project_root), "branch", "-D", branch],
-                       capture_output=True, timeout=10)
-            except Exception:
-                pass
+            from grace_control.agent.legacy_backend import legacy_prepare_worktree
+            legacy_prepare_worktree(self.project_root, packet_id, attempt_slug)
 
             # Check if run already exists (from a previous worker crash)
             existing_run = db.query(PacketRun).filter_by(id=run_id).first()
@@ -212,7 +201,8 @@ class PacketExecutionAdapter:
 
             # Resolve base SHA for commit diff comparison
             import subprocess as _sp_base
-            base_ref = os.environ.get("GRACE_BASE_REF", "main")
+            from grace_control.config.settings import settings
+            base_ref = os.environ.get("GRACE_BASE_REF", settings.base_branch)
             base_sha = ""
             try:
                 sr = _sp_base.run(["git", "-C", str(self.project_root), "rev-parse", base_ref],
@@ -757,32 +747,24 @@ class PacketExecutionAdapter:
         except Exception:
             pass
 
-        # Clean stale git worktrees + branches from previous attempts
-        import subprocess as _sp
-        import shutil
+        # Clean stale git worktrees + branches from previous attempts. P2#8:
+        # legacy worktree/branch handling lives in the legacy boundary.
         attempt_slug = f"attempt-{attempt:04d}"
-        try:
-            _sp.run(["git", "-C", str(self.project_root), "worktree", "prune"],
-                    capture_output=True, timeout=10)
-            wt_path = worktree_root / f"{packet_id}-{attempt_slug}"
-            if wt_path.exists():
-                _sp.run(["git", "-C", str(self.project_root), "worktree", "remove", str(wt_path), "--force"],
-                       capture_output=True, timeout=10)
-                shutil.rmtree(wt_path, ignore_errors=True)
-            branch = f"agent/default/{packet_id}/{attempt_slug}"
-            _sp.run(["git", "-C", str(self.project_root), "branch", "-D", branch],
-                   capture_output=True, timeout=10)
-        except Exception:
-            pass
+        from grace_control.agent.legacy_backend import (
+            legacy_branch_name,
+            legacy_prepare_worktree,
+        )
+        legacy_prepare_worktree(self.project_root, packet_id, attempt_slug)
 
-        timeout = int(os.environ.get("GRACE_AGENT_TIMEOUT", "600"))
+        from grace_control.config.settings import settings
+        timeout = int(os.environ.get("GRACE_AGENT_TIMEOUT", str(settings.agent_timeout_seconds)))
         request = ExecutionRequest(
             packet_id=packet_id,
             spec={"attempt_count": attempt, "base_ref": base_ref,
                   "allowed_write_scope": effective_allowed or [],
                   "frozen_scope": effective_frozen or []},
             worktree_path=worktree_root / f"{packet_id}-{attempt_slug}",
-            branch_name=f"agent/default/{packet_id}/{attempt_slug}",
+            branch_name=legacy_branch_name(packet_id, attempt_slug),
             scope_paths=list(effective_allowed or []),
             executor={"executor_id": "legacy", "model": "prefect"},
             timeout_s=timeout,

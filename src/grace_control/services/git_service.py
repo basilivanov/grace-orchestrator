@@ -118,3 +118,19 @@ class GitService:
         if not r.success:
             return []
         return [line.strip() for line in r.stdout.splitlines() if line.strip()]
+
+    def worktree_remove(self, repo: Path, worktree_path: Path, *, force: bool = True) -> GitResult:
+        """Unregister a worktree from `git worktree list` (P1#7 from post-refactor audit).
+
+        Old code only did `shutil.rmtree()`, leaving stale entries in
+        `git worktree list` that tripped later attempts. Use git removal first
+        so the metadata is cleared, then filesystem cleanup as a fallback.
+        """
+        args = ["worktree", "remove", str(worktree_path)]
+        if force:
+            args.append("--force")
+        return self._run(args, repo)
+
+    def worktree_prune(self, repo: Path) -> GitResult:
+        """Run `git worktree prune` — clean up stale administrative files."""
+        return self._run(["worktree", "prune"], repo)

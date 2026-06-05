@@ -111,8 +111,9 @@ class AcceptancePipeline:
         self,
         packet: ExecutionPacketContract,
         changed_files: list[str],
+        cwd: Path | None = None,
     ) -> list[list[str]]:
-        scope_paths = self._resolve_t0_scope_paths(packet, changed_files)
+        scope_paths = self._resolve_t0_scope_paths(packet, changed_files, cwd=cwd)
         if not scope_paths:
             return self._t0_command_template
         return [
@@ -124,7 +125,14 @@ class AcceptancePipeline:
         self,
         packet: ExecutionPacketContract,
         changed_files: list[str],
+        cwd: Path | None = None,
     ) -> list[str]:
+        # P1#6: scope paths are resolved against the actual command cwd
+        # (the worktree), not the project root. A new file that exists only
+        # in the agent worktree would otherwise be skipped by the
+        # scope-aware lint selection because `project_root / p` wouldn't
+        # exist on disk.
+        base = (cwd or self._root).resolve()
         candidates: list[str] = []
         seen: set[str] = set()
 
@@ -137,7 +145,6 @@ class AcceptancePipeline:
             candidates.append(raw)
 
         if changed_files:
-            cwd = self._root
             for f in changed_files:
                 if f in seen:
                     continue
@@ -146,9 +153,9 @@ class AcceptancePipeline:
 
         existing: list[str] = []
         for p in candidates:
-            abs_path = (self._root / p).resolve() if not Path(p).is_absolute() else Path(p)
+            abs_path = (base / p).resolve() if not Path(p).is_absolute() else Path(p)
             try:
-                rel = abs_path.relative_to(cwd)
+                rel = abs_path.relative_to(base)
             except ValueError:
                 rel = abs_path
             if abs_path.exists():
@@ -291,7 +298,7 @@ class AcceptancePipeline:
                     blocking_issues=[], commands=[]),
                 scope_violations=violations)
 
-        t0_cmds = self._build_t0_commands(packet, cf)
+        t0_cmds = self._build_t0_commands(packet, cf, cwd=cwd or self._root)
 
         for cmd in t0_cmds:
             r = self._runner.run(cmd, output_dir=output_dir, cwd=cwd)
