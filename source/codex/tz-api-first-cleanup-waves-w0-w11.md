@@ -10,10 +10,11 @@ Source roadmap: `source/codex/roadmap-api-first-legacy-cli-hardcode-cleanup.md`
 
 ```text
 Services = единственное ядро бизнес-логики
-FastAPI + OpenAPI = единственный публичный runtime-интерфейс
-CLI = удалить как продуктовый слой / оставить только временный thin HTTP client, если нужно для миграции
+FastAPI + OpenAPI = единственный публичный runtime-интерфейс для людей и агентов
+CLI = удалить как продуктовый/user-facing control plane
+Local CLI agents = допустимый execution adapter, запускаемый только из GRACE API/backend
 scripts/ = только CI/dev wrappers, без runtime orchestration
-Legacy Prefect = изолировать, заменить ApiAgentBackend, удалить из runtime package
+Legacy Prefect = изолировать, заменить UniversalCliAgentBackend, удалить из runtime package
 MCP = не делать сейчас; только future thin adapter поверх services
 GraceLint = executable GRACE canon, который запрещает возврат техдолга
 ```
@@ -24,6 +25,7 @@ GraceLint = executable GRACE canon, который запрещает возвр
 Не добавлять второй control plane.
 Не дублировать бизнес-логику между API / CLI / scripts / legacy.
 Все действия, которые нужны агентам, должны быть доступны через API и видны в OpenAPI.
+Локальные CLI-агенты разрешены только как backend исполнения, не как интерфейс управления GRACE.
 ```
 
 ## Базовые требования ко всем PR/пакетам
@@ -57,8 +59,6 @@ GraceLint = executable GRACE canon, который запрещает возвр
 
 ## Scope
 
-Файлы:
-
 ```text
 src/grace_control/services/merge_service.py
 src/grace_control/api/routers/packets.py
@@ -88,8 +88,6 @@ tests/grace_control/core/test_post_refactor_audit_fixes.py
 
 ## Scope
 
-Файлы/директории:
-
 ```text
 src/grace_control/cli/
 src/grace_control/api/routers/
@@ -115,6 +113,7 @@ tests/grace_control/api/
 - OpenAPI is canonical runtime contract.
 - Agents discover capabilities through /openapi.json.
 - CLI is deprecated as runtime interface.
+- Local CLI agents may still be launched by execution backends.
 - Scripts are CI/dev only.
 - MCP is future optional adapter, not active scope.
 - Services own business logic; API routers expose services.
@@ -151,7 +150,7 @@ legacy gracectl
 
 ### 3. Определить missing API capabilities
 
-Сформировать список endpoint’ов, которых не хватает, чтобы удалить CLI:
+Сформировать список endpoint’ов, которых не хватает, чтобы удалить CLI как control plane:
 
 ```text
 /api/trace/search
@@ -191,8 +190,6 @@ docs/grace/CLI_DEPRECATION_INVENTORY.md
 /api/recovery
 ```
 
-После реализации следующих волн этот тест будет расширяться.
-
 ## Что НЕ делать
 
 - Не удалять CLI в этой волне.
@@ -217,8 +214,6 @@ docs/grace/CLI_DEPRECATION_INVENTORY.md
 Заменить ценность CLI trace на OpenAPI-discoverable API. Агент должен уметь понять, что произошло с packet/feature/run, не зная hidden scripts/CLI.
 
 ## Scope
-
-Новые/изменяемые файлы:
 
 ```text
 src/grace_control/api/routers/trace.py
@@ -331,8 +326,6 @@ MVP можно сделать DB-search по Packet/Feature title/id, без ful
 
 ## Tests
 
-Добавить:
-
 1. packet trace returns current state, runs, events.
 2. feature trace groups packets by wave.
 3. search by packet title returns packet.
@@ -354,9 +347,9 @@ MVP можно сделать DB-search по Packet/Feature title/id, без ful
 
 Удалить CLI как самостоятельный runtime control plane. CLI не должен запускать API+worker, мутировать state, запускать eval pipeline, делать trace или lint как уникальную capability.
 
-## Scope
+Важно: удаляем GRACE CLI как интерфейс управления. Это **не запрещает** GRACE backend’у запускать локальные CLI-агенты (`opencode`, `codex`, `agy`, `gemini`, `claude`) как execution adapter по конфигу.
 
-Файлы:
+## Scope
 
 ```text
 pyproject.toml
@@ -382,8 +375,6 @@ grace = "grace_control.cli.main:cli"
 
 Предпочтительно: удалить полностью из runtime package.
 
-Если нужен переходный режим — оставить `grace-http` как dev-only thin client, но только после явного решения. По умолчанию — удалить.
-
 ### 2. Удалить legacy CLI entrypoints
 
 Удалить из `[project.scripts]`:
@@ -393,8 +384,6 @@ grace-dev = "prefect_grace.devtools.cli:main"
 prefect-grace = "prefect_grace.cli_compat:prefect_grace_main"
 gracectl = "prefect_grace.cli_compat:gracectl_main"
 ```
-
-Если legacy пока ещё нужен для runtime backend, это не значит, что legacy CLI должен быть публичным.
 
 ### 3. Разобрать `src/grace_control/cli/main.py`
 
@@ -410,7 +399,7 @@ trace    -> /api/trace/*
 
 ### 4. Убрать небезопасные паттерны
 
-Особенно удалить:
+Удалить:
 
 ```text
 os.system("pkill ...")
@@ -428,12 +417,7 @@ hardcoded /tmp/grace-eval
 ```text
 scripts/grace_lint.py
 scripts/generate_docs.py
-```
-
-Если нужен smoke:
-
-```text
-scripts/local_smoke.py
+scripts/local_smoke.py if needed
 ```
 
 Но это не package entrypoint и не runtime interface.
@@ -461,8 +445,6 @@ scripts/local_smoke.py
 Все runtime-настройки централизованы в typed config. Хардкод разрешён только в test fixtures или documented local defaults.
 
 ## Scope
-
-Файлы:
 
 ```text
 src/grace_control/config/settings.py
@@ -505,10 +487,10 @@ git:
   target_branch: main
 
 execution:
-  backend: api
+  backend: cli
   state_root: .grace/state
   worktree_root: .grace/worktrees
-  timeout_seconds: 600
+  timeout_seconds: 900
 
 safety:
   sandbox_mode: restricted
@@ -518,12 +500,6 @@ safety:
 ### 2. Разделить settings
 
 `GraceSettings` должен читать:
-
-- env overrides;
-- optional `.grace/config.yaml`;
-- safe local defaults.
-
-Не обязательно делать сложный precedence сразу, но нужно чётко задокументировать:
 
 ```text
 env > .grace/config.yaml > defaults
@@ -542,10 +518,8 @@ os.environ.get("GRACE_...")
 ```text
 src/grace_control/config/*
 tests/*
-legacy boundary until W8
+explicit process/env builder for UniversalCliAgentBackend
 ```
-
-Текущие места вроде `packet_executor.py` должны перейти на settings/project config.
 
 ### 4. Убрать hardcoded runtime values
 
@@ -563,13 +537,37 @@ danger-full-access
 8042
 agy1
 src/prefect_grace
+opencode/codex/agy hardcode in code
 ```
 
 на settings/config/constants с понятным владельцем.
 
-### 5. Makefile
+### 5. Agent command config
 
-Makefile не должен указывать `/tmp/grace-orchestrator-export` как основной default без объяснения. Заменить на local test db default или documented test-only variable.
+Профили локальных CLI-агентов должны жить в config, а не в коде:
+
+```yaml
+agents:
+  coder_opencode:
+    backend: cli
+    command:
+      - opencode
+      - run
+      - "--model"
+      - "{model}"
+      - "--effort"
+      - "{effort}"
+    model: "codex-5.1"
+    effort: "high"
+    cwd: "{worktree_path}"
+    timeout_seconds: 900
+    env:
+      OPENAI_API_KEY: "${OPENAI_API_KEY}"
+      OPENAI_BASE_URL: "${OPENAI_BASE_URL}"
+    input:
+      mode: stdin
+      template: "{packet_markdown}"
+```
 
 ## Tests
 
@@ -579,6 +577,7 @@ Makefile не должен указывать `/tmp/grace-orchestrator-export` �
 4. no direct `os.environ.get("GRACE_` outside allowlist.
 5. no hardcoded `/tmp/grace-` outside tests/scripts allowlist.
 6. settings values used by API lifespan, worker, packet executor, merge service.
+7. agent command template loads from config and is not hardcoded in code.
 
 ## Acceptance criteria
 
@@ -595,8 +594,6 @@ Makefile не должен указывать `/tmp/grace-orchestrator-export` �
 GraceLint должен стать executable GRACE canon: не просто проверять маркеры, а запрещать архитектурный регресс.
 
 ## Scope
-
-Файлы:
 
 ```text
 scripts/grace_lint.py
@@ -632,15 +629,16 @@ GRC004 START_BLOCK/END_BLOCK pairing
 GRC005 file size limit
 GRC010 public function contract required
 GRC012 function size limit
-GRC100 no direct os.environ outside config/tests/legacy allowlist
-GRC101 no direct subprocess outside GitService/legacy boundary/scripts/tests
-GRC102 no direct prefect_grace import outside legacy_backend until W8; after W8 nowhere
+GRC100 no direct os.environ outside config/tests/explicit agent env builder
+GRC101 no direct subprocess outside GitService/WorktreeCleanupService/UniversalCliAgentBackend/scripts/tests
+GRC102 no direct prefect_grace import anywhere in src/grace_control after W8
 GRC103 no Packet.state mutation outside PacketService/wave_gate/db migrations/tests
 GRC104 routers must not contain heavy DB/business loops beyond threshold
 GRC105 no hardcoded /tmp grace paths outside tests/scripts
 GRC106 no hardcoded branch/remote outside config/tests
 GRC107 generated docs must be in sync or docs-check covers this
 GRC108 modules over N lines must have logical START_BLOCK sections
+GRC109 no hardcoded agent command names in execution code; commands must come from profiles/config
 ```
 
 ### 3. Allowlist file
@@ -651,15 +649,13 @@ GRC108 modules over N lines must have logical START_BLOCK sections
 .grace/lint_allowlist.yaml
 ```
 
-или внутри `docs/grace/GRACE_LINT_RULES.md` описать temporary allowlist. Лучше отдельный yaml.
-
 Каждая allowlist запись должна иметь:
 
 ```yaml
 rule: GRC101
-path: src/grace_control/agent/legacy_backend.py
-reason: temporary legacy boundary until W8
-expires_wave: W8
+path: src/grace_control/agent/universal_cli_backend.py
+reason: execution backend owns local CLI process spawning by design
+expires_wave: never
 ```
 
 ### 4. API endpoint для агента
@@ -690,6 +686,7 @@ Response:
 bad missing header
 bad env read
 bad subprocess in router
+bad hardcoded agent command in backend code
 bad prefect_grace import
 bad packet state mutation
 bad hardcoded /tmp
@@ -699,7 +696,7 @@ bad giant module without blocks
 ## Acceptance criteria
 
 - `make lint` запускает stronger GraceLint.
-- Новый код не может добавить direct env/subprocess/legacy/state mutation без явного allowlist.
+- Новый код не может добавить direct env/subprocess/legacy/state mutation/hardcoded agent command без явного allowlist.
 - Canon docs и lint rules синхронизированы.
 
 ---
@@ -711,8 +708,6 @@ bad giant module without blocks
 `api/main.py` должен стать app factory/wiring-only. UI/dashboard/events/artifacts/ws/diagnostics должны жить в отдельных routers/services.
 
 ## Scope
-
-Файлы:
 
 ```text
 src/grace_control/api/main.py
@@ -731,66 +726,11 @@ tests/grace_control/api/
 
 ## Требования
 
-### 1. App factory
-
-Создать:
-
-```text
-src/grace_control/api/app_factory.py
-```
-
-Функция:
-
-```python
-def create_app(settings: GraceSettings | None = None) -> FastAPI:
-    ...
-```
-
-`main.py` должен только:
-
-```python
-app = create_app()
-
-def main(): uvicorn.run(...)
-```
-
-### 2. Lifespan отдельно
-
-Вынести lifespan loops в:
-
-```text
-src/grace_control/api/lifespan.py
-```
-
-или service:
-
-```text
-services/background_tasks.py
-```
-
-### 3. Routers
-
-Вынести из `api/main.py`:
-
-```text
-/ -> dashboard router
-/test -> diagnostics/dev router or delete
-/api/dashboard -> dashboard router/service
-/api/events -> events router/service
-/api/packets/{id}/runs/{run_id} -> artifacts/runs router
-/api/packets/{id}/runs/{run_id}/artifacts -> artifacts router
-/api/packets/{id}/runs/{run_id}/artifacts/file -> artifacts router/service
-/ws -> ws router
-/health -> diagnostics router
-```
-
-### 4. Services
-
-Routers не должны содержать DB aggregation loops. Вынести в services.
-
-### 5. Security note
-
-Artifact file reading должно остаться path-safe:
+1. Создать `src/grace_control/api/app_factory.py` с `create_app(settings: GraceSettings | None = None) -> FastAPI`.
+2. `main.py` должен только создавать app и запускать uvicorn.
+3. Вынести lifespan loops в `api/lifespan.py` или `services/background_tasks.py`.
+4. Вынести dashboard/events/artifacts/ws/health в отдельные routers/services.
+5. Artifact file reading должно остаться path-safe:
 
 ```text
 resolve evidence_dir
@@ -823,8 +763,6 @@ target must be inside evidence_dir
 `PacketExecutionAdapter` должен стать тонким orchestrator-flow, без direct legacy, subprocess, git details, evidence/reviewer/verifier/self-evolution implementation details.
 
 ## Scope
-
-Файлы:
 
 ```text
 src/grace_control/adapters/packet_executor.py
@@ -859,49 +797,13 @@ PacketExecutionAdapter.execute(packet_id, worker_id)
 
 ## Требования
 
-### 1. Extract PacketLoader
-
-Должен читать DB packet и возвращать session-safe DTO.
-
-### 2. Extract WorktreeInspector
-
-Должен отвечать за:
-
-```text
-worktree exists?
-is git worktree?
-has changes?
-changed files
-base sha
-```
-
-Subprocess/git calls должны идти через `GitService`, не напрямую.
-
-### 3. Extract AgentCommitService
-
-Отвечает за commit agent changes в worktree.
-
-### 4. Extract AcceptanceService
-
-Оборачивает `AcceptancePipeline.run()`.
-
-### 5. Extract EvidenceVerifierService / ReviewerService
-
-Не держать verifier/reviewer branching в executor.
-
-### 6. Extract RunResultWriter
-
-Единственное место, которое обновляет `PacketRun` result/status/evidence summary.
-
-### 7. Remove direct legacy helper from executor
-
-`packet_executor.py` не должен импортировать:
-
-```text
-grace_control.agent.legacy_backend
-prefect_grace
-subprocess
-```
+1. Extract `PacketLoader`: читает DB packet и возвращает session-safe DTO.
+2. Extract `WorktreeInspector`: worktree exists, is git worktree, has changes, changed files, base sha.
+3. Extract `AgentCommitService`: commit agent changes в worktree.
+4. Extract `AcceptanceService`: оборачивает `AcceptancePipeline.run()`.
+5. Extract `EvidenceVerifierService` / `ReviewerService`: не держать branching в executor.
+6. Extract `RunResultWriter`: единственное место, которое обновляет `PacketRun` result/status/evidence summary.
+7. `packet_executor.py` не должен импортировать `grace_control.agent.legacy_backend`, `prefect_grace`, `subprocess`.
 
 ## Tests
 
@@ -923,22 +825,34 @@ subprocess
 
 ---
 
-# W7 — ApiAgentBackend MVP
+# W7 — UniversalCliAgentBackend MVP
 
 ## Цель
 
-Добавить основной будущий backend выполнения агентов через API, без CLI/Prefect. Legacy backend остаётся временным fallback, но не стратегическим путём.
+Добавить основной execution backend для локальных CLI-агентов через универсальный конфигурируемый запускатор. API/OpenAPI остаётся единственным публичным control plane, но реальное исполнение packet’ов может запускать локальные CLI-агенты: `opencode`, `codex`, `agy`, `gemini`, `claude` или любой другой command из профиля.
+
+Это заменяет прежнюю идею “ApiAgentBackend как HTTP provider backend”. В GRACE API-first означает:
+
+```text
+человек/агент управляет GRACE через API/OpenAPI
+GRACE внутри сам выбирает ExecutionBackend
+UniversalCliAgentBackend запускает локальный CLI-agent по профилю
+```
+
+Не возвращать CLI как пользовательский интерфейс. CLI — только исполняемый инструмент внутри backend.
 
 ## Scope
 
-Файлы:
-
 ```text
 src/grace_control/agent/backend.py
-src/grace_control/agent/api_backend.py
+src/grace_control/agent/universal_cli_backend.py
 src/grace_control/agent/mock_backend.py
 src/grace_control/agent/__init__.py
-src/grace_control/services/agent_gateway_service.py
+src/grace_control/services/agent_run_service.py
+src/grace_control/services/command_template_renderer.py
+src/grace_control/services/agent_env_builder.py
+src/grace_control/services/process_supervisor.py
+src/grace_control/services/agent_artifact_collector.py
 src/grace_control/api/routers/agents.py
 src/grace_control/config/agent_profiles.yaml
 src/grace_control/config/settings.py
@@ -947,41 +861,100 @@ tests/grace_control/api/test_agents_api.py
 docs/grace/EXECUTION_BACKENDS.md
 ```
 
-## API/Backend model
+## Backend model
 
-### `ApiAgentBackend`
+### `UniversalCliAgentBackend`
 
 Implements:
 
 ```python
-class ApiAgentBackend(ExecutionBackend):
+class UniversalCliAgentBackend(ExecutionBackend):
     async def run(self, request: ExecutionRequest) -> ExecutionResult:
         ...
 ```
 
-### Agent gateway
+Backend не знает конкретных `opencode`, `codex`, `agy`, `gemini`, `claude` в коде. Он читает профиль и запускает command template.
 
-Добавить service:
+### Agent run services
+
+Добавить сервисы:
 
 ```text
-AgentGatewayService
+AgentRunService
+CommandTemplateRenderer
+AgentEnvBuilder
+ProcessSupervisor
+AgentArtifactCollector
 ```
 
-Он отвечает за:
+Они отвечают за:
 
 ```text
-provider selection
-model selection
-prompt/request construction
+agent profile selection
+command template rendering
+model / effort / packet_id / worktree_path / state_root substitutions
+env/key expansion from config
 timeout
-retry policy
-response normalization
+process group kill on timeout
+stdout/stderr/exit_code capture
 artifact/log persistence
+structured ExecutionResult normalization
 ```
 
-### API endpoint
+## Agent profile contract
 
-Добавить:
+Профиль агента должен быть declarative config, например:
+
+```yaml
+agents:
+  coder_opencode:
+    backend: cli
+    command:
+      - opencode
+      - run
+      - "--model"
+      - "{model}"
+      - "--effort"
+      - "{effort}"
+    model: "codex-5.1"
+    effort: "high"
+    cwd: "{worktree_path}"
+    timeout_seconds: 900
+    env:
+      OPENAI_API_KEY: "${OPENAI_API_KEY}"
+      OPENAI_BASE_URL: "${OPENAI_BASE_URL}"
+    input:
+      mode: stdin
+      template: "{packet_markdown}"
+    output:
+      collect_stdout: true
+      collect_stderr: true
+      artifacts:
+        - "."
+```
+
+Другой агент должен отличаться только профилем:
+
+```yaml
+agents:
+  coder_agy:
+    backend: cli
+    command:
+      - agy
+      - run
+      - "--model"
+      - "{model}"
+      - "--effort"
+      - "{effort}"
+    model: "gemini-3.5-flash"
+    effort: "medium"
+    cwd: "{worktree_path}"
+    timeout_seconds: 900
+```
+
+## API endpoint
+
+Добавить или сохранить:
 
 ```text
 POST /api/agents/run
@@ -992,12 +965,13 @@ Payload:
 ```json
 {
   "packet_id": "...",
+  "executor_id": "coder_opencode",
   "role": "coder",
-  "model": "...",
-  "provider": "openai|anthropic|deepseek|gemini|mock",
+  "model": "optional override",
+  "effort": "optional override",
   "worktree_path": "...",
   "packet_markdown": "...",
-  "timeout_seconds": 600
+  "timeout_seconds": 900
 }
 ```
 
@@ -1006,42 +980,61 @@ Response:
 ```json
 {
   "accepted": false,
-  "domain_status": "rejected|accepted|blocked|failed",
-  "stdout": "...",
-  "stderr": "...",
-  "messages": [],
-  "changed_files": [],
-  "reason": "...",
-  "duration_ms": 123,
+  "domain_status": "completed|rejected|blocked|failed|timeout",
+  "executor_id": "coder_opencode",
+  "command_preview": ["opencode", "run", "--model", "codex-5.1", "--effort", "high"],
+  "exit_code": 0,
+  "stdout_path": "...",
+  "stderr_path": "...",
+  "stdout_tail": "...",
+  "stderr_tail": "...",
+  "worktree_path": "...",
+  "branch_name": "...",
+  "duration_ms": 123456,
+  "reason": "",
   "artifacts": []
 }
 ```
 
-MVP может поддержать только `mock` и один real provider adapter, если API keys доступны. Но архитектура должна позволять несколько providers.
-
 ## Требования
 
-1. `execution_backend=api` выбирает ApiAgentBackend.
-2. `execution_backend=mock` выбирает MockBackend.
-3. `execution_backend=legacy` остаётся временно.
+1. `execution_backend=cli` выбирает `UniversalCliAgentBackend`.
+2. `execution_backend=mock` выбирает `MockBackend`.
+3. `execution_backend=legacy` не поддерживается после W8 и должен падать с понятной ошибкой.
 4. Agent profiles не должны быть legacy-specific.
-5. Timeouts/retries structured.
-6. All agent outputs saved as evidence artifacts.
+5. Никаких hardcoded `opencode`, `codex`, `agy`, `gemini`, `claude` в backend-коде.
+6. Command/env/model/effort/cwd/input mode берутся из профиля и request overrides.
+7. Поддержать input modes:
+   - `stdin` — отправить packet markdown в stdin;
+   - `file` — передать path к materialized packet file;
+   - `none` — command сам читает repo/context.
+8. Timeout должен завершать весь process group, не оставляя висячие agent-процессы.
+9. stdout/stderr/exit_code/duration должны сохраняться как evidence artifacts.
+10. Structured result не должен зависеть от формата конкретного CLI.
 
 ## Tests
 
-1. `select_backend("api")` returns ApiAgentBackend.
-2. `select_backend("mock")` returns MockBackend.
-3. ApiAgentBackend maps successful AgentGateway response to ExecutionResult.
-4. ApiAgentBackend maps timeout to blocked/failed result.
-5. `/api/agents/run` appears in OpenAPI.
-6. Packet execution can run with MockBackend no legacy.
+1. `select_backend("cli")` returns `UniversalCliAgentBackend`.
+2. `select_backend("mock")` returns `MockBackend`.
+3. `select_backend("legacy")` raises W8 removal error.
+4. Command template renders model/effort/packet_id/worktree_path correctly.
+5. Env builder expands `${ENV_VAR}` and redacts secrets in logs/previews.
+6. ProcessSupervisor captures stdout/stderr/exit_code.
+7. Timeout kills process group and returns `domain_status="timeout"`.
+8. stdin input mode sends packet markdown to process stdin.
+9. file input mode passes materialized packet path.
+10. stdout/stderr artifacts are persisted in run evidence.
+11. `/api/agents/run` appears in OpenAPI.
+12. Packet execution can run with `UniversalCliAgentBackend` using a fake local command, no Prefect.
+13. GraceLint fails on hardcoded agent command names in backend code.
 
 ## Acceptance criteria
 
-- Normal execution path can be tested without Prefect.
-- API backend is feature-complete enough for one smoke packet.
-- Legacy is no longer required for tests.
+- Normal execution path can run a fake local CLI command through `UniversalCliAgentBackend`.
+- opencode/codex/agy/gemini/claude integration is config-only, not code-specific.
+- API/OpenAPI remains the only public control plane.
+- No public GRACE CLI is reintroduced.
+- Legacy Prefect is no longer required for tests.
 
 ---
 
@@ -1049,18 +1042,16 @@ MVP может поддержать только `mock` и один real provide
 
 ## Цель
 
-Удалить legacy Prefect из runtime package после того, как ApiAgentBackend/MockBackend закрывают execution path.
+Удалить legacy Prefect из runtime package после того, как `UniversalCliAgentBackend`/`MockBackend` закрывают execution path.
 
 ## Prerequisites
 
 - W7 done.
 - Tests pass without Prefect installed.
 - No runtime path imports `prefect_grace`.
-- `execution_backend=api` or `mock` works.
+- `execution_backend=cli` or `mock` works.
 
 ## Scope
-
-Файлы:
 
 ```text
 pyproject.toml
@@ -1075,63 +1066,19 @@ tests/*
 
 ## Требования
 
-### 1. Remove package payload
-
-В `pyproject.toml` убрать:
-
-```toml
-packages = ["src/prefect_grace", "src/grace_control"]
-```
-
-заменить на только:
-
-```toml
-packages = ["src/grace_control"]
-```
-
-Удалить force-include legacy templates/prompts/roles/policies.
-
-### 2. Remove entrypoints
-
-Убедиться, что удалены:
-
-```text
-grace-dev
-prefect-grace
-gracectl
-```
-
-### 3. Remove dependency
-
-Удалить optional `legacy = ["prefect>=3.0.0"]`, если больше не нужен.
-
-### 4. Archive or delete source
-
-Варианты:
-
-- предпочтительно: `archive/legacy_prefect_grace/` с README, что это historical snapshot;
-- либо удалить после tag.
-
-Для этого пакета выбрать один вариант и применить последовательно.
-
-### 5. Remove legacy backend
-
-Удалить или перевести в archived:
-
-```text
-src/grace_control/agent/legacy_backend.py
-```
-
-`select_backend("legacy")` должен выдавать clear config error, либо больше не поддерживаться.
-
-### 6. GraceLint rule
-
-`prefect_grace` import anywhere in `src/grace_control` = error.
+1. В `pyproject.toml` заменить packages на только `src/grace_control`.
+2. Удалить force-include legacy templates/prompts/roles/policies.
+3. Удалить entrypoints `grace-dev`, `prefect-grace`, `gracectl`.
+4. Удалить optional `legacy = ["prefect>=3.0.0"]`, если больше не нужен.
+5. Move `src/prefect_grace` to `archive/legacy_prefect_grace/` or delete after tag.
+6. Remove `src/grace_control/agent/legacy_backend.py` or archive it.
+7. `select_backend("legacy")` должен выдавать clear config error.
+8. GraceLint: no `prefect_grace` import anywhere in `src/grace_control`.
 
 ## Tests
 
 1. import `grace_control` works without Prefect installed.
-2. `select_backend("legacy")` fails clearly or is absent by design.
+2. `select_backend("legacy")` fails clearly.
 3. grep/lint: no `prefect_grace` in runtime src.
 4. package metadata has no legacy scripts and packages.
 5. full `tests/grace_control/` passes.
@@ -1151,8 +1098,6 @@ src/grace_control/agent/legacy_backend.py
 Документация должна быть структурированной, не противоречить коду, и быть пригодной для агентов как source of truth.
 
 ## Scope
-
-Файлы:
 
 ```text
 README.md
@@ -1233,8 +1178,6 @@ Self-evolution не должен быть side-channel. Любое самоиз�
 
 ## Scope
 
-Файлы:
-
 ```text
 src/grace_control/core/self_evolution.py
 src/grace_control/api/routers/self_evolution.py
@@ -1259,8 +1202,6 @@ SelfEvolutionDecision
 SelfEvolutionApproval
 SelfEvolutionRollbackPlan
 ```
-
-Если DB schema пока не готова — минимум service DTO + persisted session/result_json.
 
 ### 2. No direct worker spawn from API
 
@@ -1347,13 +1288,13 @@ W3  hardcode/config cleanup
 W10 stronger GraceLint
 W5  split API monolith
 W6  split execution pipeline monolith
-W7  ApiAgentBackend MVP
+W7  UniversalCliAgentBackend MVP
 W8  remove legacy Prefect
 W9  docs cleanup
 W11 self-evolution safety cleanup
 ```
 
-Почему не по номеру: сначала нужно дать агентам OpenAPI-навигацию и trace capabilities, потом удалить CLI, потом зацементировать config/lint, и только после этого пилить большие монолиты и legacy.
+Почему не по номеру: сначала нужно дать агентам OpenAPI-навигацию и trace capabilities, потом удалить CLI как control plane, потом зацементировать config/lint, и только после этого пилить большие монолиты и legacy.
 
 ## Общий definition of done для всей программы
 
@@ -1361,11 +1302,12 @@ W11 self-evolution safety cleanup
 
 1. Runtime управление возможно только через API/OpenAPI.
 2. Public CLI entrypoints отсутствуют или являются dev-only thin clients без бизнес-логики.
-3. Legacy Prefect не входит в runtime package.
-4. Tests pass без Prefect.
-5. `api/main.py` wiring-only.
-6. `packet_executor.py` thin orchestration flow.
-7. Hardcode runtime values вынесены в config.
-8. GraceLint запрещает возврат прямых env/subprocess/legacy/state mutation.
-9. Docs структурированы в `docs/grace/`.
-10. Agents can discover capabilities from `/openapi.json` and inspect runs through `/api/trace/*`.
+3. Local CLI agents запускаются только через `UniversalCliAgentBackend` по declarative config.
+4. Legacy Prefect не входит в runtime package.
+5. Tests pass без Prefect.
+6. `api/main.py` wiring-only.
+7. `packet_executor.py` thin orchestration flow.
+8. Hardcode runtime values вынесены в config.
+9. GraceLint запрещает возврат прямых env/subprocess/legacy/state mutation/hardcoded agent commands.
+10. Docs структурированы в `docs/grace/`.
+11. Agents can discover capabilities from `/openapi.json` and inspect runs through `/api/trace/*`.
