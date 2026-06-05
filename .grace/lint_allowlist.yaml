@@ -1,0 +1,43 @@
+# GraceLint allowlist — entries expire at the listed wave.
+# Each entry must specify rule, path (substring match), reason, and expires_wave.
+rules:
+  - rule: GRC100
+    path: src/grace_control/config/settings.py
+    reason: settings owns env reading by design
+    expires_wave: never
+  - rule: GRC100
+    path: src/grace_control/config/project_config.py
+    reason: project_config env reads by design
+    expires_wave: never
+  - rule: GRC100
+    path: src/grace_control/adapters/packet_executor.py
+    reason: os.environ.setdefault for sandbox bypass
+    expires_wave: W11
+  - rule: GRC101
+    path: src/grace_control/adapters/packet_executor.py
+    reason: _legacy_prepare_worktree shells out to git
+    expires_wave: W11
+  - rule: GRC101
+    path: src/grace_control/core/llm_runner.py
+    reason: subprocess to spawn agent process
+    expires_wave: W11
+  - rule: GRC103
+    path: src/grace_control/adapters/packet_executor.py
+    reason: adapter wires PacketRun.status ("running", "failed")
+    expires_wave: W11
+  - rule: GRC103
+    path: src/grace_control/core/wave_gate.py
+    reason: wave_gate owns wave/packet state transitions
+    expires_wave: never
+  - rule: GRC103
+    path: src/grace_control/core/acceptance_pipeline.py
+    reason: acceptance pipeline sets run status
+    expires_wave: never
+  - rule: GRC108
+    path: src/grace_control/adapters/packet_executor.py
+    reason: large file, partially refactored in W6 (target <300)
+    expires_wave: W12
+  - rule: GRC108
+    path: src/grace_control/services/evidence_service.py
+    reason: multiple evidence helpers, not yet block-split
+    expires_wave: W12

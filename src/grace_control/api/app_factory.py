@@ -39,6 +39,7 @@ from grace_control.api.routers import (
     packets,
     recovery,
     self_evolution,
+    tools,
     trace,
     workers,
     ws,
@@ -95,5 +96,6 @@ def create_app(settings: GraceSettings | None = None) -> FastAPI:
     app.include_router(events.router, prefix="/api/events", tags=["events"])
     app.include_router(diagnostics.router, prefix="/api/diagnostics", tags=["diagnostics"])
     app.include_router(agents.router, prefix="/api/agents", tags=["agents"])
+    app.include_router(tools.router, prefix="/api/tools", tags=["tools"])
 
     return app
