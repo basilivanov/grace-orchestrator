@@ -837,8 +837,8 @@
         "tags": [
           "self-evolution"
         ],
-        "summary": "Create Evolution",
-        "operationId": "create_evolution_api_self_evolve_post",
+        "summary": "Create Session Endpoint",
+        "operationId": "create_session_endpoint_api_self_evolve_post",
         "requestBody": {
           "content": {
             "application/json": {
@@ -859,7 +859,7 @@
                 "schema": {
                   "additionalProperties": true,
                   "type": "object",
-                  "title": "Response Create Evolution Api Self Evolve Post"
+                  "title": "Response Create Session Endpoint Api Self Evolve Post"
                 }
               }
             }
@@ -884,15 +884,47 @@
         ],
         "summary": "List Sessions",
         "operationId": "list_sessions_api_self_sessions_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
                   "type": "object",
+                  "additionalProperties": true,
                   "title": "Response List Sessions Api Self Sessions Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -927,50 +959,6 @@
                   "type": "object",
                   "additionalProperties": true,
                   "title": "Response Get Session Api Self Sessions  Session Id  Get"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/self/sessions/{session_id}/context": {
-      "get": {
-        "tags": [
-          "self-evolution"
-        ],
-        "summary": "Get Session Context",
-        "operationId": "get_session_context_api_self_sessions__session_id__context_get",
-        "parameters": [
-          {
-            "name": "session_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Session Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Get Session Context Api Self Sessions  Session Id  Context Get"
                 }
               }
             }
@@ -1025,29 +1013,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/self/guard/check": {
-      "get": {
-        "tags": [
-          "self-evolution"
-        ],
-        "summary": "Guard Check",
-        "operationId": "guard_check_api_self_guard_check_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
-                  "title": "Response Guard Check Api Self Guard Check Get"
                 }
               }
             }
@@ -1613,6 +1578,48 @@
           }
         }
       }
+    },
+    "/api/tools/grace-lint/run": {
+      "post": {
+        "tags": [
+          "tools",
+          "tools"
+        ],
+        "summary": "Run Lint",
+        "operationId": "run_lint_api_tools_grace_lint_run_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunLintRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunLintResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1640,6 +1647,86 @@
         },
         "type": "object",
         "title": "HTTPValidationError"
+      },
+      "LintViolation": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "file": {
+            "type": "string",
+            "title": "File"
+          },
+          "line": {
+            "type": "integer",
+            "title": "Line",
+            "default": 1
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "file"
+        ],
+        "title": "LintViolation"
+      },
+      "RunLintRequest": {
+        "properties": {
+          "paths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Paths"
+          },
+          "strict": {
+            "type": "boolean",
+            "title": "Strict",
+            "default": false
+          },
+          "rules": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rules"
+          }
+        },
+        "type": "object",
+        "title": "RunLintRequest"
+      },
+      "RunLintResponse": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          },
+          "violations": {
+            "items": {
+              "$ref": "#/components/schemas/LintViolation"
+            },
+            "type": "array",
+            "title": "Violations"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ok"
+        ],
+        "title": "RunLintResponse"
       },
       "RunRequest": {
         "properties": {
