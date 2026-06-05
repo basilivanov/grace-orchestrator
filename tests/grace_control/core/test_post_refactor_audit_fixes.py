@@ -473,19 +473,35 @@ def test_p2_9_legacy_backend_forwards_base_ref():
 
 
 def test_p2_10_settings_used_in_main_lifespan(monkeypatch):
-    """api/main.py lifespan must read from settings (P2#10)."""
+    """api/main.py and api/lifespan.py must read from settings (P2#10 + W5).
+
+    After W5 the inline lifespan moved out of main.py into api/lifespan.py,
+    and main.py became a 45-line wiring-only entrypoint that delegates to
+    app_factory.create_app(). The settings are now read in lifespan.py and
+    app_factory.py, not in main.py.
+    """
     import grace_control.api.main as api_main
-    # If lifespan still reads os.environ directly, this would not exist.
-    src = Path(api_main.__file__).read_text()
-    assert "from grace_control.config.settings import settings" in src
-    assert "init_db(settings.database_url)" in src
-    assert "settings.wave_gate_interval_seconds" in src
-    assert "settings.feature_gate_interval_seconds" in src
-    assert "settings.api_port" in src
+    import grace_control.api.lifespan as api_lifespan
+    import grace_control.api.app_factory as api_factory
+    # main.py is wiring-only now: no init_db, no direct env reads, no magic
+    # sleep numbers. All that work lives in lifespan.py.
+    main_src = Path(api_main.__file__).read_text()
+    assert "from grace_control.config.settings import settings" in main_src
+    assert "settings.api_host" in main_src
+    assert "settings.api_port" in main_src
+    assert "init_db(" not in main_src  # moved to lifespan
+    assert "asyncio.sleep" not in main_src
+    # lifespan.py does the init_db + reads the loop intervals from settings.
+    lifespan_src = Path(api_lifespan.__file__).read_text()
+    assert "from grace_control.config.settings import settings" in lifespan_src
+    assert "init_db(settings.database_url)" in lifespan_src
+    assert "settings.wave_gate_interval_seconds" in lifespan_src
+    assert "settings.feature_gate_interval_seconds" in lifespan_src
+    # app_factory wires the routers; no env reads there.
+    factory_src = Path(api_factory.__file__).read_text()
+    assert 'os.environ.get("GRACE_DB_URL")' not in factory_src
     # And no more hard-coded `os.environ.get("GRACE_DB_URL")` in main.py.
-    assert 'os.environ.get("GRACE_DB_URL")' not in src
-    assert "asyncio.sleep(30)" not in src  # magic number removed
-    assert "asyncio.sleep(60)" not in src  # magic number removed
+    assert 'os.environ.get("GRACE_DB_URL")' not in main_src
 
 
 def test_p2_10_settings_used_in_packet_executor():
