@@ -214,6 +214,11 @@ class TraceService:
             "duration_ms": r.duration_ms or 0,
             "evidence_path": r.evidence_path or "",
         }
+        # W14.4: include artifact listing if evidence path exists
+        if r.evidence_path:
+            ep = Path(r.evidence_path)
+            if ep.exists():
+                d["artifacts"] = [str(f.relative_to(ep)) for f in ep.iterdir() if f.is_file()]
         if with_result and r.result_json:
             rj = r.result_json
             acc = rj.get("acceptance_report", {}) or {}
