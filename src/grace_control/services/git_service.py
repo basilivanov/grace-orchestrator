@@ -1,0 +1,120 @@
+# ############################################################################
+# AI_HEADER: git_service
+# ROLE: Thin wrapper around git subprocess — all git ops go through here.
+# ############################################################################
+
+# START_MODULE_CONTRACT
+# purpose: Type-safe git operations. All subprocess calls return GitResult
+#          dataclass. No direct subprocess.run in routers/services.
+# inputs: Path, command args, timeouts.
+# returns: GitResult dataclass with success, stdout, stderr, returncode.
+# side_effects: Subprocess to git binary on host.
+# emitted_logs: None (caller logs).
+# error_behavior: Never raises — all errors in GitResult.
+# END_MODULE_CONTRACT
+
+# START_MODULE_MAP
+# mapping:
+#   - dataclass: GitResult
+#   - dataclass: GitRepoInfo
+#   - class: GitService
+# END_MODULE_MAP
+
+from __future__ import annotations
+
+import subprocess
+from dataclasses import dataclass
+from pathlib import Path
+
+
+@dataclass
+class GitResult:
+    success: bool
+    stdout: str
+    stderr: str
+    returncode: int
+
+    @classmethod
+    def from_completed(cls, p: subprocess.CompletedProcess) -> "GitResult":
+        return cls(
+            success=p.returncode == 0,
+            stdout=p.stdout or "",
+            stderr=p.stderr or "",
+            returncode=p.returncode,
+        )
+
+
+@dataclass
+class GitRepoInfo:
+    path: Path
+    is_git: bool
+    current_branch: str
+    is_clean: bool
+
+
+class GitService:
+    """All git operations for GRACE. Subprocess timeout default 60s."""
+
+    DEFAULT_TIMEOUT = 60
+
+    def _run(self, args: list[str], cwd: Path, timeout: int | None = None) -> GitResult:
+        try:
+            p = subprocess.run(
+                ["git", *args],
+                cwd=str(cwd),
+                capture_output=True,
+                text=True,
+                timeout=timeout or self.DEFAULT_TIMEOUT,
+                check=False,
+            )
+            return GitResult.from_completed(p)
+        except subprocess.TimeoutExpired as e:
+            return GitResult(False, stdout="", stderr=f"git timeout: {e}", returncode=-1)
+        except Exception as e:
+            return GitResult(False, stdout="", stderr=f"git error: {e}", returncode=-1)
+
+    def validate_repo(self, path: Path) -> GitRepoInfo:
+        """Return GitRepoInfo. is_git=False if not a repo."""
+        path = path.resolve()
+        rev = self._run(["rev-parse", "--is-inside-work-tree"], path)
+        if not rev.success or rev.stdout.strip() != "true":
+            return GitRepoInfo(path=path, is_git=False, current_branch="", is_clean=False)
+        branch = self._run(["rev-parse", "--abbrev-ref", "HEAD"], path)
+        status = self._run(["status", "--porcelain"], path)
+        is_clean = status.success and not status.stdout.strip()
+        return GitRepoInfo(
+            path=path,
+            is_git=True,
+            current_branch=branch.stdout.strip() if branch.success else "",
+            is_clean=is_clean,
+        )
+
+    def is_clean(self, path: Path) -> bool:
+        r = self._run(["status", "--porcelain"], path)
+        return r.success and not r.stdout.strip()
+
+    def fetch(self, repo: Path, remote: str = "origin") -> GitResult:
+        return self._run(["fetch", remote], repo)
+
+    def checkout(self, repo: Path, branch: str) -> GitResult:
+        return self._run(["checkout", branch], repo)
+
+    def merge(self, repo: Path, branch: str, target_branch: str) -> GitResult:
+        """Merge `branch` into current branch (assumed to be target_branch)."""
+        return self._run(["merge", "--no-ff", branch, "-m", f"merge: {branch} into {target_branch}"], repo)
+
+    def push(self, repo: Path, remote: str = "origin", branch: str | None = None) -> GitResult:
+        args = ["push", remote]
+        if branch:
+            args.append(branch)
+        return self._run(args, repo, timeout=120)
+
+    def current_sha(self, repo: Path) -> str:
+        r = self._run(["rev-parse", "HEAD"], repo)
+        return r.stdout.strip() if r.success else ""
+
+    def diff_name_only(self, repo: Path, base_ref: str) -> list[str]:
+        r = self._run(["diff", "--name-only", base_ref, "HEAD"], repo)
+        if not r.success:
+            return []
+        return [line.strip() for line in r.stdout.splitlines() if line.strip()]
