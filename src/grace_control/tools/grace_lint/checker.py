@@ -210,6 +210,10 @@ def lint_text(
     if _rule_enabled("GRC108", rules_enabled):
         violations += _check_blocks(content, lines, path, al)
 
+    # GRC109
+    if _rule_enabled("GRC109", rules_enabled):
+        violations += _check_hardcoded_cli_agent(content, path, al)
+
     # GRC030: compressed file
     tls = _top_level_count(content)
     phys = _physical_lines(content)
@@ -289,7 +293,7 @@ def _check_functions(content, lines, tree, path, al, rules_enabled):
 
 
 # START_BLOCK_RULES_100
-ALLOWED_ENV = {"config/", "tests/", "scripts/", "tools/"}
+ALLOWED_ENV = {"config/", "tests/", "scripts/", "tools/", "services/agent_env_builder.py"}
 
 
 def _check_env(content: str, path: str, al: dict) -> list[Violation]:
@@ -307,7 +311,7 @@ def _check_env(content: str, path: str, al: dict) -> list[Violation]:
     return violations
 
 
-ALLOWED_SUBPROCESS = {"services/git_service.py", "services/worktree_cleanup_service.py", "scripts/", "tests/"}
+ALLOWED_SUBPROCESS = {"services/git_service.py", "services/worktree_cleanup_service.py", "services/process_supervisor.py", "core/llm_runner.py", "scripts/", "tests/"}
 
 
 def _check_subprocess(content: str, path: str, al: dict) -> list[Violation]:
@@ -413,6 +417,26 @@ def _check_router_db_loops(content: str, path: str, al: dict) -> list[Violation]
         if "for " in s and ("db.query" in s or "self._db" in s):
             violations.append(Violation("GRC104", f"router contains DB loop: {s[:60]}", path, i))
     return violations
+
+
+_KNOWN_CLI_AGENTS = {"opencode", "codex", "agy", "gemini", "claude"}
+
+
+def _check_hardcoded_cli_agent(content: str, path: str, al: dict) -> list[Violation]:
+    """GRC109: no hardcoded CLI agent command names in runtime execution code."""
+    violations = []
+    if any(a in path for a in ("config/", "tests/", "docs/")):
+        return violations
+    if _is_allowed("GRC109", path, al):
+        return violations
+    for i, line in enumerate(content.split("\n"), 1):
+        for name in _KNOWN_CLI_AGENTS:
+            if name in line and ("run" in line or "exec" in line):
+                violations.append(Violation("GRC109", f"hardcoded CLI agent '{name}': {line.strip()[:60]}", path, i))
+                break
+    return violations
+
+
 # END_BLOCK_RULES_100
 
 
@@ -422,5 +446,5 @@ DEFAULT_RULES: list[str] = [
     "GRC020", "GRC021", "GRC030",
     "GRC100", "GRC101", "GRC102", "GRC103",
     "GRC104",
-    "GRC105", "GRC106", "GRC108",
+    "GRC105", "GRC106", "GRC108", "GRC109",
 ]

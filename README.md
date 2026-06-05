@@ -21,7 +21,7 @@ Key docs:
 - [Architecture](docs/grace/ARCHITECTURE.md) — component layers
 - [API First Control Plane](docs/grace/API_FIRST_CONTROL_PLANE.md) — the canonical contract
 - [Configuration](docs/grace/CONFIGURATION.md) — env / `.grace/config.yaml` / defaults
-- [Execution Backends](docs/grace/EXECUTION_BACKENDS.md) — `api` / `mock` (legacy removed in W8)
+- [Execution Backends](docs/grace/EXECUTION_BACKENDS.md) — `cli` (default) / `mock` / `api` (legacy: removed in W8)
 - [Execution Pipeline](docs/grace/EXECUTION_PIPELINE.md) — claim → execute → acceptance → merge
 - [State Machine](docs/grace/STATE_MACHINE.md) — packet state transitions
 - [Acceptance Pipeline](docs/grace/ACCEPTANCE_PIPELINE.md) — T0/T1/T2 + verifier + reviewer

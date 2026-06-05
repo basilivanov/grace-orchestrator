@@ -6,11 +6,12 @@ by `grace_control.config.settings.execution_backend` (env:
 
 | Backend | Module | Use case |
 | --- | --- | --- |
-| `legacy` | `grace_control.agent.legacy_backend.LegacyPrefectBackend` | Wraps `prefect_grace.platform.e2e_packet_runner`. **Deprecated — removed in W8.** |
-| `api` | `grace_control.agent.api_backend.ApiAgentBackend` | Provider-agnostic, delegates to `AgentGatewayService`. The strategic path. |
+| `cli` | `grace_control.agent.universal_cli_backend.UniversalCliAgentBackend` | **Default runtime backend.** Runs local CLI agents (`opencode`, `codex`, `agy`, etc.) by declarative profile. |
 | `mock` | `grace_control.agent.mock_backend.MockBackend` | In-process, no subprocess, no LLM. Tests, CI, local smoke. |
+| `api` | `grace_control.agent.api_backend.ApiAgentBackend` | HTTP provider adapter (mock provider only; real providers pending W7.1). |
+| `legacy` | removed in W8 | Raises `ValueError` with migration hint. |
 
-The packet executor (`adapters.packet_executor.PacketExecutionAdapter`)
+The packet executor (`adapters/packet_executor.PacketExecutionAdapter`)
 depends only on the `ExecutionBackend` Protocol. The backend is selected
 once per process — never per packet.
 
@@ -23,28 +24,47 @@ result = await backend.run(execution_request)
 ```
 
 The factory accepts an explicit `backend_name` (used by tests) or, when
-empty, reads the `execution_backend` field. `BACKEND_NEW` is retained as
-an alias for `BACKEND_API` for back-compat with older test code.
+empty, reads the `execution_backend` field. `BACKEND_CLI` is the default
+and is aliased as `BACKEND_NEW` for back-compat with older test code.
 
-## ApiAgentBackend
+## UniversalCliAgentBackend (strategic path)
 
-`ApiAgentBackend` is the strategic path. It does **not** import any
-provider SDK directly. Instead, it delegates to
-`services.agent_gateway_service.AgentGatewayService`, which owns:
+`UniversalCliAgentBackend` is the strategic default. It does **not**
+hardcode any CLI tool names (`opencode`, `codex`, `agy`, `gemini`,
+`claude`). Instead, it reads agent profiles from `agent_profiles.yaml`
+and renders command templates dynamically.
 
-- provider selection
-- model selection
-- prompt / request construction
-- timeout policy
-- retry policy
-- response normalization
-- artifact / log persistence
+The implementation stack:
 
-The MVP supports `provider="mock"` end-to-end. Real provider adapters for
-`openai` / `anthropic` / `deepseek` / `gemini` / `cliproxy` are out of
-scope for W7 but the architecture is in place — adding a new provider
-means writing a new branch in
-`services/agent_gateway_service._call_provider`.
+- `AgentRunService` — orchestrator
+- `CommandTemplateRenderer` — `{model}`, `{effort}`, `{packet_id}`, `{worktree_path}`, `{packet_markdown}`
+- `AgentEnvBuilder` — `${ENV_VAR}` expansion, inherits parent `PATH`, redacts secrets
+- `ProcessSupervisor` — subprocess with process group timeout kill
+- `AgentArtifactCollector` — persists `agent_stdout.log` to canonical evidence dir
+
+### Agent profile example (`agent_profiles.yaml`)
+
+```yaml
+agents:
+  coder_opencode:
+    backend: cli
+    command:
+      - opencode
+      - run
+      - "--model"
+      - "{model}"
+      - "--effort"
+      - "{effort}"
+    model: "codex-5.1"
+    effort: "high"
+    cwd: "{worktree_path}"
+    timeout_seconds: 900
+    env:
+      OPENAI_API_KEY: "${OPENAI_API_KEY}"
+    input:
+      mode: stdin
+      template: "{packet_markdown}"
+```
 
 ### `/api/agents/run`
 
@@ -54,13 +74,13 @@ Content-Type: application/json
 
 {
   "packet_id": "pkt_001",
+  "executor_id": "coder_opencode",
   "role": "coder",
-  "model": "gpt-4o",
-  "provider": "openai|anthropic|deepseek|gemini|cliproxy|mock",
+  "model": "optional override",
+  "effort": "optional override",
   "worktree_path": "/path/to/worktree",
   "packet_markdown": "# ...",
-  "timeout_seconds": 600,
-  "max_retries": 0
+  "timeout_seconds": 900
 }
 ```
 
@@ -69,15 +89,19 @@ Response:
 ```json
 {
   "accepted": false,
-  "domain_status": "rejected|accepted|blocked|failed",
+  "domain_status": "completed|rejected|blocked|failed|timeout",
+  "executor_id": "coder_opencode",
+  "command_preview": ["opencode", "run", "--model", "codex-5.1", "--effort", "high"],
+  "exit_code": 0,
+  "stdout_path": "...",
+  "stderr_path": "...",
   "stdout": "...",
   "stderr": "...",
-  "messages": [],
-  "changed_files": [],
-  "reason": "...",
-  "duration_ms": 123,
-  "artifacts": [],
-  "attempts": 0
+  "worktree_path": "...",
+  "branch_name": "",
+  "duration_ms": 123456,
+  "reason": "",
+  "artifacts": []
 }
 ```
 
@@ -91,30 +115,42 @@ the worktree. Used by:
 
 - the existing test suite (no API keys required)
 - CI smoke runs
-- local development when the user has no LLM credentials
+- local development when the user has no CLI agent installed
 
-## LegacyPrefectBackend
+## ApiAgentBackend
 
-Wraps the historical `prefect_grace` E2E runner. **W8 will remove it.**
-It is the only file in the new control plane allowed to import
-`prefect_grace`. Until W8 lands, `execution_backend=legacy` remains the
-default for backward compatibility with existing test fixtures.
+Retained as an optional HTTP provider adapter. Currently only the `mock`
+provider is implemented; real providers (OpenAI, Anthropic, DeepSeek,
+Gemini) are pending W7.1. Not the strategic default.
+
+## LegacyPrefectBackend (removed)
+
+Removed in W8. `select_backend("legacy")` raises a clear `ValueError`.
+The historical code is archived at `docs/archived/legacy_prefect_grace/`.
 
 ## Agent profiles
 
-`config/agent_profiles.yaml` is no longer legacy-specific. A top-level
-`default_provider: openai` field is the canonical default; per-executor
-`metadata.provider` may override. The `codex:` section retains the
-existing `command:` / `kind:` fields for backward compat with the legacy
-backend; ApiAgentBackend does not read them.
+`config/agent_profiles.yaml` contains two profile sections:
+
+1. **`agents:`** — W7 declarative profiles for `UniversalCliAgentBackend`.
+   Each entry declares `backend: cli`, a `command` list, `model`, `effort`,
+   `cwd`, `timeout_seconds`, `env`, and `input` mode.
+2. **`codex:`** — legacy profiles for the old `executor_selector`.
+   Retained for back-compat; new profiles should go under `agents:`.
+
+## GraceLint rules
+
+| Rule | Check |
+| --- | --- |
+| `GRC109` | No hardcoded `opencode`/`codex`/`agy`/`gemini`/`claude` in runtime execution code |
+| `GRC100` | No `os.environ` outside config/W7 boundary |
+| `GRC101` | No `subprocess` outside W7 boundary |
 
 ## Tests
 
-W7 ships with two test files:
+Test files covering the execution backends:
 
-- `tests/grace_control/agent/test_select_backend.py` — `select_backend`
-  factory coverage (`legacy` / `api` / `mock` / unknown / settings-driven).
-- `tests/grace_control/agent/test_agent_gateway_service.py` — provider
-  hook, retry, timeout, artifact persistence.
-- `tests/grace_control/api/test_agents_api.py` — OpenAPI presence + happy
-  path + 400 on unknown provider + log persistence.
+- `tests/grace_control/agent/test_select_backend.py` — `select_backend()` factory
+- `tests/grace_control/agent/test_agent_gateway_service.py` — ApiAgentBackend gateway
+- `tests/grace_control/api/test_agents_api.py` — OpenAPI + `/api/agents/run`
+

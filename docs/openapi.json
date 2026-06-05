@@ -1734,6 +1734,11 @@
             "type": "string",
             "title": "Packet Id"
           },
+          "executor_id": {
+            "type": "string",
+            "title": "Executor Id",
+            "default": "coder_opencode"
+          },
           "role": {
             "type": "string",
             "title": "Role",
@@ -1744,10 +1749,10 @@
             "title": "Model",
             "default": ""
           },
-          "provider": {
+          "effort": {
             "type": "string",
-            "title": "Provider",
-            "default": "mock"
+            "title": "Effort",
+            "default": ""
           },
           "worktree_path": {
             "type": "string",
@@ -1762,7 +1767,7 @@
           "timeout_seconds": {
             "type": "integer",
             "title": "Timeout Seconds",
-            "default": 600
+            "default": 900
           },
           "max_retries": {
             "type": "integer",
@@ -1774,8 +1779,7 @@
         "required": [
           "packet_id"
         ],
-        "title": "RunRequest",
-        "description": "Body of POST /api/agents/run."
+        "title": "RunRequest"
       },
       "RunResponse": {
         "properties": {
@@ -1785,34 +1789,54 @@
           },
           "domain_status": {
             "type": "string",
-            "title": "Domain Status"
+            "title": "Domain Status",
+            "default": ""
           },
-          "stdout": {
+          "executor_id": {
             "type": "string",
-            "title": "Stdout"
+            "title": "Executor Id",
+            "default": ""
           },
-          "stderr": {
-            "type": "string",
-            "title": "Stderr"
-          },
-          "messages": {
-            "items": {
-              "additionalProperties": true,
-              "type": "object"
-            },
-            "type": "array",
-            "title": "Messages"
-          },
-          "changed_files": {
+          "command_preview": {
             "items": {
               "type": "string"
             },
             "type": "array",
-            "title": "Changed Files"
+            "title": "Command Preview"
           },
-          "reason": {
+          "exit_code": {
+            "type": "integer",
+            "title": "Exit Code",
+            "default": -1
+          },
+          "stdout": {
             "type": "string",
-            "title": "Reason",
+            "title": "Stdout",
+            "default": ""
+          },
+          "stderr": {
+            "type": "string",
+            "title": "Stderr",
+            "default": ""
+          },
+          "stdout_path": {
+            "type": "string",
+            "title": "Stdout Path",
+            "default": ""
+          },
+          "stderr_path": {
+            "type": "string",
+            "title": "Stderr Path",
+            "default": ""
+          },
+          "worktree_path": {
+            "type": "string",
+            "title": "Worktree Path",
+            "default": ""
+          },
+          "branch_name": {
+            "type": "string",
+            "title": "Branch Name",
             "default": ""
           },
           "duration_ms": {
@@ -1820,10 +1844,10 @@
             "title": "Duration Ms",
             "default": 0
           },
-          "attempts": {
-            "type": "integer",
-            "title": "Attempts",
-            "default": 0
+          "reason": {
+            "type": "string",
+            "title": "Reason",
+            "default": ""
           },
           "artifacts": {
             "items": {
@@ -1835,13 +1859,9 @@
         },
         "type": "object",
         "required": [
-          "accepted",
-          "domain_status",
-          "stdout",
-          "stderr"
+          "accepted"
         ],
-        "title": "RunResponse",
-        "description": "Response of POST /api/agents/run. Mirrors the gateway output."
+        "title": "RunResponse"
       },
       "ValidationError": {
         "properties": {
