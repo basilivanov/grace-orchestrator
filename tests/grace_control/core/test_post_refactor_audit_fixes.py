@@ -15,7 +15,7 @@ from grace_control.core.contracts import (
 from grace_control.core.state_machine import StateTransitionError
 from grace_control.db import get_db, init_db
 from grace_control.db.schema import Feature, Lease, Packet, PacketState, Wave, Worker
-from grace_control.services.merge_service import MergeService
+from grace_control.services.merge_service import MergeResult, MergeService
 from grace_control.services.packet_service import (
     ClaimResult,
     PacketNotFoundError,
@@ -495,3 +495,93 @@ def test_p2_10_settings_used_in_packet_executor():
     # Both legacy env-var fallbacks must defer to settings defaults.
     assert 'os.environ.get("GRACE_BASE_REF", settings.base_branch)' in src
     assert 'os.environ.get("GRACE_AGENT_TIMEOUT", str(settings.agent_timeout_seconds))' in src
+
+
+# ── Followup (review-2026-06-05-5198516-followup.md): merge atomicity ───────
+
+
+def test_followup_5198516_merge_fails_when_transition_fails(db):
+    """If PacketService.transition raises, MergeService must return success=False.
+
+    Review `source/codex/review-2026-06-05-5198516-followup.md` §1:
+    git merge can succeed but DB transition can fail; the service must
+    surface that as a failed merge, not a successful one.
+    """
+    from grace_control.services.git_service import GitResult
+
+    with get_db() as session:
+        _make_accepted_packet(session, pid="p-merge-fail")
+        session.commit()
+
+    git = MagicMock()
+    git.validate_repo.return_value = MagicMock(is_git=True, is_clean=True, current_branch="main")
+    git.checkout.return_value = GitResult(True, "stdout", "", 0)
+    git.fetch.return_value = GitResult(True, "", "", 0)
+    git.merge.return_value = GitResult(True, "Merge made", "", 0)
+    git.push.return_value = GitResult(True, "", "", 0)
+    git.current_sha.return_value = "deadbeef12345678"
+
+    # Inject a PacketService stub whose transition always raises.
+    fake_packets = MagicMock()
+    fake_packets.transition = AsyncMock(side_effect=StateTransitionError("simulated DB failure"))
+    svc = MergeService(git=git, packets=fake_packets)
+
+    result = asyncio.run(svc.merge_packet(
+        packet_id="p-merge-fail",
+        target_repo_root="/tmp/repo",
+        branch_name="agent/p-merge-fail/attempt-0001",
+        target_branch="main",
+    ))
+
+    assert result.success is False
+    assert "state transition failed" in result.error
+    assert "simulated DB failure" in result.error
+    assert result.commit_sha == "deadbeef12345678"  # git SHA still recorded
+    # And the DB packet must still be ACCEPTED — the failure prevented the transition.
+    with get_db() as session:
+        packet = session.query(Packet).filter_by(id="p-merge-fail").first()
+        assert packet.state == PacketState.ACCEPTED.value
+
+
+def test_followup_5198516_merge_router_returns_409_on_transition_failure(api, monkeypatch):
+    """API /merge must return 409 when git succeeded but DB transition failed."""
+    import asyncio
+    from grace_control.services.git_service import GitResult
+
+    with get_db() as session:
+        _make_accepted_packet(session, pid="p-merge-api-409")
+        session.commit()
+
+    # Stub MergeService so we control success/failure without a real git repo.
+    async def _stub_merge_packet(self, **kwargs):
+        return MergeResult(
+            False, kwargs["packet_id"], "cafef00d", "/tmp/repo",
+            kwargs["branch_name"], kwargs["target_branch"],
+            error="state transition failed: simulated",
+        )
+
+    monkeypatch.setattr(MergeService, "merge_packet", _stub_merge_packet)
+
+    async def _call():
+        return await api.post(
+            "/api/packets/p-merge-api-409/merge",
+            json={
+                "worktree_path": "/tmp/wt",
+                "branch_name": "agent/p-merge-api-409/attempt-0001",
+                "target_branch": "main",
+                "target_repo_root": "/tmp/repo",
+            },
+        )
+
+    resp = asyncio.run(_call())
+
+    assert resp.status_code == 409, resp.text
+    body = resp.json()
+    assert "merge_failed" in body.get("detail", {}), body
+    assert "state transition failed" in body["detail"]["merge_failed"]
+    assert body["detail"]["packet_id"] == "p-merge-api-409"
+
+    # DB must still show ACCEPTED — no MERGED transition.
+    with get_db() as session:
+        packet = session.query(Packet).filter_by(id="p-merge-api-409").first()
+        assert packet.state == PacketState.ACCEPTED.value

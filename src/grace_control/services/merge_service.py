@@ -113,6 +113,10 @@ class MergeService:
         except Exception as e:
             _log.warn("merge_state_transition_failed",
                 packet_id=packet_id, error=str(e)[:200])
+            return MergeResult(
+                False, packet_id, commit_sha, str(repo), branch_name, target_branch,
+                error=f"state transition failed: {str(e)[:200]}",
+            )
 
         _log.info("merge_packet_done",
             packet_id=packet_id, commit_sha=commit_sha[:12], branch=branch_name)

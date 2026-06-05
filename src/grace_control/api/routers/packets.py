@@ -271,20 +271,28 @@ async def merge_packet(packet_id: str, request: dict) -> dict:
 
     if not result.success:
         _log.warn("merge_failed", packet_id=packet_id, error=result.error[:200])
-        with get_db() as db:
-            from grace_control.api.ws_events import record_event as _rec
-            _rec("packet_merge_failed", "packet", packet_id, {
-                "branch": branch_name, "error": result.error,
-            }, db=db)
+        try:
+            with get_db() as db:
+                from grace_control.api.ws_events import record_event as _rec
+                _rec("packet_merge_failed", "packet", packet_id, {
+                    "branch": branch_name, "error": result.error,
+                }, db=db)
+        except Exception as _evt_err:
+            _log.warn("merge_event_record_failed",
+                packet_id=packet_id, error=str(_evt_err)[:200])
         raise HTTPException(status_code=409,
             detail={"merge_failed": result.error, "packet_id": packet_id})
 
-    with get_db() as db:
-        from grace_control.api.ws_events import record_event as _rec
-        _rec("packet_merged", "packet", packet_id, {
-            "commit_sha": result.commit_sha, "target_repo": result.target_repo,
-            "branch": branch_name,
-        }, db=db)
+    try:
+        with get_db() as db:
+            from grace_control.api.ws_events import record_event as _rec
+            _rec("packet_merged", "packet", packet_id, {
+                "commit_sha": result.commit_sha, "target_repo": result.target_repo,
+                "branch": branch_name,
+            }, db=db)
+    except Exception as _evt_err:
+        _log.warn("merged_event_record_failed",
+            packet_id=packet_id, error=str(_evt_err)[:200])
 
     if worktree_path:
         from pathlib import Path as _P
