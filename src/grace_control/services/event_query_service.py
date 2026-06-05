@@ -1,4 +1,25 @@
-"""EventQueryService — filters Event rows for the /api/events endpoint."""
+# ############################################################################
+# AI_HEADER: event_query_service
+# ROLE: Filter and paginate the events table for the /api/events endpoint.
+# ############################################################################
+
+# START_MODULE_CONTRACT
+# purpose: Build filtered Event queries for the API. All event filtering
+#          (entity_id, entity_type, event_type, trace_id, time range) lives
+#          here; new filters land in this service, not in the router.
+# inputs: Session + filter kwargs.
+# returns: dict with keys {total, limit, offset, events[]}.
+# side_effects: None.
+# emitted_logs: None.
+# error_behavior: Raises ValueError on unparseable timestamp strings.
+# END_MODULE_CONTRACT
+
+# START_MODULE_MAP
+# mapping:
+#   - class: EventQueryService
+#     methods:
+#       - query
+# END_MODULE_MAP
 
 from __future__ import annotations
 
@@ -13,6 +34,22 @@ from grace_control.db.schema import Event
 class EventQueryService:
     """Filter and paginate the events table."""
 
+    # START_FUNCTION_CONTRACT
+    # name: query
+    # purpose: Filter events by entity_id / entity_type / event_type / trace_id
+    #          / time range, paginate, and return a stable page shape.
+    # inputs:
+    #   entity_id, entity_type, event_type, trace_id: optional exact-match
+    #     filters. event_type ending in '%' triggers a LIKE match; the bare
+    #     'recovery_*' prefix is a special case for backward compatibility
+    #     with the legacy /api/events route.
+    #   since, until: ISO8601 inclusive bounds; raises ValueError if malformed.
+    #   limit, offset: pagination, capped at 1000/0 respectively.
+    # returns: {"total": int, "limit": int, "offset": int, "events": [...]}.
+    # side_effects: None.
+    # emitted_logs: None.
+    # error_behavior: Raises ValueError on unparseable timestamps.
+    # END_FUNCTION_CONTRACT
     def query(
         self,
         db: Session,
@@ -32,8 +69,8 @@ class EventQueryService:
         if entity_type:
             q = q.filter(Event.entity_type == entity_type)
         if event_type:
-            # Preserve the legacy "recovery_*" prefix-match contract from the
-            # original /api/events route in api/main.py:228-253.
+            # Preserve the legacy "recovery_*" prefix-match contract from
+            # the original /api/events route in api/main.py (W4).
             if event_type.endswith("%"):
                 q = q.filter(Event.event_type.like(event_type))
             elif event_type.startswith("recovery_"):

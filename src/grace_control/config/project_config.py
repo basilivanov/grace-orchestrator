@@ -1,14 +1,11 @@
 # ############################################################################
 # AI_HEADER: project_config
-# ROLE: Typed loader for `.grace/config.yaml` — the project-level config file
-#       described in `docs/grace/CONFIGURATION.md`. Precedence is:
-#
-#           env (.env / GRACE_* env vars)  >  .grace/config.yaml  >  defaults
-#
+# ROLE: Typed loader for `.grace/config.yaml`. Precedence is:
+#           env (GRACE_*)  >  .grace/config.yaml  >  safe local defaults
 #       The Pydantic `BaseSettings` class `GraceSettings` in
 #       `src/grace_control/config/settings.py` is the env layer. This module
-#       is the .grace/config.yaml layer. It is OPTIONAL — if the file does
-#       not exist, it returns safe local defaults; nothing breaks.
+#       is the .grace/config.yaml layer. W3 of
+#       source/codex/tz-api-first-cleanup-waves-w0-w11.md.
 # ############################################################################
 
 # START_MODULE_CONTRACT
@@ -25,7 +22,17 @@
 # START_MODULE_MAP
 # mapping:
 #   - class: ProjectConfig
+#     methods: []
+#   - class: ProjectSection
+#   - class: ApiSection
+#   - class: DatabaseSection
+#   - class: GitSection
+#   - class: ExecutionSection
+#   - class: SafetySection
+#   - function: _resolve_config_path
 #   - function: load_project_config
+#   - function: get_project_config
+#   - function: reset_cache
 # END_MODULE_MAP
 
 from __future__ import annotations
@@ -86,24 +93,32 @@ class ProjectConfig(BaseModel):
     safety: SafetySection = Field(default_factory=SafetySection)
 
 
+# START_FUNCTION_CONTRACT
+# name: _resolve_config_path
+# purpose: Find `.grace/config.yaml`. Search order: GRACE_PROJECT_ROOT, then
+#          cwd. A missing file is a normal condition, not an error.
+# inputs: none (reads GRACE_PROJECT_ROOT).
+# returns: Path — may or may not exist on disk.
+# side_effects: Reads env var.
+# emitted_logs: None.
+# error_behavior: Never raises.
+# END_FUNCTION_CONTRACT
 def _resolve_config_path() -> Path:
-    """Find `.grace/config.yaml`. Search order: GRACE_PROJECT_ROOT, then cwd.
-
-    The lookup is deliberately permissive — a missing file is a normal
-    condition, not an error. We do not raise here.
-    """
     root = Path(os.environ.get("GRACE_PROJECT_ROOT", ".")).resolve()
     return root / ".grace" / "config.yaml"
 
 
+# START_FUNCTION_CONTRACT
+# name: load_project_config
+# purpose: Load `.grace/config.yaml` and return a typed `ProjectConfig`.
+# inputs: path (Path | None) — defaults to GRACE_PROJECT_ROOT/.grace/config.yaml.
+# returns: ProjectConfig. Missing file → all defaults.
+# side_effects: Reads filesystem.
+# emitted_logs: None.
+# error_behavior: Invalid YAML → raises yaml.YAMLError with the file path
+#                in the message. Unknown keys → silently ignored.
+# END_FUNCTION_CONTRACT
 def load_project_config(path: Path | None = None) -> ProjectConfig:
-    """Load `.grace/config.yaml` and return a typed `ProjectConfig`.
-
-    - `path` defaults to `<GRACE_PROJECT_ROOT>/.grace/config.yaml`.
-    - Missing file → all-defaults `ProjectConfig`.
-    - Invalid YAML → raises `yaml.YAMLError` with the file path in the message.
-    - Unknown keys → silently ignored (Pydantic default).
-    """
     cfg_path = path or _resolve_config_path()
     if not cfg_path.exists():
         return ProjectConfig()
@@ -124,8 +139,16 @@ _cached_mtime_ns: int | None = None
 _cached_path: Path | None = None
 
 
+# START_FUNCTION_CONTRACT
+# name: get_project_config
+# purpose: Return the cached project config, refreshing it if the file changed.
+# inputs: none.
+# returns: ProjectConfig.
+# side_effects: Reads filesystem (once, then cached).
+# emitted_logs: None.
+# error_behavior: Propagates yaml.YAMLError on a malformed file.
+# END_FUNCTION_CONTRACT
 def get_project_config() -> ProjectConfig:
-    """Return the cached project config, refreshing it if the file changed."""
     global _cached, _cached_mtime_ns, _cached_path
     cfg_path = _resolve_config_path()
     try:
@@ -139,8 +162,16 @@ def get_project_config() -> ProjectConfig:
     return _cached
 
 
+# START_FUNCTION_CONTRACT
+# name: reset_cache
+# purpose: Drop the cache. Tests use this to force a reload after writing a new config.
+# inputs: none.
+# returns: None.
+# side_effects: Resets module-level cache.
+# emitted_logs: None.
+# error_behavior: Never raises.
+# END_FUNCTION_CONTRACT
 def reset_cache() -> None:
-    """Drop the cache. Tests use this to force a reload after writing a new config."""
     global _cached, _cached_mtime_ns, _cached_path
     _cached = None
     _cached_mtime_ns = None

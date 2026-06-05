@@ -1,10 +1,30 @@
-"""TraceService — collects packet/feature/run trace from the DB.
+# ############################################################################
+# AI_HEADER: trace_service
+# ROLE: Read-only aggregator for packet / feature / run / wave trace data.
+#       Replaces the deleted `grace trace --packet/--feature/--wave` CLI (W2)
+#       and is the single source of truth for /api/trace/* (W4).
+# ############################################################################
 
-Service rules (W4 of source/codex/tz-api-first-cleanup-waves-w0-w11.md):
-  - Routers do not run SQL-aggregation loops; they call services.
-  - TraceService returns plain dicts (DTOs); the router shape-matches them
-    onto the response model.
-"""
+# START_MODULE_CONTRACT
+# purpose: Build trace DTOs from Packet / PacketRun / Event / Feature / Wave
+#          rows. No HTTP, no CLI, no Prefect. Routers call this; never
+#          build SQL aggregation loops in the router.
+# inputs: SQLAlchemy Session + entity IDs / search string.
+# returns: Plain dicts (DTOs). None when the entity is not found.
+# side_effects: None.
+# emitted_logs: None (read-only).
+# error_behavior: Never raises; returns None or empty list on miss.
+# END_MODULE_CONTRACT
+
+# START_MODULE_MAP
+# mapping:
+#   - class: TraceService
+#     methods:
+#       - get_packet_trace
+#       - get_run_trace
+#       - get_feature_trace
+#       - search
+# END_MODULE_MAP
 
 from __future__ import annotations
 
@@ -24,8 +44,17 @@ from grace_control.db.schema import (
 class TraceService:
     """Read-only aggregator for packet / feature / run / wave trace data."""
 
+    # START_FUNCTION_CONTRACT
+    # name: get_packet_trace
+    # purpose: Return the full trace of one packet: state, runs, timeline,
+    #          last failure, recommended next action.
+    # inputs: db (Session), packet_id (str).
+    # returns: dict | None — None when the packet is not found.
+    # side_effects: None.
+    # emitted_logs: None.
+    # error_behavior: Never raises.
+    # END_FUNCTION_CONTRACT
     def get_packet_trace(self, db: Session, packet_id: str) -> dict[str, Any] | None:
-        """Return the trace of one packet: state, runs, timeline, last failure."""
         packet = db.query(Packet).filter_by(id=packet_id).first()
         if not packet:
             return None
@@ -41,7 +70,7 @@ class TraceService:
             .order_by(Event.timestamp)
             .all()
         )
-        last_failure = self._last_failure(packet, runs)
+        last_failure = self._last_failure(runs)
         return {
             "packet_id": packet.id,
             "feature_id": packet.feature_id,
@@ -57,12 +86,30 @@ class TraceService:
             "recommended_next_action": self._recommend(packet, last_failure),
         }
 
+    # START_FUNCTION_CONTRACT
+    # name: get_run_trace
+    # purpose: Return one PacketRun with its full result_json exposed.
+    # inputs: db (Session), run_id (str).
+    # returns: dict | None.
+    # side_effects: None.
+    # emitted_logs: None.
+    # error_behavior: Never raises.
+    # END_FUNCTION_CONTRACT
     def get_run_trace(self, db: Session, run_id: str) -> dict[str, Any] | None:
         run = db.query(PacketRun).filter_by(id=run_id).first()
         if not run:
             return None
         return self._run_to_dict(run, with_result=True)
 
+    # START_FUNCTION_CONTRACT
+    # name: get_feature_trace
+    # purpose: Return feature → waves → packets grouped summary + timeline.
+    # inputs: db (Session), feature_id (str).
+    # returns: dict | None.
+    # side_effects: None.
+    # emitted_logs: None.
+    # error_behavior: Never raises.
+    # END_FUNCTION_CONTRACT
     def get_feature_trace(self, db: Session, feature_id: str) -> dict[str, Any] | None:
         feature = db.query(Feature).filter_by(id=feature_id).first()
         if not feature:
@@ -107,12 +154,17 @@ class TraceService:
             "timeline": [self._event_to_dict(e) for e in events],
         }
 
+    # START_FUNCTION_CONTRACT
+    # name: search
+    # purpose: Cross-entity substring search (MVP; no full-text engine).
+    #          Matches packet id / title, feature title, run executor_id.
+    # inputs: db (Session), q (str), limit (int, default 25, max 200).
+    # returns: list of dicts with keys {kind, id, ...}.
+    # side_effects: None.
+    # emitted_logs: None.
+    # error_behavior: Returns [] when q is empty.
+    # END_FUNCTION_CONTRACT
     def search(self, db: Session, q: str, limit: int = 25) -> list[dict[str, Any]]:
-        """Search packets, features, runs by id / title / executor_id.
-
-        MVP: case-insensitive substring on Packet.id, Packet.title,
-        Feature.title, PacketRun.executor_id. No full-text engine.
-        """
         if not q:
             return []
         like = f"%{q}%"
@@ -149,6 +201,7 @@ class TraceService:
             })
         return out[:limit]
 
+    # START_BLOCK_DTO_HELPERS
     def _run_to_dict(self, r: PacketRun, with_result: bool = False) -> dict[str, Any]:
         d: dict[str, Any] = {
             "run_id": r.id,
@@ -178,7 +231,7 @@ class TraceService:
             "trace_id": e.trace_id or "",
         }
 
-    def _last_failure(self, packet: Packet, runs: list[PacketRun]) -> dict[str, Any] | None:
+    def _last_failure(self, runs: list[PacketRun]) -> dict[str, Any] | None:
         for r in reversed(runs):
             if r.status in ("rejected", "failed", "blocked"):
                 rj = r.result_json or {}
@@ -201,3 +254,4 @@ class TraceService:
         if packet.attempt_count >= packet.max_attempts:
             return "manual"
         return "retry"
+    # END_BLOCK_DTO_HELPERS

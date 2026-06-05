@@ -1,4 +1,25 @@
-"""RunSummaryService — extracts last-failure / acceptance summary per packet."""
+# ############################################################################
+# AI_HEADER: run_summary_service
+# ROLE: Per-packet last-failure and acceptance summary used by TraceService
+#       and /api/diagnostics/state.
+# ############################################################################
+
+# START_MODULE_CONTRACT
+# purpose: Produce a compact per-packet summary: latest run, acceptance
+#          verdict, stages, and flattened blocking_issues.
+# inputs: Session + packet_id.
+# returns: dict | None.
+# side_effects: None.
+# emitted_logs: None.
+# error_behavior: Returns None when the packet does not exist.
+# END_MODULE_CONTRACT
+
+# START_MODULE_MAP
+# mapping:
+#   - class: RunSummaryService
+#     methods:
+#       - get_packet_summary
+# END_MODULE_MAP
 
 from __future__ import annotations
 
@@ -10,9 +31,18 @@ from grace_control.db.schema import Packet, PacketRun
 
 
 class RunSummaryService:
-    """Per-packet last-failure and acceptance summary, used by TraceService
-    and by /api/diagnostics/state."""
+    """Per-packet last-failure and acceptance summary."""
 
+    # START_FUNCTION_CONTRACT
+    # name: get_packet_summary
+    # purpose: Build a flat per-packet summary: state, attempts, latest run,
+    #          acceptance verdict/summary, per-stage status, blocking issues.
+    # inputs: db (Session), packet_id (str).
+    # returns: dict | None — None when the packet does not exist.
+    # side_effects: None.
+    # emitted_logs: None.
+    # error_behavior: Never raises.
+    # END_FUNCTION_CONTRACT
     def get_packet_summary(self, db: Session, packet_id: str) -> dict[str, Any] | None:
         packet = db.query(Packet).filter_by(id=packet_id).first()
         if not packet:

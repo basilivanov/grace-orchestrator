@@ -1,9 +1,31 @@
-"""Trace API — /api/trace/{packets,features,runs,search}.
+# ############################################################################
+# AI_HEADER: api_routers_trace
+# ROLE: Trace API — /api/trace/{packets,features,runs,search}. Replaces the
+#       deleted `grace trace --packet/--feature/--wave` CLI from W2 (W4).
+# ############################################################################
 
-Replaces the `grace trace --packet/--feature/--wave` CLI from W2.
-"""
+# START_MODULE_CONTRACT
+# purpose: Thin FastAPI bindings to TraceService. No DB queries here.
+# inputs: HTTP requests with path/query params.
+# returns: JSON {"data": <trace>, "timestamp": <iso>}.
+# side_effects: None.
+# emitted_logs: None.
+# error_behavior: 404 when the entity is not found.
+# END_MODULE_CONTRACT
+
+# START_MODULE_MAP
+# mapping:
+#   - router: APIRouter
+#     routes:
+#       - GET /packets/{packet_id}
+#       - GET /features/{feature_id}
+#       - GET /runs/{run_id}
+#       - GET /search
+# END_MODULE_MAP
 
 from __future__ import annotations
+
+from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Query
 
@@ -14,6 +36,15 @@ router = APIRouter()
 _svc = TraceService()
 
 
+# START_FUNCTION_CONTRACT
+# name: get_packet_trace
+# purpose: HTTP wrapper around TraceService.get_packet_trace.
+# inputs: packet_id (str path param).
+# returns: dict {"data": <trace>, "timestamp": iso}.
+# side_effects: None.
+# emitted_logs: None.
+# error_behavior: 404 when packet is not found.
+# END_FUNCTION_CONTRACT
 @router.get("/packets/{packet_id}")
 def get_packet_trace(packet_id: str) -> dict:
     with get_db() as db:
@@ -23,6 +54,15 @@ def get_packet_trace(packet_id: str) -> dict:
     return {"data": trace, "timestamp": _now()}
 
 
+# START_FUNCTION_CONTRACT
+# name: get_feature_trace
+# purpose: HTTP wrapper around TraceService.get_feature_trace.
+# inputs: feature_id (str path param).
+# returns: dict {"data": <trace>, "timestamp": iso}.
+# side_effects: None.
+# emitted_logs: None.
+# error_behavior: 404 when feature is not found.
+# END_FUNCTION_CONTRACT
 @router.get("/features/{feature_id}")
 def get_feature_trace(feature_id: str) -> dict:
     with get_db() as db:
@@ -32,6 +72,15 @@ def get_feature_trace(feature_id: str) -> dict:
     return {"data": trace, "timestamp": _now()}
 
 
+# START_FUNCTION_CONTRACT
+# name: get_run_trace
+# purpose: HTTP wrapper around TraceService.get_run_trace.
+# inputs: run_id (str path param).
+# returns: dict {"data": <run>, "timestamp": iso}.
+# side_effects: None.
+# emitted_logs: None.
+# error_behavior: 404 when run is not found.
+# END_FUNCTION_CONTRACT
 @router.get("/runs/{run_id}")
 def get_run_trace(run_id: str) -> dict:
     with get_db() as db:
@@ -41,6 +90,15 @@ def get_run_trace(run_id: str) -> dict:
     return {"data": trace, "timestamp": _now()}
 
 
+# START_FUNCTION_CONTRACT
+# name: search_trace
+# purpose: HTTP wrapper around TraceService.search.
+# inputs: q (str, default ""), limit (int, default 25, max 200).
+# returns: dict {"data": {"q": q, "results": [...]}, "timestamp": iso}.
+# side_effects: None.
+# emitted_logs: None.
+# error_behavior: Never raises (empty query returns []).
+# END_FUNCTION_CONTRACT
 @router.get("/search")
 def search_trace(
     q: str = Query("", description="Substring to search for"),
@@ -52,5 +110,4 @@ def search_trace(
 
 
 def _now() -> str:
-    from datetime import datetime
     return datetime.utcnow().isoformat() + "Z"

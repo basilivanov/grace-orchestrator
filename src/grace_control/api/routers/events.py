@@ -1,7 +1,24 @@
-"""Events API — /api/events.
+# ############################################################################
+# AI_HEADER: api_routers_events
+# ROLE: Events API — /api/events. Filterable event log access (W4).
+# ############################################################################
 
-Filterable event log access. Replaces ad-hoc DB queries from CLI trace.
-"""
+# START_MODULE_CONTRACT
+# purpose: Thin FastAPI binding to EventQueryService. No DB queries here.
+# inputs: HTTP request with query params (entity_id, entity_type, event_type,
+#         trace_id, since, until, limit, offset).
+# returns: dict {"data": <page>, "timestamp": iso}.
+# side_effects: None.
+# emitted_logs: None.
+# error_behavior: 422 on unparseable timestamps (Pydantic validation).
+# END_MODULE_CONTRACT
+
+# START_MODULE_MAP
+# mapping:
+#   - router: APIRouter
+#     routes:
+#       - GET "" (events)
+# END_MODULE_MAP
 
 from __future__ import annotations
 
@@ -16,6 +33,16 @@ router = APIRouter()
 _svc = EventQueryService()
 
 
+# START_FUNCTION_CONTRACT
+# name: list_events
+# purpose: HTTP wrapper around EventQueryService.query.
+# inputs: entity_id, entity_type, event_type, trace_id, since, until
+#         (all optional str), limit (1..1000, default 100), offset (>=0).
+# returns: dict {"data": {"total", "limit", "offset", "events[]"}, "timestamp": iso}.
+# side_effects: None.
+# emitted_logs: None.
+# error_behavior: 422 on bad timestamps (Pydantic).
+# END_FUNCTION_CONTRACT
 @router.get("")
 def list_events(
     entity_id: str | None = Query(None),
