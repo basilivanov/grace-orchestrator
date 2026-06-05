@@ -20,7 +20,8 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from grace_control.agent import select_backend
 from grace_control.agent.backend import ExecutionRequest
-from grace_control.config.agent_profiles import get_agent_profile
+from grace_control.config.agent_profiles import get_agent_profile, load_agent_profiles
+from grace_control.services.agent_profile_validator import AgentProfileValidator
 from grace_control.core.structured_logger import GraceLogger
 
 _log = GraceLogger("agents_router")
@@ -91,3 +92,65 @@ async def run_agent(req: RunRequest) -> RunResponse:
         reason=result.reason,
         artifacts=result.evidence.get("artifacts", []) if isinstance(result.evidence, dict) else [],
     )
+
+
+# ── Agent profile inspection (W14.3) ──────────────────────────────────
+
+
+@router.get("/profiles")
+def list_profiles() -> dict:
+    profiles = load_agent_profiles()
+    return {"data": [
+        {
+            "executor_id": pid,
+            "backend": p.backend,
+            "model": p.model,
+            "effort": p.effort,
+            "command_preview": list(p.command) if p.command else [],
+            "input_mode": p.input_mode,
+            "timeout_seconds": p.timeout_seconds,
+        }
+        for pid, p in sorted(profiles.items())
+    ]}
+
+
+@router.get("/profiles/{executor_id}")
+def get_profile(executor_id: str) -> dict:
+    p = get_agent_profile(executor_id)
+    if not p:
+        raise HTTPException(status_code=404, detail=f"profile {executor_id} not found")
+    return {
+        "data": {
+            "executor_id": p.executor_id,
+            "backend": p.backend,
+            "model": p.model,
+            "effort": p.effort,
+            "command": list(p.command) if p.command else [],
+            "cwd": p.cwd_template,
+            "input_mode": p.input_mode,
+            "timeout_seconds": p.timeout_seconds,
+            "env_preview": {k: "****" if "KEY" in k.upper() or "TOKEN" in k.upper() else v
+                           for k, v in p.env.items()},
+        }
+    }
+
+
+@router.post("/profiles/{executor_id}/validate")
+def validate_profile(executor_id: str, body: dict | None = None) -> dict:
+    p = get_agent_profile(executor_id)
+    if not p:
+        raise HTTPException(status_code=404, detail=f"profile {executor_id} not found")
+    check_exe = (body or {}).get("check_executable", False)
+    wt = (body or {}).get("worktree_path", None)
+    validator = AgentProfileValidator()
+    return {"data": validator.validate(p, check_executable=check_exe, worktree_path=wt)}
+
+
+@router.post("/profiles/{executor_id}/dry-run")
+def dry_run_profile(executor_id: str, body: dict | None = None) -> dict:
+    p = get_agent_profile(executor_id)
+    if not p:
+        raise HTTPException(status_code=404, detail=f"profile {executor_id} not found")
+    wt = (body or {}).get("worktree_path", None)
+    validator = AgentProfileValidator()
+    return {"data": validator.dry_run(p, worktree_path=wt)}
