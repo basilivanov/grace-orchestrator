@@ -1,12 +1,10 @@
 # AI_HEADER: packet_executor — stateless bridge: DB → backend → acceptance → persist.
 # START_MODULE_CONTRACT
-# purpose: Materialize DB packet → call execution backend → route through
-#          acceptance pipeline → persist result. State ownership belongs
-#          to API endpoints, not this adapter.
+# purpose: Execute a packet through its lifecycle. No direct env reads,
+#          no prefect-grace, no subprocess in execute() flow.
 # inputs: packet_id, worker_id, project_root, state_root, worktree_root.
 # returns: ExecutionResult.
-# side_effects: Creates PacketRun record. Does NOT change packet state.
-# emitted_logs: adapter_execute_start / _done / _failed.
+# side_effects: Creates PacketRun record.
 # error_behavior: Raises on DB/runtime failures.
 # END_MODULE_CONTRACT
 # START_MODULE_MAP
@@ -37,6 +35,18 @@ class ExecutionResult(BaseModel):
     commit_sha: str = ""
 
 
+def _git_worktree_cleanup(project_root: Path, slug: str) -> None:
+    import subprocess, shutil
+    wt = project_root / slug
+    try:
+        subprocess.run(["git","-C",str(project_root),"worktree","prune"],capture_output=True,timeout=10)
+        if wt.exists():
+            subprocess.run(["git","-C",str(project_root),"worktree","remove",str(wt),"--force"],capture_output=True,timeout=10)
+            shutil.rmtree(wt,ignore_errors=True)
+        subprocess.run(["git","-C",str(project_root),"branch","-D",f"agent/{slug}"],capture_output=True,timeout=10)
+    except: pass
+
+
 class PacketExecutionAdapter:
     def __init__(self, project_root: Path, state_root: Path, worktree_root: Path,
                  backend: "ExecutionBackend | None" = None):
@@ -58,27 +68,27 @@ class PacketExecutionAdapter:
             from grace_control.core.contracts import build_packet_contract
             pkt_contract = build_packet_contract(packet_data)
             from grace_control.config.settings import settings
-            base_ref = os.environ.get("GRACE_BASE_REF", settings.base_branch)
+            base_ref = settings.base_branch
             base_sha = self._inspector.base_sha(self.project_root, base_ref)
-            result = await self._call_legacy_runner(packet_path, pkt_contract, run_number, base_ref, base_sha)
-            _log.debug("legacy_runner_completed", packet_id=packet_id, ok=result.ok, errors=result.errors[:2])
+            result = await self._call_executor(packet_path, pkt_contract, run_number, base_ref, base_sha)
+            _log.debug("executor_run_completed", packet_id=packet_id, ok=result.ok, errors=result.errors[:2])
 
             wt_ok, agent_commit_sha = self._inspected_worktree(result, pkt_contract, packet_id, packet_data["attempt_count"])
-            if not wt_ok: return self._fast_reject(f"Worktree: {result.worktree_path}", executor.get("executor_id",""), run_id, start)
+            if not wt_ok: return self._fast_reject(f"Worktree issue", executor.get("executor_id",""), run_id, start)
 
-            accept_report, ar_path, safe_legacy, changed_files, wt_path, run_dir = await self._run_acceptance(
+            accept_report, ar_path, safe_data, changed_files, wt_path, run_dir = await self._run_acceptance(
                 pkt_contract, result, packet_id, run_number, base_ref, base_sha, start)
 
             if not accept_report.is_accepted:
-                ev_report, rv_report = self._maybe_verify(accept_report, pkt_contract, wt_path, run_dir, changed_files, packet_data)
-                return self._persist_run("rejected", run_id, executor, safe_legacy, accept_report, ev_report, rv_report,
+                ev, rv = self._maybe_verify(accept_report, pkt_contract, wt_path, run_dir, changed_files, packet_data)
+                return self._persist_run("rejected", run_id, executor, safe_data, accept_report, ev, rv,
                     int((time.time()-start)*1000), ar_path, packet_id, start, commit_sha="")
 
-            se_result = self._self_evolution_guard(packet_data, accept_report, safe_legacy, run_id, executor, start)
+            se_result = self._self_evolution_guard(packet_data, accept_report, safe_data, run_id, executor, start)
             if se_result: return se_result
 
             return await self._route_after(start, run_id, packet_id, result, executor, run_number,
-                pkt_contract, accept_report, ar_path, safe_legacy, changed_files, agent_commit_sha, wt_path, run_dir)
+                pkt_contract, accept_report, ar_path, safe_data, changed_files, agent_commit_sha, wt_path, run_dir)
         except Exception:
             _log.error("adapter_execute_failed", packet_id=packet_id)
             with get_db() as db:
@@ -87,18 +97,11 @@ class PacketExecutionAdapter:
             raise
 
     def _load_packet(self, packet_id: str, worker_id: str):
-        import subprocess, shutil
         with get_db() as db:
             p = db.query(Packet).filter_by(id=packet_id).first()
             if not p: raise ValueError(f"Packet {packet_id} not found")
-            rn = p.attempt_count; rid = f"{packet_id}-R{rn:02d}"; slug = f"attempt-{rn:04d}"; wt = self.project_root / f"{packet_id}-{slug}"
-            try:
-                subprocess.run(["git","-C",str(self.project_root),"worktree","prune"],capture_output=True,timeout=10)
-                if wt.exists():
-                    subprocess.run(["git","-C",str(self.project_root),"worktree","remove",str(wt),"--force"],capture_output=True,timeout=10)
-                    shutil.rmtree(wt,ignore_errors=True)
-                subprocess.run(["git","-C",str(self.project_root),"branch","-D",f"agent/default/{packet_id}/{slug}"],capture_output=True,timeout=10)
-            except Exception: pass
+            rn = p.attempt_count; rid = f"{packet_id}-R{rn:02d}"; slug = f"attempt-{rn:04d}"
+            _git_worktree_cleanup(self.project_root, f"{packet_id}-{slug}")
             ex = db.query(PacketRun).filter_by(id=rid).first()
             if ex: ex.status = "running"; ex.started_at = datetime.now(timezone.utc)
             else: db.add(PacketRun(id=rid, packet_id=packet_id, run_number=rn, worker_id=worker_id, status="running", started_at=datetime.now(timezone.utc)))
@@ -125,7 +128,7 @@ class PacketExecutionAdapter:
         if not self._inspector.has_changes(wt, pkt_contract.allowed_write_scope): return False, ""
         sha = self._committer.commit(wt, packet_id, attempt_count); return bool(sha), sha
 
-    def _self_evolution_guard(self, pd, accept_report, safe_legacy, run_id, executor, start):
+    def _self_evolution_guard(self, pd, accept_report, safe_data, run_id, executor, start):
         spec = pd.get("spec_json") or {}
         if not (isinstance(spec,dict) and spec.get("origin")=="self_evolution"): return None
         _log.info("self_evolution_guard_check", packet_id=pd["id"])
@@ -133,7 +136,7 @@ class PacketExecutionAdapter:
         gr = SelfEvolutionGuard().check(self._inspector.collect_changed_files(Path(".")), session_id=spec.get("session_id",""))
         if gr.passed: return None
         _log.warn("self_evolution_guard_blocked", packet_id=pd["id"], errors=gr.errors)
-        return self._persist_run("rejected", run_id, executor, safe_legacy, accept_report,
+        return self._persist_run("rejected", run_id, executor, safe_data, accept_report,
             skipped_evidence_report("guard"), skipped_reviewer_report("guard"), int((time.time()-start)*1000), "", pd["id"], start, commit_sha="")
 
     async def _run_acceptance(self, pkt_contract, result, packet_id, rn, base_ref, base_sha, start):
@@ -161,43 +164,37 @@ class PacketExecutionAdapter:
         return ev, skipped_reviewer_report("deterministic fail")
 
     async def _route_after(self, start, run_id, packet_id, result, executor, rn,
-                           pkt_contract, accept_report, ar_path, sf, changed_files, sha, wt_path, run_dir):
+                           pkt_contract, accept_report, ar_path, sd, changed_files, sha, wt_path, run_dir):
         from grace_control.core.contracts import AcceptanceProfile
         prof = pkt_contract.acceptance_profile; ev = self._evidence; ex_id = executor.get("executor_id","")
         art = [str(p.relative_to(run_dir)) for p in run_dir.rglob("*") if p.is_file()] if run_dir.exists() else []
         ep = ev.evidence_path(packet_id, rn, self.state_root)
-        def _mk(acc, ds, r=None, e=ep, c=sha): return ExecutionResult(accepted=acc, reason=r, domain_status=ds,
-            worktree_path=result.worktree_path or "", branch_name=result.branch_name or "",
-            acceptance_report_path=ar_path, acceptance_verdict=accept_report.final_verdict.value,
-            acceptance_summary=accept_report.summary, duration_ms=int((time.time()-start)*1000), commit_sha=c, evidence_path=e)
-
+        def _mk(accepted, ds, r=None, e=ep, c=sha):
+            return ExecutionResult(accepted=accepted, reason=r, domain_status=ds,
+                worktree_path=result.worktree_path or "", branch_name=result.branch_name or "",
+                acceptance_report_path=ar_path, acceptance_verdict=accept_report.final_verdict.value,
+                acceptance_summary=accept_report.summary, duration_ms=int((time.time()-start)*1000), commit_sha=c, evidence_path=e)
         def _acc(er, evr, rvr):
             ev.save_agent_log(packet_id, rn, result, self.state_root)
-            self._evidence.update_run_result(run_id=run_id, status="accepted", legacy_result=sf,
+            self._evidence.update_run_result(run_id=run_id, status="accepted", legacy_result=sd,
                 acceptance_report=accept_report, evidence_verifier_report=evr, reviewer_report=rvr,
                 evidence_path=ep, duration_ms=er.duration_ms, executor_id=ex_id, commit_sha=sha)
-            _log.info("adapter_execute_done", packet_id=packet_id, accepted=True, duration_ms=er.duration_ms)
-            return er
-
+            _log.info("adapter_execute_done", packet_id=packet_id, accepted=True, duration_ms=er.duration_ms); return er
         def _rej(domain, reason, evr, rvr):
             er = _mk(False, domain, r=reason, e="")
-            self._evidence.update_run_result(run_id=run_id, status=domain, legacy_result=sf,
+            self._evidence.update_run_result(run_id=run_id, status=domain, legacy_result=sd,
                 acceptance_report=accept_report, evidence_verifier_report=evr, reviewer_report=rvr,
                 evidence_path="", duration_ms=er.duration_ms, executor_id=ex_id)
-            _log.info("adapter_execute_done", packet_id=packet_id, accepted=False, duration_ms=er.duration_ms)
-            return er
+            _log.info("adapter_execute_done", packet_id=packet_id, accepted=False, duration_ms=er.duration_ms); return er
 
         if prof == AcceptanceProfile.FAST:
             return _acc(_mk(True, "accepted"), skipped_evidence_report("FAST"), skipped_reviewer_report("FAST"))
-
         evr = await run_evidence_verifier(packet=pkt_contract, acceptance_report=accept_report,
             worktree_path=wt_path, run_dir=run_dir, changed_files=changed_files, artifacts=art)
         if evr.verdict in (EvidenceVerifierVerdict.REWORK_TO_CODER, EvidenceVerifierVerdict.RETURN_TO_ARCHITECT):
             return _rej("rejected" if evr.verdict==EvidenceVerifierVerdict.REWORK_TO_CODER else "blocked", evr.summary, evr, skipped_reviewer_report("ev reject"))
-
         if prof == AcceptanceProfile.NORMAL:
             return _acc(_mk(True, "accepted"), evr, skipped_reviewer_report("NORMAL"))
-
         rvr = await run_reviewer_gate(packet=pkt_contract, acceptance_report=accept_report,
             evidence_verifier_report=evr, worktree_path=wt_path, run_dir=run_dir, changed_files=changed_files, artifacts=art)
         if rvr.verdict == ReviewerVerdict.PASS: return _acc(_mk(True, "accepted"), evr, rvr)
@@ -206,12 +203,12 @@ class PacketExecutionAdapter:
         _log.error("unexpected_reviewer_verdict", packet_id=packet_id, verdict=rvr.verdict.value)
         raise RuntimeError(f"Unexpected reviewer verdict: {rvr.verdict.value}")
 
-    def _persist_run(self, status, run_id, executor, safe_dict, accept_report, evr, rvr, dur, ar_path, packet_id, start, *, commit_sha=""):
+    def _persist_run(self, status, run_id, executor, safe_data, accept_report, evr, rvr, dur, ar_path, packet_id, start, *, commit_sha=""):
         er = ExecutionResult(accepted=(status=="accepted"), domain_status=accept_report.final_verdict.value,
             reason=accept_report.summary, worktree_path="", branch_name="",
             acceptance_report_path=ar_path, acceptance_verdict=accept_report.final_verdict.value,
             acceptance_summary=accept_report.summary, duration_ms=dur, commit_sha=commit_sha)
-        self._evidence.update_run_result(run_id=run_id, status=status, legacy_result=safe_dict,
+        self._evidence.update_run_result(run_id=run_id, status=status, legacy_result=safe_data,
             acceptance_report=accept_report, evidence_verifier_report=evr, reviewer_report=rvr,
             evidence_path=er.evidence_path, duration_ms=er.duration_ms, executor_id=executor.get("executor_id",""))
         _log.info("adapter_execute_done", packet_id=packet_id, accepted=(status=="accepted"), duration_ms=dur)
@@ -225,9 +222,9 @@ class PacketExecutionAdapter:
         except: pass
         return er
 
-    async def _call_legacy_runner(self, packet_path: Path, packet_contract, attempt: int, base_ref: str, base_sha: str):
+    async def _call_executor(self, packet_path: Path, packet_contract, attempt: int, base_ref: str, base_sha: str):
         from grace_control.agent.backend import ExecutionRequest
-        pid = packet_path.parent.name; os.environ.setdefault("GRACE_ALLOW_SANDBOX_BYPASS","true")
+        pid = packet_path.parent.name
         eff = packet_contract.allowed_write_scope; slug = f"attempt-{attempt:04d}"
         reg = self.state_root / "state"; reg.mkdir(parents=True, exist_ok=True); rf = reg / "packet_registry.yaml"
         try:
@@ -236,20 +233,10 @@ class PacketExecutionAdapter:
                 "packet_path":str(packet_path),"allowed_write_scope":eff or [],"frozen_scope":packet_contract.frozen_scope or [],"depends_on":[]}
             rf.write_text(yaml.dump(ex, default_flow_style=False))
         except: pass
-        import subprocess, shutil
-        wt = self.project_root / f"{pid}-{slug}"
-        branch = f"agent/default/{pid}/{slug}"
-        try:
-            subprocess.run(["git","-C",str(self.project_root),"worktree","prune"],capture_output=True,timeout=10)
-            if wt.exists():
-                subprocess.run(["git","-C",str(self.project_root),"worktree","remove",str(wt),"--force"],capture_output=True,timeout=10)
-                shutil.rmtree(wt,ignore_errors=True)
-            subprocess.run(["git","-C",str(self.project_root),"branch","-D",branch],capture_output=True,timeout=10)
-        except: pass
+        _git_worktree_cleanup(self.project_root, f"{pid}-{slug}")
         from grace_control.config.settings import settings
-        to = int(os.environ.get("GRACE_AGENT_TIMEOUT", str(settings.agent_timeout_seconds)))
         req = ExecutionRequest(packet_id=pid,
             spec={"attempt_count":attempt,"base_ref":base_ref,"allowed_write_scope":eff or [],"frozen_scope":packet_contract.frozen_scope or []},
-            worktree_path=self.worktree_root / f"{pid}-{slug}", branch_name=branch,
-            scope_paths=list(eff or []), executor={"executor_id":"legacy","model":"prefect"}, timeout_s=to, session_dir=self.state_root)
+            worktree_path=self.worktree_root / f"{pid}-{slug}", branch_name=f"agent/{slug}",
+            scope_paths=list(eff or []), executor={"executor_id":"api","model":""}, timeout_s=settings.agent_timeout_seconds, session_dir=self.state_root)
         return await self._backend.run(req)

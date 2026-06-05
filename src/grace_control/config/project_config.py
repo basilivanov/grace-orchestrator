@@ -66,7 +66,7 @@ class GitSection(BaseModel):
 
 
 class ExecutionSection(BaseModel):
-    backend: str = "legacy"  # "legacy" | "api" | "mock" — see grace_control.agent.select_backend
+    backend: str = "api"  # "api" | "mock" — legacy removed in W8
     state_root: str = ".grace/state"
     worktree_root: str = ".grace/worktrees"
     timeout_seconds: int = 600

@@ -456,9 +456,11 @@ def test_p2_10_settings_used_in_packet_executor():
     """packet_executor must prefer settings.agent_timeout_seconds + base_branch."""
     import grace_control.adapters.packet_executor as pe
     src = Path(pe.__file__).read_text()
-    # Both legacy env-var fallbacks must defer to settings defaults.
-    assert 'os.environ.get("GRACE_BASE_REF", settings.base_branch)' in src
-    assert 'os.environ.get("GRACE_AGENT_TIMEOUT", str(settings.agent_timeout_seconds))' in src
+    # executor must use settings directly, not os.environ.get fallbacks.
+    assert 'os.environ.get("GRACE_BASE_REF"' not in src
+    assert 'os.environ.get("GRACE_AGENT_TIMEOUT"' not in src
+    assert "settings.base_branch" in src
+    assert "settings.agent_timeout_seconds" in src
 
 
 # ── Followup (review-2026-06-05-5198516-followup.md): merge atomicity ───────

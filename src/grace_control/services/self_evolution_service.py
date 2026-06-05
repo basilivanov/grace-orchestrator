@@ -126,17 +126,9 @@ def _classify_risk(description: str, constraints: dict | None) -> str:
 
 
 def _build_rollback(project_root: Path) -> SelfEvolutionRollbackPlan:
-    """Build rollback metadata from the git state."""
-    import subprocess
-    sha = ""
-    try:
-        r = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=str(project_root), capture_output=True, text=True, timeout=10,
-        )
-        sha = r.stdout.strip() if r.returncode == 0 else ""
-    except Exception:
-        pass
+    """Build rollback metadata from the git state via WorktreeInspector."""
+    from grace_control.services.worktree_inspector import WorktreeInspector
+    sha = WorktreeInspector().base_sha(project_root)
     return SelfEvolutionRollbackPlan(
         session_id="",
         base_commit=sha,

@@ -320,7 +320,7 @@ def _check_subprocess(content: str, path: str, al: dict) -> list[Violation]:
     if _is_allowed("GRC101", path, al):
         return violations
     for i, line in enumerate(content.split("\n"), 1):
-        if "subprocess" in line and "import" not in line:
+        if "subprocess" in line:
             violations.append(Violation("GRC101", f"subprocess outside allowed paths: {line.strip()[:60]}", path, i))
     return violations
 

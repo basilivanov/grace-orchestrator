@@ -187,7 +187,7 @@ class TestOriginal:
     @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
     @patch("grace_control.adapters.packet_executor.get_db")
     @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
-    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_legacy_runner")
+    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_executor")
     async def test_legacy_accepted_acceptance_accepted(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
         """verifier PASS + reviewer PASS → accepted."""
         result = await _run_adapter_test(
@@ -204,7 +204,7 @@ class TestOriginal:
     @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
     @patch("grace_control.adapters.packet_executor.get_db")
     @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
-    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_legacy_runner")
+    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_executor")
     async def test_legacy_accepted_acceptance_rework(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
         result = await _run_adapter_test(
             mock_legacy, mock_get_db, mock_pipeline,
@@ -219,7 +219,7 @@ class TestOriginal:
     @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
     @patch("grace_control.adapters.packet_executor.get_db")
     @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
-    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_legacy_runner")
+    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_executor")
     async def test_legacy_accepted_acceptance_blocked(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
         result = await _run_adapter_test(
             mock_legacy, mock_get_db, mock_pipeline,
@@ -233,7 +233,7 @@ class TestOriginal:
     @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
     @patch("grace_control.adapters.packet_executor.get_db")
     @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
-    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_legacy_runner")
+    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_executor")
     async def test_adapter_trusts_acceptance_pipeline_when_mocked(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
         """Adapter trusts the acceptance pipeline report even when legacy failed (pipeline mock)."""
         result = await _run_adapter_test(
@@ -248,7 +248,7 @@ class TestOriginal:
     @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
     @patch("grace_control.adapters.packet_executor.get_db")
     @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
-    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_legacy_runner")
+    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_executor")
     async def test_result_json_contains_both(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
         mock_run = _make_mock_packet_run()
         await _run_adapter_test(
@@ -265,7 +265,7 @@ class TestOriginal:
     @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
     @patch("grace_control.adapters.packet_executor.get_db")
     @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
-    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_legacy_runner")
+    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_executor")
     async def test_durable_worktree_path_exists(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
         with tempfile.TemporaryDirectory() as td:
             wt = Path(td) / "wt"
@@ -289,7 +289,7 @@ class TestOriginal:
     @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
     @patch("grace_control.adapters.packet_executor.get_db")
     @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
-    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_legacy_runner")
+    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_executor")
     async def test_adapter_trusts_acceptance_pipeline_domain_status_mocked(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
         """Adapter trusts pipeline report even when legacy domain_status=rejected (pipeline mock)."""
         result = await _run_adapter_test(
@@ -304,7 +304,7 @@ class TestOriginal:
     @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
     @patch("grace_control.adapters.packet_executor.get_db")
     @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
-    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_legacy_runner")
+    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_executor")
     async def test_packet_run_status_accepted(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
         mock_run = _make_mock_packet_run()
         await _run_adapter_test(
@@ -319,7 +319,7 @@ class TestOriginal:
     @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
     @patch("grace_control.adapters.packet_executor.get_db")
     @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
-    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_legacy_runner")
+    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_executor")
     async def test_packet_run_status_rejected(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
         mock_run = _make_mock_packet_run()
         await _run_adapter_test(
@@ -334,7 +334,7 @@ class TestOriginal:
     @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
     @patch("grace_control.adapters.packet_executor.get_db")
     @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
-    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_legacy_runner")
+    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_executor")
     async def test_keep_worktree_true_in_legacy_call(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
         await _run_adapter_test(
             mock_legacy, mock_get_db, mock_pipeline,
@@ -354,7 +354,7 @@ class TestEvidenceVerifierReviewerRouting:
     @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
     @patch("grace_control.adapters.packet_executor.get_db")
     @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
-    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_legacy_runner")
+    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_executor")
     async def test_fast_skips_verifier_and_reviewer(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
         """FAST with deterministic accepted → verifier and reviewer not called."""
         result = await _run_adapter_test(
@@ -376,7 +376,7 @@ class TestEvidenceVerifierReviewerRouting:
     @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
     @patch("grace_control.adapters.packet_executor.get_db")
     @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
-    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_legacy_runner")
+    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_executor")
     async def test_normal_verifier_pass_skips_reviewer(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
         """NORMAL with verifier PASS → reviewer not called, accepted."""
         result = await _run_adapter_test(
@@ -393,7 +393,7 @@ class TestEvidenceVerifierReviewerRouting:
     @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
     @patch("grace_control.adapters.packet_executor.get_db")
     @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
-    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_legacy_runner")
+    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_executor")
     async def test_normal_verifier_rework_skips_reviewer(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
         """NORMAL with verifier REWORK_TO_CODER → reviewer not called, rejected."""
         mock_verifier.return_value = _make_verifier_rework()
@@ -411,7 +411,7 @@ class TestEvidenceVerifierReviewerRouting:
     @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
     @patch("grace_control.adapters.packet_executor.get_db")
     @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
-    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_legacy_runner")
+    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_executor")
     async def test_normal_verifier_architect_skips_reviewer(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
         """NORMAL with verifier RETURN_TO_ARCHITECT → reviewer not called, blocked."""
         mock_verifier.return_value = _make_verifier_architect()
@@ -431,7 +431,7 @@ class TestEvidenceVerifierReviewerRouting:
     @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
     @patch("grace_control.adapters.packet_executor.get_db")
     @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
-    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_legacy_runner")
+    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_executor")
     async def test_strict_verifier_pass_reviewer_pass(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
         """STRICT with verifier PASS + reviewer PASS → accepted."""
         mock_verifier.return_value = _make_verifier_pass()
@@ -450,7 +450,7 @@ class TestEvidenceVerifierReviewerRouting:
     @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
     @patch("grace_control.adapters.packet_executor.get_db")
     @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
-    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_legacy_runner")
+    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_executor")
     async def test_strict_reviewer_rework_rejected(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
         """STRICT with reviewer REWORK_TO_CODER → rejected."""
         mock_verifier.return_value = _make_verifier_pass()
@@ -468,7 +468,7 @@ class TestEvidenceVerifierReviewerRouting:
     @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
     @patch("grace_control.adapters.packet_executor.get_db")
     @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
-    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_legacy_runner")
+    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_executor")
     async def test_strict_reviewer_architect_blocked(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
         """STRICT with reviewer RETURN_TO_ARCHITECT → blocked."""
         mock_verifier.return_value = _make_verifier_pass()
@@ -486,7 +486,7 @@ class TestEvidenceVerifierReviewerRouting:
     @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
     @patch("grace_control.adapters.packet_executor.get_db")
     @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
-    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_legacy_runner")
+    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_executor")
     async def test_result_json_has_four_keys_strict(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
         """STRICT: result_json always has all four keys."""
         mock_verifier.return_value = _make_verifier_pass()
@@ -510,7 +510,7 @@ class TestEvidenceVerifierReviewerRouting:
     @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
     @patch("grace_control.adapters.packet_executor.get_db")
     @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
-    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_legacy_runner")
+    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_executor")
     async def test_deterministic_fail_skips_verifier_reviewer(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
         """All profiles: deterministic fail → verifier and reviewer not called."""
         result = await _run_adapter_test(

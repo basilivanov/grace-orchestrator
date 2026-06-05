@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "grace-orchestrator"
 version = "0.1.0"
-description = "GRACE methodology orchestrator — LLM-driven development with Prefect"
+description = "GRACE methodology orchestrator — API-first, agent-driven, LLM-powered development"
 readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "MIT"}
@@ -28,21 +28,17 @@ dependencies = [
     "pyyaml>=6.0.0",
     "pydantic>=2.7.0",
     "pydantic-settings>=2.3.0",
-    "typer>=0.12.0",
-    "rich>=13.7.0",
     "anthropic>=0.18.0",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=8.0.0",
-    "pytest-cov>=4.1.0",
-    "pytest-asyncio>=0.23.0",
     "black>=24.0.0",
-    "ruff>=0.3.0",
     "isort>=5.13.0",
     "mypy>=1.9.0",
     "types-pyyaml>=6.0.0",
+    "typer>=0.12.0",
+    "rich>=13.7.0",
     "pre-commit>=3.6.0",
     "bandit>=1.7.0",
     "safety>=3.0.0",

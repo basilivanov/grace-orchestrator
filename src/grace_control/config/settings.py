@@ -67,7 +67,7 @@ class GraceSettings(BaseSettings):
     worktree_root: str = ".grace/worktrees"
     sandbox_mode: str = "danger-full-access"
     allow_sandbox_bypass: bool = False
-    execution_backend: str = "legacy"  # "legacy" | "api" | "mock" — see grace_control.agent.select_backend
+    execution_backend: str = "api"  # "api" | "mock" — see grace_control.agent.select_backend
 
     # ── Database ──
     database_url: str = "sqlite:///./grace.db"

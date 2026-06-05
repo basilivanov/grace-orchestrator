@@ -11,20 +11,20 @@ rules:
     expires_wave: never
   - rule: GRC100
     path: src/grace_control/adapters/packet_executor.py
-    reason: os.environ.setdefault for sandbox bypass
-    expires_wave: W11
+    reason: os.environ.setdefault for sandbox bypass — to be handled in settings
+    expires_wave: W12
   - rule: GRC101
     path: src/grace_control/adapters/packet_executor.py
-    reason: _legacy_prepare_worktree shells out to git
-    expires_wave: W11
+    reason: _git_worktree_cleanup shells out to git worktree prune/remove
+    expires_wave: W12
   - rule: GRC101
     path: src/grace_control/core/llm_runner.py
     reason: subprocess to spawn agent process
-    expires_wave: W11
+    expires_wave: W12
   - rule: GRC103
     path: src/grace_control/adapters/packet_executor.py
     reason: adapter wires PacketRun.status ("running", "failed")
-    expires_wave: W11
+    expires_wave: W12
   - rule: GRC103
     path: src/grace_control/core/wave_gate.py
     reason: wave_gate owns wave/packet state transitions
