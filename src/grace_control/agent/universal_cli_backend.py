@@ -41,7 +41,7 @@ class UniversalCliAgentBackend(ExecutionBackend):
             executor,
             packet_id=request.packet_id,
             worktree_path=Path(request.worktree_path) if request.worktree_path else Path("."),
-            state_root=request.session_dir or Path("."),
+            state_root=request.session_dir or (Path(request.worktree_path) if request.worktree_path else Path(".")),
             packet_markdown=packet_markdown,
             timeout_seconds=request.timeout_s,
             run_dir=request.evidence_dir,
