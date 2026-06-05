@@ -31,7 +31,7 @@ from __future__ import annotations
 import enum
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, Integer, JSON, String, Text
+from sqlalchemy import Boolean, Column, DateTime, Integer, JSON, String, Text
 from sqlalchemy.orm import declarative_base
 
 Base = declarative_base()
@@ -192,5 +192,11 @@ class SelfEvolutionSession(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
     finished_at = Column(DateTime, nullable=True)
     error = Column(Text, nullable=True)
+    # W11: explicit fields for risk/approval/rollback
+    risk_class = Column(String, nullable=True)
+    requires_approval = Column(Boolean, default=True)
+    base_branch = Column(String, default="main")
+    rollback_plan = Column(JSON, nullable=True)
+    prompt = Column(Text, nullable=True)
 
 # END_BLOCK_TABLES
