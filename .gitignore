@@ -74,3 +74,8 @@ plan.json
 sandbox/
 llm_prompts/
 agents/
+*.db
+*.db-shm
+*.db-wal
+%2Ftmp%2F*
+test_grace.db
