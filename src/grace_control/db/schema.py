@@ -38,7 +38,10 @@ Base = declarative_base()
 
 # START_BLOCK_PACKET_STATE
 class PacketState(enum.Enum):
-    """Canonical packet states — 9 total. CANCELLED reserved for post-MVP."""
+    """Canonical packet states — 10 total. CANCELLED reserved for post-MVP.
+    BLOCKED is deprecated alias kept for backward compat (reads as BLOCKED_FINAL).
+    Use BLOCKED_RECOVERABLE when a blocked packet may retry; BLOCKED_FINAL is terminal.
+    """
 
     DRAFT = "draft"
     READY = "ready"
@@ -46,9 +49,11 @@ class PacketState(enum.Enum):
     ACCEPTED = "accepted"
     MERGED = "merged"
     REJECTED = "rejected"
-    BLOCKED = "blocked"
+    BLOCKED = "blocked"  # deprecated alias for BLOCKED_FINAL
     FAILED = "failed"
     CANCELLED = "cancelled"  # reserved, no endpoint creates this in MVP-0
+    BLOCKED_RECOVERABLE = "blocked_recoverable"  # NEW: retryable, requires architect intervention
+    BLOCKED_FINAL = "blocked_final"  # NEW: true terminal
 
 # END_BLOCK_PACKET_STATE
 
@@ -67,6 +72,7 @@ class Feature(Base):
     description = Column(Text)
     spec_json = Column(JSON, nullable=False)
     status = Column(String, nullable=False, default="NOT_STARTED")
+    degraded_reason = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 

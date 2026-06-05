@@ -245,7 +245,7 @@ def test_apply_return_architect_sets_BLOCKED():
 
         ctrl._apply_return_to_architect("pkt_test", decision)
 
-    assert mock_packet.state == "blocked"
+    assert mock_packet.state == "blocked_final"
     assert mock_packet.spec_json.get("architect_repair", {}).get("reason") == "scope impossible"
 
 
@@ -275,7 +275,7 @@ def test_apply_block_feature_blocks_packet():
 
         ctrl._apply_block_feature("pkt_test", decision)
 
-    assert mock_packet.state == "blocked"
+    assert mock_packet.state == "blocked_final"
 
 
 # ── feature flag tests ───────────────────────────────────────────────────────

@@ -66,6 +66,8 @@ src/prefect_grace/briefs/
 prefect_grace/state/state/
 prefect_grace/state/packets.yaml
 .grace_state/
+.grace_worktrees/
+grace/features/
 # Sandbox golden test output is NOT ignored — agents write here
 grace.db*
 plan.json

@@ -281,8 +281,8 @@ class RecoveryController:
                 _log.warn("apply_return_to_architect_skip", packet_id=packet_id, reason="packet_not_found")
                 return
             sm = PacketStateMachine()
-            sm.transition(PacketState(packet.state), PacketState.BLOCKED)
-            packet.state = PacketState.BLOCKED.value
+            sm.transition(PacketState(packet.state), PacketState.BLOCKED_FINAL)
+            packet.state = PacketState.BLOCKED_FINAL.value
 
             spec = dict(packet.spec_json or {})
             spec["architect_repair"] = {
@@ -306,8 +306,8 @@ class RecoveryController:
                 _log.warn("apply_block_feature_skip", packet_id=packet_id, reason="packet_not_found")
                 return
             sm = PacketStateMachine()
-            sm.transition(PacketState(packet.state), PacketState.BLOCKED)
-            packet.state = PacketState.BLOCKED.value
+            sm.transition(PacketState(packet.state), PacketState.BLOCKED_FINAL)
+            packet.state = PacketState.BLOCKED_FINAL.value
 
             feature = db.query(Feature).filter_by(id=packet.feature_id).first()
             if feature:
@@ -414,8 +414,8 @@ class RecoveryController:
                 _log.warn("apply_new_architect_skip", packet_id=packet_id, reason="packet_not_found")
                 return
             sm = PacketStateMachine()
-            sm.transition(PacketState(packet.state), PacketState.BLOCKED)
-            packet.state = PacketState.BLOCKED.value
+            sm.transition(PacketState(packet.state), PacketState.BLOCKED_FINAL)
+            packet.state = PacketState.BLOCKED_FINAL.value
 
             architect_ctx = self._build_architect_context(packet, db)
             spec = dict(packet.spec_json or {})

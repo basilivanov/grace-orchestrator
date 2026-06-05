@@ -49,17 +49,21 @@ async def lifespan(app: FastAPI):
     from grace_control.core.lease_manager import lease_expiration_loop
     _lease_task = asyncio.create_task(lease_expiration_loop())
     from grace_control.core.wave_gate import check_wave_gates as _gate_loop
+    from grace_control.core.structured_logger import GraceLogger
+    _loop_log = GraceLogger("lifespan_loops")
     async def _gate_task():
         while True:
-            try: check_wave_gates()
-            except Exception: pass
+            try: _gate_loop()
+            except Exception as e:
+                _loop_log.error("wave_gate_loop_error", error=str(e)[:500])
             await asyncio.sleep(30)
     asyncio.create_task(_gate_task())
     from grace_control.core.feature_gate import check_feature_completion
     async def _feature_task():
         while True:
             try: check_feature_completion()
-            except Exception: pass
+            except Exception as e:
+                _loop_log.error("feature_gate_loop_error", error=str(e)[:500])
             await asyncio.sleep(60)
     asyncio.create_task(_feature_task())
     yield
@@ -139,7 +143,7 @@ async def test_page():
 async def dashboard_data():
     """Aggregated view: features → waves → packets + workers + stats."""
     from grace_control.db import get_db as _gdb
-    from grace_control.db.schema import Feature, Wave, Packet, Worker
+    from grace_control.db.schema import Feature, Wave, Packet, PacketRun, Worker
 
     with _gdb() as db:
         features = db.query(Feature).all()
@@ -298,9 +302,10 @@ async def get_artifact_file(packet_id: str, run_id: str, path: str = "", tail: i
         if not run or not run.evidence_path:
             return JSONResponse({"error": "not found"}, status_code=404)
 
-        fp = _P(run.evidence_path) / path
-        if not fp.exists() or not fp.is_file():
-            return JSONResponse({"error": "file not found"}, status_code=404)
+        evidence_dir = _P(run.evidence_path).resolve()
+        fp = (evidence_dir / path).resolve()
+        if not fp.is_file() or evidence_dir not in fp.parents:
+            return JSONResponse({"error": "forbidden"}, status_code=403)
 
         content = fp.read_text()
         if tail > 0:
