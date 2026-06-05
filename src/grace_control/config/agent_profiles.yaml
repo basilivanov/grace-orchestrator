@@ -1,4 +1,9 @@
 version: 2
+# W7: top-level provider default makes profiles backend-agnostic.
+# ApiAgentBackend reads `provider` to pick a provider hook; the legacy
+# codex CLI still works because executors keep their `kind:`/`command:`
+# fields for backward compat.
+default_provider: openai
 codex:
   binary: agy
   workdir: /tmp/grace-orchestrator-export

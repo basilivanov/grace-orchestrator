@@ -9,9 +9,9 @@
 #          adapters.packet_executor.PacketExecutionAdapter. The choice is driven
 #          by grace_control.config.settings.execution_backend (env:
 #          GRACE_EXECUTION_BACKEND).
-# inputs: backend_name (str) — "legacy" or "new".
+# inputs: backend_name (str) — "legacy", "api", or "mock".
 # returns: ExecutionBackend instance.
-# side_effects: May import prefect_grace (lazy) when backend_name == "legacy".
+# side_effects: Lazy-imports the chosen backend module on first call.
 # emitted_logs: backend_selected.
 # error_behavior: Raises ValueError for unknown backend names.
 # END_MODULE_CONTRACT
@@ -20,7 +20,8 @@
 # mapping:
 #   - function: select_backend
 #   - constant: BACKEND_LEGACY
-#   - constant: BACKEND_NEW
+#   - constant: BACKEND_API
+#   - constant: BACKEND_MOCK
 # END_MODULE_MAP
 
 from __future__ import annotations
@@ -31,26 +32,29 @@ from grace_control.core.structured_logger import GraceLogger
 _log = GraceLogger("agent")
 
 BACKEND_LEGACY = "legacy"
-BACKEND_NEW = "new"
+BACKEND_API = "api"
+BACKEND_MOCK = "mock"
+# Back-compat alias kept for tests + downstream code.
+BACKEND_NEW = BACKEND_API
 
-_VALID = {BACKEND_LEGACY, BACKEND_NEW}
+_VALID = {BACKEND_LEGACY, BACKEND_API, BACKEND_MOCK}
 
 
 def select_backend(backend_name: str = "") -> ExecutionBackend:
     """Return an ExecutionBackend instance for the given name.
 
     Args:
-        backend_name: "legacy" (default — wraps prefect_grace) or "new"
-                      (stub, not yet implemented). When backend_name is empty,
-                      reads grace_control.config.settings.execution_backend.
+        backend_name: One of "legacy" (wraps prefect_grace), "api"
+                      (delegates to AgentGatewayService), or "mock"
+                      (in-process, no subprocess). When backend_name is
+                      empty, reads
+                      grace_control.config.settings.execution_backend
+                      (env: GRACE_EXECUTION_BACKEND).
 
     Raises:
-        ValueError: if backend_name is not in {"legacy", "new"}.
+        ValueError: if backend_name is not in {"legacy", "api", "mock"}.
     """
     if not backend_name:
-        # Import the instance via the submodule path so we don't pick up the
-        # package attribute (which Python would resolve to the submodule itself
-        # in `from grace_control.config import settings`).
         from grace_control.config.settings import settings as _settings
         backend_name = _settings.execution_backend
 
@@ -65,9 +69,12 @@ def select_backend(backend_name: str = "") -> ExecutionBackend:
         # module import time. Only the legacy_backend module imports it.
         from grace_control.agent.legacy_backend import LegacyPrefectBackend
         backend: ExecutionBackend = LegacyPrefectBackend()
-    else:
-        from grace_control.agent.new_backend import NewDirectBackend
-        backend = NewDirectBackend()
+    elif backend_name == BACKEND_API:
+        from grace_control.agent.api_backend import ApiAgentBackend
+        backend = ApiAgentBackend()
+    else:  # mock
+        from grace_control.agent.mock_backend import MockBackend
+        backend = MockBackend()
 
     _log.info("backend_selected", backend=backend_name)
     return backend

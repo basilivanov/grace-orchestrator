@@ -28,6 +28,7 @@ from fastapi.responses import JSONResponse
 
 from grace_control.api.lifespan import lifespan
 from grace_control.api.routers import (
+    agents,
     architect,
     artifacts,
     dashboard,
@@ -93,5 +94,6 @@ def create_app(settings: GraceSettings | None = None) -> FastAPI:
     app.include_router(trace.router, prefix="/api/trace", tags=["trace"])
     app.include_router(events.router, prefix="/api/events", tags=["events"])
     app.include_router(diagnostics.router, prefix="/api/diagnostics", tags=["diagnostics"])
+    app.include_router(agents.router, prefix="/api/agents", tags=["agents"])
 
     return app
