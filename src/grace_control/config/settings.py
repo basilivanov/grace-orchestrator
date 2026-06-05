@@ -101,6 +101,11 @@ class GraceSettings(BaseSettings):
     wave_gate_interval_seconds: int = 30
     feature_gate_interval_seconds: int = 60
 
+    # ── API auth (W14.2) ──
+    api_auth_enabled: bool = False
+    api_auth_token: str = ""
+    api_auth_allow_unauthenticated_localhost: bool = True
+
 
 # Class-level defaults, captured AFTER the class is defined and BEFORE
 # pydantic-settings ever resolves env vars. We use this to decide whether

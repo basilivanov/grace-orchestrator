@@ -44,8 +44,9 @@ from grace_control.api.routers import (
     workers,
     ws,
 )
-from grace_control.config.settings import GraceSettings
+from grace_control.config.settings import GraceSettings, settings as _default_settings
 from grace_control.core.structured_logger import GraceLogger
+from grace_control.api.auth import AuthMiddleware
 
 _log = GraceLogger("app_factory")
 
@@ -60,6 +61,7 @@ _log = GraceLogger("app_factory")
 # error_behavior: Never raises during construction.
 # END_FUNCTION_CONTRACT
 def create_app(settings: GraceSettings | None = None) -> FastAPI:
+    s = settings or _default_settings
     app = FastAPI(
         title="GRACE Control Plane",
         version="0.1.0",
@@ -71,6 +73,12 @@ def create_app(settings: GraceSettings | None = None) -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+    )
+    app.add_middleware(
+        AuthMiddleware,
+        token=s.api_auth_token,
+        enabled=s.api_auth_enabled,
+        allow_localhost=s.api_auth_allow_unauthenticated_localhost,
     )
 
     @app.exception_handler(Exception)
