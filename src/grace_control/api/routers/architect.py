@@ -44,7 +44,9 @@ router = APIRouter()
 _log = GraceLogger("architect")
 
 from grace_control.core.executor_selector import resolve_model
-ARCHITECT_TIMEOUT = int(os.environ.get("GRACE_ARCHITECT_TIMEOUT", "120"))
+from grace_control.config.settings import settings
+ARCHITECT_TIMEOUT = int(os.environ.get(
+    "GRACE_ARCHITECT_TIMEOUT", str(settings.architect_timeout_seconds)))
 
 
 @router.post("/plan")

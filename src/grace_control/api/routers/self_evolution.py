@@ -45,7 +45,10 @@ from grace_control.db.schema import SelfEvolutionSession
 router = APIRouter()
 _log = GraceLogger("self_evolution")
 
-MAX_SESSIONS = int(os.environ.get("GRACE_SELF_MAX_SESSIONS", "3"))
+MAX_SESSIONS = int(os.environ.get(
+    "GRACE_SELF_MAX_SESSIONS",
+    str(__import__("grace_control.config.settings", fromlist=["settings"]).settings.self_evolution_max_sessions),
+))
 
 
 @router.post("/evolve")

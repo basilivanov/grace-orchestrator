@@ -48,8 +48,9 @@ def init_db(db_url: str | None = None) -> None:
     global engine, SessionLocal  # noqa: PLW0603
 
     if db_url is None:
-        db_url = os.environ.get("GRACE_DB_URL")
-    if db_url is None:
+        from grace_control.config.settings import settings
+        db_url = os.environ.get("GRACE_DB_URL") or settings.database_url
+    if db_url is None or "PLACEHOLDER" in db_url:
         db_path = Path.cwd() / "grace.db"
         db_url = f"sqlite:///{db_path}"
 

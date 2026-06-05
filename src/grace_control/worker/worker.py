@@ -81,7 +81,9 @@ class Worker:
             self.log.info("worker_stopped", worker_id=self.worker_id)
 
     async def _main_loop(self):
-        agent_timeout = int(os.environ.get("GRACE_AGENT_TIMEOUT", "600"))
+        from grace_control.config.settings import settings
+        agent_timeout = int(os.environ.get(
+            "GRACE_AGENT_TIMEOUT", str(settings.agent_timeout_seconds)))
         while self.running:
             claim = None
             try:
@@ -164,7 +166,11 @@ class Worker:
             self.log.warn("max_retries_reached", packet_id=packet_id, error=str(e)[:200])
 
     async def _maybe_apply_recovery(self, packet_id: str):
-        controller_enabled = os.environ.get("GRACE_RECOVERY_CONTROLLER_ENABLED", "false") == "true"
+        from grace_control.config.settings import settings
+        controller_enabled = os.environ.get(
+            "GRACE_RECOVERY_CONTROLLER_ENABLED",
+            "true" if settings.recovery_controller_enabled else "false",
+        ) == "true"
         self.log.info("recovery_check",
             packet_id=packet_id,
             controller_enabled=controller_enabled,

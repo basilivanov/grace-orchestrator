@@ -25,9 +25,21 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from grace_control.config.project_config import ProjectConfig, get_project_config
+
 
 class GraceSettings(BaseSettings):
-    """Centralized settings — env vars override defaults (GRACE_* prefix)."""
+    """Centralized settings — env vars override defaults (GRACE_* prefix).
+
+    Precedence (highest to lowest):
+      1. Environment variables (`GRACE_*`).
+      2. `.grace/config.yaml` (loaded by `grace_control.config.project_config`).
+      3. Safe local defaults declared on this class.
+
+    To set a value at a lower layer, leave the corresponding env var unset
+    and put it in `.grace/config.yaml`. See
+    `docs/grace/CONFIGURATION.md` for the schema and the rationale.
+    """
 
     model_config = SettingsConfigDict(
         env_prefix="GRACE_",
@@ -45,19 +57,41 @@ class GraceSettings(BaseSettings):
     target_repo_root: str = ""
     base_branch: str = "main"
     target_branch: str = "main"
+    git_remote: str = "origin"
 
     # ── Agent execution ──
     agent_timeout_seconds: int = 600
-    state_root: str = "/tmp/grace-eval"
+    architect_timeout_seconds: int = 120
+    context_timeout_seconds: int = 60
+    state_root: str = ".grace/state"
+    worktree_root: str = ".grace/worktrees"
     sandbox_mode: str = "danger-full-access"
-    execution_backend: str = "legacy"  # "legacy" | "new" — see grace_control.agent.select_backend
+    allow_sandbox_bypass: bool = False
+    execution_backend: str = "legacy"  # "legacy" | "api" | "mock" — see grace_control.agent.select_backend
 
     # ── Database ──
     database_url: str = "sqlite:///./grace.db"
 
+    # ── Self-evolution ──
+    self_evolution_max_sessions: int = 3
+
+    # ── Recovery / observability ──
+    recovery_controller_enabled: bool = False
+
+    # ── Telegram (optional notification channel) ──
+    telegram_token: str = ""
+    telegram_chat_id: str = ""
+
+    # ── Agent profiles / LLM ──
+    agent_profiles_path_override: str = ""  # empty = use packaged default
+    context_model: str = "deepseek/deepseek-v4-flash"
+    session_dir: str = ""
+
     # ── Profiles ──
     @property
     def agent_profiles_path(self) -> Path:
+        if self.agent_profiles_path_override:
+            return Path(self.agent_profiles_path_override)
         return Path(__file__).parent / "agent_profiles.yaml"
 
     # ── Logging ──
@@ -68,4 +102,47 @@ class GraceSettings(BaseSettings):
     feature_gate_interval_seconds: int = 60
 
 
-settings = GraceSettings()
+# Class-level defaults, captured AFTER the class is defined and BEFORE
+# pydantic-settings ever resolves env vars. We use this to decide whether
+# the env layer has touched a field.
+_BASE_DEFAULTS: dict[str, object] = {
+    name: field.default
+    for name, field in GraceSettings.model_fields.items()
+    if hasattr(field, "default")
+}
+
+
+def _apply_project_fallbacks(target: "GraceSettings", project: ProjectConfig) -> None:
+    """Copy project-config values into `target` only when env did not touch them.
+
+    Precedence is env > .grace/config.yaml > safe_local_defaults. Pydantic-
+    settings has already populated `target` from env vars (or from the class
+    defaults if env is silent), so we overwrite only fields whose current
+    value still equals the env-less default.
+    """
+    project_overrides = {
+        "api_host": project.api.host,
+        "api_port": project.api.port,
+        "database_url": project.database.url,
+        "base_branch": project.git.base_branch,
+        "target_branch": project.git.target_branch,
+        "agent_timeout_seconds": project.execution.timeout_seconds,
+        "state_root": project.execution.state_root,
+        "execution_backend": project.execution.backend,
+        "sandbox_mode": project.safety.sandbox_mode,
+    }
+    for field_name, project_value in project_overrides.items():
+        if field_name not in _BASE_DEFAULTS:
+            continue
+        if getattr(target, field_name) == _BASE_DEFAULTS[field_name]:
+            object.__setattr__(target, field_name, project_value)
+
+
+def _build_settings() -> GraceSettings:
+    """Build a GraceSettings with env > .grace/config.yaml > defaults applied."""
+    s = GraceSettings()
+    _apply_project_fallbacks(s, get_project_config())
+    return s
+
+
+settings = _build_settings()

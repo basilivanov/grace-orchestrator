@@ -106,6 +106,13 @@ app.include_router(workers.router, prefix="/api/workers", tags=["workers"])
 app.include_router(architect.router, prefix="/api/architect", tags=["architect"])
 app.include_router(self_evolution.router, prefix="/api/self", tags=["self-evolution"])
 app.include_router(recovery.router, prefix="/api/recovery", tags=["recovery"])
+# W4 of source/codex/tz-api-first-cleanup-waves-w0-w11.md
+from grace_control.api.routers import trace as _trace_router
+from grace_control.api.routers import events as _events_router
+from grace_control.api.routers import diagnostics as _diagnostics_router
+app.include_router(_trace_router.router, prefix="/api/trace", tags=["trace"])
+app.include_router(_events_router.router, prefix="/api/events", tags=["events"])
+app.include_router(_diagnostics_router.router, prefix="/api/diagnostics", tags=["diagnostics"])
 
 #END_BLOCK_APP
 
@@ -215,34 +222,6 @@ async def dashboard_data():
                          "last_heartbeat": w.last_heartbeat.isoformat() + "Z" if w.last_heartbeat else None}
                         for w in workers],
             "stats": {**stats, "workers": active_workers},
-        }
-
-
-@app.get("/api/events")
-async def list_events(entity_type: str = "", entity_id: str = "",
-                       event_type: str = "", limit: int = 100):
-    from grace_control.db import get_db as _gdb
-    from grace_control.db.schema import Event
-
-    with _gdb() as db:
-        q = db.query(Event).order_by(Event.timestamp.desc())
-        if entity_type:
-            q = q.filter_by(entity_type=entity_type)
-        if entity_id:
-            q = q.filter_by(entity_id=entity_id)
-        if event_type:
-            if event_type.startswith("recovery_"):
-                q = q.filter(Event.event_type.like("recovery_%"))
-            else:
-                q = q.filter_by(event_type=event_type)
-        events = q.limit(limit).all()
-        return {
-            "data": [
-                {"timestamp": e.timestamp.isoformat() + "Z", "event_type": e.event_type,
-                 "entity_type": e.entity_type, "entity_id": e.entity_id,
-                 "payload": e.payload_json, "trace_id": e.trace_id}
-                for e in reversed(events)
-            ]
         }
 
 

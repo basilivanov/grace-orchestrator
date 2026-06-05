@@ -52,13 +52,10 @@ dev = [
     "coverage>=7.4.0",
 ]
 
-[project.scripts]
-grace = "grace_control.cli.main:cli"
-grace-dev = "prefect_grace.devtools.cli:main"
-
-# Legacy entry point (backward compat)
-prefect-grace = "prefect_grace.cli_compat:prefect_grace_main"
-gracectl = "prefect_grace.cli_compat:gracectl_main"
+# Public entrypoints removed in W2 of source/codex/tz-api-first-cleanup-waves-w0-w11.md.
+# The CLI is deprecated as a runtime interface; OpenAPI is the canonical contract
+# (see docs/grace/API_FIRST_CONTROL_PLANE.md). Legacy scripts
+# (grace-dev / prefect-grace / gracectl) are scheduled for removal in W8.
 
 [tool.hatch.build]
 packages = ["src/prefect_grace", "src/grace_control"]

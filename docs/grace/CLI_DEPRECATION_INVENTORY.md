@@ -61,22 +61,22 @@ both the migration action is complete and the acceptance test passes.
 
 | command | status | landed in |
 |---------|--------|-----------|
-| `up` | TODO | W2 |
-| `init` | TODO | W2 |
-| `lint` | TODO (script extracted) | W2 + W10 |
-| `eval run` | TODO (script extracted) | W2 + W4 |
-| `eval report` | TODO | W2 + W4 |
-| `architect plan` | TODO | W2 |
-| `packet list` | TODO | W2 |
-| `packet get` | TODO | W2 |
-| `worker start` | TODO | W2 |
-| `api start` | TODO | W2 |
-| `health` | TODO | W2 |
-| `golden` / `fixture run-one` | TODO | W2 + W4 |
-| `trace --packet/--feature/--wave` | TODO | W2 + W4 |
-| `grace-dev` | TODO | W2 + W8 |
-| `prefect-grace` | TODO | W2 + W8 |
-| `gracectl` | TODO | W2 + W8 |
+| `up` | done (W2) | W2 — deleted; deployment uses systemd/k8s; `scripts/live_worker.py` runs the worker |
+| `init` | done (W2) | W2 — deleted; bootstrap via docs/template |
+| `lint` | done (W2) | W2 — `scripts/grace_lint.py` is the CI replacement |
+| `eval run` | done (W2) | W2 — `scripts/run_golden.py` covers the smoke run; `/api/tools/smoke/run` (W4) |
+| `eval report` | done (W2) | W2 — replaced by `GET /api/trace/features/{id}` (W4) |
+| `architect plan` | done (W2) | W2 — replaced by `POST /api/architect/plan` |
+| `packet list` | done (W2) | W2 — replaced by `GET /api/packets/` |
+| `packet get` | done (W2) | W2 — replaced by `GET /api/packets/{id}` |
+| `worker start` | done (W2) | W2 — `scripts/live_worker.py`; deployment unit calls `/api/workers/register` |
+| `api start` | done (W2) | W2 — `uvicorn grace_control.api.main:app` in deployment |
+| `health` | done (W2) | W2 — `GET /health` |
+| `golden` / `fixture run-one` | done (W2) | W2 — `scripts/run_golden.py` |
+| `trace --packet/--feature/--wave` | done (W2) | W2 — replaced by `/api/trace/*` (W4) |
+| `grace-dev` | done (W2) | W2 — pyproject entrypoint removed; W8 deletes the legacy package |
+| `prefect-grace` | done (W2) | W2 — pyproject entrypoint removed; W8 deletes the legacy package |
+| `gracectl` | done (W2) | W2 — pyproject entrypoint removed; W8 deletes the legacy package |
 
 ## Missing API capabilities (carry-overs to W4)
 
