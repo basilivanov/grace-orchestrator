@@ -1,11 +1,11 @@
-# AI_HEADER: agent_env_builder — expands ${ENV_VAR}, redacts secrets in logs
+# AI_HEADER: agent_env_builder — expands ${ENV_VAR}, inherits parent env, redacts secrets
 # START_MODULE_CONTRACT
-# purpose: Expands `${VAR}` references from os.environ, returns a clean env dict
-#          for subprocess execution. Redacts secret-like values in previews.
+# purpose: Build subprocess env dict starting from os.environ.copy(),
+#          overlaying profile env vars with ${VAR} expansion.
 # inputs: raw_env (dict[str,str]), env_override (dict | None).
-# returns: dict[str,str] with all ${VAR} expanded.
+# returns: dict[str,str] inheriting PATH/HOME/etc. + expanded profile env.
 # side_effects: Reads os.environ.
-# error_behavior: Missing var → leaves unreplaced if optional, raises if required.
+# error_behavior: Missing var → leaves unreplaced.
 # END_MODULE_CONTRACT
 # START_MODULE_MAP
 # mapping:   - class: AgentEnvBuilder
@@ -23,10 +23,12 @@ class AgentEnvBuilder:
         merged = dict(raw_env)
         if env_override:
             merged.update(env_override)
-        result = {}
+        expanded = {}
         for k, v in merged.items():
-            result[k] = self._expand(v)
-        return result
+            expanded[k] = self._expand(v)
+        env = os.environ.copy()
+        env.update(expanded)
+        return env
 
     def _expand(self, value: str) -> str:
         def _replacer(m: re.Match) -> str:
@@ -35,7 +37,6 @@ class AgentEnvBuilder:
         return re.sub(r"\$\{(\w+)\}", _replacer, value)
 
     def preview(self, env: dict[str, str]) -> dict[str, str]:
-        """Return env dict with secret values redacted for logging."""
         redacted = {}
         for k, v in env.items():
             if any(s in k.upper() for s in _SECRET_KEYS):

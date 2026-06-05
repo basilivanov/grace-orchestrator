@@ -153,3 +153,99 @@ def test_mock_backend_run_succeeds(tmp_path):
         assert "pkt-mock" in result.stdout
 
     asyncio.run(_check())
+
+
+# ── W7 profile validation ──────────────────────────────────────────────
+
+
+def test_agent_profile_rejects_string_command():
+    """AgentProfile rejects string `command` with clear ValueError."""
+    from grace_control.config.agent_profiles import AgentProfile
+    import pytest
+    with pytest.raises(ValueError, match="must be a list"):
+        AgentProfile("bad_exec", {"command": "opencode"})
+
+
+def test_agent_profile_accepts_list_command():
+    """AgentProfile accepts list command."""
+    from grace_control.config.agent_profiles import AgentProfile
+    p = AgentProfile("ok", {"command": ["opencode", "run", "--model", "{model}"]})
+    assert p.command == ["opencode", "run", "--model", "{model}"]
+
+
+# ── Env builder ────────────────────────────────────────────────────────
+
+
+def test_env_builder_inherits_path():
+    """AgentEnvBuilder.build() must include PATH from parent env."""
+    from grace_control.services.agent_env_builder import AgentEnvBuilder
+    import os
+    env = AgentEnvBuilder().build({})
+    assert "PATH" in env
+
+
+# ── Exit code handling ─────────────────────────────────────────────────
+
+
+def test_run_service_exit_zero_accepted():
+    """Exit code 0 → accepted=True, domain_status='completed'."""
+    import asyncio
+    from pathlib import Path
+    from grace_control.services.agent_run_service import AgentRunService
+    svc = AgentRunService()
+
+    async def _check():
+        result = await svc.run(
+            {"command": ["echo", "ok"], "model": "t", "effort": "low"},
+            packet_id="p-exit-0", worktree_path=Path("."), state_root=Path("/tmp"),
+            packet_markdown="", timeout_seconds=5,
+        )
+        assert result["accepted"] is True
+        assert result["domain_status"] == "completed"
+
+    asyncio.run(_check())
+
+
+def test_run_service_exit_nonzero_rejected():
+    """Exit code != 0 → accepted=False, domain_status='failed'."""
+    import asyncio
+    from pathlib import Path
+    from grace_control.services.agent_run_service import AgentRunService
+    svc = AgentRunService()
+
+    async def _check():
+        result = await svc.run(
+            {"command": ["sh", "-c", "exit 1"], "model": "t", "effort": "low"},
+            packet_id="p-exit-1", worktree_path=Path("."), state_root=Path("/tmp"),
+            packet_markdown="", timeout_seconds=5,
+        )
+        assert result["accepted"] is False
+        assert result["domain_status"] == "failed"
+
+    asyncio.run(_check())
+
+
+# ── Stdin input mode ───────────────────────────────────────────────────
+
+
+def test_stdin_input_mode_sends_markdown():
+    """stdin mode sends packet_markdown to subprocess stdin."""
+    import asyncio
+    from pathlib import Path
+    from grace_control.services.agent_run_service import AgentRunService
+    svc = AgentRunService()
+
+    async def _check():
+        result = await svc.run(
+            {
+                "command": ["cat"],
+                "model": "t", "effort": "low",
+                "input_mode": "stdin",
+                "input_template": "{packet_markdown}",
+            },
+            packet_id="p-stdin", worktree_path=Path("/tmp"), state_root=Path("/tmp"),
+            packet_markdown="hello from stdin", timeout_seconds=5,
+        )
+        assert "hello from stdin" in result.get("stdout", ""), f"stdout={result['stdout']!r} stderr={result['stderr']!r}"
+
+    asyncio.run(_check())

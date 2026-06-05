@@ -23,7 +23,7 @@ from grace_control.services.agent_run_service import AgentRunService
 _log = GraceLogger("cli_backend")
 
 
-class UniversalCliAgentBackend:
+class UniversalCliAgentBackend(ExecutionBackend):
     def __init__(self, run_service: AgentRunService | None = None) -> None:
         self._run_service = run_service or AgentRunService()
 

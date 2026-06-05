@@ -1,26 +1,26 @@
 # AI_HEADER: api_routers_agents — POST /api/agents/run (W7 UniversalCliAgentBackend)
 # START_MODULE_CONTRACT
-# purpose: Execute a CLI agent via UniversalCliAgentBackend or ApiAgentBackend
-#          based on the executor_id lookup in agent_profiles.yaml.
-#          API/OpenAPI remains the only public control plane.
-# inputs: RunRequest {packet_id, executor_id, role, model, effort, worktree_path, ...}.
+# purpose: Execute a CLI agent via UniversalCliAgentBackend using
+#          declarative profiles from `agents:` in agent_profiles.yaml.
+#          Resolves executor_id from profiles, not from codex.executors.
+#          Async route, no asyncio.run().
+# inputs: RunRequest {packet_id, executor_id, ...}.
 # returns: RunResponse.
-# side_effects: Spawns subprocess via the selected backend.
-# error_behavior: 400 on invalid request; backend errors in response body.
+# side_effects: Spawns subprocess via UniversalCliAgentBackend.
+# error_behavior: 400 on unknown executor_id, backend errors in body.
 # END_MODULE_CONTRACT
 # START_MODULE_MAP
 # mapping:   - router: APIRouter   - class: RunRequest   - class: RunResponse
 # END_MODULE_MAP
 
 from __future__ import annotations
-
+from pathlib import Path
 from typing import Any
-
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
-
 from grace_control.agent import select_backend
 from grace_control.agent.backend import ExecutionRequest
+from grace_control.config.agent_profiles import get_agent_profile
 from grace_control.core.structured_logger import GraceLogger
 
 _log = GraceLogger("agents_router")
@@ -40,55 +40,45 @@ class RunRequest(BaseModel):
 
 
 class RunResponse(BaseModel):
-    accepted: bool
-    domain_status: str = ""
-    executor_id: str = ""
+    accepted: bool; domain_status: str = ""; executor_id: str = ""
     command_preview: list[str] = Field(default_factory=list)
-    exit_code: int = -1
-    stdout: str = ""
-    stderr: str = ""
-    stdout_path: str = ""
-    stderr_path: str = ""
-    worktree_path: str = ""
-    branch_name: str = ""
-    duration_ms: int = 0
-    reason: str = ""
+    exit_code: int = -1; stdout: str = ""; stderr: str = ""
+    stdout_path: str = ""; stderr_path: str = ""
+    worktree_path: str = ""; branch_name: str = ""
+    duration_ms: int = 0; reason: str = ""
     artifacts: list[str] = Field(default_factory=list)
 
 
 @router.post("/run", response_model=RunResponse)
-def run_agent(req: RunRequest) -> RunResponse:
+async def run_agent(req: RunRequest) -> RunResponse:
     _log.info("agent_run_request", packet_id=req.packet_id, executor_id=req.executor_id)
-
-    from grace_control.core.executor_selector import load_profiles
-    profiles = load_profiles()
-    executors = profiles.get("codex", {}).get("executors", [])
-    matching = [e for e in executors if e.get("executor_id") == req.executor_id]
-    if not matching:
+    profile = get_agent_profile(req.executor_id)
+    if not profile:
         raise HTTPException(status_code=400, detail=f"unknown executor_id: {req.executor_id}")
-    executor = dict(matching[0])
+    if not req.worktree_path:
+        raise HTTPException(status_code=400, detail="worktree_path is required")
 
+    executor = profile.to_dict()
     if req.model:
         executor["model"] = req.model
     if req.effort:
         executor["effort"] = req.effort
-    executor.setdefault("timeout_seconds", req.timeout_seconds)
 
-    import asyncio
     backend = select_backend("cli")
     er = ExecutionRequest(
         packet_id=req.packet_id,
         spec={"role": req.role, "packet_markdown": req.packet_markdown},
-        worktree_path=None, branch_name="",
-        executor=executor, timeout_s=req.timeout_seconds,
+        worktree_path=Path(req.worktree_path),
+        branch_name="",
+        executor=executor,
+        timeout_s=req.timeout_seconds,
     )
-
-    result = asyncio.run(backend.run(er))
+    result = await backend.run(er)
 
     return RunResponse(
         accepted=result.accepted,
         domain_status=result.domain_status,
-        executor_id=executor.get("executor_id", ""),
+        executor_id=profile.executor_id,
         command_preview=result.evidence.get("command_preview", []) if isinstance(result.evidence, dict) else [],
         exit_code=result.evidence.get("exit_code", -1) if isinstance(result.evidence, dict) else -1,
         stdout=result.stdout,
