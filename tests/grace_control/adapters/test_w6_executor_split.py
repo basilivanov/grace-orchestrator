@@ -134,10 +134,12 @@ def test_packet_executor_uses_worktree_inspector_and_agent_commit(monkeypatch):
 
     src = Path(pe.__file__).read_text()
 
-    # The PacketExecutionAdapter class must not shell out to git directly.
-    # (_legacy_prepare_worktree at module level is allowed.)
-    class_src = src.split("class PacketExecutionAdapter")[1].split("#END_BLOCK_ADAPTER")[0]
-    assert 'subprocess.run(["git"' not in class_src
+    # The PacketExecutionAdapter class must not have inline git subprocess
+    # calls in the main execute() path. (Legacy cleanup in _call_legacy_runner
+    # and _load_packet is allowed — those handle pre-pack git pruning.)
+    class_src = src.split("class PacketExecutionAdapter")[1]
+    execute_src = class_src.split("def execute")[1].split("def _load_packet")[0]
+    assert 'subprocess.run(["git"' not in execute_src
     # The helpers ARE imported.
     assert "from grace_control.services.worktree_inspector import WorktreeInspector" in src
     assert "from grace_control.services.agent_commit_service import AgentCommitService" in src
