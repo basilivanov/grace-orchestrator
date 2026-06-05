@@ -74,11 +74,9 @@ def test_replacement_scripts_exist():
     assert (SCRIPTS / "live_worker.py").exists(), "scripts/live_worker.py is the deployment replacement for `grace worker start`."
 
 
-# 6. CLI_DEPRECATION_INVENTORY.md is updated.
+# 6. CLI_DEPRECATION_INVENTORY.md is archived and complete. (W9 moved to stale.)
 def test_cli_inventory_status_reflects_w2_completion():
-    inv = _read(ROOT / "docs" / "grace" / "CLI_DEPRECATION_INVENTORY.md")
-    # After W2, every `command` row in the migration-status table should be `done (W2)`.
-    # The table at the bottom of the inventory file is the source of truth.
+    inv = _read(ROOT / "docs" / "archived" / "stale" / "CLI_DEPRECATION_INVENTORY.md")
     for cmd in ("up", "init", "lint", "eval run", "worker start", "api start",
                 "trace --packet/--feature/--wave"):
         pattern = rf"\|\s*`?{re.escape(cmd)}`?\s*\|\s*(done|TODO)\s*\|"

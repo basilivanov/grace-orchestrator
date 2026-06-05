@@ -2,160 +2,39 @@
 
 **LLM-driven autonomous development orchestrator** — packet-based, agent-driven, SQLite-backed.
 
-MVP-0 ready: API server + worker loop + state machine + GRACE Canon checker + structured logging.
-
-> **The OpenAPI document is the canonical runtime contract.** Agents and humans
-> discover capabilities through `/openapi.json`. The CLI is being deprecated
-> as a runtime interface; see [`docs/grace/API_FIRST_CONTROL_PLANE.md`](docs/grace/API_FIRST_CONTROL_PLANE.md)
-> and [`docs/grace/CLI_DEPRECATION_INVENTORY.md`](docs/grace/CLI_DEPRECATION_INVENTORY.md)
-> for the migration plan (W1..W11).
-
-## Architecture
-
-```
-POST /api/architect/plan  → packets in DB (READY)
-        ↓
-/api/packets/claim + /api/packets/{id}/release  → ACCEPTED
-        ↓
-/api/packets/{id}/merge  → MERGED
-        ↓
-GET /api/trace/features/{id}  → observability
-```
-
-**Packages:**
-- `grace_control/` — new Control Plane (FastAPI, state machine, worker, CLI)
-- `prefect_grace/` — legacy execution engine (worktree isolation, agent launcher, git ops)
-- `prefect_grace/prefect_compat.py` — compatibility layer (no Prefect runtime required)
-
-## Quick Start
+## Quick start
 
 ```bash
 pip install grace-orchestrator
 ```
 
 ```bash
-# Start API server (deployment concern; not a product CLI)
+# Start API server
 uvicorn grace_control.api.main:app --host 127.0.0.1 --port 8042
-# → http://127.0.0.1:8042
-
-# Terminal 2: Worker
-grace worker start
-
-# Terminal 3: Create plan
-echo 'title: Auth
-waves:
-  - title: Foundation
-    packets:
-      - title: Add JWT utils
-        scope: src/auth/jwt.py' > feature.yaml
-grace architect plan feature.yaml
-
-# Check progress
-grace packet list
-grace health
 ```
 
-## API Endpoints (9)
+## Documentation
 
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | /api/features/ | List features |
-| GET | /api/features/{id} | Get feature |
-| GET | /api/packets/ | List packets (filter: ?state=ready) |
-| GET | /api/packets/{id} | Get packet + runs |
-| POST | /api/packets/claim | Worker claims packet (READY→RUNNING) |
-| POST | /api/packets/{id}/release | Worker releases (RUNNING→ACCEPTED/REJECTED/FAILED) |
-| POST | /api/packets/{id}/cancel | Cancel packet → CANCELLED |
-| POST | /api/packets/{id}/merge | Merge accepted → MERGED |
-| GET | /api/workers/ | List workers |
-| POST | /api/workers/register | Register worker |
-| POST | /api/workers/heartbeat | Worker heartbeat |
-| POST | /api/architect/plan | Create feature + waves + packets |
-| GET | /health | System health |
+See [`docs/README.md`](docs/README.md) for the full document index.
 
-## CLI Commands (6)
+Key docs:
+- [Architecture](docs/grace/ARCHITECTURE.md) — component layers
+- [API First Control Plane](docs/grace/API_FIRST_CONTROL_PLANE.md) — the canonical contract
+- [Configuration](docs/grace/CONFIGURATION.md) — env / `.grace/config.yaml` / defaults
+- [Execution Backends](docs/grace/EXECUTION_BACKENDS.md) — `api` / `mock` (legacy removed in W8)
+- [Execution Pipeline](docs/grace/EXECUTION_PIPELINE.md) — claim → execute → acceptance → merge
+- [State Machine](docs/grace/STATE_MACHINE.md) — packet state transitions
+- [Acceptance Pipeline](docs/grace/ACCEPTANCE_PIPELINE.md) — T0/T1/T2 + verifier + reviewer
+- [Trace & Observability](docs/grace/TRACE_AND_OBSERVABILITY.md) — trace API
+- [Testing Strategy](docs/grace/TESTING_STRATEGY.md) — test layers and conventions
+
+## OpenAPI
 
 ```bash
-grace architect plan <file>   # Create plan from YAML
-grace packet list              # Rich table with states
-grace packet get <id>          # Details + runs
-grace worker start             # Run worker loop
-grace api start                # Start API server
-grace health                   # System status
+curl http://127.0.0.1:8042/openapi.json
 ```
 
-## State Machine (8 states)
-
-```
-DRAFT → READY → RUNNING → ACCEPTED → MERGED
-                  ↓           ↓
-              REJECTED     MERGED (auto)
-                  ↓
-              READY (retry, max 3 attempts)
-```
-
-## DB Schema (7 tables)
-
-features, waves, packets, packet_runs, workers, leases, events — SQLite via SQLAlchemy.
-
-## Implemented Features
-
-- **MVP-0:** DB, state machine, adapter, API, worker, CLI, E2E
-- **Wave 1:** Auto-retry, cancellation, auto-merge
-- **Wave 3:** GRACE Canon checker, complexity router
-- **Wave 4:** DAG validator, scope conflict detector, parallel-safe claim
-- **Infra:** Structured JSONL logging, event audit trail, lease expiration checker
-
-## Tests
-
-```bash
-pytest tests/ --asyncio-mode=auto
-# 38 tests, 8.8s
-```
-
-## Project Structure
-
-```
-src/grace_control/
-├── db/schema.py              # 7 SQLAlchemy models
-├── core/
-│   ├── state_machine.py      # 8 states + transitions
-│   ├── packet_operations.py  # mark_ready/running/accepted/...
-│   ├── grace_canon.py        # Canon compliance checker
-│   ├── complexity_router.py  # FAST→CHEAP, STRICT→PREMIUM
-│   ├── dag_validator.py      # Cycle detection + scope conflicts
-│   ├── lease_manager.py      # Expired lease recovery
-│   ├── event_recorder.py     # Audit trail to events table
-│   ├── structured_logger.py  # JSONL logging + trace_context
-│   └── health.py             # System health check
-├── api/
-│   ├── main.py               # FastAPI app + lifespan + CORS
-│   └── routers/              # features, packets, workers, architect
-├── adapters/
-│   └── packet_executor.py    # DB packet → legacy run_e2e_packet
-├── worker/
-│   ├── api_client.py         # httpx-based API client
-│   └── worker.py             # claim→execute→release loop
-└── cli/main.py               # 6 CLI commands
-
-src/prefect_grace/            # Legacy execution engine (kept as-is)
-├── flows/                    # Prefect flows (compat-only)
-├── platform/                 # e2e_packet_runner, worktree_manager, etc.
-├── tasks/                    # codex_launcher, agent tools
-└── prefect_compat.py         # No-op decorators when Prefect unavailable
-
-grace/packets/                # 14 control packet specifications
-tests/                        # 38 tests across 7 test files
-```
-
-## Configuration
-
-- `CANONICAL_DECISIONS.md` — single source of truth
-- `docs/openapi.json` — auto-generated API contract (regenerate with `make docs`)
-- `docs/state-diagram.md` / `docs/packet-states.md` — packet state machine
-- `tasks/README.md` — task specifications (REVISED)
-- Environment: `GRACE_DB_URL` (sqlite:///grace.db), `GRACE_API_PORT` (8042)
-- `GRACE_EXECUTION_BACKEND` — `legacy` (default) or `new` (stub) — see `grace_control.agent.select_backend`
+The OpenAPI document is the canonical runtime contract.
 
 ## License
 
