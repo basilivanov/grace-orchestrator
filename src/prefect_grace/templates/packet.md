@@ -47,7 +47,7 @@
 - **Блоки**: `#START_BLOCK_<NAME>` / `#END_BLOCK_<NAME>` для логических секций
 - **Лимиты**: файл ≤ 1000 строк, функция ≤ 4000 токенов
 - **Логирование**: `log_event()` вместо `print()`, `trace_context()` для сквозного trace_id
-- **T0-проверка**: `ruff check`, `ruff format --check`, `mypy`, `compileall` — все должны проходить
+- **T0-проверка**: `python3 scripts/grace_lint.py` (Канон), `python3 -m ruff check src/` — обе должны проходить (T0 жестко прописан в пайплайне, не переопределяется архитектором)
 
 ## Required Design Decisions
 

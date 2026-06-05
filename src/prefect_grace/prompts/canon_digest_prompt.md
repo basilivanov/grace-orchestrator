@@ -143,12 +143,11 @@ with trace_context(trace_id=packet_id):
 ## 9. Проверка перед коммитом (T0)
 
 ```bash
-ruff check src/grace_control/
-ruff format --check src/grace_control/
-mypy src/grace_control/
-python -m compileall -q src/grace_control/
+python3 scripts/grace_lint.py
+python3 -m ruff check src/
 ```
 
+T0 жестко прописан в пайплайне — запускается всегда, не переопределяется архитектором.
 Если любая команда падает → пакет не проходит T0 → REJECT.
 
 ---
@@ -162,8 +161,8 @@ python -m compileall -q src/grace_control/
 - [ ] START_BLOCK_*/END_BLOCK_* — все пары сходятся
 - [ ] Файл ≤ 1000 строк
 - [ ] Функция ≤ 4000 токенов
-- [ ] `ruff check` чисто
-- [ ] `mypy` чисто
+- [ ] `python3 scripts/grace_lint.py` чисто (Канон)
+- [ ] `python3 -m ruff check src/` чисто
 - [ ] `log_event()` вместо `print()`/`logging.getLogger()`
 - [ ] `trace_context(trace_id=packet_id)` обёрнут вокруг основного вызова
 - [ ] `packet_id` во всех log_event вызовах
