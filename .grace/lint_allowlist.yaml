@@ -14,10 +14,6 @@ rules:
     reason: os.environ.setdefault for sandbox bypass — to be handled in settings
     expires_wave: W12
   - rule: GRC101
-    path: src/grace_control/adapters/packet_executor.py
-    reason: _git_worktree_cleanup shells out to git worktree prune/remove
-    expires_wave: W12
-  - rule: GRC101
     path: src/grace_control/core/llm_runner.py
     reason: subprocess to spawn agent process
     expires_wave: W12

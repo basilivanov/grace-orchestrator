@@ -134,15 +134,15 @@ def test_packet_executor_uses_worktree_inspector_and_agent_commit(monkeypatch):
 
     src = Path(pe.__file__).read_text()
 
-    # The PacketExecutionAdapter class must not have inline git subprocess
-    # calls in the main execute() path. (Legacy cleanup in _call_legacy_runner
-    # and _load_packet is allowed — those handle pre-pack git pruning.)
-    class_src = src.split("class PacketExecutionAdapter")[1]
-    execute_src = class_src.split("def execute")[1].split("def _load_packet")[0]
-    assert 'subprocess.run(["git"' not in execute_src
+    # The entire packet_executor.py file must have no subprocess.run or
+    # import subprocess. All git cleanup lives in WorktreeCleanupService.
+    assert "import subprocess" not in src
+    assert "subprocess.run" not in src
+    assert "import shutil" not in src
     # The helpers ARE imported.
     assert "from grace_control.services.worktree_inspector import WorktreeInspector" in src
     assert "from grace_control.services.agent_commit_service import AgentCommitService" in src
+    assert "from grace_control.services.worktree_cleanup_service import WorktreeCleanupService" in src
     # The legacy `_collect_changed_files` helper at module bottom is removed.
     assert "_collect_changed_files" not in src
 

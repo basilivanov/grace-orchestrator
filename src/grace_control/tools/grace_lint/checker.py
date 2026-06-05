@@ -307,7 +307,7 @@ def _check_env(content: str, path: str, al: dict) -> list[Violation]:
     return violations
 
 
-ALLOWED_SUBPROCESS = {"services/git_service.py", "services/", "scripts/", "tests/"}
+ALLOWED_SUBPROCESS = {"services/git_service.py", "services/worktree_cleanup_service.py", "scripts/", "tests/"}
 
 
 def _check_subprocess(content: str, path: str, al: dict) -> list[Violation]:

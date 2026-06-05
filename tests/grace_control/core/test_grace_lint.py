@@ -146,6 +146,13 @@ def test_grc101_subprocess_allowed_in_tests():
     assert not any(v.code == "GRC101" for v in vs)
 
 
+def test_grc101_subprocess_in_arbitrary_service_fails():
+    """GRC101 now catches import subprocess in any service/ not in the allowlist."""
+    src = "import subprocess\nresult = subprocess.run(['git', 'status'])\n"
+    vs = _v(src, path="src/grace_control/services/foo_service.py")
+    assert any(v.code == "GRC101" for v in vs)
+
+
 # ── GRC102: prefect_grace ────────────────────────────────────────────────
 
 

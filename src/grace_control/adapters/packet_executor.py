@@ -24,6 +24,7 @@ from grace_control.core.structured_logger import GraceLogger
 from grace_control.db import get_db
 from grace_control.db.schema import Packet, PacketRun
 from grace_control.services.agent_commit_service import AgentCommitService
+from grace_control.services.worktree_cleanup_service import WorktreeCleanupService
 from grace_control.services.worktree_inspector import WorktreeInspector
 _log = GraceLogger("adapter")
 
@@ -35,18 +36,6 @@ class ExecutionResult(BaseModel):
     commit_sha: str = ""
 
 
-def _git_worktree_cleanup(project_root: Path, slug: str) -> None:
-    import subprocess, shutil
-    wt = project_root / slug
-    try:
-        subprocess.run(["git","-C",str(project_root),"worktree","prune"],capture_output=True,timeout=10)
-        if wt.exists():
-            subprocess.run(["git","-C",str(project_root),"worktree","remove",str(wt),"--force"],capture_output=True,timeout=10)
-            shutil.rmtree(wt,ignore_errors=True)
-        subprocess.run(["git","-C",str(project_root),"branch","-D",f"agent/{slug}"],capture_output=True,timeout=10)
-    except: pass
-
-
 class PacketExecutionAdapter:
     def __init__(self, project_root: Path, state_root: Path, worktree_root: Path,
                  backend: "ExecutionBackend | None" = None):
@@ -56,6 +45,7 @@ class PacketExecutionAdapter:
         from grace_control.services.evidence_service import EvidenceService
         self._materializer = PacketMaterializer(); self._evidence = EvidenceService(db_factory=get_db)
         self._inspector = WorktreeInspector(); self._committer = AgentCommitService()
+        self._worktree_cleanup = WorktreeCleanupService()
 
     async def execute(self, packet_id: str, worker_id: str) -> ExecutionResult:
         start = time.time(); _log.info("adapter_execute_start", packet_id=packet_id, worker_id=worker_id)
@@ -101,7 +91,7 @@ class PacketExecutionAdapter:
             p = db.query(Packet).filter_by(id=packet_id).first()
             if not p: raise ValueError(f"Packet {packet_id} not found")
             rn = p.attempt_count; rid = f"{packet_id}-R{rn:02d}"; slug = f"attempt-{rn:04d}"
-            _git_worktree_cleanup(self.project_root, f"{packet_id}-{slug}")
+            self._worktree_cleanup.cleanup_attempt(self.project_root, f"{packet_id}-{slug}")
             ex = db.query(PacketRun).filter_by(id=rid).first()
             if ex: ex.status = "running"; ex.started_at = datetime.now(timezone.utc)
             else: db.add(PacketRun(id=rid, packet_id=packet_id, run_number=rn, worker_id=worker_id, status="running", started_at=datetime.now(timezone.utc)))
@@ -233,7 +223,7 @@ class PacketExecutionAdapter:
                 "packet_path":str(packet_path),"allowed_write_scope":eff or [],"frozen_scope":packet_contract.frozen_scope or [],"depends_on":[]}
             rf.write_text(yaml.dump(ex, default_flow_style=False))
         except: pass
-        _git_worktree_cleanup(self.project_root, f"{pid}-{slug}")
+        self._worktree_cleanup.cleanup_attempt(self.project_root, f"{pid}-{slug}")
         from grace_control.config.settings import settings
         req = ExecutionRequest(packet_id=pid,
             spec={"attempt_count":attempt,"base_ref":base_ref,"allowed_write_scope":eff or [],"frozen_scope":packet_contract.frozen_scope or []},
