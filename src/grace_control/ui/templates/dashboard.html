@@ -1,5 +1,5 @@
 <!doctype html><html lang=en><meta charset=UTF-8><meta name=viewport content="width=device-width,initial-scale=1">
-<title>GRACE</title>
+<title>GRACE Mission Control Center</title>
 <script>
   let currentTheme = localStorage.getItem('grace-theme') || 'dark';
   if (currentTheme === 'light') document.documentElement.setAttribute('data-theme', 'light');
@@ -10,8 +10,8 @@
   --bg:#0d1117;--fg:#c9d1d9;--accent:#58a6ff;
   --g:#3fb950;--r:#f85149;--y:#d2991d;--b:#58a6ff;--c:#39d353;
   --gr:#8b949e;--bd:#30363d;--card:#161b22;--hvr:#1c2533;--dt:#21262d;
-  --ready:#238636;--running:#9e6a03;--accepted:#1f6feb;--merged:#2ea043;
-  --rejected:#da3633;--failed:#f85149;--cancelled:#6e7681;
+  --draft:#6e7681;--ready:#238636;--running:#9e6a03;--accepted:#1f6feb;--merged:#2ea043;
+  --rejected:#da3633;--failed:#f85149;--blocked:#8b5cf6;--cancelled:#6e7681;
   --font:-apple-system,BlinkMacSystemFont,sans-serif;
   --mono:SFMono-Regular,Consolas,monospace;
 }
@@ -19,8 +19,8 @@
   --bg:#ffffff;--fg:#24292f;--accent:#0969da;
   --g:#1a7f37;--r:#cf222e;--y:#9a6700;--b:#0969da;--c:#1a7f37;
   --gr:#57606a;--bd:#d0d7de;--card:#f6f8fa;--hvr:#eaeef2;--dt:#ddf4ff;
-  --ready:#2da44e;--running:#bf8700;--accepted:#0969da;--merged:#2da44e;
-  --rejected:#cf222e;--failed:#cf222e;--cancelled:#57606a;
+  --draft:#57606a;--ready:#2da44e;--running:#bf8700;--accepted:#0969da;--merged:#2da44e;
+  --rejected:#cf222e;--failed:#cf222e;--blocked:#8250df;--cancelled:#57606a;
 }
 *{box-sizing:border-box;margin:0;padding:0}
 body{font:14px/1.5 var(--font);background:var(--bg);color:var(--fg);overflow:hidden;height:100vh}
@@ -131,7 +131,7 @@ body{font:14px/1.5 var(--font);background:var(--bg);color:var(--fg);overflow:hid
 </style>
 
 <div class=hdr>
-  <span class=logo>GRACE</span>
+  <span class=logo>GRACE Mission Control Center</span>
   <span class=stat id=s-ready><span class=dot style=background:var(--ready)></span><span class=val>0</span> Ready</span>
   <span class=stat id=s-running><span class=dot style=background:var(--running)></span><span class=val>0</span> Running</span>
   <span class=stat id=s-merged><span class=dot style=background:var(--merged)></span><span class=val>0</span> Merged</span>
@@ -175,12 +175,14 @@ body{font:14px/1.5 var(--font);background:var(--bg);color:var(--fg);overflow:hid
 <div class=legend id=leg>
   <button class=leg-close onclick=toggleLegend()>×</button>
   <h3 style=margin-bottom:8px>Status Legend</h3>
+  <div class=leg-item><span class=leg-dot style=background:var(--draft)></span> Draft — initial state</div>
   <div class=leg-item><span class=leg-dot style=background:var(--ready)></span> Ready — waiting to start</div>
   <div class=leg-item><span class=leg-dot style=background:var(--running)></span> Running — executing now</div>
   <div class=leg-item><span class=leg-dot style=background:var(--accepted)></span> Accepted — passed acceptance</div>
   <div class=leg-item><span class=leg-dot style=background:var(--merged)></span> Merged — changes merged</div>
   <div class=leg-item><span class=leg-dot style=background:var(--rejected)></span> Rejected — didn't pass</div>
   <div class=leg-item><span class=leg-dot style=background:var(--failed)></span> Failed — execution error</div>
+  <div class=leg-item><span class=leg-dot style=background:var(--blocked)></span> Blocked — waiting on dependency</div>
   <div class=leg-item><span class=leg-dot style=background:var(--cancelled)></span> Cancelled — stopped</div>
 </div>
 
@@ -198,7 +200,10 @@ function toggleTheme() {
   localStorage.setItem('grace-theme', currentTheme);
 }
 
-const STY={ready:{bg:'var(--ready)',label:'Ready'},running:{bg:'var(--running)',label:'Running'},accepted:{bg:'var(--accepted)',label:'Accepted'},merged:{bg:'var(--merged)',label:'Merged'},rejected:{bg:'var(--rejected)',label:'Rejected'},failed:{bg:'var(--failed)',label:'Failed'},cancelled:{bg:'var(--cancelled)',label:'Cancelled'}};
+const STY={draft:{bg:'var(--draft)',label:'Draft'},ready:{bg:'var(--ready)',label:'Ready'},running:{bg:'var(--running)',label:'Running'},accepted:{bg:'var(--accepted)',label:'Accepted'},merged:{bg:'var(--merged)',label:'Merged'},rejected:{bg:'var(--rejected)',label:'Rejected'},failed:{bg:'var(--failed)',label:'Failed'},blocked:{bg:'var(--blocked)',label:'Blocked'},cancelled:{bg:'var(--cancelled)',label:'Cancelled'}};
+const EVT_LABELS={packet_claimed:'Packet claimed by worker',packet_released:'Packet released',packet_cancelled:'Packet cancelled',packet_merge_failed:'Merge failed',packet_merged:'Packet merged',recovery_classified:'Recovery classified failure',recovery_retry_same_coder:'Recovery: retry same coder',recovery_switch_coder:'Recovery: switch coder',recovery_return_to_architect:'Recovery: return to architect',recovery_escalate_architect:'Recovery: escalate architect',recovery_retry_verifier:'Recovery: retry verifier',recovery_retry_reviewer:'Recovery: retry reviewer',recovery_retry_merge:'Recovery: retry merge',recovery_block_feature:'Recovery: block feature',recovery_no_action:'Recovery: no action',recovery_new_architect:'Recovery: switch architect',self_evolution_update:'Self-evolution update'};
+function fmtDur(ms){if(!ms||ms<0)return'';const s=Math.floor(ms/1000);const m=Math.floor(s/60);const h=Math.floor(m/60);if(h>0)return h+'h '+m%60+'m';if(m>0)return m+'m '+s%60+'s';return s+'s'}
+function fmtDurSec(sec){if(!sec||sec<0)return'';const m=Math.floor(sec/60);const h=Math.floor(m/60);if(h>0)return h+'h '+m%60+'m';if(m>0)return m+'m '+sec%60+'s';return sec+'s'}
 let data={features:[],workers:[],stats:{}},selFid=null,selPid=null,actTab='ov',lastPktState={},ws,mobile=window.innerWidth<700;
 
 function $(id){return document.getElementById(id)}
@@ -288,30 +293,31 @@ function selPacket(pid){
 }
 function renderOverview(d,s){
   const lr=d.runs&&d.runs.length?d.runs[d.runs.length-1]:null;
-  const next=d.state==='ready'?'Worker claim':d.state==='running'?'Agent executing':d.state==='accepted'?'Auto-merge':d.state==='failed'?'Manual retry':d.state==='rejected'?'Auto-retry':'Complete';
+  const NEXT_ACTIONS={ready:'Waiting for worker claim',running:'Agent executing',accepted:'Ready to merge',merged:'Complete',failed:'Needs manual/recovery decision',rejected:'Can retry / recovery may decide',blocked:'Blocked, inspect reason',cancelled:'Cancelled'};
+  const next=NEXT_ACTIONS[d.state]||'Complete';
   return `<div style=font-size:12px;line-height:2>
     <b>Status:</b> <span style=color:${s.bg}>${s.label}</span><br>
-    ${lr?`<b>Last run:</b> ${lr.status}${lr.duration_ms?` · ${(lr.duration_ms/1000).toFixed(1)}s`:''}<br>`:''}
+    ${lr?`<b>Last run:</b> ${lr.status}${lr.duration_ms?` · ${fmtDur(lr.duration_ms)}`:''}<br>`:''}
     ${lr&&lr.evidence_path?`<b>Evidence:</b> <span style=font-family:var(--mono);font-size:10px>${lr.evidence_path}</span><br>`:''}
     <b>Runs:</b> ${d.runs?d.runs.length:0} &nbsp; <b>Next:</b> ${next}
   </div>
   ${d.recovery?`<div class=recovery-section style="margin-top:8px;padding:8px;background:var(--card);border-radius:6px;border:1px solid var(--bd)">
     <b style=font-size:11px>Recovery</b>
     <div style=font-size:11px;margin-top:4px>
-      <span class=badge style="display:inline-block;padding:2px 6px;border-radius:3px;background:var(--y)20;color:var(--y);font-size:10px;font-weight:600">${d.recovery.failureClass||'none'}</span>
+      <span class=badge style="display:inline-block;padding:2px 6px;border-radius:3px;background:var(--y)20;color:var(--y);font-size:10px;font-weight:600">${d.recovery.failure_class||'none'}</span>
       <span style=margin-left:4px>${d.recovery.action||'-'}</span>
     </div>
     <div style=font-size:10px;color:var(--gr);margin-top:2px>${d.recovery.reason||''}</div>
     <div style=font-size:10px;color:var(--gr);margin-top:2px>
-      ${d.recovery.currentExecutorId||'?'} → ${d.recovery.nextExecutorHint||'?'}
+      ${d.recovery.current_executor_id||'?'} → ${d.recovery.next_executor_hint||'?'}
     </div>
-  </div>`:''}`;
+  </div>`:'<div style="margin-top:8px;padding:8px;border-radius:6px;border:1px solid var(--bd)"><b style=font-size:11px>Recovery:</b> <span style=font-size:11px;color:var(--gr)>none</span></div>'}`;
 }
 function renderRuns(d){
   if(!d.runs||!d.runs.length)return'<div class=empt>No runs</div>';
   return d.runs.map(r=>`<div class=run-card onclick="loadRunArts('${d.id}','${r.id}')">
     <b>Run ${r.run_number}</b> <span style=color:${STY[r.status]?.bg||'var(--gr)'}>${r.status}</span>
-    ${r.duration_ms?` · ${(r.duration_ms/1000).toFixed(1)}s`:''}
+    ${r.duration_ms?` · ${fmtDur(r.duration_ms)}`:''}
     ${r.evidence_path?`<br><span style=font-size:10px;color:var(--gr)>${r.evidence_path}</span>`:''}
   </div>`).join('');
 }
@@ -322,29 +328,34 @@ async function renderInspector(pid){
     const s=STY[d.state]||{bg:'var(--gr)',label:d.state};
     const ct = d.created_at ? new Date(d.created_at).toLocaleString() : '?';
     const ut = d.updated_at ? new Date(d.updated_at).toLocaleString() : '?';
-    const dur = d.created_at && d.updated_at ? ((new Date(d.updated_at)-new Date(d.created_at))/1000).toFixed(0) : '?';
+    const dur = d.created_at && d.updated_at ? ((new Date(d.updated_at)-new Date(d.created_at))/1000) : null;
+    const updatedAgo = d.updated_at ? ((Date.now()-new Date(d.updated_at))/1000) : null;
     h+=`<h3>${d.title||'Packet'}</h3>
     <span class=state-badge style="background:${s.bg}20;color:${s.bg};border:1px solid ${s.bg}40">${s.label}</span>
     <div class=meta>
       <b>UID:</b> <span style=font-family:var(--mono);font-size:10px>${d.id}</span> <button class=copy-btn onclick="navigator.clipboard.writeText('${d.id}')">copy</button><br>
       <b>Attempt:</b> ${d.attempt_count}/${d.max_attempts} &nbsp; <b>Profile:</b> ${d.acceptance_profile}<br>
-      <b>Created:</b> ${ct} &nbsp; <b>Life:</b> ${dur}s<br>
+      <b>Created:</b> ${ct} &nbsp; <b>Age:</b> ${dur?fmtDurSec(dur):'?'}${updatedAgo?` &nbsp; <b>Updated after:</b> ${fmtDurSec(updatedAgo)}`:''}<br>
       <b>Feature:</b> <span style=font-family:var(--mono);font-size:10px>${d.feature_id}</span> <button class=copy-btn onclick="navigator.clipboard.writeText('${d.feature_id}')">copy</button><br>
       <b>Wave:</b> <span style=font-family:var(--mono);font-size:10px>${d.wave_id}</span>
     </div>`;
 
-    // Timeline
-    const phases=['ready','claimed','running','evidence','accepted','merged'];
-    const idx=phases.indexOf(d.state);
-    const activeIdx=idx>=0?idx:(d.state==='rejected'||d.state==='cancelled'?4:d.state==='failed'?3:0);
+    // Timeline — real packet states
+    const mainPhases=['draft','ready','running','accepted','merged'];
+    const terminalPhases=['rejected','blocked','failed','cancelled'];
+    const idx=mainPhases.indexOf(d.state);
+    const isTerminal=terminalPhases.includes(d.state);
     h+='<div class=tl>';
-    phases.forEach((ph,i)=>{
+    mainPhases.forEach((ph,i)=>{
       let cls='next';
-      if(i<activeIdx&&d.state!=='failed'&&d.state!=='rejected'&&d.state!=='cancelled')cls='done';
-      if(i===activeIdx&&d.state!=='failed'&&d.state!=='rejected'&&d.state!=='cancelled')cls='now';
-      if((d.state==='failed'||d.state==='rejected'||d.state==='cancelled')&&i===activeIdx)cls='fail';
+      if(i<idx)cls='done';
+      if(i===idx&&!isTerminal)cls='now';
+      if(i===idx&&isTerminal)cls='fail';
       h+=`<div class="tl-step ${cls}"><span class=tl-dot></span><span class=tl-label>${ph}</span></div>`;
     });
+    if(isTerminal){
+      h+=`<div class="tl-step fail"><span class=tl-dot></span><span class=tl-label>${d.state}</span></div>`;
+    }
     h+='</div>';
 
     // Tabs + content
@@ -380,16 +391,35 @@ async function loadEvents(pid){
   const el=$('tc-events');el.innerHTML='Loading...';
   const r=await fetch(`/api/events?entity_type=packet&entity_id=${pid}`);
   const evs=(await r.json()).data;
-  el.innerHTML=evs.length?`<div class=ev-list>${evs.map(e=>`<div class=ev-item><span class=ev-time>${new Date(e.timestamp).toLocaleTimeString()}</span><span class=ev-type>${e.event_type}</span><div><span class=ev-detail>${JSON.stringify(e.payload||{}).slice(0,120)}</span><br><span class=ev-raw>${e.trace_id||''}</span></div></div>`).join('')}</div>`:'<div class=empt>No events yet</div>';
+  el.innerHTML=evs.length?`<div class=ev-list>${evs.map(e=>`<div class=ev-item><span class=ev-time>${new Date(e.timestamp).toLocaleTimeString()}</span><span class=ev-type>${EVT_LABELS[e.event_type]||e.event_type}</span><div><span class=ev-detail>${JSON.stringify(e.payload||{}).slice(0,120)}</span><br><span class=ev-raw>${e.trace_id||''}</span></div></div>`).join('')}</div>`:'<div class=empt>No events yet</div>';
+}
+const TEXT_EXTS=['log','txt','json','md','py','yaml','yml'];
+function isTextFile(name){const e=name.split('.').pop();return TEXT_EXTS.includes(e)}
+function artIcon(f){
+  if(f.type==='image')return'🖼';
+  if(f.type==='log')return'📄';
+  return'📋';
+}
+function artClickHandler(pid,runId,f){
+  if(isTextFile(f.name)){
+    return 'viewArt(\''+pid+'\',\''+runId+'\',\''+f.name+'\')';
+  }
+  return 'showArtMeta(\''+pid+'\',\''+runId+'\',\''+f.name+'\','+f.size+')';
+}
+function artItem(pid,runId,f){
+  return '<div class=art-item onclick="'+artClickHandler(pid,runId,f)+'">'+artIcon(f)+' '+f.name+' <span style=color:var(--gr);font-size:10px>'+(f.size/1024).toFixed(1)+'KB</span></div>';
 }
 async function loadRunArts(pid,runId){
   const el=$('tc-arts');el.style.display='block';
   try{
-    const r=await fetch(`/api/packets/${pid}/runs/${runId}/artifacts`);
+    const r=await fetch('/api/packets/'+pid+'/runs/'+runId+'/artifacts');
     const files=(await r.json()).data;
     if(!files.length){el.innerHTML='<div class=empt>No artifacts</div>';return}
-    el.innerHTML=`<div>${files.map(f=>`<div class=art-item onclick="viewArt('${pid}','${runId}','${f.name}')">${f.type==='image'?'🖼':f.type==='log'?'📄':'📋'} ${f.name} <span style=color:var(--gr);font-size:10px>${(f.size/1024).toFixed(1)}KB</span></div>`).join('')}</div>`;
+    el.innerHTML='<div>'+files.map(function(f){return artItem(pid,runId,f)}).join('')+'</div>';
   }catch(e){el.innerHTML='<div class=empt>Error</div>'}
+}
+function showArtMeta(pid,runId,path,size){
+  $('tc-arts').innerHTML=`<div style="font-size:11px;color:var(--gr);margin-bottom:8px">📄 ${path} · ${(size/1024).toFixed(1)}KB <a href="#" onclick="loadRunArts('${pid}','${runId}')" style=color:var(--accent)>← back</a></div><div class=empt>Preview is not available for this file type yet</div>`;
 }
 async function viewArt(pid,runId,path){
   const r=await fetch(`/api/packets/${pid}/runs/${runId}/artifacts/file?path=${encodeURIComponent(path)}&tail=200`);
@@ -439,7 +469,7 @@ async function loadSESessions(){
     var sc=data.data||[];
     if(!sc.length){$('se-list').innerHTML='<div class=empt>No self-evolution sessions yet</div>';return}
     $('se-list').innerHTML=sc.map(s=>{
-      var clr='var(--y)';if(s.status==='done')clr='var(--g)';if(s.status==='failed'||s.status==='cancelled')clr='var(--r)';
+      var clr='var(--y)';if(s.status==='completed')clr='var(--g)';if(s.status==='executed')clr='var(--y)';if(s.status==='failed'||s.status==='cancelled')clr='var(--r)';
       return `<div style="border:1px solid var(--bd);border-radius:6px;padding:10px;margin-bottom:8px">
         <div style=display:flex;justify-content:space-between;align-items:center>
           <b style=font-size:13px>${s.title}</b>
@@ -449,7 +479,7 @@ async function loadSESessions(){
         ${s.feature_id?`<div style="font-size:11px;color:var(--accent);margin-top:4px;cursor:pointer" onclick="toggleSelfEvolve();selFeature('${s.feature_id}')">→ View Feature</div>`:''}
         ${s.error?`<div style="font-size:11px;color:var(--r);margin-top:4px">${s.error}</div>`:''}
         ${s.context?`<div style="font-size:10px;color:var(--gr);margin-top:4px">Scope: ${(s.context.estimated_scope||[]).join(', ')||'?'} · Complexity: ${s.context.complexity_score||'?'}</div>`:''}
-        ${s.status!=='done'&&s.status!=='failed'&&s.status!=='cancelled'?`<button onclick="cancelSESession('${s.id}')" style="background:var(--r);color:#fff;border:none;padding:4px 10px;border-radius:4px;font-size:11px;margin-top:6px;cursor:pointer">Cancel</button>`:''}
+        ${s.status!=='completed'&&s.status!=='executed'&&s.status!=='failed'&&s.status!=='cancelled'?`<button onclick="cancelSESession('${s.id}')" style="background:var(--r);color:#fff;border:none;padding:4px 10px;border-radius:4px;font-size:11px;margin-top:6px;cursor:pointer">Cancel</button>`:''}
       </div>`;
     }).join('');
   }catch(e){$('se-list').innerHTML='<div class=empt>Error loading sessions</div>'}

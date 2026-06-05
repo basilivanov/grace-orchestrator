@@ -215,7 +215,7 @@ async def _warm_context(spec: dict, feature_id: str) -> dict:
             for s in pkt_spec.get("scope", []):
                 scope_paths.add(s)
 
-    scene = sorted(scope_paths) if scope_paths else ["src/grace_control/"]
+    scene = sorted(scope_paths) if scope_paths else (spec.get("constraints", {}).get("allowed_scope") or ["src/grace_control/"])
     # If task_desc references a specific file (e.g. docs/codex/tz-019-...md), include its directory
     if task_desc.endswith(".md") and "/" in task_desc:
         doc_dir = "/".join(task_desc.split("/")[:-1]) + "/"
@@ -243,6 +243,15 @@ async def _warm_context(spec: dict, feature_id: str) -> dict:
 
 async def _call_architect_llm(task: str, context: dict, feature_slug: str,
                               self_improvement: bool = False) -> dict:
+    tz_source = ""
+    for line in task.split("\n"):
+        candidate = line.strip()
+        if candidate.endswith(".md") and "/" in candidate:
+            tz_path = Path(candidate)
+            if tz_path.exists():
+                tz_source = tz_path.read_text()
+                task = task.replace(candidate, f"{candidate}\n\n=== TZ CONTENT ===\n{tz_source}\n=== END TZ ===")
+                break
     all_files = context.get("files", [])
     all_paths = "\n".join(f.get("path", f.get("path", "?")) for f in all_files[:60])
 
@@ -363,29 +372,26 @@ Respond ONLY with valid JSON (no markdown, no backticks):
         try:
             raw = await _run_opencode(prompt, resolve_model("architect")["model"])
             plan = json.loads(raw)
+            if "plan" in plan and isinstance(plan["plan"], dict) and plan["plan"].get("waves"):
+                plan["waves"] = plan["plan"]["waves"]
+            if "packets" in plan and not plan.get("waves"):
+                plan["waves"] = [{"title": "Phase 1", "packets": plan["packets"]}]
             if "waves" not in plan:
                 plan["waves"] = []
             for w in plan.get("waves", []):
                 if "packets" not in w:
                     w["packets"] = []
                 for pkt in w["packets"]:
-                    pkt.setdefault("scope", [])
+                    if pkt.get("scope") is None or not pkt.get("scope"):
+                        pkt["scope"] = []
                     pkt.setdefault("acceptance_profile", "NORMAL")
                     pkt.setdefault("depends_on", [])
 
+            any_packet = any(w.get("packets") for w in plan.get("waves", []))
             all_empty = all(not pkt.get("scope") for w in plan.get("waves", [])
                            for pkt in w.get("packets", []))
-            any_packet = any(w.get("packets") for w in plan.get("waves", []))
             if any_packet and all_empty:
-                file_paths = [f["path"] for f in context.get("files", [])]
-                if file_paths:
-                    for w in plan.get("waves", []):
-                        for pkt in w.get("packets", []):
-                            if not pkt.get("scope"):
-                                pkt["scope"] = file_paths[:3]
-                    _log.info("architect_scope_seeded", paths=len(file_paths))
-                else:
-                    raise RuntimeError("All packet scopes are empty — you must specify which files to modify")
+                raise RuntimeError("All packet scopes are empty — you must specify which files to modify")
 
             plan.setdefault("constraints", {"frozen_scope": ["src/prefect_grace/"]})
             plan.setdefault("verification", {"t0": [], "t1": [], "t2": []})
@@ -402,29 +408,7 @@ Respond ONLY with valid JSON (no markdown, no backticks):
 
 async def _run_opencode(prompt: str, model: str) -> str:
     from grace_control.core.llm_runner import run_llm
-    raw = await run_llm(prompt, role="architect", model=model, cli="opencode")
-
-    # Try direct JSON parse
-    for line in raw.split("\n"):
-        line = line.strip()
-        if line.startswith("{") and line.endswith("}"):
-            try:
-                json.loads(line)
-                return line
-            except Exception:
-                pass
-
-    # Try extract JSON block
-    m = _re.search(r"\{[\s\S]*\}", raw)
-    if m:
-        candidate = m.group(0)
-        try:
-            json.loads(candidate)
-            return candidate
-        except Exception:
-            pass
-
-    raise RuntimeError(f"Could not extract JSON from output (first 300): {raw[:300]}")
+    return await run_llm(prompt, role="architect", model=model, cli="opencode")
 
 
 def _slugify(text: str) -> str:

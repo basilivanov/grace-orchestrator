@@ -102,9 +102,59 @@ class AcceptancePipeline:
         self._runner = command_runner or CommandRunner(self._root)
         self._scope = scope_guard or ScopeGuard(self._root)
         self._evidence = evidence_collector or EvidenceCollector()
-        self._t0_commands: list[list[str]] = [
-            ["python", "-m", "py_compile", "src/grace_control/core/contracts.py"],
+        self._t0_command_template: list[list[str]] = [
+            ["python3", "scripts/grace_lint.py", "src/"],
+            ["python3", "-m", "ruff", "check", "src/"],
         ]
+
+    def _build_t0_commands(
+        self,
+        packet: ExecutionPacketContract,
+        changed_files: list[str],
+    ) -> list[list[str]]:
+        scope_paths = self._resolve_t0_scope_paths(packet, changed_files)
+        if not scope_paths:
+            return self._t0_command_template
+        return [
+            ["python3", "scripts/grace_lint.py"] + scope_paths,
+            ["python3", "-m", "ruff", "check"] + scope_paths,
+        ]
+
+    def _resolve_t0_scope_paths(
+        self,
+        packet: ExecutionPacketContract,
+        changed_files: list[str],
+    ) -> list[str]:
+        candidates: list[str] = []
+        seen: set[str] = set()
+
+        for raw in (packet.allowed_write_scope or []):
+            if not raw:
+                continue
+            if raw in seen:
+                continue
+            seen.add(raw)
+            candidates.append(raw)
+
+        if changed_files:
+            cwd = self._root
+            for f in changed_files:
+                if f in seen:
+                    continue
+                seen.add(f)
+                candidates.append(f)
+
+        existing: list[str] = []
+        for p in candidates:
+            abs_path = (self._root / p).resolve() if not Path(p).is_absolute() else Path(p)
+            try:
+                rel = abs_path.relative_to(cwd)
+            except ValueError:
+                rel = abs_path
+            if abs_path.exists():
+                existing.append(str(rel))
+
+        return existing
 
     def run(
         self,
@@ -233,10 +283,15 @@ class AcceptancePipeline:
                         commands=commands),
                     scope_violations=violations)
             # FAST/NORMAL: scope violations are warnings, not blockers
-        if "t0" in packet.verification:
-            t0_cmds = packet.verification.get("t0", []) or []
-        else:
-            t0_cmds = self._t0_commands
+
+        if not cf:
+            return _T0Result(
+                stage=StageResult(name=StageName.T0_SCOPE_AND_LINT,
+                    status=StageStatus.PASSED, summary="no changes to lint (empty diff)",
+                    blocking_issues=[], commands=[]),
+                scope_violations=violations)
+
+        t0_cmds = self._build_t0_commands(packet, cf)
 
         for cmd in t0_cmds:
             r = self._runner.run(cmd, output_dir=output_dir, cwd=cwd)

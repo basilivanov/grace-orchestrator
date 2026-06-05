@@ -67,3 +67,41 @@ async def _broadcast_recovery(event_type: str, data: dict):
     for ws in dead:
         if ws in _clients:
             _clients.remove(ws)
+
+# START_FUNCTION_CONTRACT
+# purpose: Broadcast packet cancellation to all connected WebSocket clients.
+# inputs: packet_id (str), reason (str)
+# returns: None
+# side_effects: Sends WebSocket messages, logs event.
+# error_behavior: Errors during sending are handled by broadcast_event.
+# END_FUNCTION_CONTRACT
+async def broadcast_packet_cancel(packet_id: str, reason: str = ""):
+    try:
+        from grace_control.core.structured_logger import log_event
+        log_event("ws_broadcast", {"action": "cancel", "packet_id": packet_id, "reason": reason})
+    except ImportError:
+        pass
+    await broadcast_event("state_change", {
+        "packet_id": packet_id,
+        "state": "cancelled",
+        "reason": reason
+    })
+
+# START_FUNCTION_CONTRACT
+# purpose: Broadcast packet merge to all connected WebSocket clients.
+# inputs: packet_id (str), commit_sha (str)
+# returns: None
+# side_effects: Sends WebSocket messages, logs event.
+# error_behavior: Errors during sending are handled by broadcast_event.
+# END_FUNCTION_CONTRACT
+async def broadcast_packet_merge(packet_id: str, commit_sha: str = ""):
+    try:
+        from grace_control.core.structured_logger import log_event
+        log_event("ws_broadcast", {"action": "merge", "packet_id": packet_id, "commit_sha": commit_sha})
+    except ImportError:
+        pass
+    await broadcast_event("state_change", {
+        "packet_id": packet_id,
+        "state": "merged",
+        "commit_sha": commit_sha
+    })

@@ -699,9 +699,7 @@ def _handle_error(e, json_out):
         console.print(f"[red]Error: {e}[/red]")
 
 
+cli.add_command(trace_cmd)
+
 if __name__ == "__main__":
     cli()
-
-
-# Register trace command
-cli.add_command(trace_cmd)

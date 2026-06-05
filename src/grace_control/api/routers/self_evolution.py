@@ -25,7 +25,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import subprocess
 import sys
@@ -34,14 +33,12 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-import yaml
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import JSONResponse
 
+from grace_control.api.ws_broadcast import broadcast_event
 from grace_control.core.context_collector import CodebaseContext, ContextCollector
 from grace_control.core.self_evolution_guard import SelfEvolutionGuard
 from grace_control.core.structured_logger import GraceLogger
-from grace_control.api.ws_broadcast import broadcast_event
 from grace_control.db import get_db
 from grace_control.db.schema import SelfEvolutionSession
 
@@ -133,7 +130,7 @@ async def cancel_session(session_id: str) -> dict:
         s = db.query(SelfEvolutionSession).filter_by(id=session_id).first()
         if not s:
             raise HTTPException(status_code=404, detail="Session not found")
-        if s.status in ("done", "failed", "cancelled"):
+        if s.status in ("completed", "executed", "failed", "cancelled"):
             raise HTTPException(status_code=400, detail=f"Cannot cancel terminal session: {s.status}")
         s.status = "cancelled"
         s.finished_at = datetime.utcnow()
@@ -170,6 +167,10 @@ async def _run_evolution(session_id: str, title: str, description: str, constrai
             s = db.query(SelfEvolutionSession).filter_by(id=session_id).first()
             if s:
                 s.status = "collecting_context"
+
+        session_dir = Path.cwd() / ".grace" / "sessions" / session_id
+        session_dir.mkdir(parents=True, exist_ok=True)
+        os.environ["GRACE_SESSION_DIR"] = str(session_dir)
 
         collector = ContextCollector()
         allowed = constraints.get("allowed_scope", ["src/grace_control/"])
@@ -318,7 +319,7 @@ asyncio.run(m())
 
 def _build_feature_spec(title: str, desc: str, scope: list[str], profile: str, session_id: str) -> dict:
     packets = []
-    for i, filepath in enumerate(scope, 1):
+    for filepath in scope:
         action = f"modify-{filepath.replace('/', '-').replace('.py', '').replace('_', '-')}"
         packets.append({
             "title": action,
