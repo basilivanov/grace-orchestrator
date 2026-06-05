@@ -9,17 +9,17 @@
 #          adapters.packet_executor.PacketExecutionAdapter. The choice is driven
 #          by grace_control.config.settings.execution_backend (env:
 #          GRACE_EXECUTION_BACKEND).
-# inputs: backend_name (str) — "legacy", "api", or "mock".
+# inputs: backend_name (str) — "api" or "mock".
 # returns: ExecutionBackend instance.
 # side_effects: Lazy-imports the chosen backend module on first call.
 # emitted_logs: backend_selected.
-# error_behavior: Raises ValueError for unknown backend names.
+# error_behavior: Raises ValueError for "legacy" (removed in W8) or any
+#                 unknown backend name.
 # END_MODULE_CONTRACT
 
 # START_MODULE_MAP
 # mapping:
 #   - function: select_backend
-#   - constant: BACKEND_LEGACY
 #   - constant: BACKEND_API
 #   - constant: BACKEND_MOCK
 # END_MODULE_MAP
@@ -31,32 +31,37 @@ from grace_control.core.structured_logger import GraceLogger
 
 _log = GraceLogger("agent")
 
-BACKEND_LEGACY = "legacy"
 BACKEND_API = "api"
 BACKEND_MOCK = "mock"
-# Back-compat alias kept for tests + downstream code.
-BACKEND_NEW = BACKEND_API
 
-_VALID = {BACKEND_LEGACY, BACKEND_API, BACKEND_MOCK}
+_VALID = {BACKEND_API, BACKEND_MOCK}
 
 
 def select_backend(backend_name: str = "") -> ExecutionBackend:
     """Return an ExecutionBackend instance for the given name.
 
     Args:
-        backend_name: One of "legacy" (wraps prefect_grace), "api"
-                      (delegates to AgentGatewayService), or "mock"
-                      (in-process, no subprocess). When backend_name is
-                      empty, reads
+        backend_name: One of "api" (delegates to AgentGatewayService) or
+                      "mock" (in-process, no subprocess). When
+                      backend_name is empty, reads
                       grace_control.config.settings.execution_backend
                       (env: GRACE_EXECUTION_BACKEND).
 
     Raises:
-        ValueError: if backend_name is not in {"legacy", "api", "mock"}.
+        ValueError: if backend_name is "legacy" (removed in W8) or any
+                    other unknown name.
     """
     if not backend_name:
         from grace_control.config.settings import settings as _settings
         backend_name = _settings.execution_backend
+
+    if backend_name == "legacy":
+        raise ValueError(
+            "execution_backend='legacy' was removed in W8 of "
+            "source/codex/tz-api-first-cleanup-waves-w0-w11.md. "
+            "Use 'api' or 'mock' instead. The historical prefect_grace "
+            "package is archived under docs/archived/legacy_prefect_grace/."
+        )
 
     if backend_name not in _VALID:
         raise ValueError(
@@ -64,14 +69,9 @@ def select_backend(backend_name: str = "") -> ExecutionBackend:
             f"Expected one of {sorted(_VALID)}."
         )
 
-    if backend_name == BACKEND_LEGACY:
-        # Lazy import keeps the legacy boundary isolated — no prefect_grace at
-        # module import time. Only the legacy_backend module imports it.
-        from grace_control.agent.legacy_backend import LegacyPrefectBackend
-        backend: ExecutionBackend = LegacyPrefectBackend()
-    elif backend_name == BACKEND_API:
+    if backend_name == BACKEND_API:
         from grace_control.agent.api_backend import ApiAgentBackend
-        backend = ApiAgentBackend()
+        backend: ExecutionBackend = ApiAgentBackend()
     else:  # mock
         from grace_control.agent.mock_backend import MockBackend
         backend = MockBackend()

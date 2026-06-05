@@ -489,7 +489,7 @@ async function launchSelfEvolve(){
   var desc=$('se-desc').value.trim();var profile=$('se-profile').value;var maxf=$('se-maxfiles').value;
   try{
     var r=await fetch('/api/self/evolve',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({title:title,description:desc||title,constraints:{acceptance_profile:profile,max_files:parseInt(maxf),allowed_scope:['src/grace_control/'],forbidden_scope:['src/prefect_grace/','tests/']}})});
+      body:JSON.stringify({title:title,description:desc||title,constraints:{acceptance_profile:profile,max_files:parseInt(maxf),allowed_scope:['src/grace_control/'],forbidden_scope:['docs/archived/legacy_prefect_grace/','tests/']}})});
     if(!r.ok){var e=await r.json();alert('Failed: '+(e.detail||r.status));return}
     var d=await r.json();
     $('se-title').value='';$('se-desc').value='';

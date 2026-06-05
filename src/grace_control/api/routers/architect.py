@@ -166,7 +166,7 @@ async def create_plan(request: dict) -> dict:
                 root_constraints = spec.get("constraints", {})
                 enriched_spec.setdefault("verification", root_verification)
                 enriched_spec.setdefault("frozen_scope",
-                    root_constraints.get("frozen_scope", ["src/prefect_grace/"]))
+                    root_constraints.get("frozen_scope", ["docs/archived/legacy_prefect_grace/"]))
 
                 if spec.get("self_improvement") or spec.get("origin") == "self_evolution":
                     enriched_spec.setdefault("origin", spec.get("origin", "self_evolution"))
@@ -359,7 +359,7 @@ Respond ONLY with valid JSON (no markdown, no backticks):
     }}
   ],
   "constraints": {{
-    "frozen_scope": ["src/prefect_grace/"],
+    "frozen_scope": ["docs/archived/legacy_prefect_grace/"],
     "forbidden_imports": [],
     "python_version": ">= 3.12"
   }},
@@ -395,7 +395,7 @@ Respond ONLY with valid JSON (no markdown, no backticks):
             if any_packet and all_empty:
                 raise RuntimeError("All packet scopes are empty — you must specify which files to modify")
 
-            plan.setdefault("constraints", {"frozen_scope": ["src/prefect_grace/"]})
+            plan.setdefault("constraints", {"frozen_scope": ["docs/archived/legacy_prefect_grace/"]})
             plan.setdefault("verification", {"t0": [], "t1": [], "t2": []})
             return plan
         except Exception as e:

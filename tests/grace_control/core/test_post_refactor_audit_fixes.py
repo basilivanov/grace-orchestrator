@@ -417,59 +417,7 @@ def test_p1_7_git_service_worktree_remove(tmp_path):
     assert str(wt) not in listed.stdout
 
 
-# ── P2#8: legacy_branch_name + legacy_prepare_worktree ─────────────────────
-
-
-def test_p2_8_legacy_branch_name_format():
-    """P2#8: branch format lives in legacy_backend, single source of truth."""
-    from grace_control.agent.legacy_backend import (
-        LEGACY_BRANCH_FORMAT,
-        legacy_branch_name,
-    )
-    assert legacy_branch_name("pkt-1", "attempt-0001") == "agent/default/pkt-1/attempt-0001"
-    assert LEGACY_BRANCH_FORMAT == "agent/default/{packet_id}/{attempt_slug}"
-
-    # packet_materializer still re-exports it for back-compat.
-    from grace_control.services.packet_materializer import BRANCH_FORMAT
-    assert BRANCH_FORMAT == LEGACY_BRANCH_FORMAT
-
-
-def test_p2_8_legacy_prepare_worktree_idempotent(tmp_path):
-    """legacy_prepare_worktree never raises on missing worktree/branch."""
-    from grace_control.agent.legacy_backend import legacy_prepare_worktree
-    project_root = tmp_path / "project"
-    project_root.mkdir()
-    # No git init — function must still complete without raising.
-    wt_path, branch = legacy_prepare_worktree(project_root, "p-1", "attempt-0001")
-    assert wt_path == project_root / "p-1-attempt-0001"
-    assert branch == "agent/default/p-1/attempt-0001"
-
-
-# ── P2#9: LegacyPrefectBackend forwards request.spec.base_ref ──────────────
-
-
-def test_p2_9_legacy_backend_forwards_base_ref():
-    """LegacyPrefectBackend must forward request.spec.base_ref (P2#9)."""
-    from grace_control.agent.backend import ExecutionRequest
-    from grace_control.agent.legacy_backend import LegacyPrefectBackend
-
-    fake_e2e = MagicMock(ok=True, domain_status="accepted", worktree_path="/tmp/wt",
-                        branch_name="agent/p/1", errors=[], registry_reason="")
-
-    with patch("grace_control.agent.legacy_backend.run_e2e_packet", return_value=fake_e2e) as mock_run:
-        backend = LegacyPrefectBackend()
-        asyncio.run(backend.run(ExecutionRequest(
-            packet_id="p-1", spec={"base_ref": "main", "attempt_count": 1},
-            worktree_path=Path("/tmp/wt"), branch_name="agent/p/1", timeout_s=10,
-        )))
-
-    # base_ref= kwarg must be passed through, not hard-coded to "HEAD".
-    assert mock_run.called
-    _, kwargs = mock_run.call_args
-    assert kwargs.get("base_ref") == "main"
-
-
-# ── P2#10: settings.* used in api/main.py + packet_executor.py ─────────────
+# ── P2#8+9 removed in W8 (legacy_backend deleted) ────────────────────────────
 
 
 def test_p2_10_settings_used_in_main_lifespan(monkeypatch):

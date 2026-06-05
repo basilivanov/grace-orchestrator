@@ -1,46 +1,34 @@
 """Tests for grace_control.agent.select_backend() — settings-driven backend selection.
 
-W7: `BACKEND_NEW` is now an alias for `BACKEND_API`; `NewDirectBackend` is
-retained as a thin compatibility shim that returns the new
-ApiAgentBackend (or a stub, see note in `__init__.py`).
+W7: added 'api' and 'mock' backends; W8: removed 'legacy' (raises ValueError).
 """
 import pytest
 
 from grace_control.agent import (
     BACKEND_API,
-    BACKEND_LEGACY,
     BACKEND_MOCK,
-    BACKEND_NEW,
     select_backend,
 )
 from grace_control.agent.api_backend import ApiAgentBackend
-from grace_control.agent.legacy_backend import LegacyPrefectBackend
 from grace_control.agent.mock_backend import MockBackend
 
 
-def test_select_backend_legacy_returns_legacy():
-    """Explicit 'legacy' name returns LegacyPrefectBackend."""
-    backend = select_backend(BACKEND_LEGACY)
-    assert isinstance(backend, LegacyPrefectBackend)
+def test_select_backend_legacy_raises_value_error():
+    """W8: 'legacy' backend was removed — must raise ValueError."""
+    with pytest.raises(ValueError, match="removed in W8"):
+        select_backend("legacy")
 
 
 def test_select_backend_api_returns_api():
-    """Explicit 'api' name returns ApiAgentBackend. W7."""
+    """Explicit 'api' name returns ApiAgentBackend."""
     backend = select_backend(BACKEND_API)
     assert isinstance(backend, ApiAgentBackend)
 
 
 def test_select_backend_mock_returns_mock():
-    """Explicit 'mock' name returns MockBackend. W7."""
+    """Explicit 'mock' name returns MockBackend."""
     backend = select_backend(BACKEND_MOCK)
     assert isinstance(backend, MockBackend)
-
-
-def test_select_backend_new_is_alias_for_api():
-    """BACKEND_NEW == BACKEND_API (back-compat alias). W7."""
-    assert BACKEND_NEW == BACKEND_API
-    assert select_backend(BACKEND_NEW) is select_backend(BACKEND_API) or \
-        isinstance(select_backend(BACKEND_NEW), ApiAgentBackend)
 
 
 def test_select_backend_unknown_raises():
@@ -56,10 +44,6 @@ def test_select_backend_default_reads_settings(monkeypatch):
     monkeypatch.setattr(cfg, "execution_backend", BACKEND_API)
     backend = select_backend()
     assert isinstance(backend, ApiAgentBackend)
-
-    monkeypatch.setattr(cfg, "execution_backend", BACKEND_LEGACY)
-    backend = select_backend()
-    assert isinstance(backend, LegacyPrefectBackend)
 
     monkeypatch.setattr(cfg, "execution_backend", BACKEND_MOCK)
     backend = select_backend()

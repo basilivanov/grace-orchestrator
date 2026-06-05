@@ -32,6 +32,22 @@ class _FakeLegacyResult:
                 "worktree_path": self.worktree_path, "branch_name": self.branch_name}
 
 
+class _FakeBackend:
+    """W8: tests pass a fake backend in instead of selecting the (removed) legacy one."""
+    def __init__(self, worktree_path=None, ok=True):
+        self._wt = worktree_path
+        self._ok = ok
+
+    async def run(self, request):
+        return _FakeLegacyResult(
+            ok=self._ok, domain_status="accepted" if self._ok else "failed",
+            worktree_path=self._wt, branch_name=request.branch_name,
+        )
+
+    async def cancel(self, request):
+        return None
+
+
 def _make_accepted_report() -> AcceptanceReport:
     return AcceptanceReport(
         packet_id="p1",
@@ -155,7 +171,8 @@ async def _run_adapter_test(mock_legacy, mock_get_db, mock_pipeline,
         mock_get_db.return_value.__enter__.return_value.query.return_value.filter_by.return_value.first.side_effect = side_effect_values
 
         adapter = PacketExecutionAdapter(
-            project_root=Path(td), state_root=Path(td), worktree_root=Path(td))
+            project_root=Path(td), state_root=Path(td), worktree_root=Path(td),
+            backend=_FakeBackend())
         result = await adapter.execute("pkt-001", "w1")
 
     if expect_accepted is not None:
@@ -261,7 +278,8 @@ class TestOriginal:
             side_effect_values = [_make_mock_packet(profile="STRICT"), None, _make_mock_packet_run()]
             mock_get_db.return_value.__enter__.return_value.query.return_value.filter_by.return_value.first.side_effect = side_effect_values
             adapter = PacketExecutionAdapter(
-                project_root=Path(td), state_root=Path(td), worktree_root=Path(td))
+                project_root=Path(td), state_root=Path(td), worktree_root=Path(td),
+                backend=_FakeBackend())
             result = await adapter.execute("pkt-001", "w1")
             assert result.accepted is True
             assert result.worktree_path

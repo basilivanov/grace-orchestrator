@@ -235,7 +235,7 @@ def build_packet_contract(packet_data: dict) -> ExecutionPacketContract:
     if isinstance(scope_list, str):
         scope_list = [scope_list]
     scope_list = scope_list or ["src/grace_control/"]
-    frozen = spec.get("frozen_scope", ["src/prefect_grace/"])
+    frozen = spec.get("frozen_scope", ["docs/archived/legacy_prefect_grace/"])
 
     verification_raw = spec.get("verification", {})
     if isinstance(verification_raw, list):

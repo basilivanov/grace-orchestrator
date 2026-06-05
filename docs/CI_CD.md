@@ -42,19 +42,19 @@ Run automatically on git commit:
 
 **Run tests:**
 ```bash
-pytest src/prefect_grace/tests/ -v --cov
+pytest tests/ -v --cov
 ```
 
 **Run linting:**
 ```bash
-ruff check src/prefect_grace
-black src/prefect_grace
-isort src/prefect_grace
+ruff check src/grace_control
+black src/grace_control
+isort src/grace_control
 ```
 
 **Run type checking:**
 ```bash
-mypy src/prefect_grace --ignore-missing-imports
+mypy src/grace_control --ignore-missing-imports
 ```
 
 **Run all checks:**
@@ -66,11 +66,11 @@ pre-commit run --all-files
 
 ### Before Committing
 
-1. Run tests locally: `pytest src/prefect_grace/tests/ -v`
-2. Check coverage: `pytest --cov=src/prefect_grace --cov-report=term`
-3. Run linters: `ruff check src/prefect_grace`
-4. Format code: `black src/prefect_grace && isort src/prefect_grace`
-5. Type check: `mypy src/prefect_grace --ignore-missing-imports`
+1. Run tests locally: `pytest tests/ -v`
+2. Check coverage: `pytest --cov=src/grace_control --cov-report=term tests/`
+3. Run linters: `ruff check src/grace_control`
+4. Format code: `black src/grace_control && isort src/grace_control`
+5. Type check: `mypy src/grace_control --ignore-missing-imports`
 
 Or simply run: `pre-commit run --all-files`
 
@@ -104,9 +104,9 @@ Add tests for uncovered code or adjust threshold in `.github/workflows/ci.yml`:
 
 Auto-fix most issues:
 ```bash
-ruff check --fix src/prefect_grace
-black src/prefect_grace
-isort src/prefect_grace
+ruff check --fix src/grace_control
+black src/grace_control
+isort src/grace_control
 ```
 
 ### Type Errors
@@ -133,7 +133,7 @@ Scans for common security issues in Python code.
 
 **Run locally:**
 ```bash
-bandit -r src/prefect_grace -ll
+bandit -r src/grace_control -ll
 ```
 
 **Ignore false positives:**

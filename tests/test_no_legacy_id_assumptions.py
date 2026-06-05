@@ -32,7 +32,7 @@ def _check_dir(path: str, allowlist: list[str] | None = None) -> list[str]:
 def test_src_no_legacy_id_parsing():
     """Production source code must not parse W/P markers or check FEAT- prefix."""
     violations = _check_dir("src", allowlist=[
-        "nightly_batch_execution_guard",  # legacy prefect_grace, not in active path
+        "nightly_batch_execution_guard",  # legacy archive reference, not in active path
     ])
     assert not violations, f"Found legacy ID parsing in src/:\n" + "\n".join(violations[:10])
 

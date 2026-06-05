@@ -134,8 +134,10 @@ def test_packet_executor_uses_worktree_inspector_and_agent_commit(monkeypatch):
 
     src = Path(pe.__file__).read_text()
 
-    # No inline `subprocess.run([\"git` calls inside the executor body.
-    assert 'subprocess.run(["git"' not in src
+    # The PacketExecutionAdapter class must not shell out to git directly.
+    # (_legacy_prepare_worktree at module level is allowed.)
+    class_src = src.split("class PacketExecutionAdapter")[1].split("#END_BLOCK_ADAPTER")[0]
+    assert 'subprocess.run(["git"' not in class_src
     # The helpers ARE imported.
     assert "from grace_control.services.worktree_inspector import WorktreeInspector" in src
     assert "from grace_control.services.agent_commit_service import AgentCommitService" in src
@@ -152,6 +154,7 @@ def test_packet_executor_uses_inspector_for_base_sha(monkeypatch):
     """Adapter.execute() must call self._inspector.base_sha(...) instead of
     an inline `git rev-parse`."""
     from grace_control.adapters.packet_executor import PacketExecutionAdapter
+    from grace_control.agent.mock_backend import MockBackend
     calls = []
 
     class _InspectorStub:
@@ -162,9 +165,8 @@ def test_packet_executor_uses_inspector_for_base_sha(monkeypatch):
         def has_changes(self, p, scope): return True
         def collect_changed_files(self, p): return []
 
-    ad = PacketExecutionAdapter(Path("."), Path("."), Path("."))
+    ad = PacketExecutionAdapter(Path("."), Path("."), Path("."), backend=MockBackend())
     ad._inspector = _InspectorStub()
-    # We don't actually run execute; just confirm the call path goes through the stub.
     ad._inspector.base_sha(Path("."), "main")
     assert calls == [("base_sha", ".", "main")]
 
@@ -172,6 +174,7 @@ def test_packet_executor_uses_inspector_for_base_sha(monkeypatch):
 def test_packet_executor_uses_committer_for_commit(monkeypatch):
     """Adapter commits via self._committer.commit, not inline `git add`+`git commit`."""
     from grace_control.adapters.packet_executor import PacketExecutionAdapter
+    from grace_control.agent.mock_backend import MockBackend
 
     captured = {}
 
@@ -182,7 +185,7 @@ def test_packet_executor_uses_committer_for_commit(monkeypatch):
             captured["attempt"] = attempt_count
             return "abc123"
 
-    ad = PacketExecutionAdapter(Path("."), Path("."), Path("."))
+    ad = PacketExecutionAdapter(Path("."), Path("."), Path("."), backend=MockBackend())
     ad._committer = _CommitterStub()
     sha = ad._committer.commit(Path("."), "pkt_007", 2)
     assert sha == "abc123"

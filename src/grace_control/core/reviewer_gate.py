@@ -123,7 +123,7 @@ async def run_reviewer_gate(
     if artifacts:
         prompt_parts.append(f"Artifacts: {artifacts[:20]}")
 
-    prompt_path = Path(__file__).resolve().parents[3] / "src" / "prefect_grace" / "prompts" / "reviewer_prompt.md"
+    prompt_path = Path(__file__).resolve().parent / "prompts" / "reviewer_prompt.md"
     try:
         prompt_template = prompt_path.read_text()
     except Exception:

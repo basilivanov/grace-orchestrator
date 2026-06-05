@@ -26,18 +26,18 @@ from pathlib import Path
 import yaml
 
 
-# Branch format shared with WorktreeService. The canonical home for this
-# constant is `grace_control.agent.legacy_backend.LEGACY_BRANCH_FORMAT` (P2#8
-# from post-refactor audit). `BRANCH_FORMAT` is kept here as a re-export for
-# back-compat with code that imported it from this module.
-from grace_control.agent.legacy_backend import LEGACY_BRANCH_FORMAT as BRANCH_FORMAT  # noqa: E402,F401
+# Legacy branch format for agent worktrees. The canonical home moved to
+# `grace_control.agent.legacy_backend.LEGACY_BRANCH_FORMAT` (P2#8) and
+# that module was deleted in W8. The constant lives here for tests that
+# still check the format string.
+BRANCH_FORMAT = "agent/default/{packet_id}/{attempt_slug}"
 
 
 class PacketMaterializer:
     """Renders EXECUTION_PACKET.md from a packet DB row."""
 
     DEFAULT_SCOPE = "src/"
-    DEFAULT_FROZEN = ["src/prefect_grace/"]
+    DEFAULT_FROZEN = ["docs/archived/legacy_prefect_grace/"]
     DEFAULT_VERIFICATION = "pytest -v\npython3 scripts/grace_lint.py"
 
     def materialize(self, packet_data: dict, state_root: Path) -> Path:

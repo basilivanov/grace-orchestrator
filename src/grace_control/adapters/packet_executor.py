@@ -50,6 +50,39 @@ from grace_control.services.worktree_inspector import WorktreeInspector
 
 _log = GraceLogger("adapter")
 
+# Legacy helpers — were in grace_control.agent.legacy_backend before W8.
+# Inlined here because they're trivial and only packet_executor uses them.
+_LEGACY_BRANCH_FORMAT = "agent/default/{packet_id}/{attempt_slug}"
+
+
+def _legacy_branch_name(packet_id: str, attempt_slug: str) -> str:
+    return _LEGACY_BRANCH_FORMAT.format(packet_id=packet_id, attempt_slug=attempt_slug)
+
+
+def _legacy_prepare_worktree(project_root: Path, packet_id: str, attempt_slug: str) -> tuple[Path, str]:
+    import shutil
+    import subprocess
+    wt_path = Path(project_root) / f"{packet_id}-{attempt_slug}"
+    branch = _legacy_branch_name(packet_id, attempt_slug)
+    try:
+        subprocess.run(
+            ["git", "-C", str(project_root), "worktree", "prune"],
+            capture_output=True, timeout=10,
+        )
+        if wt_path.exists():
+            subprocess.run(
+                ["git", "-C", str(project_root), "worktree", "remove", str(wt_path), "--force"],
+                capture_output=True, timeout=10,
+            )
+            shutil.rmtree(wt_path, ignore_errors=True)
+        subprocess.run(
+            ["git", "-C", str(project_root), "branch", "-D", branch],
+            capture_output=True, timeout=10,
+        )
+    except Exception as e:
+        _log.warn("legacy_prepare_worktree_failed", packet_id=packet_id, error=str(e)[:200])
+    return wt_path, branch
+
 
 # START_BLOCK_MODELS
 class ExecutionResult(BaseModel):
@@ -132,9 +165,8 @@ class PacketExecutionAdapter:
             run_number = packet.attempt_count
             run_id = f"{packet_id}-R{run_number:02d}"
 
-            from grace_control.agent.legacy_backend import legacy_prepare_worktree
             attempt_slug = f"attempt-{run_number:04d}"
-            legacy_prepare_worktree(self.project_root, packet_id, attempt_slug)
+            _legacy_prepare_worktree(self.project_root, packet_id, attempt_slug)
 
             existing_run = db.query(PacketRun).filter_by(id=run_id).first()
             if existing_run:
@@ -592,8 +624,7 @@ class PacketExecutionAdapter:
             pass
 
         attempt_slug = f"attempt-{attempt:04d}"
-        from grace_control.agent.legacy_backend import legacy_branch_name, legacy_prepare_worktree
-        legacy_prepare_worktree(self.project_root, packet_id, attempt_slug)
+        _legacy_prepare_worktree(self.project_root, packet_id, attempt_slug)
 
         from grace_control.config.settings import settings
         timeout = int(os.environ.get("GRACE_AGENT_TIMEOUT", str(settings.agent_timeout_seconds)))
@@ -603,7 +634,7 @@ class PacketExecutionAdapter:
                   "allowed_write_scope": effective_allowed or [],
                   "frozen_scope": effective_frozen or []},
             worktree_path=worktree_root / f"{packet_id}-{attempt_slug}",
-            branch_name=legacy_branch_name(packet_id, attempt_slug),
+            branch_name=_legacy_branch_name(packet_id, attempt_slug),
             scope_paths=list(effective_allowed or []),
             executor={"executor_id": "legacy", "model": "prefect"},
             timeout_s=timeout, session_dir=state_root,
