@@ -30,7 +30,17 @@ import yaml
 DEFAULT_MODEL = "gemini-3.5-flash"
 DEFAULT_EXECUTOR = {"executor_id": "default", "model": DEFAULT_MODEL, "command": "agy", "priority": 100}
 
-_PROFILES_PATH = Path(__file__).parent.parent.parent / "prefect_grace" / "agent_profiles.yaml"
+
+def _resolve_profiles_path() -> Path:
+    """Resolve agent_profiles.yaml path. Override via GRACE_AGENT_PROFILES_PATH env var."""
+    import os
+    env_path = os.environ.get("GRACE_AGENT_PROFILES_PATH")
+    if env_path:
+        return Path(env_path)
+    return Path(__file__).parent.parent / "config" / "agent_profiles.yaml"
+
+
+_PROFILES_PATH = _resolve_profiles_path()
 
 
 @lru_cache(maxsize=1)

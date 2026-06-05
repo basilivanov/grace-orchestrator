@@ -22,6 +22,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 import time
@@ -34,7 +35,7 @@ from grace_control.core.structured_logger import GraceLogger
 
 _log = GraceLogger("llm_runner")
 
-_PROFILES_PATH = Path(__file__).parent.parent.parent / "prefect_grace" / "agent_profiles.yaml"
+_PROFILES_PATH = Path(__file__).parent.parent / "config" / "agent_profiles.yaml"
 _DEFAULT_STALL = 300
 _DEFAULT_HARD = 600
 
@@ -59,15 +60,19 @@ async def run_llm(
     model: str,
     cli: str = "opencode",
     cwd: Path | None = None,
+    session_dir: Path | None = None,
+    extract_json: bool = True,
 ) -> str:
     config = _load_role_config(role)
     stall_sec = config["stall"]
     hard_sec = config["hard"]
 
     project_root = cwd or Path.cwd()
-    state_root_env = os.environ.get("GRACE_STATE_ROOT", "")
-    if state_root_env and cli != "opencode":
-        prompt_dir = Path(state_root_env) / "llm_prompts"
+    session_root = session_dir or Path(os.environ.get("GRACE_SESSION_DIR", ""))
+    if session_root and session_root.exists():
+        prompt_dir = session_root / "llm_prompts"
+    elif os.environ.get("GRACE_STATE_ROOT") and cli != "opencode":
+        prompt_dir = Path(os.environ["GRACE_STATE_ROOT"]) / "llm_prompts"
     else:
         prompt_dir = project_root / "llm_prompts"
     prompt_dir.mkdir(parents=True, exist_ok=True)
@@ -75,9 +80,12 @@ async def run_llm(
     tmp.write_text(prompt)
 
     if cli == "opencode":
-        rel = tmp.relative_to(project_root)
+        try:
+            task_path = str(tmp.relative_to(project_root))
+        except ValueError:
+            task_path = str(tmp)
         instruction = (
-            f"Read the task from {rel}. "
+            f"Read the task from {task_path}. "
             "Respond ONLY with valid JSON, no other text."
         )
         cmd = ["opencode", "run", "--model", model, instruction]
@@ -120,18 +128,15 @@ async def run_llm(
 
             if no_progress >= stall_sec:
                 proc.kill()
-                tmp.unlink(missing_ok=True)
                 _log.error("llm_stalled", role=role, stall_s=stall_sec)
                 raise RuntimeError(f"{role}: no stdout growth for {stall_sec}s")
 
         if proc.returncode is None:
             proc.kill()
-            tmp.unlink(missing_ok=True)
             _log.error("llm_timeout", role=role, hard_s=hard_sec)
             raise TimeoutError(f"{role}: hard timeout after {hard_sec}s")
 
         stdout, stderr = await proc.communicate()
-        tmp.unlink(missing_ok=True)
 
         out = stdout.decode("utf-8", errors="replace").strip()
         if not out:
@@ -139,9 +144,51 @@ async def run_llm(
             _log.warn("llm_empty_output", role=role, stderr=err)
             raise RuntimeError(f"{role}: empty output: {err}")
 
+        if extract_json:
+            out = _extract_json_block(out)
+
         _log.info("llm_completed", role=role, output_len=len(out))
         return out
 
-    except Exception:
+    finally:
         tmp.unlink(missing_ok=True)
-        raise
+
+
+def _extract_json_block(text: str) -> str:
+    m = re.search(r"```(?:json)?\s*\n?([\s\S]*?)\n?```", text)
+    if m:
+        candidate = m.group(1).strip()
+        try:
+            json.loads(candidate)
+            return candidate
+        except Exception:
+            pass
+
+    for line in text.split("\n"):
+        line = line.strip()
+        if line.startswith("{") and line.endswith("}"):
+            try:
+                json.loads(line)
+                return line
+            except Exception:
+                pass
+
+    for line in text.split("\n"):
+        line = line.strip()
+        if line.startswith("[") and line.endswith("]"):
+            try:
+                json.loads(line)
+                return line
+            except Exception:
+                pass
+
+    m = re.search(r"\{[\s\S]*\}", text)
+    if m:
+        candidate = m.group(0)
+        try:
+            json.loads(candidate)
+            return candidate
+        except Exception:
+            pass
+
+    return text

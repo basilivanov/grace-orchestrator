@@ -29,15 +29,16 @@ class Worker:
     def __init__(
         self,
         worker_id: str | None = None,
-        api_url: str = "http://localhost:8042",
+        api_url: str | None = None,
         heartbeat_interval: int = 30,
         project_root: Path | None = None,
         state_root: Path | None = None,
         worktree_root: Path | None = None,
         git_context: GitExecutionContext | None = None,
     ):
+        from grace_control.config.settings import settings as _settings
         self.worker_id = worker_id or f"worker-{uuid.uuid4().hex[:8]}"
-        self.api = WorkerAPIClient(api_url)
+        self.api = WorkerAPIClient(api_url or _settings.api_url)
         self.heartbeat_interval = heartbeat_interval
         self.running = False
         self.log = GraceLogger("worker")
@@ -153,14 +154,14 @@ class Worker:
                 await asyncio.sleep(10)
 
     def _handle_rejection(self, packet_id: str):
-        from grace_control.core.packet_operations import mark_failed, retry_packet
+        import asyncio
+        from grace_control.services.packet_service import PacketService
         from grace_control.core.state_machine import StateTransitionError
         try:
-            retry_packet(packet_id)
+            asyncio.run(PacketService().retry(packet_id))
             self.log.info("packet_retried", packet_id=packet_id)
-        except StateTransitionError:
-            mark_failed(packet_id, "Max retry attempts reached")
-            self.log.warn("max_retries_reached", packet_id=packet_id)
+        except StateTransitionError as e:
+            self.log.warn("max_retries_reached", packet_id=packet_id, error=str(e)[:200])
 
     async def _maybe_apply_recovery(self, packet_id: str):
         controller_enabled = os.environ.get("GRACE_RECOVERY_CONTROLLER_ENABLED", "false") == "true"
