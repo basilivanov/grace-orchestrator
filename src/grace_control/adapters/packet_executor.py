@@ -32,6 +32,7 @@ import yaml
 from pydantic import BaseModel
 
 from grace_control.core.structured_logger import GraceLogger
+from grace_control.agent.backend import ExecutionBackend
 from grace_control.core.evidence_verifier import (
     EvidenceVerifierVerdict,
     run_evidence_verifier,
@@ -82,10 +83,20 @@ class PacketExecutionAdapter:
     # emitted_logs: None.
     # error_behavior: None.
     # END_FUNCTION_CONTRACT
-    def __init__(self, project_root: Path, state_root: Path, worktree_root: Path):
+    def __init__(self, project_root: Path, state_root: Path, worktree_root: Path,
+                 backend: "ExecutionBackend | None" = None):
         self.project_root = Path(project_root)
         self.state_root = Path(state_root)
         self.worktree_root = Path(worktree_root)
+        if backend is None:
+            from grace_control.agent.legacy_backend import LegacyPrefectBackend
+            self._backend: ExecutionBackend = LegacyPrefectBackend()
+        else:
+            self._backend = backend
+        from grace_control.services.packet_materializer import PacketMaterializer
+        from grace_control.services.evidence_service import EvidenceService
+        self._materializer = PacketMaterializer()
+        self._evidence = EvidenceService(db_factory=get_db)
 
     # START_FUNCTION_CONTRACT
     # name: execute
@@ -192,7 +203,7 @@ class PacketExecutionAdapter:
         packet_data["_tier"] = tier.value
 
         try:
-            packet_path = self._materialize_packet(packet_data, state_root)
+            packet_path = self._materializer.materialize(packet_data, state_root)
             _log.debug("packet_materialized", packet_id=packet_id, path=str(packet_path))
 
             # Build packet contract for registry + legacy runner
@@ -250,20 +261,31 @@ class PacketExecutionAdapter:
                     pass
                 if is_git_wt:
                     try:
-                        # Check for agent-produced changes by looking at files on disk
+                        # Check for agent-produced changes via git status (catches all writes)
                         has_changes = False
-                        for scope_pattern in pkt_contract.allowed_write_scope:
-                            scope_path = wt / scope_pattern
-                            if scope_path.exists():
+                        try:
+                            status_r = _sp.run(
+                                ["git", "status", "--porcelain"],
+                                cwd=str(wt), capture_output=True, text=True, timeout=5
+                            )
+                            if status_r.returncode == 0 and status_r.stdout.strip():
                                 has_changes = True
-                                break
-                            if scope_pattern.endswith("/") or scope_pattern.endswith("/**"):
-                                stripped = scope_pattern.rstrip("/").rstrip("*").rstrip("/")
-                                scope_dir = wt / stripped
-                                if scope_dir.exists() and scope_dir.is_dir():
-                                    if list(scope_dir.iterdir()):
-                                        has_changes = True
-                                        break
+                        except Exception:
+                            pass
+
+                        if not has_changes:
+                            for scope_pattern in pkt_contract.allowed_write_scope:
+                                scope_path = wt / scope_pattern
+                                if scope_path.exists():
+                                    has_changes = True
+                                    break
+                                if scope_pattern.endswith("/") or scope_pattern.endswith("/**"):
+                                    stripped = scope_pattern.rstrip("/").rstrip("*").rstrip("/")
+                                    scope_dir = wt / stripped
+                                    if scope_dir.exists() and scope_dir.is_dir():
+                                        if list(scope_dir.iterdir()):
+                                            has_changes = True
+                                            break
 
                         if not has_changes:
                             _log.warn("no_changes_produced", packet_id=packet_id)
@@ -301,6 +323,14 @@ class PacketExecutionAdapter:
                 wt_path = Path(result.worktree_path) if result.worktree_path else self.project_root
                 run_dir = state_root / "packets" / packet_id / "runs" / f"R{run_number:02d}"
 
+                # ── Collect changed_files early (needed by deterministic fail branch + verifier) ──
+                from grace_control.core.scope_guard import get_changed_files as _get_changed_files
+                changed_files: list[str] = []
+                try:
+                    changed_files = _get_changed_files(wt_path, base_ref=base_sha or base_ref)
+                except Exception:
+                    changed_files = []
+
                 accept_report = run_acceptance_pipeline(
                     packet=pkt_contract,
                     legacy_result=result,
@@ -317,7 +347,7 @@ class PacketExecutionAdapter:
 
                 # Save acceptance report + evidence as JSON
                 ev_dir = run_dir
-                accept_report_path = self._save_acceptance_report(packet_id, run_number, accept_report, state_root)
+                accept_report_path = self._evidence.save_acceptance_report(packet_id, run_number, accept_report, state_root)
 
                 try:
                     safe_legacy_dict = result.to_dict()
@@ -333,7 +363,6 @@ class PacketExecutionAdapter:
                         ev_report = skipped_evidence_report("odd attempt skips verifier per ladder")
                         rv_report = skipped_reviewer_report("deterministic acceptance failed")
                     else:
-                        from grace_control.core.evidence_verifier import run_evidence_verifier
                         ev_report = await run_evidence_verifier(
                             packet=pkt_contract,
                             acceptance_report=accept_report,
@@ -352,7 +381,7 @@ class PacketExecutionAdapter:
                         branch_name=result.branch_name or "",
                         duration_ms=int((time.time() - start_time) * 1000),
                     )
-                    self._update_packet_run_result(
+                    self._evidence.update_run_result(
                         run_id=run_id, status="rejected",
                         legacy_result=safe_legacy_dict,
                         acceptance_report=accept_report,
@@ -374,7 +403,7 @@ class PacketExecutionAdapter:
                 except Exception:
                     safe_legacy = {"error": str(e)[:200]}
                 try:
-                    self._update_packet_run_result(
+                    self._evidence.update_run_result(
                         run_id=run_id, status="blocked",
                         legacy_result=safe_legacy,
                         acceptance_report=None,
@@ -414,7 +443,7 @@ class PacketExecutionAdapter:
                         evidence_path="",
                         duration_ms=int((time.time() - start_time) * 1000),
                     )
-                    self._update_packet_run_result(
+                    self._evidence.update_run_result(
                         run_id=run_id, status="rejected",
                         legacy_result=safe_legacy_dict,
                         acceptance_report=accept_report,
@@ -428,13 +457,6 @@ class PacketExecutionAdapter:
                 _log.info("self_evolution_guard_passed", packet_id=packet_id)
 
             # ── Prepare context for verifier + reviewer ──
-            from grace_control.core.scope_guard import get_changed_files as _get_changed_files
-            changed_files: list[str] = []
-            try:
-                changed_files = _get_changed_files(wt_path, base_ref=base_sha or base_ref)
-            except Exception:
-                changed_files = []
-
             artifacts: list[str] = []
             if run_dir.exists():
                 try:
@@ -462,11 +484,11 @@ class PacketExecutionAdapter:
                     duration_ms=int((time.time() - start_time) * 1000),
                     commit_sha=agent_commit_sha,
                 )
-                evidence_path = self._save_evidence(packet_id, run_number, result.to_dict(), state_root)
+                evidence_path = self._evidence.evidence_path(packet_id, run_number, state_root)
                 execution_result.evidence_path = evidence_path
                 execution_result.commit_sha = agent_commit_sha
-                self._save_agent_log(packet_id, run_number, result, state_root)
-                self._update_packet_run_result(
+                self._evidence.save_agent_log(packet_id, run_number, result, state_root)
+                self._evidence.update_run_result(
                     run_id=run_id, status="accepted",
                     legacy_result=safe_legacy_dict,
                     acceptance_report=accept_report,
@@ -505,7 +527,7 @@ class PacketExecutionAdapter:
                     acceptance_summary=accept_report.summary,
                     duration_ms=int((time.time() - start_time) * 1000),
                 )
-                self._update_packet_run_result(
+                self._evidence.update_run_result(
                     run_id=run_id, status="rejected",
                     legacy_result=safe_legacy_dict,
                     acceptance_report=accept_report,
@@ -531,7 +553,7 @@ class PacketExecutionAdapter:
                     acceptance_summary=accept_report.summary,
                     duration_ms=int((time.time() - start_time) * 1000),
                 )
-                self._update_packet_run_result(
+                self._evidence.update_run_result(
                     run_id=run_id, status="blocked",
                     legacy_result=safe_legacy_dict,
                     acceptance_report=accept_report,
@@ -560,10 +582,10 @@ class PacketExecutionAdapter:
                     duration_ms=int((time.time() - start_time) * 1000),
                 )
                 execution_result.commit_sha = agent_commit_sha
-                evidence_path = self._save_evidence(packet_id, run_number, result.to_dict(), state_root)
+                evidence_path = self._evidence.evidence_path(packet_id, run_number, state_root)
                 execution_result.evidence_path = evidence_path
-                self._save_agent_log(packet_id, run_number, result, state_root)
-                self._update_packet_run_result(
+                self._evidence.save_agent_log(packet_id, run_number, result, state_root)
+                self._evidence.update_run_result(
                     run_id=run_id, status="accepted",
                     legacy_result=safe_legacy_dict,
                     acceptance_report=accept_report,
@@ -604,10 +626,10 @@ class PacketExecutionAdapter:
                     duration_ms=int((time.time() - start_time) * 1000),
                     commit_sha=agent_commit_sha,
                 )
-                evidence_path = self._save_evidence(packet_id, run_number, result.to_dict(), state_root)
+                evidence_path = self._evidence.evidence_path(packet_id, run_number, state_root)
                 execution_result.evidence_path = evidence_path
-                self._save_agent_log(packet_id, run_number, result, state_root)
-                self._update_packet_run_result(
+                self._evidence.save_agent_log(packet_id, run_number, result, state_root)
+                self._evidence.update_run_result(
                     run_id=run_id, status="accepted",
                     legacy_result=safe_legacy_dict,
                     acceptance_report=accept_report,
@@ -633,7 +655,7 @@ class PacketExecutionAdapter:
                     acceptance_summary=accept_report.summary,
                     duration_ms=int((time.time() - start_time) * 1000),
                 )
-                self._update_packet_run_result(
+                self._evidence.update_run_result(
                     run_id=run_id, status="rejected",
                     legacy_result=safe_legacy_dict,
                     acceptance_report=accept_report,
@@ -658,7 +680,7 @@ class PacketExecutionAdapter:
                     acceptance_summary=accept_report.summary,
                     duration_ms=int((time.time() - start_time) * 1000),
                 )
-                self._update_packet_run_result(
+                self._evidence.update_run_result(
                     run_id=run_id, status="blocked",
                     legacy_result=safe_legacy_dict,
                     acceptance_report=accept_report,
@@ -687,132 +709,25 @@ class PacketExecutionAdapter:
             raise
 
     # START_FUNCTION_CONTRACT
-    # name: _materialize_packet
-    # purpose: Convert DB Packet into EXECUTION_PACKET.md file parseable by parse_packet_markdown.
-    # inputs: packet ORM object.
-    # returns: Path to created markdown file.
-    # side_effects: Writes file to state_root/packets/{id}/EXECUTION_PACKET.md.
-    # emitted_logs: None.
-    # error_behavior: Raises on filesystem error.
-    # END_FUNCTION_CONTRACT
-    def _materialize_packet(self, packet_data: dict, state_root: Path) -> Path:
-        packet_id = packet_data["id"]
-        packet_dir = state_root / "packets" / packet_id
-        packet_dir.mkdir(parents=True, exist_ok=True)
-
-        spec_json = packet_data["spec_json"] if isinstance(packet_data["spec_json"], dict) else {}
-        spec_str = yaml.dump(spec_json, default_flow_style=False, allow_unicode=True)
-        scope = spec_json.get("scope", "src/")
-        if isinstance(scope, str):
-            scope = [scope]
-        scope_lines = "\n".join(f"- {s}" for s in scope)
-
-        frozen = spec_json.get("frozen_scope", ["src/prefect_grace/"])
-        if isinstance(frozen, str):
-            frozen = [frozen]
-        frozen_lines = "\n".join(f"- {s}" for s in frozen)
-
-        verification_raw = spec_json.get("verification", {})
-        if isinstance(verification_raw, list):
-            verification_text = "\n".join(f"- {v}" if isinstance(v, str) else f"- {' '.join(v)}" for v in verification_raw)
-        elif isinstance(verification_raw, dict):
-            parts = []
-            for stage in ("t0", "t1", "t2"):
-                cmds = verification_raw.get(stage, [])
-                for c in cmds:
-                    c_str = " ".join(c) if isinstance(c, list) else c
-                    parts.append(f"- [{stage}] {c_str}")
-            verification_text = "\n".join(parts) if parts else "pytest -v\nruff check src/"
-        else:
-            verification_text = "pytest -v\nruff check src/"
-
-        expected_raw = spec_json.get("expected_evidence", [])
-        if expected_raw:
-            expected_lines = "\n".join(
-                f"- {e['id']}" if isinstance(e, dict) else f"- {e}"
-                for e in expected_raw
-            )
-        else:
-            expected_lines = "- test results\n- lint output"
-
-        pd = packet_data
-        content = f"""# Execution Packet: {pd['id']}
-
-## Objective
-
-{pd.get('description') or pd.get('title', '')}
-
-## Slice
-
-- slice_id: `SLICE-{pd.get('slug', '').upper()}`
-- feature_id: `{pd.get('feature_id', '')}`
-- packet_id: `{pd['id']}`
-- wave_id: `{pd.get('wave_id', '')}`
-- status: `{pd.get('state', '')}`
-
-## Allowed Write Scope
-
-{scope_lines}
-
-## Frozen Scope
-
-{frozen_lines}
-
-## Must Preserve
-
-- Follow GRACE Canon contracts (AI_HEADER, MODULE_CONTRACT, FUNCTION_CONTRACT)
-- File ≤ 1000 lines, function ≤ 4000 tokens
-- Use log_event() for structured logging
-
-## Acceptance Profile
-
-{pd.get('acceptance_profile', 'NORMAL')}
-
-## Verification
-
-```bash
-{verification_text}
-```
-
-## Expected Evidence
-
-{expected_lines}
-
-## Escalation Triggers
-
-- Tests fail
-- Lint errors
-- Scope violation
-
-## Specification
-
-```yaml
-{spec_str}
-```
-"""
-        packet_file = packet_dir / "EXECUTION_PACKET.md"
-        packet_file.write_text(content)
-        return packet_file
-
-    # START_FUNCTION_CONTRACT
     # name: _call_legacy_runner
-    # purpose: Call existing run_e2e_packet synchronously in executor thread.
+    # purpose: Prepare packet registry + worktree, then delegate execution to the
+    #          injected ExecutionBackend (default: LegacyPrefectBackend). The
+    #          adapter no longer imports prefect_grace directly.
     # inputs: packet_path to EXECUTION_PACKET.md.
-    # returns: E2EPacketRunnerResult.
-    # side_effects: Creates git worktree, launches agents, runs verifier/reviewer.
-    # emitted_logs: None.
-    # error_behavior: Raises on runtime failure.
+    # returns: ExecutionResult.
+    # side_effects: Writes packet_registry.yaml, prunes stale worktrees.
+    # emitted_logs: legacy_runner_done.
+    # error_behavior: Never raises; failures encoded in ExecutionResult.accepted=False.
     # END_FUNCTION_CONTRACT
     async def _call_legacy_runner(self, packet_path: Path, state_root: Path, worktree_root: Path,
                                    allowed_scope: list[str] | None = None,
                                    frozen_scope: list[str] | None = None,
                                    packet_contract=None,
                                    attempt: int = 1,
-                                   base_ref: str = "HEAD"):
-        from prefect_grace.platform.e2e_packet_runner import run_e2e_packet
+                                   base_ref: str = "HEAD") -> "ExecutionResult":
+        from grace_control.agent.backend import ExecutionRequest
 
         packet_id = packet_path.parent.name
-
         os.environ.setdefault("GRACE_ALLOW_SANDBOX_BYPASS", "true")
 
         effective_allowed = allowed_scope
@@ -861,25 +776,19 @@ class PacketExecutionAdapter:
             pass
 
         timeout = int(os.environ.get("GRACE_AGENT_TIMEOUT", "600"))
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            None,
-            partial(
-                run_e2e_packet,
-                project_root=self.project_root,
-                packet_path=packet_path,
-                state_root=state_root,
-                worktree_root=worktree_root,
-                dry_run=False,
-                execute_agent=True,
-                attempt=attempt,
-                base_ref=base_ref,
-                keep_worktree=True,
-                runtime_state_root=state_root,
-                timeout_seconds=timeout,
-            ),
+        request = ExecutionRequest(
+            packet_id=packet_id,
+            spec={"attempt_count": attempt, "base_ref": base_ref,
+                  "allowed_write_scope": effective_allowed or [],
+                  "frozen_scope": effective_frozen or []},
+            worktree_path=worktree_root / f"{packet_id}-{attempt_slug}",
+            branch_name=f"agent/default/{packet_id}/{attempt_slug}",
+            scope_paths=list(effective_allowed or []),
+            executor={"executor_id": "legacy", "model": "prefect"},
+            timeout_s=timeout,
+            session_dir=state_root,
         )
-        return result
+        return await self._backend.run(request)
 
     # START_FUNCTION_CONTRACT
     # name: _parse_result
@@ -901,33 +810,6 @@ class PacketExecutionAdapter:
 
     # START_FUNCTION_CONTRACT
     # name: _save_evidence
-    # purpose: Return evidence path string for PacketRun record.
-    # inputs: packet_id, run_number, result_dict.
-    # returns: Evidence directory path string.
-    # side_effects: None (path only, evidence saved by legacy runner).
-    # emitted_logs: None.
-    # error_behavior: Never raises.
-    # END_FUNCTION_CONTRACT
-    def _save_evidence(self, packet_id: str, run_number: int, result: dict, state_root: Path) -> str:
-        return str(state_root / "packets" / packet_id / "runs" / f"R{run_number:02d}")
-
-    # START_FUNCTION_CONTRACT
-    # name: _save_acceptance_report
-    # purpose: Save acceptance report as JSON to run directory.
-    # inputs: packet_id, run_number, report (AcceptanceReport), state_root.
-    # returns: acceptance_report.json path string.
-    # side_effects: Writes JSON file.
-    # emitted_logs: None.
-    # error_behavior: Never raises.
-    # END_FUNCTION_CONTRACT
-    def _save_acceptance_report(self, packet_id: str, run_number: int, report, state_root: Path) -> str:
-        import json as _json
-        ev_dir = state_root / "packets" / packet_id / "runs" / f"R{run_number:02d}"
-        ev_dir.mkdir(parents=True, exist_ok=True)
-        path = ev_dir / "acceptance_report.json"
-        path.write_text(_json.dumps(report.to_dict(), indent=2, default=str))
-        return str(path)
-
     # START_FUNCTION_CONTRACT
     # name: _build_execution_result_from_acceptance
     # purpose: Build ExecutionResult from acceptance report and legacy result.
@@ -961,62 +843,6 @@ class PacketExecutionAdapter:
         )
 
     # START_FUNCTION_CONTRACT
-    # name: _update_packet_run_result
-    # purpose: Write PacketRun result_json with all four reports and metadata.
-    # inputs: run_id, status, legacy_result, acceptance_report, evidence_verifier_report,
-    #         reviewer_report, evidence_path, duration_ms, executor_id.
-    # returns: None.
-    # side_effects: Updates PacketRun row in DB.
-    # emitted_logs: None.
-    # error_behavior: Never raises.
-    # END_FUNCTION_CONTRACT
-    def _update_packet_run_result(
-        self,
-        *,
-        run_id: str,
-        status: str,
-        legacy_result: dict,
-        acceptance_report,
-        evidence_verifier_report,
-        reviewer_report,
-        evidence_path: str,
-        duration_ms: int,
-        executor_id: str = "",
-        commit_sha: str = "",
-    ) -> None:
-        try:
-            with get_db() as db:
-                existing = db.query(PacketRun).filter_by(id=run_id).first()
-                if existing:
-                    existing.status = status
-                    accept_dict = acceptance_report.to_dict() if acceptance_report else {"error": "acceptance pipeline failed"}
-                    existing.result_json = {
-                        "legacy_result": legacy_result,
-                        "acceptance_report": accept_dict,
-                        "evidence_verifier_report": evidence_verifier_report.model_dump(),
-                        "reviewer_report": reviewer_report.model_dump(),
-                        "agent_commit_sha": commit_sha,
-                    }
-                    existing.evidence_path = evidence_path
-                    existing.finished_at = datetime.now(timezone.utc)
-                    existing.duration_ms = duration_ms
-                    existing.executor_id = executor_id
-                    self._log_rejection(status, acceptance_report, accept_dict)
-        except Exception:
-            _log.warn("update_run_result_failed", run_id=run_id, status=status)
-
-    def _log_rejection(self, status: str, accept_report, accept_dict: dict):
-        if status != "accepted" and accept_dict:
-            stages = [s.get("name", "?") for s in accept_dict.get("stages", [])]
-            _log.info("execution_rejected",
-                verdict=accept_dict.get("final_verdict", "?"),
-                summary=accept_dict.get("summary", "")[:200],
-                stages=stages,
-                evidence_issues=accept_dict.get("evidence_issues", []),
-                scope_violations=accept_dict.get("scope_violations", []),
-            )
-
-    # START_FUNCTION_CONTRACT
     # name: _finish_early_rejected_run
     # purpose: Update PacketRun on early git/worktree failures before acceptance pipeline runs.
     # inputs: run_id, reason, duration_ms, executor_id, legacy_result.
@@ -1041,7 +867,7 @@ class PacketExecutionAdapter:
         try:
             skip_ev = skipped_evidence_report(reason)
             skip_rv = skipped_reviewer_report(reason)
-            self._update_packet_run_result(
+            self._evidence.update_run_result(
                 run_id=run_id, status="rejected",
                 legacy_result=lr,
                 acceptance_report=None,
@@ -1054,38 +880,6 @@ class PacketExecutionAdapter:
         except Exception:
             pass
         return result
-
-    def _save_agent_log(self, packet_id: str, run_number: int, result, state_root: Path) -> None:
-        try:
-            log_dir = state_root / "packets" / packet_id / "runs" / f"R{run_number:02d}"
-            log_dir.mkdir(parents=True, exist_ok=True)
-            agent_log = log_dir / "agent_output.log"
-
-            mr = result.managed_runner_result
-            if isinstance(mr, dict):
-                agent = mr.get("agent_result", {})
-                if isinstance(agent, dict):
-                    # Try paths first (legacy writes to files)
-                    for key in ("stdout_path", "stderr_path"):
-                        path = agent.get(key, "")
-                        if path:
-                            p = Path(path)
-                            if p.exists():
-                                content = p.read_text()
-                                with agent_log.open("a") as f:
-                                    f.write(f"=== {key} ===\n{content}\n")
-                    # Also check inline stdout/stderr
-                    for key in ("stdout", "stderr"):
-                        content = agent.get(key, "")
-                        if content:
-                            with agent_log.open("a") as f:
-                                f.write(f"=== AGENT {key.upper()} ===\n{content}\n")
-
-            if agent_log.exists() and agent_log.stat().st_size > 0:
-                _log.info("agent_log_saved", packet_id=packet_id, path=str(agent_log),
-                    size=agent_log.stat().st_size)
-        except Exception:
-            pass
 
 
 def _collect_changed_files(worktree_root: Path) -> list[Path]:

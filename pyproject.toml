@@ -25,7 +25,6 @@ classifiers = [
 ]
 
 dependencies = [
-    "prefect>=3.0.0",
     "pyyaml>=6.0.0",
     "pydantic>=2.7.0",
     "pydantic-settings>=2.3.0",
@@ -35,6 +34,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+legacy = [
+    "prefect>=3.0.0",
+]
 dev = [
     "pytest>=8.0.0",
     "pytest-cov>=4.1.0",
