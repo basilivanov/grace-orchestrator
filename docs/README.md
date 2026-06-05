@@ -28,6 +28,4 @@
 
 ## Archived
 
-- [Legacy prefect_grace](archived/legacy_prefect_grace/) — historical runtime, removed in W8
-- [Codex TZ & reviews](archived/codex/) — superseded TZ specifications
-- [Stale docs](archived/stale/) — historical documentation moved in W9
+- W15: all historical/transitional docs removed from repo. See git history.

@@ -72,16 +72,3 @@ def test_replacement_scripts_exist():
     assert (SCRIPTS / "grace_lint.py").exists(), "scripts/grace_lint.py is the CI replacement for `grace lint`."
     assert (SCRIPTS / "run_golden.py").exists(), "scripts/run_golden.py is the CI replacement for `grace golden`/`fixture run-one`."
     assert (SCRIPTS / "live_worker.py").exists(), "scripts/live_worker.py is the deployment replacement for `grace worker start`."
-
-
-# 6. CLI_DEPRECATION_INVENTORY.md is archived and complete. (W9 moved to stale.)
-def test_cli_inventory_status_reflects_w2_completion():
-    inv = _read(ROOT / "docs" / "archived" / "stale" / "CLI_DEPRECATION_INVENTORY.md")
-    for cmd in ("up", "init", "lint", "eval run", "worker start", "api start",
-                "trace --packet/--feature/--wave"):
-        pattern = rf"\|\s*`?{re.escape(cmd)}`?\s*\|\s*(done|TODO)\s*\|"
-        m = re.search(pattern, inv)
-        if m and m.group(1) == "TODO":
-            pytest.fail(
-                f"CLI inventory still lists `{cmd}` as TODO; W2 should have flipped it to done."
-            )

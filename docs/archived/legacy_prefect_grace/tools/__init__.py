@@ -1,3 +1,0 @@
-"""
-Orchestrator verification tools.
-"""
