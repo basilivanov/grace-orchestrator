@@ -431,7 +431,7 @@ def _check_hardcoded_cli_agent(content: str, path: str, al: dict) -> list[Violat
         return violations
     for i, line in enumerate(content.split("\n"), 1):
         for name in _KNOWN_CLI_AGENTS:
-            if name in line and ("run" in line or "exec" in line):
+            if name in line:
                 violations.append(Violation("GRC109", f"hardcoded CLI agent '{name}': {line.strip()[:60]}", path, i))
                 break
     return violations
