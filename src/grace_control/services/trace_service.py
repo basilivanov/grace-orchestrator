@@ -226,6 +226,17 @@ class TraceService:
             acc = rj.get("acceptance_report", {}) or {}
             d["acceptance_verdict"] = acc.get("final_verdict", "")
             d["acceptance_summary"] = acc.get("summary", "")
+            # W14.4: extract executor metadata from result_json
+            leg = rj.get("legacy_result", {}) or {}
+            d["domain_status"] = leg.get("domain_status", "")
+            ev = rj.get("evidence", {}) or {}
+            d["exit_code"] = ev.get("exit_code", -1) if isinstance(ev, dict) else -1
+            # Named artifact links
+            if r.evidence_path:
+                ep = Path(r.evidence_path)
+                for name in ("agent_stdout.log", "agent_stderr.log", "agent_command.log"):
+                    if (ep / name).exists():
+                        d[f"{name.replace('.log','')}_artifact"] = name
         return d
 
     def _event_to_dict(self, e: Event) -> dict[str, Any]:

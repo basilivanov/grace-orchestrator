@@ -79,6 +79,7 @@ def create_app(settings: GraceSettings | None = None) -> FastAPI:
         token=s.api_auth_token,
         enabled=s.api_auth_enabled,
         allow_localhost=s.api_auth_allow_unauthenticated_localhost,
+        public_openapi=s.api_auth_public_openapi,
     )
 
     @app.exception_handler(Exception)

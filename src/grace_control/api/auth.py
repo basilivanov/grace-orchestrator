@@ -31,17 +31,25 @@ _PUBLIC_PATHS = {"/health", "/openapi.json"}
 
 class AuthMiddleware(BaseHTTPMiddleware):
     def __init__(self, app: ASGIApp, token: str = "", enabled: bool = False,
-                 allow_localhost: bool = True) -> None:
+                 allow_localhost: bool = True, public_openapi: bool = False) -> None:
         super().__init__(app)
         self._token = token
         self._enabled = enabled
         self._allow_localhost = allow_localhost
+        self._public_openapi = public_openapi
+
+    def _is_public(self, path: str) -> bool:
+        if path == "/health":
+            return True
+        if path == "/openapi.json" and self._public_openapi:
+            return True
+        return False
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint):
         if not self._enabled:
             return await call_next(request)
 
-        if request.url.path in _PUBLIC_PATHS:
+        if self._is_public(request.url.path):
             return await call_next(request)
 
         if self._allow_localhost:

@@ -105,6 +105,7 @@ class GraceSettings(BaseSettings):
     api_auth_enabled: bool = False
     api_auth_token: str = ""
     api_auth_allow_unauthenticated_localhost: bool = True
+    api_auth_public_openapi: bool = False
 
 
 # Class-level defaults, captured AFTER the class is defined and BEFORE
