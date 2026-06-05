@@ -1,12 +1,12 @@
-# AI_HEADER: llm_runner — thin adapter: call sites → AgentRunService (W13).
+# AI_HEADER: llm_runner — thin adapter: call sites → AgentRunService via profiles (W13).
 # START_MODULE_CONTRACT
 # purpose: Single entry point for LLM calls (architect, verifier, reviewer,
-#          context_collector). Delegates to AgentRunService via on-the-fly
-#          profiles. No hardcoded CLI names.
+#          context_collector). Resolves profile by executor_id via
+#          get_agent_profile(), delegates to UniversalCliAgentBackend.
+#          No hardcoded CLI names, no subprocess, no os.environ.
 # inputs: prompt, role, model, cli (executor_id for profile lookup).
 # returns: stdout as string.
-# side_effects: Writes prompt to .grace/llm_prompts/, spawns agent via
-#               UniversalCliAgentBackend/ProcessSupervisor.
+# side_effects: Spawns agent via ProcessSupervisor/AgentRunService.
 # emitted_logs: llm_started, llm_completed, llm_failed.
 # error_behavior: Raises RuntimeError on empty output or non-zero exit.
 # END_MODULE_CONTRACT
@@ -21,11 +21,10 @@ from pathlib import Path
 
 from grace_control.agent.backend import ExecutionRequest
 from grace_control.agent.universal_cli_backend import UniversalCliAgentBackend
+from grace_control.config.agent_profiles import get_agent_profile
 from grace_control.core.structured_logger import GraceLogger
-from grace_control.services.command_template_renderer import CommandTemplateRenderer
 
 _log = GraceLogger("llm_runner")
-_renderer = CommandTemplateRenderer()
 
 
 async def run_llm(
@@ -39,20 +38,14 @@ async def run_llm(
     extract_json: bool = True,
 ) -> str:
     project_root = cwd or Path.cwd()
-    prompt_dir = project_root / ".grace" / "llm_prompts"
-    prompt_dir.mkdir(parents=True, exist_ok=True)
-    prompt_file = prompt_dir / f"{role}_{uuid.uuid4().hex[:8]}.txt"
-    prompt_file.write_text(prompt)
+    executor_id = cli or f"llm_{role}"
+    profile = get_agent_profile(executor_id)
+    if not profile:
+        raise ValueError(f"no agent profile for executor_id={executor_id!r}; check agent_profiles.yaml `agents:` section")
 
-    executor = {
-        "executor_id": f"llm_{role}",
-        "command": [cli, "run", "--model", model, "Read the task from {packet_path}. Respond ONLY with valid JSON."],
-        "model": model,
-        "effort": "high",
-        "cwd": "{worktree_path}",
-        "timeout_seconds": 600,
-        "input_mode": "file",
-    }
+    executor = profile.to_dict()
+    if model:
+        executor["model"] = model
 
     req = ExecutionRequest(
         packet_id=f"llm_{role}_{uuid.uuid4().hex[:6]}",
@@ -60,7 +53,7 @@ async def run_llm(
         worktree_path=project_root,
         branch_name="",
         executor=executor,
-        timeout_s=600,
+        timeout_s=profile.timeout_seconds,
         session_dir=session_dir,
     )
 

@@ -132,6 +132,20 @@ codex:
 
 # W7 (revised): UniversalCliAgentBackend profiles — declarative, no CLI names in code.
 agents:
+  opencode:
+    backend: cli
+    command:
+      - opencode
+      - run
+      - "--model"
+      - "{model}"
+      - Read the task from {packet_path}. Respond ONLY with valid JSON, no other text.
+    model: "codex-5.1"
+    effort: "high"
+    cwd: "{worktree_path}"
+    timeout_seconds: 900
+    input:
+      mode: file
   coder_opencode:
     backend: cli
     command:

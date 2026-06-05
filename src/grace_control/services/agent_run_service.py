@@ -40,6 +40,20 @@ class AgentRunService:
             "attempt": "1",
             "packet_markdown": packet_markdown,
         }
+
+        # Input mode must be resolved before command render (P0-2: {packet_path} needs ctx).
+        input_mode = executor.get("input_mode", "none")
+        input_template = executor.get("input_template", "")
+        stdin_text: str | None = None
+        if input_mode == "stdin" and input_template:
+            stdin_text = self._renderer.render([input_template], ctx)[0]
+        elif input_mode == "file":
+            effective_run_dir = run_dir or (state_root / "agents" / packet_id)
+            packet_path = effective_run_dir / "EXECUTION_PACKET.md"
+            packet_path.parent.mkdir(parents=True, exist_ok=True)
+            packet_path.write_text(packet_markdown)
+            ctx["packet_path"] = str(packet_path)
+
         command = self._renderer.render(executor.get("command", []), ctx)
         raw_env = executor.get("env", {})
         env = self._env_builder.build(raw_env)
@@ -48,14 +62,6 @@ class AgentRunService:
         cwd_template = str(executor.get("cwd", "{worktree_path}"))
         cwd_str = self._renderer.render([cwd_template], ctx)[0]
         cwd = worktree_path if cwd_str == str(worktree_path) else Path(cwd_str)
-
-        input_mode = executor.get("input_mode", "none")
-        input_template = executor.get("input_template", "")
-        stdin_text: str | None = None
-        if input_mode == "stdin" and input_template:
-            stdin_text = self._renderer.render([input_template], ctx)[0]
-        elif input_mode == "file":
-            ctx["packet_path"] = str(cwd / "EXECUTION_PACKET.md")
 
         result = await self._supervisor.run(
             command, cwd=cwd, env=env, timeout_seconds=timeout_seconds, stdin_text=stdin_text,
