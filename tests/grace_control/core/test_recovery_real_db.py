@@ -287,7 +287,8 @@ def test_full_stale_db_history(db):
 
 
 async def test_full_multiwave_acceptance_recovery_real_db(db):
-    """Two waves. Wave 1 rejected → recovery → SWITCH_CODER. Wave gate opens W02."""
+    """Two waves. Wave 1 rejected → recovery → feature blocked. Wave 2 stays draft because
+    feature is blocked — wave gate does not progress blocked features."""
     from grace_control.core.recovery_controller import RecoveryController
     from grace_control.core.feature_recovery import RecoveryAction, FailureClass, RecoveryDecision
 
@@ -313,7 +314,9 @@ async def test_full_multiwave_acceptance_recovery_real_db(db):
 
     with get_db() as d:
         p2 = d.query(Packet).filter_by(id="P2").first()
-        assert p2.state == PacketState.READY.value
+        # After feature is blocked, wave gate does not progress W02 packets;
+        # P2 remains DRAFT.
+        assert p2.state == PacketState.DRAFT.value
 
 
 def test_full_profiles_maintained(db):
