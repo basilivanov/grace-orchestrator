@@ -120,6 +120,7 @@ async def claim_packet(request: dict) -> dict:
 
     with get_db() as db:
         ready = db.query(Packet).filter_by(state=PacketState.READY.value).all()
+        packet_ids = [p.id for p in ready]
 
     if not ready:
         from grace_control.core.wave_gate import check_wave_gates
@@ -129,9 +130,9 @@ async def claim_packet(request: dict) -> dict:
     from grace_control.services.packet_service import PacketService, PacketNotFoundError, StateTransitionError
     svc = PacketService()
 
-    for packet in ready:
+    for pid in packet_ids:
         try:
-            result = await svc.claim(packet.id, worker_id)
+            result = await svc.claim(pid, worker_id)
         except StateTransitionError:
             continue
         except PacketNotFoundError:

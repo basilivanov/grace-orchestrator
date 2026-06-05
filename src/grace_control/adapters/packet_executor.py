@@ -49,7 +49,11 @@ class PacketExecutionAdapter:
     def __init__(self, project_root: Path, state_root: Path, worktree_root: Path,
                  backend: "ExecutionBackend | None" = None):
         self.project_root = Path(project_root); self.state_root = Path(state_root); self.worktree_root = Path(worktree_root)
-        self._backend = backend or (lambda: (exec("from grace_control.agent import select_backend"), select_backend())[1])()
+        if backend is None:
+            from grace_control.agent import select_backend
+            self._backend = select_backend()
+        else:
+            self._backend = backend
         from grace_control.services.packet_materializer import PacketMaterializer
         from grace_control.services.evidence_service import EvidenceService
         self._materializer = PacketMaterializer(); self._evidence = EvidenceService(db_factory=get_db)
@@ -171,7 +175,8 @@ class PacketExecutionAdapter:
         ep = ev.evidence_path(packet_id, rn, self.state_root)
         def _mk(accepted, ds, r=None, e=ep, c=sha):
             return ExecutionResult(accepted=accepted, reason=r, domain_status=ds,
-                worktree_path=result.worktree_path or "", branch_name=result.branch_name or "",
+                worktree_path=str(result.worktree_path) if result.worktree_path else "",
+                branch_name=result.branch_name or "",
                 acceptance_report_path=ar_path, acceptance_verdict=accept_report.final_verdict.value,
                 acceptance_summary=accept_report.summary, duration_ms=int((time.time()-start)*1000), commit_sha=c, evidence_path=e)
         def _acc(er, evr, rvr):
