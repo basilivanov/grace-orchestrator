@@ -263,3 +263,71 @@ class SelfEvolutionService:
         constraints: dict | None = None,
     ) -> str:
         return _classify_risk(description, constraints)
+
+    # START_FUNCTION_CONTRACT
+    # name: list_sessions
+    # purpose: List sessions with pagination. Owns the DB query.
+    # inputs: limit (int), offset (int).
+    # returns: list[dict].
+    # side_effects: None.
+    # emitted_logs: None.
+    # error_behavior: Never raises.
+    # END_FUNCTION_CONTRACT
+    def list_sessions(self, limit: int = 50, offset: int = 0) -> list[dict]:
+        with get_db() as db:
+            sessions = (db.query(SelfEvolutionSession)
+                         .order_by(SelfEvolutionSession.created_at.desc())
+                         .offset(offset).limit(limit).all())
+            return [
+                {
+                    "id": s.id, "title": s.title, "status": s.status,
+                    "risk_class": s.risk_class or "",
+                    "requires_approval": s.requires_approval,
+                    "created_at": s.created_at.isoformat() + "Z" if s.created_at else "",
+                }
+                for s in sessions
+            ]
+
+    # START_FUNCTION_CONTRACT
+    # name: get_session
+    # purpose: Return full session dict including rollback_plan.
+    # inputs: session_id (str).
+    # returns: dict | None — None if not found.
+    # side_effects: None.
+    # emitted_logs: None.
+    # error_behavior: Never raises.
+    # END_FUNCTION_CONTRACT
+    def get_session(self, session_id: str) -> dict | None:
+        with get_db() as db:
+            s = db.query(SelfEvolutionSession).filter_by(id=session_id).first()
+            if not s:
+                return None
+            return {
+                "id": s.id, "title": s.title, "description": s.description,
+                "status": s.status, "risk_class": s.risk_class or "",
+                "requires_approval": s.requires_approval,
+                "base_branch": s.base_branch or "main",
+                "constraints": s.constraints_json or {},
+                "rollback_plan": s.rollback_plan or {},
+                "created_at": s.created_at.isoformat() + "Z" if s.created_at else "",
+            }
+
+    # START_FUNCTION_CONTRACT
+    # name: cancel_session
+    # purpose: Cancel a pending session. Owns the DB mutation.
+    # inputs: session_id (str).
+    # returns: bool — True if cancelled, raises ValueError if not found or merged.
+    # side_effects: Sets session.status = "cancelled".
+    # emitted_logs: session_cancelled.
+    # error_behavior: Raises ValueError if not found or already merged.
+    # END_FUNCTION_CONTRACT
+    def cancel_session(self, session_id: str) -> bool:
+        with get_db() as db:
+            s = db.query(SelfEvolutionSession).filter_by(id=session_id).first()
+            if not s:
+                raise ValueError("session not found")
+            if s.status == "merged":
+                raise ValueError("cannot cancel merged session")
+            s.status = "cancelled"
+        _log.info("session_cancelled", session_id=session_id)
+        return True

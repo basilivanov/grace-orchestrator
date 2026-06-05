@@ -9,10 +9,6 @@ rules:
     path: src/grace_control/config/project_config.py
     reason: project_config env reads by design
     expires_wave: never
-  - rule: GRC100
-    path: src/grace_control/adapters/packet_executor.py
-    reason: os.environ.setdefault for sandbox bypass — to be handled in settings
-    expires_wave: W12
   - rule: GRC101
     path: src/grace_control/core/llm_runner.py
     reason: subprocess to spawn agent process

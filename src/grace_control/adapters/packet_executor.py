@@ -1,7 +1,7 @@
 # AI_HEADER: packet_executor — stateless bridge: DB → backend → acceptance → persist.
 # START_MODULE_CONTRACT
-# purpose: Execute a packet through its lifecycle. No direct env reads,
-#          no prefect-grace, no subprocess in execute() flow.
+# purpose: Execute a packet through its lifecycle. Forwards resolved executor
+#          to backend. No subprocess, no shutil, no packet_registry writes.
 # inputs: packet_id, worker_id, project_root, state_root, worktree_root.
 # returns: ExecutionResult.
 # side_effects: Creates PacketRun record.
@@ -9,13 +9,13 @@
 # END_MODULE_CONTRACT
 # START_MODULE_MAP
 # mapping:   - class: ExecutionResult   - class: PacketExecutionAdapter
+#           - function: _attempt_slug   - function: _attempt_branch
 # END_MODULE_MAP
 
 from __future__ import annotations
-import os, time
+import time
 from datetime import datetime, timezone
 from pathlib import Path
-import yaml
 from pydantic import BaseModel
 from grace_control.agent.backend import ExecutionBackend
 from grace_control.core.evidence_verifier import EvidenceVerifierVerdict, run_evidence_verifier, skipped_evidence_report
@@ -27,6 +27,15 @@ from grace_control.services.agent_commit_service import AgentCommitService
 from grace_control.services.worktree_cleanup_service import WorktreeCleanupService
 from grace_control.services.worktree_inspector import WorktreeInspector
 _log = GraceLogger("adapter")
+
+
+# Canonical worktree/branch naming helpers — single source of truth.
+def _attempt_slug(packet_id: str, attempt: int) -> str:
+    return f"{packet_id}-attempt-{attempt:04d}"
+
+
+def _attempt_branch(packet_id: str, attempt: int) -> str:
+    return f"agent/{_attempt_slug(packet_id, attempt)}"
 
 
 class ExecutionResult(BaseModel):
@@ -60,7 +69,7 @@ class PacketExecutionAdapter:
             from grace_control.config.settings import settings
             base_ref = settings.base_branch
             base_sha = self._inspector.base_sha(self.project_root, base_ref)
-            result = await self._call_executor(packet_path, pkt_contract, run_number, base_ref, base_sha)
+            result = await self._call_executor(packet_path, pkt_contract, run_number, base_ref, base_sha, executor)
             _log.debug("executor_run_completed", packet_id=packet_id, ok=result.ok, errors=result.errors[:2])
 
             wt_ok, agent_commit_sha = self._inspected_worktree(result, pkt_contract, packet_id, packet_data["attempt_count"])
@@ -90,8 +99,8 @@ class PacketExecutionAdapter:
         with get_db() as db:
             p = db.query(Packet).filter_by(id=packet_id).first()
             if not p: raise ValueError(f"Packet {packet_id} not found")
-            rn = p.attempt_count; rid = f"{packet_id}-R{rn:02d}"; slug = f"attempt-{rn:04d}"
-            self._worktree_cleanup.cleanup_attempt(self.project_root, f"{packet_id}-{slug}")
+            rn = p.attempt_count; rid = f"{packet_id}-R{rn:02d}"; slug = _attempt_slug(packet_id, rn)
+            self._worktree_cleanup.cleanup_attempt(self.project_root, slug)
             ex = db.query(PacketRun).filter_by(id=rid).first()
             if ex: ex.status = "running"; ex.started_at = datetime.now(timezone.utc)
             else: db.add(PacketRun(id=rid, packet_id=packet_id, run_number=rn, worker_id=worker_id, status="running", started_at=datetime.now(timezone.utc)))
@@ -212,21 +221,15 @@ class PacketExecutionAdapter:
         except: pass
         return er
 
-    async def _call_executor(self, packet_path: Path, packet_contract, attempt: int, base_ref: str, base_sha: str):
+    async def _call_executor(self, packet_path: Path, packet_contract, attempt: int,
+                             base_ref: str, base_sha: str, executor: dict):
         from grace_control.agent.backend import ExecutionRequest
         pid = packet_path.parent.name
-        eff = packet_contract.allowed_write_scope; slug = f"attempt-{attempt:04d}"
-        reg = self.state_root / "state"; reg.mkdir(parents=True, exist_ok=True); rf = reg / "packet_registry.yaml"
-        try:
-            ex = yaml.safe_load(rf.read_text()) or {} if rf.exists() else {}
-            ex[pid] = {"packet_id":pid,"feature_id":pid[:15],"wave_id":"W01","status":"ready","phase":"PHASE-TEST",
-                "packet_path":str(packet_path),"allowed_write_scope":eff or [],"frozen_scope":packet_contract.frozen_scope or [],"depends_on":[]}
-            rf.write_text(yaml.dump(ex, default_flow_style=False))
-        except: pass
-        self._worktree_cleanup.cleanup_attempt(self.project_root, f"{pid}-{slug}")
+        eff = packet_contract.allowed_write_scope; slug = _attempt_slug(pid, attempt)
+        self._worktree_cleanup.cleanup_attempt(self.project_root, slug)
         from grace_control.config.settings import settings
         req = ExecutionRequest(packet_id=pid,
             spec={"attempt_count":attempt,"base_ref":base_ref,"allowed_write_scope":eff or [],"frozen_scope":packet_contract.frozen_scope or []},
-            worktree_path=self.worktree_root / f"{pid}-{slug}", branch_name=f"agent/{slug}",
-            scope_paths=list(eff or []), executor={"executor_id":"api","model":""}, timeout_s=settings.agent_timeout_seconds, session_dir=self.state_root)
+            worktree_path=self.worktree_root / slug, branch_name=_attempt_branch(pid, attempt),
+            scope_paths=list(eff or []), executor=executor, timeout_s=settings.agent_timeout_seconds, session_dir=self.state_root)
         return await self._backend.run(req)
