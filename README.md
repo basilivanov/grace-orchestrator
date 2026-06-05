@@ -4,14 +4,22 @@
 
 MVP-0 ready: API server + worker loop + state machine + GRACE Canon checker + structured logging.
 
+> **The OpenAPI document is the canonical runtime contract.** Agents and humans
+> discover capabilities through `/openapi.json`. The CLI is being deprecated
+> as a runtime interface; see [`docs/grace/API_FIRST_CONTROL_PLANE.md`](docs/grace/API_FIRST_CONTROL_PLANE.md)
+> and [`docs/grace/CLI_DEPRECATION_INVENTORY.md`](docs/grace/CLI_DEPRECATION_INVENTORY.md)
+> for the migration plan (W1..W11).
+
 ## Architecture
 
 ```
-grace architect plan → packets in DB (READY)
-       ↓
-grace worker start → claim → execute → release → ACCEPTED → merge → MERGED
-       ↓
-grace packet list → Rich-formatted dashboard
+POST /api/architect/plan  → packets in DB (READY)
+        ↓
+/api/packets/claim + /api/packets/{id}/release  → ACCEPTED
+        ↓
+/api/packets/{id}/merge  → MERGED
+        ↓
+GET /api/trace/features/{id}  → observability
 ```
 
 **Packages:**
@@ -26,8 +34,8 @@ pip install grace-orchestrator
 ```
 
 ```bash
-# Terminal 1: API server
-grace api start
+# Start API server (deployment concern; not a product CLI)
+uvicorn grace_control.api.main:app --host 127.0.0.1 --port 8042
 # → http://127.0.0.1:8042
 
 # Terminal 2: Worker

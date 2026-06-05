@@ -292,7 +292,7 @@
           "packets"
         ],
         "summary": "Cancel Packet",
-        "description": "Cancel packet: READY/RUNNING/REJECTED \u2192 CANCELLED. Releases lease if present.",
+        "description": "Cancel packet: any non-terminal state \u2192 CANCELLED. Delegates to PacketService.\n\nThe router only translates service exceptions to HTTP responses. All DB\nstate work (transition + lease release + worker cleanup) is owned by\n`PacketService.cancel` (P1#4 from post-refactor audit).",
         "operationId": "cancel_packet_api_packets__packet_id__cancel_post",
         "parameters": [
           {
