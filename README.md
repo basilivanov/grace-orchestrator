@@ -143,9 +143,11 @@ tests/                        # 38 tests across 7 test files
 ## Configuration
 
 - `CANONICAL_DECISIONS.md` — single source of truth
-- `docs/API_CONTRACT.md` — canonical API endpoints
+- `docs/openapi.json` — auto-generated API contract (regenerate with `make docs`)
+- `docs/state-diagram.md` / `docs/packet-states.md` — packet state machine
 - `tasks/README.md` — task specifications (REVISED)
 - Environment: `GRACE_DB_URL` (sqlite:///grace.db), `GRACE_API_PORT` (8042)
+- `GRACE_EXECUTION_BACKEND` — `legacy` (default) or `new` (stub) — see `grace_control.agent.select_backend`
 
 ## License
 

@@ -4,14 +4,14 @@ Auto-generated from grace_control.core.state_machine.
 
 | State | Terminal? | Allowed transitions |
 |-------|-----------|---------------------|
-| `draft` | no | ready |
-| `ready` | no | running, cancelled |
-| `running` | no | accepted, rejected, blocked_recoverable, blocked_final, failed, cancelled |
-| `rejected` | no | ready, blocked_recoverable, blocked_final, cancelled |
-| `blocked` | no | ready |
-| `blocked_recoverable` | no | ready, blocked_final, cancelled |
-| `blocked_final` | yes | (none) |
 | `accepted` | no | merged |
-| `merged` | yes | (none) |
-| `failed` | yes | (none) |
+| `blocked` | no | ready |
+| `blocked_final` | yes | (none) |
+| `blocked_recoverable` | no | ready, blocked_final, cancelled |
 | `cancelled` | yes | (none) |
+| `draft` | no | ready |
+| `failed` | yes | (none) |
+| `merged` | yes | (none) |
+| `ready` | no | running, cancelled |
+| `rejected` | no | ready, blocked_recoverable, blocked_final, cancelled |
+| `running` | no | accepted, rejected, blocked_recoverable, blocked_final, failed, cancelled |

@@ -50,6 +50,7 @@ class GraceSettings(BaseSettings):
     agent_timeout_seconds: int = 600
     state_root: str = "/tmp/grace-eval"
     sandbox_mode: str = "danger-full-access"
+    execution_backend: str = "legacy"  # "legacy" | "new" — see grace_control.agent.select_backend
 
     # ── Database ──
     database_url: str = "sqlite:///./grace.db"

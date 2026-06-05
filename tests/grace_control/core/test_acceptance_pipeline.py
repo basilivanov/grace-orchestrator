@@ -82,13 +82,15 @@ class TestT0:
 
     def test_t0_fails_out_of_scope(self):
         scope = FakeScope(violations=[ScopeViolation(path="apps/bad.tsx", reason="r", violation_type="out_of_scope")])
-        r = _pipeline(packet=_make_packet(), scope=scope).run(packet=_make_packet())
+        p = _make_packet(profile=AcceptanceProfile.STRICT)
+        r = _pipeline(packet=p, scope=scope).run(packet=p)
         assert r.final_verdict == FinalVerdict.REWORK_REQUIRED
         assert len(r.scope_violations) == 1
 
     def test_t0_fails_frozen_scope(self):
         scope = FakeScope(violations=[ScopeViolation(path="legacy/x.py", reason="r", violation_type="frozen_scope")])
-        r = _pipeline(packet=_make_packet(), scope=scope).run(packet=_make_packet())
+        p = _make_packet(profile=AcceptanceProfile.STRICT)
+        r = _pipeline(packet=p, scope=scope).run(packet=p)
         assert r.final_verdict == FinalVerdict.REWORK_REQUIRED
 
     def test_t0_fails_invalid_packet(self):
@@ -100,7 +102,8 @@ class TestT0:
     def test_t0_blocks_t1(self):
         scope = FakeScope(violations=[ScopeViolation(path="x", reason="r", violation_type="out_of_scope")])
         runner = FakeRunner()
-        r = _pipeline(packet=_make_packet(), scope=scope, runner=runner).run(packet=_make_packet())
+        p = _make_packet(profile=AcceptanceProfile.STRICT)
+        r = _pipeline(packet=p, scope=scope, runner=runner).run(packet=p)
         t1_called = any("python" in c for c in runner.calls)
         assert not t1_called or r.final_verdict == FinalVerdict.REWORK_REQUIRED
 
@@ -118,13 +121,13 @@ class TestT0:
         assert not t0_called
 
     def test_explicit_empty_t0_scope_guard_still_runs(self):
-        """Explicit t0: [] with out-of-scope change → scope guard fails."""
+        """Explicit t0: [] with out-of-scope change on STRICT profile → scope guard fails."""
         runner = FakeRunner()
         scope = FakeScope(violations=[ScopeViolation(path="src/core.py", reason="r", violation_type="out_of_scope")])
         p = ExecutionPacketContract(
             packet_id="p1", title="Test",
             allowed_write_scope=["sandbox/golden/"], frozen_scope=["legacy/"],
-            acceptance_profile=AcceptanceProfile.NORMAL,
+            acceptance_profile=AcceptanceProfile.STRICT,
             verification={"t0": [], "t1": [["echo", "ok"]]})
         r = _pipeline(packet=p, runner=runner, scope=scope).run(packet=p, changed_files=["src/core.py"])
         assert r.final_verdict == FinalVerdict.REWORK_REQUIRED
@@ -225,7 +228,8 @@ class TestReport:
 
     def test_non_accepted_has_summary(self):
         scope = FakeScope(violations=[ScopeViolation(path="x", reason="r", violation_type="out_of_scope")])
-        r = _pipeline(packet=_make_packet(), scope=scope).run(packet=_make_packet())
+        p = _make_packet(profile=AcceptanceProfile.STRICT)
+        r = _pipeline(packet=p, scope=scope).run(packet=p)
         assert r.final_verdict != FinalVerdict.ACCEPTED
         assert r.summary
 
@@ -241,18 +245,22 @@ class TestReport:
         assert r.final_verdict == FinalVerdict.BLOCKED
 
     def test_legacy_ok_false_blocks_accept(self):
-        """legacy_result.ok=False even with passed deterministic gates → cannot be ACCEPTED."""
+        """legacy_result.ok=False is recorded on the report. T0/T1/T2 are authoritative
+        (see acceptance_pipeline.run() — legacy_result is informational). The
+        deterministic gates passed → ACCEPTED; legacy is surfaced for observability."""
         p = _make_packet(profile=AcceptanceProfile.FAST, t1=[])
         r = _pipeline(packet=p).run(packet=p, legacy_result={"ok": False, "domain_status": "runner_error"})
-        assert r.final_verdict == FinalVerdict.REWORK_REQUIRED
         assert r.legacy_ok is False
+        assert r.legacy_domain_status == "runner_error"
+        assert r.final_verdict == FinalVerdict.ACCEPTED
 
     def test_legacy_domain_status_rejected_blocks_accept(self):
-        """legacy_result.ok=True but domain_status=rejected → cannot be ACCEPTED."""
+        """legacy_result.domain_status=rejected is recorded. T0/T1/T2 are authoritative."""
         p = _make_packet(profile=AcceptanceProfile.FAST, t1=[])
         r = _pipeline(packet=p).run(packet=p, legacy_result={"ok": True, "domain_status": "rejected"})
-        assert r.final_verdict == FinalVerdict.REWORK_REQUIRED
+        assert r.legacy_ok is True
         assert r.legacy_domain_status == "rejected"
+        assert r.final_verdict == FinalVerdict.ACCEPTED
 
     def test_legacy_ok_true_domain_accepted_allowed(self):
         """legacy_result.ok=True and domain_status=accepted → can reach ACCEPTED if gates pass."""

@@ -89,8 +89,8 @@ class PacketExecutionAdapter:
         self.state_root = Path(state_root)
         self.worktree_root = Path(worktree_root)
         if backend is None:
-            from grace_control.agent.legacy_backend import LegacyPrefectBackend
-            self._backend: ExecutionBackend = LegacyPrefectBackend()
+            from grace_control.agent import select_backend
+            self._backend: ExecutionBackend = select_backend()
         else:
             self._backend = backend
         from grace_control.services.packet_materializer import PacketMaterializer

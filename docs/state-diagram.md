@@ -1,23 +1,23 @@
 ```mermaid
 stateDiagram-v2
-    draft --> ready
-    ready --> running
-    ready --> cancelled
-    running --> accepted
-    running --> rejected
-    running --> blocked_recoverable
-    running --> blocked_final
-    running --> failed
-    running --> cancelled
-    rejected --> ready
-    rejected --> blocked_recoverable
-    rejected --> blocked_final
-    rejected --> cancelled
+    accepted --> merged
     blocked --> ready
-    blocked_recoverable --> ready
     blocked_recoverable --> blocked_final
     blocked_recoverable --> cancelled
-    accepted --> merged
+    blocked_recoverable --> ready
+    draft --> ready
+    ready --> cancelled
+    ready --> running
+    rejected --> blocked_final
+    rejected --> blocked_recoverable
+    rejected --> cancelled
+    rejected --> ready
+    running --> accepted
+    running --> blocked_final
+    running --> blocked_recoverable
+    running --> cancelled
+    running --> failed
+    running --> rejected
 
     classDef terminal fill:#fdd,stroke:#900,stroke-width:2px
     class blocked_final terminal

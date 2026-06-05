@@ -1,6 +1,6 @@
 # Verification Matrix
 # Project: grace-control-plane
-# Canonical reference: CANONICAL_DECISIONS.md, API_CONTRACT.md
+# Canonical reference: CANONICAL_DECISIONS.md, docs/openapi.json (regenerate via `make docs`)
 
 ## Overview
 
@@ -205,7 +205,7 @@ W01 → W02 → W03 → W04 (sequential). Within waves, slices may be developed 
 ## References
 
 - CANONICAL_DECISIONS.md — canonical architecture decisions
-- docs/API_CONTRACT.md — API endpoint contract
+- docs/openapi.json — auto-generated API contract (regenerate via `make docs`)
 - tasks/PHASE_1_CORE_REVISED.md — DB + state machine + adapter specs
 - tasks/PHASE_2_API_WORKER_REVISED.md — API + worker specs
 - tasks/PHASE_3_CLI_E2E_REVISED.md — CLI + E2E test specs
