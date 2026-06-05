@@ -117,102 +117,73 @@ async def get_packet(packet_id: str) -> dict:
 
 @router.post("/claim")
 async def claim_packet(request: dict) -> dict:
-    """Claim next READY packet. SOLE owner of READY→RUNNING transition.
-    Multi-worker safe: unique constraint on lease(packet_id) prevents duplicate claims."""
+    """Claim next READY packet. Delegates to PacketService.claim for all state work."""
     worker_id = request["worker_id"]
 
     with get_db() as db:
         ready = db.query(Packet).filter_by(state=PacketState.READY.value).all()
 
-        for packet in ready:
-            existing = db.query(Lease).filter_by(packet_id=packet.id).first()
-            if existing:
-                if existing.expires_at > datetime.utcnow():
-                    continue
-                db.delete(existing)
-
-            lease = Lease(
-                packet_id=packet.id,
-                worker_id=worker_id,
-                expires_at=datetime.utcnow() + timedelta(minutes=5),
-            )
-            db.add(lease)
-            db.flush()  # populate lease.id before return
-
-            _state_machine.transition(PacketState(packet.state), PacketState.RUNNING)
-            packet.state = PacketState.RUNNING.value
-            packet.attempt_count += 1
-
-            worker = db.query(Worker).filter_by(id=worker_id).first()
-            if worker:
-                worker.current_packet_id = packet.id
-
-            _log.info("packet_claimed", packet_id=packet.id, worker_id=worker_id,
-                       attempt=packet.attempt_count)
-            record_event("packet_claimed", "packet", packet.id,
-                         {"worker_id": worker_id, "attempt": packet.attempt_count}, db=db)
-            await notify_event("packet_claimed", packet.id, worker_id=worker_id)
-            await broadcast_event("state_change", {"packet_id": packet.id, "state": "running", "worker_id": worker_id})
-
-            return {
-                "data": {
-                    "packet_id": packet.id,
-                    "spec": packet.spec_json,
-                    "lease_id": lease.id,
-                    "expires_at": lease.expires_at.isoformat() + "Z",
-                },
-                "timestamp": datetime.utcnow().isoformat() + "Z",
-            }
-
+    if not ready:
         from grace_control.core.wave_gate import check_wave_gates
         check_wave_gates()
         raise HTTPException(status_code=404, detail="No packets available")
 
+    from grace_control.services.packet_service import PacketService, PacketNotFoundError, StateTransitionError
+    svc = PacketService()
+
+    for packet in ready:
+        try:
+            lease = await svc.claim(packet.id, worker_id)
+        except StateTransitionError:
+            continue
+        except PacketNotFoundError:
+            continue
+
+        return {
+            "data": {
+                "packet_id": packet.id,
+                "spec": packet.spec_json,
+                "lease_id": lease.id,
+                "expires_at": lease.expires_at.isoformat() + "Z",
+            },
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+        }
+
+    from grace_control.core.wave_gate import check_wave_gates
+    check_wave_gates()
+    raise HTTPException(status_code=404, detail="No packets available")
+
 
 @router.post("/{packet_id}/release")
 async def release_packet(packet_id: str, request: dict) -> dict:
-    """Release packet after execution. RUNNING→ACCEPTED/REJECTED/FAILED."""
+    """Release packet after execution. Delegates state transition to PacketService."""
     worker_id = request["worker_id"]
     status = request["status"]
     result = request.get("result", {})
 
+    if status == "accepted" and not result.get("accepted"):
+        status = "rejected"
+
+    from grace_control.services.packet_service import PacketService, PacketNotFoundError
+    svc = PacketService()
+    try:
+        await svc.release(packet_id, status, result)
+    except PacketNotFoundError:
+        raise HTTPException(status_code=404, detail="Packet not found")
+
     with get_db() as db:
-        lease = db.query(Lease).filter_by(packet_id=packet_id).first()
-        if lease:
-            db.delete(lease)
-
-        packet = db.query(Packet).filter_by(id=packet_id).first()
-        if not packet:
-            raise HTTPException(status_code=404, detail="Packet not found")
-
-        if status == "accepted" and result.get("accepted"):
-            target = PacketState.ACCEPTED
-        elif status == "blocked" or result.get("domain_status") == "blocked":
-            target = PacketState.BLOCKED
-        elif status == "rejected":
-            target = PacketState.REJECTED
-        else:
-            target = PacketState.FAILED
-
-        _state_machine.transition(PacketState(packet.state), target)
-        packet.state = target.value
-
         worker = db.query(Worker).filter_by(id=worker_id).first()
         if worker:
             worker.current_packet_id = None
             worker.status = "idle"
+        packet = db.query(Packet).filter_by(id=packet_id).first()
+        new_state = packet.state if packet else status
 
-        _log.info("packet_released", packet_id=packet.id, state=target.value,
-                   worker_id=worker_id)
-        record_event("packet_released", "packet", packet.id,
-                     {"worker_id": worker_id, "state": target.value}, db=db)
-        await notify_event("packet_released", packet.id, worker_id=worker_id, state=target.value)
-        await broadcast_event("state_change", {"packet_id": packet.id, "state": target.value})
-
-        return {
-            "data": {"packet_id": packet.id, "state": packet.state, "released": True},
-            "timestamp": datetime.utcnow().isoformat() + "Z",
-        }
+    _log.info("packet_released", packet_id=packet_id, state=new_state, worker_id=worker_id)
+    return {
+        "data": {"packet_id": packet_id, "state": new_state, "released": True},
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+    }
 
 
 @router.post("/{packet_id}/cancel")
@@ -260,146 +231,68 @@ async def cancel_packet(packet_id: str, request: dict) -> dict:
 
 @router.post("/{packet_id}/merge")
 async def merge_packet(packet_id: str, request: dict) -> dict:
-    """Merge accepted packet: ACCEPTED → MERGED. Uses target_repo_root, no stash."""
-    commit_sha = request.get("commit_sha", "")
+    """Merge accepted packet: ACCEPTED → MERGED. Delegates to MergeService."""
+    from grace_control.config.settings import settings as _settings
+    from grace_control.services.merge_service import MergeService
+    from grace_control.db.schema import PacketState as _PS
+
     worktree_path = request.get("worktree_path", "")
     branch_name = request.get("branch_name", "")
-    target_repo_root = request.get("target_repo_root") or os.environ.get("GRACE_TARGET_REPO_ROOT") or ""
+    target_branch = request.get("target_branch") or _settings.target_branch
+    target_repo_root = (
+        request.get("target_repo_root")
+        or os.environ.get("GRACE_TARGET_REPO_ROOT")
+        or _settings.target_repo_root
+    )
 
     if not worktree_path or not branch_name:
         raise HTTPException(status_code=400,
             detail="worktree_path and branch_name are required for merge")
 
-    import subprocess as _sp
-    from pathlib import Path
-
-    repo = Path(target_repo_root).resolve() if target_repo_root else Path.cwd().resolve()
-
     with get_db() as db:
         packet = db.query(Packet).filter_by(id=packet_id).first()
         if not packet:
             raise HTTPException(status_code=404, detail="Packet not found")
-
-        current = PacketState(packet.state)
-        if current != PacketState.ACCEPTED:
+        current = _PS(packet.state)
+        if current != _PS.ACCEPTED:
             raise HTTPException(status_code=400,
                 detail=f"Can only merge ACCEPTED packets, got {current.value}")
 
-        # Validate target repo and worktree/branch
-        if not repo.exists():
-            raise HTTPException(status_code=400, detail=f"target_repo_root does not exist: {repo}")
-        try:
-            _sp.run(["git", "-C", str(repo), "rev-parse", "--is-inside-work-tree"],
-                    capture_output=True, timeout=10, check=True)
-        except Exception:
-            raise HTTPException(status_code=400, detail=f"target_repo_root is not a git repo: {repo}")
+    if not target_repo_root:
+        raise HTTPException(status_code=400, detail="target_repo_root is required")
 
-        wt = Path(worktree_path)
-        if not wt.exists():
-            raise HTTPException(status_code=400, detail=f"worktree_path does not exist: {worktree_path}")
-        try:
-            wt_list = _sp.run(["git", "-C", str(repo), "worktree", "list", "--porcelain"],
-                              capture_output=True, text=True, timeout=10)
-            if worktree_path not in wt_list.stdout:
-                raise HTTPException(status_code=400,
-                    detail=f"worktree_path is not registered for target repo: {worktree_path}")
-        except HTTPException:
-            raise
-        except Exception:
-            pass
-        try:
-            rev = _sp.run(["git", "-C", str(repo), "rev-parse", "--verify", branch_name],
-                          capture_output=True, timeout=10)
-            if rev.returncode != 0:
-                raise HTTPException(status_code=400, detail=f"branch does not exist: {branch_name}")
-        except HTTPException:
-            raise
-        except Exception:
-            raise HTTPException(status_code=400, detail=f"cannot verify branch: {branch_name}")
+    svc = MergeService()
+    result = await svc.merge_packet(
+        packet_id=packet_id,
+        target_repo_root=target_repo_root,
+        branch_name=branch_name,
+        target_branch=target_branch,
+    )
 
-        # Check for dirty target repo (no stash)
-        allow_dirty = os.environ.get("GRACE_ALLOW_DIRTY_TARGET_MERGE") == "true"
-        if not allow_dirty:
-            try:
-                status = _sp.run(["git", "-C", str(repo), "status", "--porcelain"],
-                                 capture_output=True, text=True, timeout=10)
-                if status.stdout.strip():
-                    _log.warn("dirty_target_repo", packet_id=packet.id, repo=str(repo))
-                    record_event("packet_merge_failed", "packet", packet.id,
-                                 {"reason": "DIRTY_TARGET_REPO", "repo": str(repo)}, db=db)
-                    raise HTTPException(status_code=409,
-                        detail={"merge_failed": "DIRTY_TARGET_REPO",
-                                "message": "Target repo has uncommitted changes. Commit or stash them manually."})
-            except HTTPException:
-                raise
-            except Exception:
-                pass
+    if not result.success:
+        _log.warn("merge_failed", packet_id=packet_id, error=result.error[:200])
+        with get_db() as db:
+            from grace_control.api.ws_events import record_event as _rec
+            _rec("packet_merge_failed", "packet", packet_id, {
+                "branch": branch_name, "error": result.error,
+            }, db=db)
+        raise HTTPException(status_code=409,
+            detail={"merge_failed": result.error, "packet_id": packet_id})
 
-        # Attempt git merge BEFORE state transition
-        merge_ok = True
-        merge_stderr = ""
-        try:
-            mr = _sp.run(["git", "merge", branch_name, "--no-edit", "--no-ff"],
-                         cwd=str(repo), capture_output=True, text=True, timeout=30)
-            if mr.returncode != 0:
-                merge_ok = False
-                merge_stderr = mr.stderr[:500]
-                _log.warn("merge_failed", packet_id=packet.id, stderr=merge_stderr)
-        except Exception as e:
-            merge_ok = False
-            merge_stderr = str(e)[:200]
-            _log.warn("merge_failed", packet_id=packet.id, error=merge_stderr)
+    with get_db() as db:
+        from grace_control.api.ws_events import record_event as _rec
+        _rec("packet_merged", "packet", packet_id, {
+            "commit_sha": result.commit_sha, "target_repo": result.target_repo,
+            "branch": branch_name,
+        }, db=db)
 
-        # If git merge failed, do NOT transition to MERGED
-        if not merge_ok:
-            record_event("packet_merge_failed", "packet", packet.id,
-                         {"branch": branch_name, "worktree": worktree_path,
-                          "target_repo": str(repo), "stderr": merge_stderr,
-                          "commit_sha": commit_sha}, db=db)
-            raise HTTPException(status_code=409,
-                detail={"merge_failed": f"git merge of {branch_name} failed",
-                        "stderr": merge_stderr})
+    if worktree_path:
+        from pathlib import Path as _P
+        await svc.cleanup_worktree(_P(worktree_path), branch_name)
 
-        # State transition only after successful merge
-        _state_machine.transition(current, PacketState.MERGED)
-        packet.state = PacketState.MERGED.value
-
-        # Push to origin so self-evolution / golden test merges are not lost
-        try:
-            pr = _sp.run(["git", "push", "origin", "main"],
-                         cwd=str(repo), capture_output=True, text=True, timeout=30)
-            if pr.returncode != 0:
-                _log.warn("merge_push_failed", packet_id=packet.id, stderr=pr.stderr[:200])
-            else:
-                _log.info("merge_pushed", packet_id=packet.id)
-                record_event("packet_merge_pushed", "packet", packet.id,
-                             {"commit_sha": commit_sha, "target_repo": str(repo)})
-        except Exception as e:
-            _log.warn("merge_push_failed", packet_id=packet.id, error=str(e)[:200])
-
-        # Clean up worktree (prefer git worktree remove over shutil.rmtree)
-        if worktree_path:
-            try:
-                if wt.exists():
-                    import shutil
-                    try:
-                        _sp.run(["git", "worktree", "remove", str(wt), "--force"],
-                                cwd=str(repo), capture_output=True, timeout=10)
-                    except Exception:
-                        pass
-                    if wt.exists():
-                        shutil.rmtree(wt)
-            except Exception:
-                pass
-
-        _log.info("packet_merged", packet_id=packet.id, commit_sha=commit_sha,
-                   target_repo=str(repo))
-        record_event("packet_merged", "packet", packet.id,
-                     {"commit_sha": commit_sha, "target_repo": str(repo), "branch": branch_name,
-                      "worktree": worktree_path}, db=db)
-        await broadcast_event("state_change", {"packet_id": packet.id, "state": "merged"})
-
-        return {
-            "data": {"packet_id": packet.id, "state": packet.state, "commit_sha": commit_sha},
-            "timestamp": datetime.utcnow().isoformat() + "Z",
-        }
+    _log.info("packet_merged", packet_id=packet_id,
+        commit_sha=result.commit_sha, target_repo=result.target_repo)
+    return {
+        "data": {"packet_id": packet_id, "state": "merged", "commit_sha": result.commit_sha},
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+    }
