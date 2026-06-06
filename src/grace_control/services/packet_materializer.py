@@ -74,6 +74,16 @@ class PacketMaterializer:
 ## Objective
 {pd.get('objective') or pd.get('title') or pd['id']}
 
+## GRACE Canon (MANDATORY)
+Every new file must include:
+1. `# AI_HEADER: module_name — short description` at the top
+2. `# START_MODULE_CONTRACT` / `# END_MODULE_CONTRACT` block
+3. `# START_MODULE_MAP` / `# END_MODULE_MAP` block
+4. `# START_FUNCTION_CONTRACT` / `# END_FUNCTION_CONTRACT` for every public function
+5. Structured logging: `from grace_control.core.structured_logger import GraceLogger`
+   and `_log = GraceLogger("name")`. Use `_log.info("msg", ctx_key=value)`.
+   NEVER use `print()`, `logging`, or `loguru`.
+
 ## Scope
 {scope_lines}
 

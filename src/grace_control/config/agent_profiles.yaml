@@ -190,7 +190,7 @@ agents:
       - "{model}"
       - "--variant"
       - "{effort}"
-      - Read the task from {packet_path} and execute it. Create or modify files in the current working directory using the file-editing tools available. After finishing, briefly summarize what you changed.
+      - "Read the task from {packet_path} and execute it. Create or modify files in the current working directory using the file-editing tools available. Every new file MUST include GRACE canon headers: AI_HEADER, MODULE_CONTRACT, MODULE_MAP, FUNCTION_CONTRACT. Use GraceLogger for logging (never print). Follow the GRACE Canon section from the task. After finishing, briefly summarize what you changed."
     model: "deepseek/deepseek-v4-flash"
     effort: "medium"
     cwd: "{worktree_path}"
@@ -207,7 +207,7 @@ agents:
       - "{model}"
       - "--variant"
       - "{effort}"
-      - Read the task from {packet_path} and execute it. Create or modify files in the current working directory using the file-editing tools available. After finishing, briefly summarize what you changed.
+      - "Read the task from {packet_path} and execute it. Create or modify files in the current working directory using the file-editing tools available. Every new file MUST include GRACE canon headers: AI_HEADER, MODULE_CONTRACT, MODULE_MAP, FUNCTION_CONTRACT. Use GraceLogger for logging (never print). Follow the GRACE Canon section from the task. After finishing, briefly summarize what you changed."
     model: "opencode/claude-sonnet-4-6"
     effort: "max"
     cwd: "{worktree_path}"
@@ -222,7 +222,7 @@ agents:
       - run
       - "--model"
       - "{model}"
-      - Read the task from {packet_path} and execute it. Create or modify files in the current working directory using the file-editing tools available. After finishing, briefly summarize what you changed.
+      - "Read the task from {packet_path} and execute it. Create or modify files in the current working directory using the file-editing tools available. Every new file MUST include GRACE canon headers: AI_HEADER, MODULE_CONTRACT, MODULE_MAP, FUNCTION_CONTRACT. Use GraceLogger for logging (never print). Follow the GRACE Canon section from the task. After finishing, briefly summarize what you changed."
     model: "deepseek/deepseek-v4-flash"
     effort: "high"
     cwd: "{worktree_path}"

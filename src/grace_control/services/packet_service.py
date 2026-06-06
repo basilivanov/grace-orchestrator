@@ -264,10 +264,18 @@ class PacketService:
 
     async def retry(self, packet_id: str) -> Packet:
         """REJECTED/BLOCKED_RECOVERABLE → READY for retry. Raises if max_attempts reached."""
+        packet = None
+        for attempt in range(5):
+            with self._db_factory() as db:
+                packet = db.query(Packet).filter_by(id=packet_id).with_for_update().first()
+                if packet: break
+            if packet: break
+            import time
+            time.sleep(0.1 * (attempt + 1))
+        if not packet:
+            raise PacketNotFoundError(packet_id)
         with self._db_factory() as db:
-            packet = db.query(Packet).filter_by(id=packet_id).with_for_update().first()
-            if not packet:
-                raise PacketNotFoundError(packet_id)
+            packet = db.merge(packet)  # re-attach to fresh session
             current = PacketStateMachine.normalize_state(packet.state)
             if current not in (PacketState.REJECTED, PacketState.BLOCKED_RECOVERABLE):
                 raise StateTransitionError(
