@@ -84,7 +84,7 @@ class PacketExecutionAdapter:
                 pkt_contract, result, packet_id, run_number, base_ref, base_sha, start)
 
             if not accept_report.is_accepted:
-                ev, rv = self._maybe_verify(accept_report, pkt_contract, wt_path, run_dir, changed_files, packet_data)
+                ev, rv = await self._maybe_verify(accept_report, pkt_contract, wt_path, run_dir, changed_files, packet_data)
                 return self._persist_run("rejected", run_id, executor, safe_data, accept_report, ev, rv,
                     int((time.time()-start)*1000), ar_path, packet_id, start, commit_sha="")
 
@@ -121,8 +121,8 @@ class PacketExecutionAdapter:
         rid = (spec.get("recovery") or {}).get("requested_executor_id") if isinstance(spec, dict) else None
         if rid:
             match = get_agent_profile(rid)
-            ex = match.to_dict() if match else select_executor("coder", attempt=pd.get("attempt_count",1)+1)
-        else: ex = select_executor("coder", attempt=pd.get("attempt_count",1)+1)
+            ex = match.to_dict() if match else select_executor("coder", attempt=max(pd.get("attempt_count", 0), 1))
+        else: ex = select_executor("coder", attempt=max(pd.get("attempt_count", 0), 1))
         pd["_executor"] = ex; pd["_tier"] = tier.value; return ex
 
     def _inspected_worktree(self, result, pkt_contract, packet_id, attempt_count):
@@ -158,13 +158,12 @@ class PacketExecutionAdapter:
         except: sl = {"ok": result.ok, "domain_status": result.domain_status}
         return report, arp, sl, cf, wt, rd
 
-    def _maybe_verify(self, accept_report, pkt_contract, wt_path, run_dir, changed_files, pd):
+    async def _maybe_verify(self, accept_report, pkt_contract, wt_path, run_dir, changed_files, pd):
         from grace_control.core.recovery_rules import evaluate_ladder
         if evaluate_ladder(pd.get("attempt_count",1)).skip_verifier:
             return skipped_evidence_report("odd skips"), skipped_reviewer_report("fail")
-        import asyncio
-        ev = asyncio.run(run_evidence_verifier(packet=pkt_contract, acceptance_report=accept_report,
-            worktree_path=wt_path, run_dir=run_dir, changed_files=changed_files, artifacts=[]))
+        ev = await run_evidence_verifier(packet=pkt_contract, acceptance_report=accept_report,
+            worktree_path=wt_path, run_dir=run_dir, changed_files=changed_files, artifacts=[])
         return ev, skipped_reviewer_report("deterministic fail")
 
     async def _route_after(self, start, run_id, packet_id, result, executor, rn,

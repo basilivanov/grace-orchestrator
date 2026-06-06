@@ -144,7 +144,7 @@ class Worker:
                             pass
                     except Exception:
                         self.log.error("execution_failed", packet_id=packet_id,
-                            error=traceback.format_exc()[:500])
+                            error=traceback.format_exc()[:5000])
                         try:
                             already_released = status not in ("", "running")
                         except UnboundLocalError:
