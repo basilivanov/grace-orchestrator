@@ -56,6 +56,11 @@ class WorkerAPIClient:
                 return None
             raise
 
+    async def retry_packet(self, packet_id: str, worker_id: str) -> dict:
+        r = await self.client.post(f"/api/packets/{packet_id}/retry", json={"worker_id": worker_id})
+        r.raise_for_status()
+        return r.json()
+
     async def release_packet(self, packet_id: str, worker_id: str, status: str, result: dict) -> dict:
         r = await self.client.post(f"/api/packets/{packet_id}/release", json={
             "worker_id": worker_id, "status": status, "result": result,

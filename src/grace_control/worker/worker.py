@@ -167,13 +167,13 @@ class Worker:
                 await asyncio.sleep(10)
 
     async def _handle_rejection(self, packet_id: str):
-        from grace_control.services.packet_service import PacketService
-        from grace_control.core.state_machine import StateTransitionError
+        # Let the API handle retry — avoids DB visibility races between
+        # worker and API processes (same issue as PacketNotFoundError on claim).
         try:
-            await PacketService().retry(packet_id)
+            await self.api.retry_packet(packet_id, self.worker_id)
             self.log.info("packet_retried", packet_id=packet_id)
-        except StateTransitionError as e:
-            self.log.warn("max_retries_reached", packet_id=packet_id, error=str(e)[:200])
+        except Exception as e:
+            self.log.warn("retry_via_api_failed", packet_id=packet_id, error=str(e)[:200])
 
     async def _maybe_apply_recovery(self, packet_id: str):
         from grace_control.config.settings import settings

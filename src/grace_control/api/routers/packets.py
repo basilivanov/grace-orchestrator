@@ -236,6 +236,22 @@ async def cancel_packet(packet_id: str, request: dict) -> dict:
         "timestamp": datetime.utcnow().isoformat() + "Z",
     }
 
+@router.post("/{packet_id}/retry")
+async def retry_packet(packet_id: str, request: dict) -> dict:
+    """Retry a REJECTED packet: REJECTED → READY via API (no DB race)."""
+    from grace_control.services.packet_service import PacketService, MaxRetriesReachedError
+    from grace_control.core.state_machine import StateTransitionError
+    try:
+        await PacketService().retry(packet_id)
+    except MaxRetriesReachedError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except StateTransitionError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {
+        "data": {"packet_id": packet_id, "state": "ready"},
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+    }
+
 
 @router.post("/{packet_id}/merge")
 async def merge_packet(packet_id: str, request: dict) -> dict:
