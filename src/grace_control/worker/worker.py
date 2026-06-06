@@ -130,8 +130,7 @@ class Worker:
 
                         if status == "rejected":
                             self.log.warn("packet_rejected", packet_id=packet_id, reason=result.reason)
-                            await self._maybe_apply_recovery(packet_id)
-                            self._handle_rejection(packet_id)
+                            await self._handle_rejection(packet_id)
                         elif status == "blocked":
                             self.log.warn("packet_blocked", packet_id=packet_id, reason=result.reason)
                             await self._maybe_apply_recovery(packet_id)
@@ -147,10 +146,15 @@ class Worker:
                         self.log.error("execution_failed", packet_id=packet_id,
                             error=traceback.format_exc()[:500])
                         try:
-                            await self.api.release_packet(packet_id, self.worker_id, "failed", {"accepted": False})
-                            self.log.info("released_as_failed", packet_id=packet_id)
-                        except Exception:
-                            pass
+                            already_released = status not in ("", "running")
+                        except UnboundLocalError:
+                            already_released = False
+                        if not already_released:
+                            try:
+                                await self.api.release_packet(packet_id, self.worker_id, "failed", {"accepted": False})
+                                self.log.info("released_as_failed", packet_id=packet_id)
+                            except Exception:
+                                pass
                     except Exception:
                             self.log.error("release_failed_on_error", packet_id=packet_id)
 
@@ -159,12 +163,11 @@ class Worker:
                     error=traceback.format_exc()[:500])
                 await asyncio.sleep(10)
 
-    def _handle_rejection(self, packet_id: str):
-        import asyncio
+    async def _handle_rejection(self, packet_id: str):
         from grace_control.services.packet_service import PacketService
         from grace_control.core.state_machine import StateTransitionError
         try:
-            asyncio.run(PacketService().retry(packet_id))
+            await PacketService().retry(packet_id)
             self.log.info("packet_retried", packet_id=packet_id)
         except StateTransitionError as e:
             self.log.warn("max_retries_reached", packet_id=packet_id, error=str(e)[:200])
