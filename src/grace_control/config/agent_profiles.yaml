@@ -141,18 +141,60 @@ agents:
       - "{model}"
       - "--variant"
       - "{effort}"
-      - Read the task from {packet_path}. Respond ONLY with valid JSON, no other text.
+      - Read the task from {packet_path} and execute it. Create or modify files in the current working directory using the file-editing tools available. After finishing, briefly summarize what you changed.
     extras:
       - "--attach"
       - "${OPENCODE_SERVER_URL}"
       - "-p"
       - "${OPENCODE_SERVER_PASSWORD}"
-    model: "deepseek/deepseek-v4-pro"
+    model: "deepseek/deepseek-v4-flash"
     effort: "max"
     cwd: "{worktree_path}"
     timeout_seconds: 1200
     env:
       OPENAI_API_KEY: "${OPENAI_API_KEY}"
+    input:
+      mode: file
+  verifier-cheap:
+    backend: cli
+    command:
+      - opencode
+      - run
+      - "--model"
+      - "{model}"
+      - "--variant"
+      - "{effort}"
+      - You are a verifier. Read the task and evidence from {packet_path}, then output your verdict as JSON.
+    extras:
+      - "--attach"
+      - "${OPENCODE_SERVER_URL}"
+      - "-p"
+      - "${OPENCODE_SERVER_PASSWORD}"
+    model: "deepseek/deepseek-v4-flash"
+    effort: "medium"
+    cwd: "{worktree_path}"
+    timeout_seconds: 300
+    input:
+      mode: file
+  context-collector-flash:
+    backend: cli
+    command:
+      - opencode
+      - run
+      - "--model"
+      - "{model}"
+      - "--variant"
+      - "{effort}"
+      - You are a context collector. Read the task from {packet_path} and output the relevant context excerpts as JSON.
+    extras:
+      - "--attach"
+      - "${OPENCODE_SERVER_URL}"
+      - "-p"
+      - "${OPENCODE_SERVER_PASSWORD}"
+    model: "deepseek/deepseek-v4-flash"
+    effort: "low"
+    cwd: "{worktree_path}"
+    timeout_seconds: 300
     input:
       mode: file
   coder-deepseek-flash:
@@ -164,7 +206,7 @@ agents:
       - "{model}"
       - "--variant"
       - "{effort}"
-      - Read the task from {packet_path}. Respond ONLY with valid JSON, no other text.
+      - Read the task from {packet_path} and execute it. Create or modify files in the current working directory using the file-editing tools available. After finishing, briefly summarize what you changed.
     extras:
       - "--attach"
       - "${OPENCODE_SERVER_URL}"
@@ -185,7 +227,7 @@ agents:
       - "{model}"
       - "--variant"
       - "{effort}"
-      - Read the task from {packet_path}. Respond ONLY with valid JSON, no other text.
+      - Read the task from {packet_path} and execute it. Create or modify files in the current working directory using the file-editing tools available. After finishing, briefly summarize what you changed.
     extras:
       - "--attach"
       - "${OPENCODE_SERVER_URL}"
@@ -204,13 +246,13 @@ agents:
       - run
       - "--model"
       - "{model}"
-      - Read the task from {packet_path}. Respond ONLY with valid JSON, no other text.
+      - Read the task from {packet_path} and execute it. Create or modify files in the current working directory using the file-editing tools available. After finishing, briefly summarize what you changed.
     extras:
       - "--attach"
       - "${OPENCODE_SERVER_URL}"
       - "-p"
       - "${OPENCODE_SERVER_PASSWORD}"
-    model: "codex-5.1"
+    model: "deepseek/deepseek-v4-flash"
     effort: "high"
     cwd: "{worktree_path}"
     timeout_seconds: 900
@@ -230,7 +272,7 @@ agents:
       - "${OPENCODE_SERVER_URL}"
       - "-p"
       - "${OPENCODE_SERVER_PASSWORD}"
-    model: "codex-5.1"
+    model: "deepseek/deepseek-v4-flash"
     effort: "high"
     cwd: "{worktree_path}"
     timeout_seconds: 900
