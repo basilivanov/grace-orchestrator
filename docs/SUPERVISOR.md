@@ -16,7 +16,13 @@ Supervisor:
 
 ```bash
 # Запустить supervisor (API + 1 worker)
-scripts/live_supervisor.sh --target-dir /tmp/grace-live-wt --source-dir /tmp/grace-orchestrator-export
+# source-dir по умолчанию = директория скрипта (авто-определяется)
+scripts/live_supervisor.sh --target-dir /tmp/grace-live-wt
+
+# Явно указать source-dir (если запускаете из другой директории)
+scripts/live_supervisor.sh \
+  --target-dir /tmp/grace-live-wt \
+  --source-dir /path/to/grace-orchestrator
 
 # Проверить статус
 GRACE_SUPERVISOR_SOCK=/tmp/grace-live-wt/supervisor.sock python3 -m grace_control.cli status
@@ -191,7 +197,7 @@ Supervisor — это Python-процесс (asyncio), который:
 Три независимые оси:
 
 ### 1. Worktree cleanup (default: on)
-- Сканирует `$TARGET_DIR/.grace_worktrees/wt_*`
+- Сканирует `$TARGET_DIR/.grace/worktrees/`
 - Для каждой директории проверяет:
   1. `git worktree list --porcelain` — зарегистрирована ли в git?
   2. Есть ли в БД `Packet` в non-terminal state, ссылающийся на этот worktree?
@@ -203,7 +209,7 @@ Supervisor — это Python-процесс (asyncio), который:
 Conservative: если git или DB недоступны — **не трогает** worktree. Никогда не поднимает исключение.
 
 ### 2. State file cleanup (default: on, threshold: 7 days)
-- Сканирует `$TARGET_DIR/.grace_state/`
+- Сканирует `$TARGET_DIR/.grace/state/`
 - Удаляет файлы/директории старше `--stale-state-days N` (default 7)
 - Использует `mtime` для сравнения
 

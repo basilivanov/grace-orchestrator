@@ -105,7 +105,7 @@ class PacketExecutionAdapter:
             p = db.query(Packet).filter_by(id=packet_id).first()
             if not p: raise ValueError(f"Packet {packet_id} not found")
             rn = p.attempt_count; rid = f"{packet_id}-R{rn:02d}"; slug = _attempt_slug(packet_id, rn)
-            self._worktree_cleanup.cleanup_attempt(self.project_root, slug)
+            self._worktree_cleanup.cleanup_attempt(self.project_root, slug, worktree_root=self.worktree_root)
             ex = db.query(PacketRun).filter_by(id=rid).first()
             if ex: ex.status = "running"; ex.started_at = datetime.now(timezone.utc)
             else: db.add(PacketRun(id=rid, packet_id=packet_id, run_number=rn, worker_id=worker_id, status="running", started_at=datetime.now(timezone.utc)))
@@ -234,20 +234,71 @@ class PacketExecutionAdapter:
         eff = packet_contract.allowed_write_scope; slug = _attempt_slug(pid, attempt)
         wt_path = self.worktree_root / slug
         branch = _attempt_branch(pid, attempt)
-        self._worktree_cleanup.cleanup_attempt(self.project_root, slug)
+
+        # Clean up any stale worktree/branch from a previous attempt.
+        # Pass worktree_root so cleanup looks in the right place.
+        self._worktree_cleanup.cleanup_attempt(
+            self.project_root, slug, worktree_root=self.worktree_root)
+
+        git = GitService()
+
+        # 2.3: if the branch still exists after cleanup (e.g. cleanup_attempt
+        # couldn't delete it), force-delete it now so worktree_add can
+        # create a fresh branch from base_ref.
+        branch_check = git._run(["branch", "--list", branch], self.project_root)
+        if branch_check.stdout.strip():
+            git._run(["branch", "-D", branch], self.project_root)
+            _log.info("stale_branch_deleted", branch=branch, packet_id=pid)
+
         # Create the worktree on a fresh branch from base_ref so the agent has
-        # a full checkout (scripts/, src/, tests/) to work in. Without this,
-        # cwd.mkdir() in agent_run_service leaves an empty directory and the
-        # agent's file edits cannot be seen by T0 scope/lint checks.
-        add_result = GitService().worktree_add(self.project_root, wt_path, branch, base_ref=base_ref)
+        # a full checkout (scripts/, src/, tests/) to work in.
+        add_result = git.worktree_add(self.project_root, wt_path, branch, base_ref=base_ref)
+
+        # 2.1: FAIL FAST — if worktree_add failed for any reason other than
+        # "already exists" (which means we reuse an existing one), stop here.
+        # Do NOT let the agent run in an empty/wrong directory.
         if not add_result.success and "already exists" not in add_result.stderr:
-            from grace_control.core.structured_logger import GraceLogger
-            GraceLogger("packet_executor").warn(
+            _log.warn(
                 "worktree_add_failed",
+                packet_id=pid,
                 worktree=str(wt_path),
                 branch=branch,
-                stderr=add_result.stderr[:200],
+                stderr=add_result.stderr[:400],
             )
+            from grace_control.agent.backend import ExecutionResult as _ER
+            return _ER(
+                accepted=False,
+                domain_status="failed",
+                worktree_path=wt_path,
+                branch_name=branch,
+                commit_sha="",
+                stdout="",
+                stderr=add_result.stderr[:400],
+                duration_ms=0,
+                errors=[f"worktree_add_failed: {add_result.stderr[:200]}"],
+            )
+
+        # 1.2: Pre-flight — verify the worktree actually exists and is a
+        # real git worktree before handing it to the agent.
+        if not wt_path.exists():
+            _log.warn(
+                "worktree_missing_after_add",
+                packet_id=pid,
+                worktree=str(wt_path),
+            )
+            from grace_control.agent.backend import ExecutionResult as _ER
+            return _ER(
+                accepted=False,
+                domain_status="failed",
+                worktree_path=wt_path,
+                branch_name=branch,
+                commit_sha="",
+                stdout="",
+                stderr=f"worktree path does not exist after git worktree add: {wt_path}",
+                duration_ms=0,
+                errors=[f"worktree path does not exist after git worktree add: {wt_path}"],
+            )
+
         from grace_control.config.settings import settings
         req = ExecutionRequest(packet_id=pid,
             spec={"attempt_count":attempt,"base_ref":base_ref,"allowed_write_scope":eff or [],"frozen_scope":packet_contract.frozen_scope or []},

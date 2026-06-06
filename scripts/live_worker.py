@@ -14,6 +14,10 @@ from pathlib import Path
 
 sys.path.insert(0, "src")
 os.environ.setdefault("GRACE_ALLOW_SANDBOX_BYPASS", "true")
+# Honor either GRACE_DB_URL (set by supervisor) or GRACE_DATABASE_URL (env yaml).
+# Fallback to a sane default ONLY if neither is set, so ad-hoc runs still work.
+if "GRACE_DB_URL" not in os.environ and "GRACE_DATABASE_URL" in os.environ:
+    os.environ["GRACE_DB_URL"] = os.environ["GRACE_DATABASE_URL"]
 os.environ.setdefault("GRACE_DB_URL", "sqlite:////tmp/grace_live.db")
 
 from grace_control.db import init_db
@@ -38,8 +42,8 @@ async def _main() -> None:
         worker_id=worker_id,
         api_url=api_url,
         project_root=project_root,
-        state_root=Path(os.environ.get("GRACE_STATE_ROOT", project_root / ".grace_state")),
-        worktree_root=Path(os.environ.get("GRACE_WORKTREE_ROOT", project_root / ".grace_worktrees")),
+        state_root=Path(os.environ.get("GRACE_STATE_ROOT", str(project_root / ".grace" / "state"))),
+        worktree_root=Path(os.environ.get("GRACE_WORKTREE_ROOT", str(project_root / ".grace" / "worktrees"))),
     )
     await w.start()
 

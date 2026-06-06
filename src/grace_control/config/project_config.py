@@ -70,6 +70,10 @@ class ExecutionSection(BaseModel):
     state_root: str = ".grace/state"
     worktree_root: str = ".grace/worktrees"
     timeout_seconds: int = 600
+    # target_repo_root: the git repository where agents write code.
+    # Leave empty to use GRACE_PROJECT_ROOT / cwd (self-hosted mode).
+    # Set explicitly when grace-orchestrator runs on a *different* project.
+    target_repo_root: str = ""
 
 
 class SafetySection(BaseModel):

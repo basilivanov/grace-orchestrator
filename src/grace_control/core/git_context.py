@@ -46,8 +46,8 @@ def resolve_git_execution_context(
     cwd = Path.cwd().resolve()
     ctrl = control_plane_root or cwd
     target = target_repo_root or Path(os.environ.get("GRACE_TARGET_REPO_ROOT", str(ctrl)))
-    state = runtime_state_root or Path(os.environ.get("GRACE_STATE_ROOT", str(target / ".grace_state")))
-    wt = worktree_root or Path(os.environ.get("GRACE_WORKTREE_ROOT", str(target / ".grace_worktrees")))
+    state = runtime_state_root or Path(os.environ.get("GRACE_STATE_ROOT", str(target / ".grace" / "state")))
+    wt = worktree_root or Path(os.environ.get("GRACE_WORKTREE_ROOT", str(target / ".grace" / "worktrees")))
     ref = base_ref or os.environ.get("GRACE_BASE_REF", "HEAD")
     return GitExecutionContext(
         control_plane_root=ctrl.resolve(),

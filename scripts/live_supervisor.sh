@@ -17,7 +17,7 @@ set -euo pipefail
 #   1) Caller passes --target-dir and --source-dir explicitly.
 #   2) Otherwise: target_dir = cwd, source_dir = $GRACE_SOURCE_DIR or $target_dir/..
 DEFAULT_TARGET_DIR="${GRACE_TARGET_DIR:-$PWD}"
-DEFAULT_SOURCE_DIR="${GRACE_SOURCE_DIR:-/tmp/grace-orchestrator-export}"
+DEFAULT_SOURCE_DIR="${GRACE_SOURCE_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
 
 TARGET_DIR=""
 SOURCE_DIR=""
@@ -46,12 +46,18 @@ SOURCE_DIR="${SOURCE_DIR:-$DEFAULT_SOURCE_DIR}"
 GRACE_CFG="$TARGET_DIR/.grace/config.yaml"
 if [[ -f "$GRACE_CFG" ]]; then
   export GRACE_DATABASE_URL="${GRACE_DATABASE_URL:-$(grep -E '^\s*url:' "$GRACE_CFG" | head -1 | sed -E 's/.*url:\s*"?([^"]+)"?/\1/')}"
+# Scripts/run_api.py and scripts/live_worker.py read GRACE_DB_URL (the legacy
+# var) — keep it in sync so the API and worker connect to the same SQLite
+# file. Without this, each child process falls back to the script's default
+# (sqlite:////tmp/grace_live.db) and the worker queries a *different* DB
+# than the API writes to, causing "Packet not found" race conditions.
+export GRACE_DB_URL="${GRACE_DB_URL:-$GRACE_DATABASE_URL}"
 fi
 
 # Project root for worker must be the target dir.
 export GRACE_PROJECT_ROOT="$TARGET_DIR"
-export GRACE_STATE_ROOT="$TARGET_DIR/.grace_state"
-export GRACE_WORKTREE_ROOT="$TARGET_DIR/.grace_worktrees"
+export GRACE_STATE_ROOT="$TARGET_DIR/.grace/state"
+export GRACE_WORKTREE_ROOT="$TARGET_DIR/.grace/worktrees"
 export GRACE_API_URL="${GRACE_API_URL:-http://127.0.0.1:8042}"
 export GRACE_ALLOW_SANDBOX_BYPASS="${GRACE_ALLOW_SANDBOX_BYPASS:-true}"
 export GRACE_LOG_DEBUG="${GRACE_LOG_DEBUG:-1}"
@@ -59,7 +65,7 @@ export GRACE_TARGET_DIR="$TARGET_DIR"
 export GRACE_SUPERVISOR_SOCK="$TARGET_DIR/supervisor.sock"
 export PYTHONPATH="${PYTHONPATH:-}:$SOURCE_DIR/src"
 
-mkdir -p "$TARGET_DIR/.grace_state" "$TARGET_DIR/.grace_worktrees"
+mkdir -p "$TARGET_DIR/.grace/state" "$TARGET_DIR/.grace/worktrees"
 
 cd "$TARGET_DIR"
 

@@ -295,6 +295,9 @@ class TestAgentRunServiceExtras:
 
     @pytest.mark.asyncio
     async def test_backend_injects_settings_into_executor_env(self, tmp_path: Path):
+        """When the profile's extras reference ${OPENCODE_SERVER_URL} (or
+        OPENCODE_SERVER_PASSWORD), the backend injects the setting into
+        the executor's env so the placeholder can resolve."""
         captured: dict = {}
 
         class FakeRunService:
@@ -314,13 +317,59 @@ class TestAgentRunServiceExtras:
                 spec={},
                 worktree_path=tmp_path,
                 branch_name="test",
-                executor={"executor_id": "test", "env": {"EXISTING": "keep"}},
+                executor={
+                    "executor_id": "test",
+                    "command": [
+                        "opencode", "run",
+                        "--attach", "${OPENCODE_SERVER_URL}",
+                        "-p", "${OPENCODE_SERVER_PASSWORD}",
+                    ],
+                    "env": {"EXISTING": "keep"},
+                },
             )
             await backend.run(req)
 
         env = captured["executor"]["env"]
         assert env["OPENCODE_SERVER_URL"] == "http://from-settings:4096"
         assert env["OPENCODE_SERVER_PASSWORD"] == "pw-from-settings"
+        assert env["EXISTING"] == "keep"
+
+    @pytest.mark.asyncio
+    async def test_backend_does_not_inject_when_profile_does_not_reference(self, tmp_path: Path):
+        """If the profile's command/extras do NOT reference OPENCODE_* vars,
+        the backend must NOT inject them — otherwise `opencode run` picks
+        them up from env and exits with "Session not found" (regression)."""
+        captured: dict = {}
+
+        class FakeRunService:
+            async def run(self, executor, **kw):
+                captured["executor"] = executor
+                return {"accepted": True, "domain_status": "completed", "exit_code": 0, "stdout": "ok"}
+
+        with (
+            patch.object(settings, "opencode_server_url", "http://from-settings:4096"),
+            patch.object(settings, "opencode_server_password", "pw-from-settings"),
+        ):
+            from grace_control.agent.universal_cli_backend import UniversalCliAgentBackend
+            backend = UniversalCliAgentBackend(FakeRunService())  # type: ignore[arg-type]
+            from grace_control.agent.backend import ExecutionRequest
+            req = ExecutionRequest(
+                packet_id="pkt-noinject",
+                spec={},
+                worktree_path=tmp_path,
+                branch_name="test",
+                executor={
+                    "executor_id": "test",
+                    # Profile does NOT use ${OPENCODE_SERVER_URL} anywhere
+                    "command": ["opencode", "run", "--model", "{model}", "{packet_markdown}"],
+                    "env": {"EXISTING": "keep"},
+                },
+            )
+            await backend.run(req)
+
+        env = captured["executor"]["env"]
+        assert "OPENCODE_SERVER_URL" not in env
+        assert "OPENCODE_SERVER_PASSWORD" not in env
         assert env["EXISTING"] == "keep"
 
     def test_project_config_opencode_section(self, tmp_path: Path):

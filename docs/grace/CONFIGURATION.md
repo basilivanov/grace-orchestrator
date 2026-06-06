@@ -1,7 +1,198 @@
 # GRACE Project Configuration
 
-Date: 2026-06-05
+Date: 2026-06-06 (updated: TZ_WORKTREE_ISOLATION_FIX)
 Status: shipped (W3 of `source/codex/tz-api-first-cleanup-waves-w0-w11.md`)
+
+## Overview
+
+GRACE has a three-layer configuration model, with strict precedence:
+
+```text
+env (GRACE_*)   >   .grace/config.yaml   >   safe local defaults
+```
+
+The three layers and their owners:
+
+| layer | location | owner |
+|-------|----------|-------|
+| env vars | `GRACE_*` shell env | deployment |
+| project config | `<project>/.grace/config.yaml` | project repo |
+| defaults | `src/grace_control/config/settings.py` | source tree |
+
+A field set at a higher layer is **never overwritten** by a lower layer.
+The merge is performed once, at `import` time, by
+`src/grace_control/config/settings.py:_apply_project_fallbacks`. The rule
+is: if the env-resolved value still equals the env-less default, the
+project-config value takes its place; otherwise the env value wins.
+
+## Schema
+
+The typed schema lives in
+`src/grace_control/config/project_config.py:ProjectConfig`. A complete
+file looks like:
+
+```yaml
+project:
+  name: my-project
+  key: default
+
+api:
+  host: 127.0.0.1
+  port: 8042
+
+database:
+  url: sqlite:///./grace.db
+
+git:
+  remote: origin
+  base_branch: main
+  target_branch: main
+
+execution:
+  backend: cli          # "cli" | "api" | "mock"
+  state_root: .grace/state
+  worktree_root: .grace/worktrees
+  timeout_seconds: 600
+  # target_repo_root: path to the git repo where agents write code.
+  # Leave empty to use GRACE_PROJECT_ROOT / cwd (self-hosted mode).
+  # Required when grace-orchestrator runs against a *different* project.
+  target_repo_root: ""
+
+safety:
+  sandbox_mode: danger-full-access
+  allow_sandbox_bypass: false
+```
+
+All fields are optional. A missing file is treated as an empty config
+and the safe local defaults take effect. Unknown keys are silently
+ignored (Pydantic default).
+
+## Canonical directory layout
+
+Grace uses two runtime directories under the project root (target_dir):
+
+```
+<target_dir>/
+  .grace/
+    config.yaml       ← project configuration
+    state/            ← state_root: execution state, evidence, packet files
+    worktrees/        ← worktree_root: per-packet git worktrees
+  supervisor.json     ← supervisor state (PIDs)
+  supervisor.sock     ← supervisor control unix-socket
+  supervisor.pid      ← supervisor PID
+  api.log             ← API process stdout/stderr
+  worker.log          ← worker process stdout/stderr
+  grace.db            ← SQLite database (configurable)
+```
+
+> **Important**: the canonical directory names are `.grace/state` and
+> `.grace/worktrees`. Older versions used `.grace_state` and
+> `.grace_worktrees` — these are now deprecated. If you have an existing
+> deployment, migrate by renaming the directories and restarting the
+> supervisor.
+
+## How to find the project root
+
+`GRACE_PROJECT_ROOT` env var, falling back to the current working
+directory. The loader looks for `<root>/.grace/config.yaml`.
+
+## How to override
+
+| I want to… | How |
+|------------|-----|
+| change a value for one process | set `GRACE_FOO=bar` in the shell |
+| change a value for the project | put it in `.grace/config.yaml` |
+| change a default for everyone | edit `src/grace_control/config/settings.py` |
+| override `.grace/config.yaml` for one process | set the env var, it wins |
+
+## Running on a different project
+
+To use GRACE orchestrator to develop *another* project (not itself):
+
+```bash
+# 1. Set the target repo
+export GRACE_TARGET_REPO_ROOT=/path/to/your-project
+
+# 2. Point GRACE_PROJECT_ROOT to a directory with .grace/config.yaml
+export GRACE_PROJECT_ROOT=/path/to/your-project
+
+# 3. Run the supervisor — source-dir stays as grace-orchestrator source
+scripts/live_supervisor.sh \
+  --target-dir /path/to/your-project \
+  --source-dir /path/to/grace-orchestrator
+```
+
+Or equivalently in `.grace/config.yaml`:
+
+```yaml
+execution:
+  target_repo_root: /path/to/your-project
+```
+
+## Key env vars reference
+
+| Env var | Maps to | Default |
+|---------|---------|---------|
+| `GRACE_PROJECT_ROOT` | project root for config/db resolution | `cwd` |
+| `GRACE_TARGET_REPO_ROOT` | repo where agents write code | `GRACE_PROJECT_ROOT` |
+| `GRACE_STATE_ROOT` | state directory path | `.grace/state` |
+| `GRACE_WORKTREE_ROOT` | worktree directory path | `.grace/worktrees` |
+| `GRACE_DATABASE_URL` / `GRACE_DB_URL` | SQLite/PG URL | `sqlite:///./grace.db` |
+| `GRACE_API_URL` | API base URL for workers | `http://127.0.0.1:8042` |
+| `GRACE_EXECUTION_BACKEND` | `cli` \| `api` \| `mock` | `cli` |
+| `GRACE_BASE_BRANCH` | git base branch | `main` |
+
+## New fields added in W3
+
+W3 expands `GraceSettings` with the fields that were previously
+duplicated as direct `os.environ.get("GRACE_...")` calls in
+routers/services:
+
+| field | type | replaces |
+|-------|------|----------|
+| `git_remote` | str | `os.environ.get("GRACE_GIT_REMOTE", "origin")` (future) |
+| `architect_timeout_seconds` | int | `os.environ.get("GRACE_ARCHITECT_TIMEOUT", "120")` |
+| `context_timeout_seconds` | int | `os.environ.get("GRACE_CONTEXT_TIMEOUT", "60")` |
+| `worktree_root` | str | hardcoded `worktree_root` in `cli/main.py:up` |
+| `allow_sandbox_bypass` | bool | `os.environ.get("GRACE_ALLOW_SANDBOX_BYPASS")` (W2) |
+| `self_evolution_max_sessions` | int | `os.environ.get("GRACE_SELF_MAX_SESSIONS", "3")` |
+| `recovery_controller_enabled` | bool | `os.environ.get("GRACE_RECOVERY_CONTROLLER_ENABLED")` |
+| `telegram_token` | str | `os.environ.get("GRACE_TELEGRAM_TOKEN")` |
+| `telegram_chat_id` | str | `os.environ.get("GRACE_TELEGRAM_CHAT_ID")` |
+| `agent_profiles_path_override` | str | `os.environ.get("GRACE_AGENT_PROFILES_PATH")` |
+| `context_model` | str | `os.environ.get("GRACE_CONTEXT_MODEL")` |
+| `session_dir` | str | `os.environ.get("GRACE_SESSION_DIR")` |
+
+## Duplicate GraceSettings class (removed)
+
+`src/grace_control/config/__init__.py` previously contained a duplicate
+`GraceSettings` class with stale defaults (`state_root="/tmp/grace-eval"`,
+`execution_backend="legacy"`). This was removed in
+`TZ_WORKTREE_ISOLATION_FIX`. The canonical class is now exclusively in
+`src/grace_control/config/settings.py`.
+
+`from grace_control.config import settings` now correctly returns the
+**module** (not the singleton instance), which is the expected import
+pattern for tests.
+
+## Tests
+
+`tests/grace_control/config/test_w3_config_cleanup.py` covers:
+
+1. `load_project_config` returns defaults when the file is missing.
+2. YAML values override defaults.
+3. Invalid YAML raises a clear `yaml.YAMLError`.
+4. Env vars override project config.
+5. `settings.py` no longer hardcodes `/tmp/grace-*` paths.
+6. `GraceSettings` has all the new W3 fields.
+7. Survey: `os.environ.get("GRACE_...")` outside the allowlist.
+
+## Migration to a future Alembic layer
+
+`_SQLITE_COLUMN_MIGRATIONS` in `src/grace_control/db/__init__.py` is the
+interim solution for additive column changes. Once Alembic is introduced
+(W12+), the precedence model stays the same — only the migration
+mechanism changes.
 
 ## Overview
 

@@ -60,6 +60,22 @@ class AgentRunService:
             cmd = [cmd, "{packet_markdown}"]
         command = self._renderer.render(cmd, ctx)
 
+        # Inject --dir <worktree_path> for backends that require it (e.g. opencode
+        # which connects to a server and would otherwise use the server's cwd).
+        # Controlled by the profile field `inject_dir: true` — avoids hardcoding
+        # CLI tool names. Legacy fallback: if command[0] basename is "opencode"
+        # and the profile has no explicit inject_dir field, still inject (back-compat).
+        inject_dir = executor.get("inject_dir")
+        if inject_dir is None:
+            # Back-compat: auto-detect opencode by binary name
+            cmd0 = command[0] if command else ""
+            inject_dir = (cmd0 == "opencode" or cmd0.endswith("/opencode"))
+        if inject_dir:
+            for i, part in enumerate(command):
+                if part == "run":
+                    command = command[:i + 1] + ["--dir", str(worktree_path)] + command[i + 1:]
+                    break
+
         # Build subprocess env FIRST so extras resolution sees injected vars.
         raw_env = executor.get("env", {})
         env = self._env_builder.build(raw_env)

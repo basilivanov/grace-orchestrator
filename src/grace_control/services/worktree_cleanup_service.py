@@ -44,10 +44,22 @@ class WorktreeCleanupService:
     # emitted_logs: worktree_cleanup_failed (on non-fatal errors).
     # error_behavior: Never raises.
     # END_FUNCTION_CONTRACT
-    def cleanup_attempt(self, project_root: Path, slug: str) -> None:
-        wt = project_root / slug
+    def cleanup_attempt(self, project_root: Path, slug: str,
+                        worktree_root: Path | None = None) -> None:
+        """Clean up worktree and branch for a given attempt slug.
+
+        Args:
+            project_root: Root of the git repo (used for git -C).
+            slug:         Attempt slug, e.g. "pkt_001-attempt-0001".
+            worktree_root: Directory where worktrees live. Defaults to
+                           project_root/.grace/worktrees (canonical). The old
+                           code used project_root / slug which was incorrect.
+        """
+        wt_base = worktree_root if worktree_root is not None else (project_root / ".grace" / "worktrees")
+        wt = wt_base / slug
         branch = f"agent/{slug}"
         try:
+            # Prune stale git worktree metadata first.
             subprocess.run(
                 ["git", "-C", str(project_root), "worktree", "prune"],
                 capture_output=True, timeout=10,
@@ -58,9 +70,11 @@ class WorktreeCleanupService:
                     capture_output=True, timeout=10,
                 )
                 shutil.rmtree(wt, ignore_errors=True)
+            # Delete the branch unconditionally — it may exist even if the
+            # worktree directory was already removed.
             subprocess.run(
                 ["git", "-C", str(project_root), "branch", "-D", branch],
                 capture_output=True, timeout=10,
             )
         except Exception as e:
-            _log.warn("worktree_cleanup_failed", error=str(e)[:200])
+            _log.warn("worktree_cleanup_failed", slug=slug, error=str(e)[:200])

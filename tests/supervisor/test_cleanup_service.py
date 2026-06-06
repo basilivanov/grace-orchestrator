@@ -15,7 +15,7 @@ from grace_control.services.supervisor_cleanup_service import (
 
 @pytest.fixture
 def worktree_env(tmp_path: Path) -> tuple[Path, Path]:
-    """Create a tiny git repo + .grace_worktrees/ with one orphan dir."""
+    """Create a tiny git repo + .grace/worktrees/ with one orphan dir."""
     target = tmp_path / "target"
     source = tmp_path / "source"
     target.mkdir()
@@ -28,8 +28,8 @@ def worktree_env(tmp_path: Path) -> tuple[Path, Path]:
     subprocess.run(["git", "add", "README.md"], cwd=str(target), check=True)
     subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=str(target), check=True)
     # Create a worktree dir that is NOT a real git worktree — simulates orphan
-    wt_root = target / ".grace_worktrees"
-    wt_root.mkdir()
+    wt_root = target / ".grace" / "worktrees"
+    wt_root.mkdir(parents=True)
     orphan = wt_root / "pkt_001-attempt-0001"
     orphan.mkdir()
     (orphan / "junk.txt").write_text("leftover")
@@ -55,7 +55,7 @@ class TestWorktreeCleanup:
         svc = SupervisorCleanupService(target, source)
         report = svc.run(stale_leases=False, state_files=False)
         assert "pkt_001-attempt-0001" in report.worktrees_removed
-        assert not (target / ".grace_worktrees" / "pkt_001-attempt-0001").exists()
+        assert not (target / ".grace" / "worktrees" / "pkt_001-attempt-0001").exists()
 
     def test_idempotent_when_nothing_to_clean(self, worktree_env: tuple[Path, Path]) -> None:
         target, source = worktree_env
@@ -89,8 +89,8 @@ class TestStateFileCleanup:
         source = tmp_path / "source"
         target.mkdir()
         source.mkdir()
-        state_root = target / ".grace_state"
-        state_root.mkdir()
+        state_root = target / ".grace" / "state"
+        state_root.mkdir(parents=True)
         old = state_root / "pkt_done"
         old.mkdir()
         (old / "data.json").write_text("{}")
@@ -119,8 +119,8 @@ class TestSafeFailure:
         source = tmp_path / "source"
         target.mkdir()
         source.mkdir()
-        wt_root = target / ".grace_worktrees"
-        wt_root.mkdir()
+        wt_root = target / ".grace" / "worktrees"
+        wt_root.mkdir(parents=True)
         orphan = wt_root / "pkt_002-attempt-0001"
         orphan.mkdir()
         (orphan / "junk.txt").write_text("x")

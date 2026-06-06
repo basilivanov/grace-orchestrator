@@ -29,6 +29,21 @@ _OPENCODE_ENV_KEYS = {
 }
 
 
+def _profile_references_env(executor: dict, env_name: str) -> bool:
+    """Return True if the profile's command/extras reference ${env_name}.
+
+    Used to decide whether to inject OPENCODE_SERVER_URL etc. into the
+    subprocess env. We only inject when the profile actually uses the
+    placeholder — otherwise `opencode run` picks up the env var and tries
+    to attach to a non-existent server session, exiting with
+    "Session not found".
+    """
+    needle = "${" + env_name + "}"
+    cmd = executor.get("command") or []
+    extras = executor.get("extras") or []
+    return any(needle in str(t) for t in list(cmd) + list(extras))
+
+
 class UniversalCliAgentBackend(ExecutionBackend):
     def __init__(self, run_service: AgentRunService | None = None) -> None:
         self._run_service = run_service or AgentRunService()
@@ -36,9 +51,14 @@ class UniversalCliAgentBackend(ExecutionBackend):
     async def run(self, request: ExecutionRequest) -> ExecutionResult:
         executor = request.executor or {}
         # Inject opencode server attach vars from settings into agent env
-        # so profile extras like ${OPENCODE_SERVER_URL} resolve in subprocess.
+        # ONLY if the profile's command/extras reference them. Unconditional
+        # injection caused `opencode run` to try attaching to a stale server
+        # session and fail with "Session not found" (since `opencode run`
+        # reads these env vars regardless of flags).
         executor_env = executor.get("env", {})
         for env_name, setting_name in _OPENCODE_ENV_KEYS.items():
+            if not _profile_references_env(executor, env_name):
+                continue
             val = getattr(settings, setting_name, "")
             if val:
                 executor_env[env_name] = val

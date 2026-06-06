@@ -5,12 +5,12 @@ version: 2
 default_provider: openai
 codex:
   binary: agy
-  workdir: /tmp/grace-orchestrator-export
+  workdir: "."  # resolved at runtime from GRACE_PROJECT_ROOT / cwd
   executors:
   - executor_id: architect-premium
     kind: opencode
     command: opencode
-    model: opencode/deepseek-v4-pro
+    model: deepseek/deepseek-v4-pro
     roles:
     - architect
     - reviewer
@@ -22,7 +22,7 @@ codex:
   - executor_id: reviewer-premium
     kind: opencode
     command: opencode
-    model: opencode/deepseek-v4-pro
+    model: deepseek/deepseek-v4-pro
     roles:
     - reviewer
     priority: 5
@@ -33,7 +33,7 @@ codex:
   - executor_id: coder-deepseek-flash
     kind: opencode
     command: opencode
-    model: opencode/deepseek-v4-flash-free
+    model: deepseek/deepseek-v4-flash
     roles:
     - coder
     priority: 100
@@ -86,7 +86,7 @@ codex:
   - executor_id: context-collector-flash
     kind: opencode
     command: opencode
-    model: opencode/deepseek-v4-flash-free
+    model: deepseek/deepseek-v4-flash
     roles:
     - context_collector
     priority: 100
@@ -134,6 +134,7 @@ codex:
 agents:
   architect-premium:
     backend: cli
+    inject_dir: true  # opencode server uses its own cwd — --dir forces the worktree
     command:
       - opencode
       - run
@@ -142,16 +143,12 @@ agents:
       - "--variant"
       - "{effort}"
       - "You are an architect. Read the spec from {packet_path} and output ONLY a valid JSON object with fields: title, description, waves. Each wave has packets. Each packet: title, scope, depends_on, acceptance. Do not write files, do not run tools. Output JSON only, no prose."
-    model: "opencode/deepseek-v4-flash-free"
-    effort: "max"
-    cwd: "{worktree_path}"
-    timeout_seconds: 1200
-    env:
-      OPENAI_API_KEY: "${OPENAI_API_KEY}"
+    model: "deepseek/deepseek-v4-pro"
     input:
       mode: file
   verifier-cheap:
     backend: cli
+    inject_dir: true
     command:
       - opencode
       - run
@@ -160,7 +157,7 @@ agents:
       - "--variant"
       - "{effort}"
       - "You are a verifier. Read the task and evidence from {packet_path}. Do NOT modify any files. Output ONLY a valid JSON object with fields: verdict (pass or fail), reason, issues (list). No prose, no code edits."
-    model: "opencode/deepseek-v4-flash-free"
+    model: "deepseek/deepseek-v4-flash"
     effort: "medium"
     cwd: "{worktree_path}"
     timeout_seconds: 300
@@ -168,6 +165,7 @@ agents:
       mode: file
   context-collector-flash:
     backend: cli
+    inject_dir: true
     command:
       - opencode
       - run
@@ -176,7 +174,7 @@ agents:
       - "--variant"
       - "{effort}"
       - "You are a context collector. Read the task from {packet_path}. Do NOT modify any files. Output ONLY a valid JSON object with fields: relevant_files (list), summary (string). No prose, no code edits."
-    model: "opencode/deepseek-v4-flash-free"
+    model: "deepseek/deepseek-v4-flash"
     effort: "low"
     cwd: "{worktree_path}"
     timeout_seconds: 300
@@ -184,6 +182,7 @@ agents:
       mode: file
   coder-deepseek-flash:
     backend: cli
+    inject_dir: true
     command:
       - opencode
       - run
@@ -192,7 +191,7 @@ agents:
       - "--variant"
       - "{effort}"
       - Read the task from {packet_path} and execute it. Create or modify files in the current working directory using the file-editing tools available. After finishing, briefly summarize what you changed.
-    model: "opencode/deepseek-v4-flash-free"
+    model: "deepseek/deepseek-v4-flash"
     effort: "medium"
     cwd: "{worktree_path}"
     timeout_seconds: 900
@@ -200,6 +199,7 @@ agents:
       mode: file
   coder-sonnet:
     backend: cli
+    inject_dir: true
     command:
       - opencode
       - run
@@ -216,13 +216,14 @@ agents:
       mode: file
   opencode:
     backend: cli
+    inject_dir: true
     command:
       - opencode
       - run
       - "--model"
       - "{model}"
       - Read the task from {packet_path} and execute it. Create or modify files in the current working directory using the file-editing tools available. After finishing, briefly summarize what you changed.
-    model: "opencode/deepseek-v4-flash-free"
+    model: "deepseek/deepseek-v4-flash"
     effort: "high"
     cwd: "{worktree_path}"
     timeout_seconds: 900
@@ -230,6 +231,7 @@ agents:
       mode: file
   coder_opencode:
     backend: cli
+    inject_dir: true
     command:
       - opencode
       - run
@@ -237,7 +239,7 @@ agents:
       - "{model}"
       - "--variant"
       - "{effort}"
-    model: "opencode/deepseek-v4-flash-free"
+    model: "deepseek/deepseek-v4-flash"
     effort: "high"
     cwd: "{worktree_path}"
     timeout_seconds: 900

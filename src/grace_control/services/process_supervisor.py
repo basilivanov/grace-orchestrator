@@ -29,17 +29,31 @@ class ProcessSupervisor:
     async def run(self, command: list[str], cwd: Path | str, env: dict[str, str] | None = None,
                   timeout_seconds: int = 600, stdin_text: str | None = None) -> ProcessResult:
         t0 = time.time()
+        # GRACE_FAST_FAIL: cap all timeouts at 60s for dev/test so failures
+        # surface immediately instead of hanging for 10+ minutes.
+        _effective_timeout = timeout_seconds
+        if os.environ.get("GRACE_FAST_FAIL"):
+            _effective_timeout = min(timeout_seconds, 60)
+        # Override PWD so the child process sees the requested cwd as its
+        # working directory. Without this, many CLIs (e.g. `opencode run`)
+        # use $PWD from the inherited parent env instead of getcwd() and
+        # end up writing files to the project root instead of the per-packet
+        # worktree. Setting PWD explicitly fixes the cwd/agent-mismatch bug.
+        # We always pass an explicit env (copy of os.environ when env=None)
+        # so the override is always applied.
+        proc_env = dict(os.environ) if env is None else dict(env)
+        proc_env["PWD"] = str(cwd)
         try:
             stdin_pipe = asyncio.subprocess.PIPE if stdin_text is not None else None
             proc = await asyncio.create_subprocess_exec(
-                *command, cwd=str(cwd), env=env,
+                *command, cwd=str(cwd), env=proc_env,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
                 stdin=stdin_pipe, preexec_fn=os.setsid,
             )
             try:
                 in_data = stdin_text.encode("utf-8", "ignore") if stdin_text else None
                 stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                    proc.communicate(input=in_data), timeout=timeout_seconds
+                    proc.communicate(input=in_data), timeout=_effective_timeout
                 )
                 duration_ms = int((time.time() - t0) * 1000)
                 return ProcessResult(

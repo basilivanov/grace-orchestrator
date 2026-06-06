@@ -2,7 +2,7 @@ version: 2
 
 project:
   key: grace-test
-  root: /tmp/grace-orchestrator-export
+  root: "."  # set via GRACE_PROJECT_ROOT env or resolved at runtime
   default_branch: prod-release-20260327
   grace_dir: grace
   packets_dir: grace/packets

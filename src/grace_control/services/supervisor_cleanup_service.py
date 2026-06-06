@@ -79,8 +79,8 @@ class SupervisorCleanupService:
     ) -> None:
         self._target = Path(target_dir).resolve()
         self._source = Path(source_dir).resolve()
-        self._worktree_root = Path(worktree_root or (self._target / ".grace_worktrees")).resolve()
-        self._state_root = Path(state_root or (self._target / ".grace_state")).resolve()
+        self._worktree_root = Path(worktree_root or (self._target / ".grace" / "worktrees")).resolve()
+        self._state_root = Path(state_root or (self._target / ".grace" / "state")).resolve()
 
     def run(
         self,

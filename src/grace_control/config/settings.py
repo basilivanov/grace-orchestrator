@@ -138,10 +138,12 @@ def _apply_project_fallbacks(target: "GraceSettings", project: ProjectConfig) ->
         "target_branch": project.git.target_branch,
         "agent_timeout_seconds": project.execution.timeout_seconds,
         "state_root": project.execution.state_root,
+        "worktree_root": project.execution.worktree_root,
         "execution_backend": project.execution.backend,
         "sandbox_mode": project.safety.sandbox_mode,
         "opencode_server_url": project.opencode.server_url,
         "opencode_server_password": project.opencode.server_password,
+        "target_repo_root": project.execution.target_repo_root,
     }
     for field_name, project_value in project_overrides.items():
         if field_name not in _BASE_DEFAULTS:

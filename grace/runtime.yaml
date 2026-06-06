@@ -5,4 +5,4 @@ live_queue_limit: 1
 monitoring_queue_name: grace-test-monitoring
 monitoring_queue_limit: 1
 monitoring_interval_seconds: 300
-working_directory: /tmp/grace-orchestrator-export
+working_directory: "."  # set via GRACE_PROJECT_ROOT env or resolved at runtime
