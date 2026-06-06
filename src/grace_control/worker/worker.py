@@ -117,12 +117,16 @@ class Worker:
                             self.log.info("merging", packet_id=packet_id,
                                 worktree=result.worktree_path, branch=result.branch_name,
                                 target_repo=target_repo, sha=result.commit_sha[:12])
-                            await self.api.merge_packet(packet_id,
-                                target_repo_root=target_repo,
-                                worktree_path=result.worktree_path,
-                                branch_name=result.branch_name,
-                                commit_sha=result.commit_sha)
-                            self.log.info("merged", packet_id=packet_id)
+                            try:
+                                await self.api.merge_packet(packet_id,
+                                    target_repo_root=target_repo,
+                                    worktree_path=result.worktree_path,
+                                    branch_name=result.branch_name,
+                                    commit_sha=result.commit_sha)
+                                self.log.info("merged", packet_id=packet_id)
+                            except Exception:
+                                self.log.warn("merge_failed_keep_accepted", packet_id=packet_id,
+                                    error=traceback.format_exc()[:200])
 
                         if status == "rejected":
                             self.log.warn("packet_rejected", packet_id=packet_id, reason=result.reason)
