@@ -115,13 +115,13 @@ class PacketExecutionAdapter:
     def _resolve_executor(self, pd: dict) -> dict:
         from grace_control.core.complexity_router import route_packet
         from grace_control.core.executor_selector import select_executor
+        from grace_control.config.agent_profiles import get_agent_profile
         tier = route_packet(pd.get("acceptance_profile","NORMAL"), pd.get("spec_json"))
         spec = pd.get("spec_json") or {}
         rid = (spec.get("recovery") or {}).get("requested_executor_id") if isinstance(spec, dict) else None
         if rid:
-            from grace_control.core.executor_selector import load_profiles
-            profs = load_profiles(); match = [e for e in profs.get("codex",{}).get("executors",[]) if e.get("executor_id")==rid]
-            ex = match[0] if match else select_executor("coder", attempt=pd.get("attempt_count",1)+1)
+            match = get_agent_profile(rid)
+            ex = match.to_dict() if match else select_executor("coder", attempt=pd.get("attempt_count",1)+1)
         else: ex = select_executor("coder", attempt=pd.get("attempt_count",1)+1)
         pd["_executor"] = ex; pd["_tier"] = tier.value; return ex
 

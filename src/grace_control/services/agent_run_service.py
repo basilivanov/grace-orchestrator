@@ -60,14 +60,12 @@ class AgentRunService:
             cmd = [cmd, "{packet_markdown}"]
         command = self._renderer.render(cmd, ctx)
 
-        # Render env-driven extras (e.g. `--attach $OPENCODE_SERVER_URL`).
-        # Rules:
-        #   - Each token is scanned for ${VAR} placeholders.
-        #   - If a token is a literal flag (starts with `-`) it is buffered as
-        #     a "pending flag" and only emitted if a value follows it.
-        #   - If the value token is ${VAR} (unset) or resolves to empty,
-        #     the pending flag is dropped together with the value.
-        #   - Standalone literal flags (no value) are emitted as-is.
+        # Build subprocess env FIRST so extras resolution sees injected vars.
+        raw_env = executor.get("env", {})
+        env = self._env_builder.build(raw_env)
+
+        # Render env-driven extras (e.g. `--attach $OPENCODE_SERVER_URL`)
+        # against the final subprocess env (not just os.environ).
         raw_extras = executor.get("extras", [])
         rendered_extras: list[str] = []
         if isinstance(raw_extras, str):
@@ -78,7 +76,7 @@ class AgentRunService:
                 if not isinstance(token, str):
                     pending_flag = None
                     continue
-                resolved = self._env_builder.resolve(token)
+                resolved = self._env_builder.resolve(token, env=env)
                 value_dropped = ("${" in token and resolved == token) or not resolved.strip()
                 if value_dropped:
                     pending_flag = None
@@ -94,13 +92,12 @@ class AgentRunService:
                 rendered_extras.append(pending_flag)
         command = command + rendered_extras
 
-        raw_env = executor.get("env", {})
-        env = self._env_builder.build(raw_env)
         preview_env = self._env_builder.preview(env)
 
         cwd_template = str(executor.get("cwd", "{worktree_path}"))
         cwd_str = self._renderer.render([cwd_template], ctx)[0]
         cwd = worktree_path if cwd_str == str(worktree_path) else Path(cwd_str)
+        cwd.mkdir(parents=True, exist_ok=True)
 
         result = await self._supervisor.run(
             command, cwd=cwd, env=env, timeout_seconds=timeout_seconds, stdin_text=stdin_text,

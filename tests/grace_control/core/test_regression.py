@@ -112,9 +112,11 @@ def test_regression_coder_ladder_yaml():
     for e in executors:
         assert "executor_id" in e
         assert "model" in e
-        assert "priority" in e
-    priorities = [e["priority"] for e in executors]
-    assert priorities == sorted(priorities, reverse=True)
+        assert "command" in e
+        assert "extras" in e
+    # Profiles ascend by timeout: quickest first (attempt 1), slowest last (attempt 3)
+    timeouts = [e["timeout_seconds"] for e in executors]
+    assert timeouts == sorted(timeouts)
 
 
 def test_regression_build_signal_no_detached_error():
