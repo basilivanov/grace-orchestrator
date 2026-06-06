@@ -77,6 +77,12 @@ class SafetySection(BaseModel):
     allow_sandbox_bypass: bool = False
 
 
+class OpencodeSection(BaseModel):
+    """opencode server attach settings (used by `extras:` in agent profiles)."""
+    server_url: str = ""
+    server_password: str = ""
+
+
 class ProjectConfig(BaseModel):
     """Typed mirror of `.grace/config.yaml`.
 
@@ -91,6 +97,7 @@ class ProjectConfig(BaseModel):
     git: GitSection = Field(default_factory=GitSection)
     execution: ExecutionSection = Field(default_factory=ExecutionSection)
     safety: SafetySection = Field(default_factory=SafetySection)
+    opencode: OpencodeSection = Field(default_factory=OpencodeSection)
 
 
 # START_FUNCTION_CONTRACT

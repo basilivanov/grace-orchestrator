@@ -107,6 +107,10 @@ class GraceSettings(BaseSettings):
     api_auth_allow_unauthenticated_localhost: bool = True
     api_auth_public_openapi: bool = False
 
+    # ── opencode server attach (extras) ──
+    opencode_server_url: str = ""
+    opencode_server_password: str = ""
+
 
 # Class-level defaults, captured AFTER the class is defined and BEFORE
 # pydantic-settings ever resolves env vars. We use this to decide whether
@@ -136,6 +140,8 @@ def _apply_project_fallbacks(target: "GraceSettings", project: ProjectConfig) ->
         "state_root": project.execution.state_root,
         "execution_backend": project.execution.backend,
         "sandbox_mode": project.safety.sandbox_mode,
+        "opencode_server_url": project.opencode.server_url,
+        "opencode_server_password": project.opencode.server_password,
     }
     for field_name, project_value in project_overrides.items():
         if field_name not in _BASE_DEFAULTS:

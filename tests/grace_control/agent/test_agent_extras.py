@@ -18,6 +18,7 @@ from unittest.mock import patch
 import pytest
 
 from grace_control.config.agent_profiles import AgentProfile
+from grace_control.config.settings import settings
 from grace_control.services.agent_env_builder import AgentEnvBuilder
 from grace_control.services.agent_run_service import AgentRunService
 from grace_control.services.process_supervisor import ProcessResult
@@ -291,6 +292,78 @@ class TestAgentRunServiceExtras:
         assert "--verbose" in cmd
         assert "--attach" not in cmd
         assert "${UNSET_URL}" not in cmd
+
+    @pytest.mark.asyncio
+    async def test_backend_injects_settings_into_executor_env(self, tmp_path: Path):
+        captured: dict = {}
+
+        class FakeRunService:
+            async def run(self, executor, **kw):
+                captured["executor"] = executor
+                return {"accepted": True, "domain_status": "completed", "exit_code": 0, "stdout": "ok"}
+
+        with (
+            patch.object(settings, "opencode_server_url", "http://from-settings:4096"),
+            patch.object(settings, "opencode_server_password", "pw-from-settings"),
+        ):
+            from grace_control.agent.universal_cli_backend import UniversalCliAgentBackend
+            backend = UniversalCliAgentBackend(FakeRunService())  # type: ignore[arg-type]
+            from grace_control.agent.backend import ExecutionRequest
+            req = ExecutionRequest(
+                packet_id="pkt-inject",
+                spec={},
+                worktree_path=tmp_path,
+                branch_name="test",
+                executor={"executor_id": "test", "env": {"EXISTING": "keep"}},
+            )
+            await backend.run(req)
+
+        env = captured["executor"]["env"]
+        assert env["OPENCODE_SERVER_URL"] == "http://from-settings:4096"
+        assert env["OPENCODE_SERVER_PASSWORD"] == "pw-from-settings"
+        assert env["EXISTING"] == "keep"
+
+    def test_project_config_opencode_section(self, tmp_path: Path):
+        cfg = tmp_path / ".grace"
+        cfg.mkdir(parents=True, exist_ok=True)
+        config_path = cfg / "config.yaml"
+        config_path.write_text(
+            "opencode:\n"
+            "  server_url: http://yaml:4096\n"
+            "  server_password: yamlpw\n"
+        )
+        from grace_control.config.project_config import reset_cache, load_project_config
+        reset_cache()
+        pc = load_project_config(config_path)
+        assert pc.opencode.server_url == "http://yaml:4096"
+        assert pc.opencode.server_password == "yamlpw"
+
+    @pytest.mark.asyncio
+    async def test_backend_does_not_inject_when_settings_empty(self, tmp_path: Path):
+        captured: dict = {}
+
+        class FakeRunService:
+            async def run(self, executor, **kw):
+                captured["executor"] = executor
+                return {"accepted": True, "domain_status": "completed", "exit_code": 0, "stdout": "ok"}
+
+        with (
+            patch.object(settings, "opencode_server_url", ""),
+            patch.object(settings, "opencode_server_password", ""),
+        ):
+            from grace_control.agent.universal_cli_backend import UniversalCliAgentBackend
+            backend = UniversalCliAgentBackend(FakeRunService())  # type: ignore[arg-type]
+            from grace_control.agent.backend import ExecutionRequest
+            req = ExecutionRequest(
+                packet_id="pkt-noinject", spec={}, worktree_path=tmp_path, branch_name="test",
+                executor={"executor_id": "test", "env": {"MY_VAR": "x"}},
+            )
+            await backend.run(req)
+
+        env = captured["executor"]["env"]
+        assert "OPENCODE_SERVER_URL" not in env
+        assert "OPENCODE_SERVER_PASSWORD" not in env
+        assert env["MY_VAR"] == "x"
 
     @pytest.mark.asyncio
     async def test_string_extras_kept_as_single_token(self, tmp_path: Path):

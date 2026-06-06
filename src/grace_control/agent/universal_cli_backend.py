@@ -17,10 +17,16 @@ from __future__ import annotations
 from pathlib import Path
 
 from grace_control.agent.backend import ExecutionBackend, ExecutionRequest, ExecutionResult
+from grace_control.config.settings import settings
 from grace_control.core.structured_logger import GraceLogger
 from grace_control.services.agent_run_service import AgentRunService
 
 _log = GraceLogger("cli_backend")
+
+_OPENCODE_ENV_KEYS = {
+    "OPENCODE_SERVER_URL": "opencode_server_url",
+    "OPENCODE_SERVER_PASSWORD": "opencode_server_password",
+}
 
 
 class UniversalCliAgentBackend(ExecutionBackend):
@@ -29,6 +35,15 @@ class UniversalCliAgentBackend(ExecutionBackend):
 
     async def run(self, request: ExecutionRequest) -> ExecutionResult:
         executor = request.executor or {}
+        # Inject opencode server attach vars from settings into agent env
+        # so profile extras like ${OPENCODE_SERVER_URL} resolve in subprocess.
+        executor_env = executor.get("env", {})
+        for env_name, setting_name in _OPENCODE_ENV_KEYS.items():
+            val = getattr(settings, setting_name, "")
+            if val:
+                executor_env[env_name] = val
+        executor["env"] = executor_env
+
         _log.info("cli_run_start", packet_id=request.packet_id, executor_id=executor.get("executor_id", "?"))
 
         packet_markdown = (request.spec or {}).get("packet_markdown", "")
