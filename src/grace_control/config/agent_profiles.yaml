@@ -132,6 +132,56 @@ codex:
 
 # W7 (revised): UniversalCliAgentBackend profiles — declarative, no CLI names in code.
 agents:
+  architect-premium:
+    backend: cli
+    command:
+      - opencode
+      - run
+      - "--model"
+      - "{model}"
+      - "--effort"
+      - "{effort}"
+      - Read the task from {packet_path}. Respond ONLY with valid JSON, no other text.
+    model: "deepseek/deepseek-v4-pro"
+    effort: "max"
+    cwd: "{worktree_path}"
+    timeout_seconds: 1200
+    env:
+      OPENAI_API_KEY: "${OPENAI_API_KEY}"
+    input:
+      mode: file
+  coder-deepseek-flash:
+    backend: cli
+    command:
+      - opencode
+      - run
+      - "--model"
+      - "{model}"
+      - "--effort"
+      - "{effort}"
+      - Read the task from {packet_path}. Respond ONLY with valid JSON, no other text.
+    model: "deepseek/deepseek-v4-flash"
+    effort: "medium"
+    cwd: "{worktree_path}"
+    timeout_seconds: 900
+    input:
+      mode: file
+  coder-sonnet:
+    backend: cli
+    command:
+      - opencode
+      - run
+      - "--model"
+      - "{model}"
+      - "--effort"
+      - "{effort}"
+      - Read the task from {packet_path}. Respond ONLY with valid JSON, no other text.
+    model: "cliproxy/claude-sonnet-4-6"
+    effort: "max"
+    cwd: "{worktree_path}"
+    timeout_seconds: 900
+    input:
+      mode: file
   opencode:
     backend: cli
     command:
