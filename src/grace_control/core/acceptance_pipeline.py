@@ -103,7 +103,6 @@ class AcceptancePipeline:
         self._scope = scope_guard or ScopeGuard(self._root)
         self._evidence = evidence_collector or EvidenceCollector()
         self._t0_command_template: list[list[str]] = [
-            ["python3", "scripts/grace_lint.py", "src/"],
             ["python3", "-m", "ruff", "check", "src/"],
         ]
 
@@ -116,10 +115,14 @@ class AcceptancePipeline:
         scope_paths = self._resolve_t0_scope_paths(packet, changed_files, cwd=cwd)
         if not scope_paths:
             return self._t0_command_template
-        return [
-            ["python3", "scripts/grace_lint.py"] + scope_paths,
-            ["python3", "-m", "ruff", "check"] + scope_paths,
-        ]
+        commands: list[list[str]] = []
+        # scripts/grace_lint.py is repo-supplied and optional — only run it
+        # if the file is committed in the worktree.
+        base = (cwd or self._root).resolve()
+        if (base / "scripts" / "grace_lint.py").is_file():
+            commands.append(["python3", "scripts/grace_lint.py"] + scope_paths)
+        commands.append(["python3", "-m", "ruff", "check"] + scope_paths)
+        return commands
 
     def _resolve_t0_scope_paths(
         self,

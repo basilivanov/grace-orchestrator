@@ -9,7 +9,10 @@ pip install grace-orchestrator
 ```
 
 ```bash
-# Start API server
+# Recommended: use the supervisor (API + worker, auto-restart, mtime watch)
+scripts/live_supervisor.sh --target-dir /tmp/grace-live-wt --source-dir /tmp/grace-orchestrator-export
+
+# Or start API-only (manual worker management):
 uvicorn grace_control.api.main:app --host 127.0.0.1 --port 8042
 ```
 
@@ -19,6 +22,7 @@ See [`docs/README.md`](docs/README.md) for the full document index.
 
 Key docs:
 - [Architecture](docs/grace/ARCHITECTURE.md) — component layers
+- [Supervisor](docs/SUPERVISOR.md) — process manager, lifecycle, auto-reload, CLI (`grace_ctl`)
 - [API First Control Plane](docs/grace/API_FIRST_CONTROL_PLANE.md) — the canonical contract
 - [Configuration](docs/grace/CONFIGURATION.md) — env / `.grace/config.yaml` / defaults
 - [Execution Backends](docs/grace/EXECUTION_BACKENDS.md) — `cli` (default) / `mock` / `api` (legacy: removed in W8)

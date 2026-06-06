@@ -229,13 +229,29 @@ class PacketExecutionAdapter:
     async def _call_executor(self, packet_path: Path, packet_contract, attempt: int,
                              base_ref: str, base_sha: str, executor: dict, evidence_dir: Path | None = None):
         from grace_control.agent.backend import ExecutionRequest
+        from grace_control.services.git_service import GitService
         pid = packet_path.parent.name
         eff = packet_contract.allowed_write_scope; slug = _attempt_slug(pid, attempt)
+        wt_path = self.worktree_root / slug
+        branch = _attempt_branch(pid, attempt)
         self._worktree_cleanup.cleanup_attempt(self.project_root, slug)
+        # Create the worktree on a fresh branch from base_ref so the agent has
+        # a full checkout (scripts/, src/, tests/) to work in. Without this,
+        # cwd.mkdir() in agent_run_service leaves an empty directory and the
+        # agent's file edits cannot be seen by T0 scope/lint checks.
+        add_result = GitService().worktree_add(self.project_root, wt_path, branch, base_ref=base_ref)
+        if not add_result.success and "already exists" not in add_result.stderr:
+            from grace_control.core.structured_logger import GraceLogger
+            GraceLogger("packet_executor").warn(
+                "worktree_add_failed",
+                worktree=str(wt_path),
+                branch=branch,
+                stderr=add_result.stderr[:200],
+            )
         from grace_control.config.settings import settings
         req = ExecutionRequest(packet_id=pid,
             spec={"attempt_count":attempt,"base_ref":base_ref,"allowed_write_scope":eff or [],"frozen_scope":packet_contract.frozen_scope or []},
-            worktree_path=self.worktree_root / slug, branch_name=_attempt_branch(pid, attempt),
+            worktree_path=wt_path, branch_name=branch,
             scope_paths=list(eff or []), executor=executor, timeout_s=settings.agent_timeout_seconds,
             session_dir=self.state_root, evidence_dir=evidence_dir)
         return await self._backend.run(req)

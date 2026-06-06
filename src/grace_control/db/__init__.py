@@ -64,7 +64,7 @@ def init_db(db_url: str | None = None) -> None:
         @event.listens_for(engine, "connect")
         def _set_wal(dbapi_conn, _rec):
             dbapi_conn.execute("PRAGMA journal_mode=WAL")
-    SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False, expire_on_commit=False)
     Base.metadata.create_all(engine)
     _run_sqlite_column_migrations(engine)
 

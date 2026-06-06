@@ -119,6 +119,18 @@ class GitService:
             return []
         return [line.strip() for line in r.stdout.splitlines() if line.strip()]
 
+    def worktree_add(self, repo: Path, worktree_path: Path, branch: str, base_ref: str = "HEAD") -> GitResult:
+        """Create a new git worktree at `worktree_path` on a new `branch` from `base_ref`.
+
+        `worktree_path` must NOT already exist (git refuses to overwrite).
+        Returns GitResult; caller should check success.
+        """
+        worktree_path.parent.mkdir(parents=True, exist_ok=True)
+        return self._run(
+            ["worktree", "add", "-b", branch, str(worktree_path), base_ref],
+            repo,
+        )
+
     def worktree_remove(self, repo: Path, worktree_path: Path, *, force: bool = True) -> GitResult:
         """Unregister a worktree from `git worktree list` (P1#7 from post-refactor audit).
 
