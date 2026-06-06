@@ -27,6 +27,13 @@ class AgentEnvBuilder:
         for k, v in merged.items():
             expanded[k] = self._expand(v)
         env = os.environ.copy()
+        # Strip leaked OPENCODE runtime vars from parent shell.
+        # OPENCODE_SERVER_PASSWORD without OPENCODE_SERVER_URL causes
+        # `opencode run` to look up a non-existent server session and
+        # exit with "Session not found". OPENCODE=1, OPENCODE_PID, etc.
+        # mark the current shell as already inside an opencode run.
+        for k in [k for k in list(env) if k == "OPENCODE" or k.startswith("OPENCODE_") and k not in expanded]:
+            del env[k]
         env.update(expanded)
         return env
 

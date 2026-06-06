@@ -410,7 +410,7 @@ Respond ONLY with valid JSON (no markdown, no backticks):
 
 async def _run_opencode(prompt: str, model: str) -> str:
     from grace_control.core.llm_runner import run_llm
-    return await run_llm(prompt, role="architect", model=model, cli="opencode")
+    return await run_llm(prompt, role="architect", model=model, cli="architect-premium")
 
 
 def _slugify(text: str) -> str:
