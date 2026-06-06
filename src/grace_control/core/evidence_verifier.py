@@ -65,35 +65,57 @@ def skipped_evidence_report(reason: str) -> EvidenceVerifierReport:
 
 def parse_evidence_verifier_json(raw: str) -> EvidenceVerifierReport:
     try:
-        json_match = re.search(r"\{.*\}", raw, re.DOTALL)
-        if not json_match:
-            return EvidenceVerifierReport(
-                verdict=EvidenceVerifierVerdict.REWORK_TO_CODER,
-                summary="no JSON found in verifier output",
-                failed_checks=["no JSON block in response"],
-            )
-        data = json.loads(json_match.group())
-        verdict_str = data.get("verdict", "")
-        try:
-            verdict = EvidenceVerifierVerdict(verdict_str)
-        except ValueError:
-            return EvidenceVerifierReport(
-                verdict=EvidenceVerifierVerdict.REWORK_TO_CODER,
-                summary=f"unknown verdict: {verdict_str}",
-                failed_checks=[f"unrecognized verdict: {verdict_str}"],
-            )
+        # Try markdown code fences first (```json ... ```)
+        fence_match = re.search(r"```(?:json)?\s*\n(.+?)\n```", raw, re.DOTALL)
+        if fence_match:
+            candidate = fence_match.group(1).strip()
+            try:
+                data = json.loads(candidate)
+                return _build_report_from_json(data)
+            except (json.JSONDecodeError, ValueError):
+                pass
+        # Try to find a standalone JSON object
+        json_match = re.search(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", raw, re.DOTALL)
+        if json_match:
+            try:
+                data = json.loads(json_match.group())
+                return _build_report_from_json(data)
+            except (json.JSONDecodeError, ValueError):
+                pass
         return EvidenceVerifierReport(
-            verdict=verdict,
-            summary=data.get("summary", ""),
-            missing_evidence=data.get("missing_evidence", []),
-            failed_checks=data.get("failed_checks", []),
-            spec_conflicts=data.get("spec_conflicts", []),
-            coder_instructions=data.get("coder_instructions", []),
-            architect_questions=data.get("architect_questions", []),
-            suggested_next_owner=data.get("suggested_next_owner", "coder"),
-            skipped=False,
+            verdict=EvidenceVerifierVerdict.REWORK_TO_CODER,
+            summary="no JSON found in verifier output",
+            failed_checks=["no JSON block in response"],
         )
-    except (json.JSONDecodeError, ValueError) as e:
+    except Exception as e:
+        return EvidenceVerifierReport(
+            verdict=EvidenceVerifierVerdict.REWORK_TO_CODER,
+            summary=f"verifier parse error: {e}",
+            failed_checks=[str(e)[:200]],
+        )
+
+
+def _build_report_from_json(data: dict) -> EvidenceVerifierReport:
+    verdict_str = data.get("verdict", "")
+    try:
+        verdict = EvidenceVerifierVerdict(verdict_str)
+    except ValueError:
+        return EvidenceVerifierReport(
+            verdict=EvidenceVerifierVerdict.REWORK_TO_CODER,
+            summary=f"unknown verdict: {verdict_str}",
+            failed_checks=[f"unrecognized verdict: {verdict_str}"],
+        )
+    return EvidenceVerifierReport(
+        verdict=verdict,
+        summary=data.get("summary", ""),
+        missing_evidence=data.get("missing_evidence", []),
+        failed_checks=data.get("failed_checks", []),
+        spec_conflicts=data.get("spec_conflicts", []),
+        coder_instructions=data.get("coder_instructions", []),
+        architect_questions=data.get("architect_questions", []),
+        suggested_next_owner=data.get("suggested_next_owner", "coder"),
+        skipped=False,
+    )
         return EvidenceVerifierReport(
             verdict=EvidenceVerifierVerdict.REWORK_TO_CODER,
             summary=f"invalid verifier JSON: {e}",
