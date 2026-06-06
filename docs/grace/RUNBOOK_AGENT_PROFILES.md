@@ -13,7 +13,7 @@ agents:
       - run
       - "--model"
       - "{model}"
-      - "--effort"
+      - "--variant"
       - "{effort}"
     extras:                          # optional, env-driven flags appended after `command`
       - "--attach"                   # tokens with ${VAR} are dropped when VAR is unset

@@ -139,7 +139,7 @@ agents:
       - run
       - "--model"
       - "{model}"
-      - "--effort"
+      - "--variant"
       - "{effort}"
       - Read the task from {packet_path}. Respond ONLY with valid JSON, no other text.
     extras:
@@ -162,7 +162,7 @@ agents:
       - run
       - "--model"
       - "{model}"
-      - "--effort"
+      - "--variant"
       - "{effort}"
       - Read the task from {packet_path}. Respond ONLY with valid JSON, no other text.
     extras:
@@ -183,7 +183,7 @@ agents:
       - run
       - "--model"
       - "{model}"
-      - "--effort"
+      - "--variant"
       - "{effort}"
       - Read the task from {packet_path}. Respond ONLY with valid JSON, no other text.
     extras:
@@ -223,7 +223,7 @@ agents:
       - run
       - "--model"
       - "{model}"
-      - "--effort"
+      - "--variant"
       - "{effort}"
     extras:
       - "--attach"
