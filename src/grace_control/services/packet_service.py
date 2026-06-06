@@ -60,6 +60,14 @@ class ClaimResult:
     expires_at: datetime
     spec: dict[str, Any]
     attempt: int
+    # Full packet fields so executor doesn't re-query DB (avoids WAL visibility races)
+    feature_id: str = ""
+    wave_id: str = ""
+    slug: str = ""
+    title: str = ""
+    description: str = ""
+    acceptance_profile: str = ""
+    max_attempts: int = 0
 
 
 @dataclass(frozen=True)
@@ -205,6 +213,13 @@ class PacketService:
                 expires_at=expires_at,
                 spec=dict(packet.spec_json or {}),
                 attempt=packet.attempt_count,
+                feature_id=packet.feature_id or "",
+                wave_id=packet.wave_id or "",
+                slug=packet.slug or "",
+                title=packet.title or "",
+                description=packet.description or "",
+                acceptance_profile=packet.acceptance_profile or "",
+                max_attempts=packet.max_attempts or 0,
             )
 
             _record_event(db, "packet_claimed", packet_id, {

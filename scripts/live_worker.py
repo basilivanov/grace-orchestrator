@@ -12,7 +12,7 @@ import sys
 import asyncio
 from pathlib import Path
 
-sys.path.insert(0, "src")
+# sys.path.insert(0, "src")  # disabled: use editable install from source_dir
 os.environ.setdefault("GRACE_ALLOW_SANDBOX_BYPASS", "true")
 # Honor either GRACE_DB_URL (set by supervisor) or GRACE_DATABASE_URL (env yaml).
 # Fallback to a sane default ONLY if neither is set, so ad-hoc runs still work.

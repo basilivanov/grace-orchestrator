@@ -145,6 +145,13 @@ async def claim_packet(request: dict) -> dict:
                 "lease_id": result.lease_id,
                 "expires_at": result.expires_at.isoformat() + "Z",
                 "attempt": result.attempt,
+                "feature_id": result.feature_id,
+                "wave_id": result.wave_id,
+                "slug": result.slug,
+                "title": result.title,
+                "description": result.description,
+                "acceptance_profile": result.acceptance_profile,
+                "max_attempts": result.max_attempts,
             },
             "timestamp": datetime.utcnow().isoformat() + "Z",
         }

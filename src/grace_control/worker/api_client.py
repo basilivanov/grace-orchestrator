@@ -23,6 +23,13 @@ class PacketClaim(BaseModel):
     spec: dict
     lease_id: int
     expires_at: str
+    feature_id: str = ""
+    wave_id: str = ""
+    slug: str = ""
+    title: str = ""
+    description: str = ""
+    acceptance_profile: str = ""
+    max_attempts: int = 0
 
 
 class WorkerAPIClient:

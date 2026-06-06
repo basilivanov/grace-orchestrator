@@ -487,6 +487,13 @@ class Supervisor:
         env = os.environ.copy()
         env["GRACE_ALLOW_SANDBOX_BYPASS"] = "true"
         env["GRACE_API_URL"] = self.cfg.api_url
+        # Propagate database and project roots to children so API and
+        # worker share the same DB file and directories.
+        for _k in ("GRACE_DB_URL", "GRACE_DATABASE_URL",
+                   "GRACE_PROJECT_ROOT", "GRACE_STATE_ROOT",
+                   "GRACE_WORKTREE_ROOT", "GRACE_SOURCE_DIR"):
+            if _k in env:
+                env[_k] = env[_k]
         # Opencode runtime vars must NOT leak into children, otherwise
         # `opencode run` returns "Session not found".
         for k in [k for k in list(env) if k == "OPENCODE" or k.startswith("OPENCODE_")]:

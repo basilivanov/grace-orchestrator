@@ -60,11 +60,14 @@ class PacketExecutionAdapter:
         self._inspector = WorktreeInspector(); self._committer = AgentCommitService()
         self._worktree_cleanup = WorktreeCleanupService()
 
-    async def execute(self, packet_id: str, worker_id: str) -> ExecutionResult:
+    async def execute(self, packet_id: str, worker_id: str,
+                       claim_data: dict | None = None) -> ExecutionResult:
         start = time.time(); _log.info("adapter_execute_start", packet_id=packet_id, worker_id=worker_id)
         self.state_root.mkdir(parents=True, exist_ok=True); self.worktree_root.mkdir(parents=True, exist_ok=True)
-        from grace_control.db import init_db as _init_db; _init_db()
-        run_id, packet_data, run_number = self._load_packet(packet_id, worker_id)
+        if claim_data:
+            run_id, packet_data, run_number = self._load_packet_from_claim(packet_id, worker_id, claim_data)
+        else:
+            run_id, packet_data, run_number = self._load_packet(packet_id, worker_id)
         executor = self._resolve_executor(packet_data); agent_commit_sha = ""
         try:
             packet_path = self._materializer.materialize(packet_data, self.state_root)
@@ -100,10 +103,46 @@ class PacketExecutionAdapter:
                 if e: e.status = "failed"; e.finished_at = datetime.now(timezone.utc); e.duration_ms = int((time.time()-start)*1000)
             raise
 
-    def _load_packet(self, packet_id: str, worker_id: str):
+    def _load_packet_from_claim(self, packet_id: str, worker_id: str, claim: dict):
+        """Build packet_data from claim response — no DB query, no WAL race."""
+        rn = claim.get("attempt", 1)
+        rid = f"{packet_id}-R{rn:02d}"
         with get_db() as db:
-            p = db.query(Packet).filter_by(id=packet_id).first()
-            if not p: raise ValueError(f"Packet {packet_id} not found")
+            ex = db.query(PacketRun).filter_by(id=rid).first()
+            if ex:
+                ex.status = "running"
+                ex.started_at = datetime.now(timezone.utc)
+            else:
+                db.add(PacketRun(id=rid, packet_id=packet_id, run_number=rn,
+                    worker_id=worker_id, status="running",
+                    started_at=datetime.now(timezone.utc)))
+            db.commit()
+        cover = claim.get("spec", {})
+        pd = {
+            "id": packet_id,
+            "feature_id": claim.get("feature_id", ""),
+            "wave_id": claim.get("wave_id", ""),
+            "slug": claim.get("slug", "") or cover.get("slug", ""),
+            "title": claim.get("title") or cover.get("title") or "",
+            "description": claim.get("description") or cover.get("description") or "",
+            "spec_json": cover,
+            "state": "running",
+            "acceptance_profile": claim.get("acceptance_profile") or cover.get("acceptance_profile") or "NORMAL",
+            "attempt_count": rn,
+            "max_attempts": claim.get("max_attempts", 3),
+        }
+        return rid, pd, rn
+
+    def _load_packet(self, packet_id: str, worker_id: str):
+        p = None
+        for attempt in range(5):
+            with get_db() as db:
+                p = db.query(Packet).filter_by(id=packet_id).first()
+                if p: break
+            if p: break
+            time.sleep(0.1 * (attempt + 1))
+        if not p: raise ValueError(f"Packet {packet_id} not found after retries")
+        with get_db() as db:
             rn = p.attempt_count; rid = f"{packet_id}-R{rn:02d}"; slug = _attempt_slug(packet_id, rn)
             self._worktree_cleanup.cleanup_attempt(self.project_root, slug, worktree_root=self.worktree_root)
             ex = db.query(PacketRun).filter_by(id=rid).first()

@@ -63,6 +63,8 @@ class Worker:
 
     async def start(self):
         self.log.info("worker_starting", worker_id=self.worker_id)
+        from grace_control.db import init_db as _init_db
+        _init_db()
         await self.api.register(self.worker_id)
         self.log.info("worker_registered", worker_id=self.worker_id)
         self.running = True
@@ -100,7 +102,8 @@ class Worker:
                     try:
                         self.log.info("execution_started", packet_id=packet_id, timeout_s=agent_timeout)
                         result = await asyncio.wait_for(
-                            self.executor.execute(packet_id, self.worker_id),
+                            self.executor.execute(packet_id, self.worker_id,
+                                claim_data=claim.model_dump()),
                             timeout=agent_timeout,
                         )
                         self.log.info("execution_completed",
