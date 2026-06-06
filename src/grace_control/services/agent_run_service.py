@@ -54,7 +54,11 @@ class AgentRunService:
             packet_path.write_text(packet_markdown)
             ctx["packet_path"] = str(packet_path)
 
-        command = self._renderer.render(executor.get("command", []), ctx)
+        # Normalize legacy string command → list
+        cmd = executor.get("command", [])
+        if isinstance(cmd, str):
+            cmd = [cmd, "{packet_markdown}"]
+        command = self._renderer.render(cmd, ctx)
         raw_env = executor.get("env", {})
         env = self._env_builder.build(raw_env)
         preview_env = self._env_builder.preview(env)
