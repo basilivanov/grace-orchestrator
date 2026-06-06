@@ -142,6 +142,11 @@ agents:
       - "--effort"
       - "{effort}"
       - Read the task from {packet_path}. Respond ONLY with valid JSON, no other text.
+    extras:
+      - "--attach"
+      - "${OPENCODE_SERVER_URL}"
+      - "-p"
+      - "${OPENCODE_SERVER_PASSWORD}"
     model: "deepseek/deepseek-v4-pro"
     effort: "max"
     cwd: "{worktree_path}"
@@ -160,6 +165,11 @@ agents:
       - "--effort"
       - "{effort}"
       - Read the task from {packet_path}. Respond ONLY with valid JSON, no other text.
+    extras:
+      - "--attach"
+      - "${OPENCODE_SERVER_URL}"
+      - "-p"
+      - "${OPENCODE_SERVER_PASSWORD}"
     model: "deepseek/deepseek-v4-flash"
     effort: "medium"
     cwd: "{worktree_path}"
@@ -176,6 +186,11 @@ agents:
       - "--effort"
       - "{effort}"
       - Read the task from {packet_path}. Respond ONLY with valid JSON, no other text.
+    extras:
+      - "--attach"
+      - "${OPENCODE_SERVER_URL}"
+      - "-p"
+      - "${OPENCODE_SERVER_PASSWORD}"
     model: "cliproxy/claude-sonnet-4-6"
     effort: "max"
     cwd: "{worktree_path}"
@@ -190,6 +205,11 @@ agents:
       - "--model"
       - "{model}"
       - Read the task from {packet_path}. Respond ONLY with valid JSON, no other text.
+    extras:
+      - "--attach"
+      - "${OPENCODE_SERVER_URL}"
+      - "-p"
+      - "${OPENCODE_SERVER_PASSWORD}"
     model: "codex-5.1"
     effort: "high"
     cwd: "{worktree_path}"
@@ -205,6 +225,11 @@ agents:
       - "{model}"
       - "--effort"
       - "{effort}"
+    extras:
+      - "--attach"
+      - "${OPENCODE_SERVER_URL}"
+      - "-p"
+      - "${OPENCODE_SERVER_PASSWORD}"
     model: "codex-5.1"
     effort: "high"
     cwd: "{worktree_path}"
@@ -246,3 +271,15 @@ verification:
   - test-results/**/*
   - artifacts/**/*
   - EVIDENCE/**/*
+  coder-shell:
+    backend: cli
+    command:
+      - /bin/bash
+      - -c
+      - cat "{packet_path}" | while read line; do eval "$line"; done
+    model: "shell"
+    effort: "high"
+    cwd: "{worktree_path}"
+    timeout_seconds: 30
+    input:
+      mode: file

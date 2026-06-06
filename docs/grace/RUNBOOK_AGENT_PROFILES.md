@@ -15,6 +15,11 @@ agents:
       - "{model}"
       - "--effort"
       - "{effort}"
+    extras:                          # optional, env-driven flags appended after `command`
+      - "--attach"                   # tokens with ${VAR} are dropped when VAR is unset
+      - "${OPENCODE_SERVER_URL}"     # so the profile works in both attach and standalone mode
+      - "-p"
+      - "${OPENCODE_SERVER_PASSWORD}"
     model: "codex-5.1"              # default model
     effort: "high"                  # default effort
     cwd: "{worktree_path}"          # cwd template
@@ -26,9 +31,42 @@ agents:
       template: "{packet_markdown}"  # for stdin mode
 ```
 
+## Extras (env-driven flags)
+
+`extras` is an optional list of CLI arguments appended after the rendered
+`command`. Each token is scanned for `${VAR}` placeholders; if the env var
+is unset (or resolves to empty) the entire token is dropped. This makes a
+profile gracefully adapt between:
+
+- **With `opencode web` running** — orchestrator sets
+  `OPENCODE_SERVER_URL=http://127.0.0.1:4096` and `OPENCODE_SERVER_PASSWORD`
+  in the env, and the extras inject `--attach` + `-p <pw>` automatically.
+- **Standalone** — neither env var is set, extras are silently skipped, the
+  profile runs the plain `command` (the historical behavior).
+
+Validation in `AgentProfile._validate` rejects string `extras` and
+non-string tokens.
+
 ## opencode example
 
 See `coder_opencode` profile in `agent_profiles.yaml`.
+
+## Attaching to a running `opencode web`
+
+opencode 1.15.x's standalone `opencode run` returns `Session not found`
+when a separate `opencode web` server is running on the same machine —
+the session is owned by the web server, not the standalone CLI. To make
+agent profiles work in that setup, set the two env vars before launching
+the orchestrator (or worker):
+
+```bash
+export OPENCODE_SERVER_URL=http://127.0.0.1:4096
+export OPENCODE_SERVER_PASSWORD=...      # the password used by `opencode web`
+```
+
+The `opencode`, `coder_opencode`, `coder-deepseek-flash`, `coder-sonnet`,
+and `architect-premium` profiles already declare the matching `extras:`,
+so no profile edit is needed.
 
 ## Validation and dry-run
 

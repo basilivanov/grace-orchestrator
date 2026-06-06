@@ -27,6 +27,7 @@ class AgentProfile:
         self.executor_id = executor_id
         self.backend = raw.get("backend", "cli")
         self.command = raw.get("command", [])
+        self.extras = raw.get("extras", [])
         self.model = raw.get("model", "")
         self.effort = raw.get("effort", "medium")
         self.cwd_template = str(raw.get("cwd", "{worktree_path}"))
@@ -47,11 +48,22 @@ class AgentProfile:
         for i, part in enumerate(self.command):
             if not isinstance(part, str):
                 raise ValueError(f"Agent '{self.executor_id}': command[{i}] must be a string, got {type(part).__name__}")
+        if isinstance(self.extras, str):
+            raise ValueError(
+                f"Agent '{self.executor_id}': `extras` must be a list of strings, "
+                f"got string '{self.extras}'."
+            )
+        if not isinstance(self.extras, list):
+            raise ValueError(f"Agent '{self.executor_id}': `extras` must be a list of strings")
+        for i, part in enumerate(self.extras):
+            if not isinstance(part, str):
+                raise ValueError(f"Agent '{self.executor_id}': extras[{i}] must be a string, got {type(part).__name__}")
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "executor_id": self.executor_id,
             "command": list(self.command),
+            "extras": list(self.extras),
             "model": self.model,
             "effort": self.effort,
             "cwd": self.cwd_template,

@@ -30,6 +30,10 @@ class AgentEnvBuilder:
         env.update(expanded)
         return env
 
+    def resolve(self, value: str) -> str:
+        """Expand ${VAR} references in a single value; return original if no placeholders."""
+        return self._expand(value)
+
     def _expand(self, value: str) -> str:
         def _replacer(m: re.Match) -> str:
             var = m.group(1)
