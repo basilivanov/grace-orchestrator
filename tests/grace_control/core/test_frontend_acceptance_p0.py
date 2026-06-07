@@ -262,5 +262,18 @@ class TestPlaywrightMissingOrNoTests:
         )
         runner._has_playwright = lambda: True
         r = runner.run_e2e()
-        assert r.passed is False, f"Expected failed, got passed={r.passed}"
+        assert r.passed is False
         assert "no e2e test files" in str(r.errors).lower()
+
+    def test_custom_commands_propagated_to_result(self, tmp_path: Path):
+        """Architect-provided custom commands appear in BrowserStageResult.command."""
+        from grace_control.services.playwright_runner import PlaywrightRunner
+        custom = [["npx", "playwright", "test", "tests/e2e/login.spec.ts"]]
+        runner = PlaywrightRunner(
+            worktree_path=tmp_path, run_dir=tmp_path / "runs",
+            viewport="android", base_url="http://localhost:3000",
+            dev_command="echo test",
+        )
+        runner._has_playwright = lambda: True
+        r = runner.run_e2e(custom_cmds=custom)
+        assert "login.spec.ts" in r.command, f"Expected login.spec.ts, got: {r.command}"

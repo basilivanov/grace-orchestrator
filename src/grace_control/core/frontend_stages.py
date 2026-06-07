@@ -134,11 +134,12 @@ def run_t2_browser_e2e(
     routing: BrowserRouting,
     *,
     telegram_mode: str = "mock",
+    custom_cmds: list[list[str]] | None = None,
 ) -> list[BrowserStageResult]:
     """Run T2_BROWSER_E2E — Playwright E2E tests per viewport.
 
-    Tries to use PlaywrightRunner if available. Falls back to skipped
-    result if Playwright is not installed or no test files found.
+    Uses custom_cmds from verification.t2_browser if provided;
+    otherwise falls back to default playwright invocation.
     """
     results: list[BrowserStageResult] = []
     for vp in routing.viewports:
@@ -152,7 +153,7 @@ def run_t2_browser_e2e(
                 dev_command=routing.dev_command,
                 telegram_mode=telegram_mode,
             )
-            result = runner.run_e2e()
+            result = runner.run_e2e(custom_cmds=custom_cmds)
             results.append(result)
         except ImportError:
             _log.info("browser_e2e_skipped", viewport=vp, reason="PlaywrightRunner not available")
@@ -174,8 +175,13 @@ def run_t3_visual_regression(
     routing: BrowserRouting,
     *,
     telegram_mode: str = "mock",
+    custom_cmds: list[list[str]] | None = None,
 ) -> list[BrowserStageResult]:
-    """Run T3_VISUAL_REGRESSION — Playwright visual diff per viewport."""
+    """Run T3_VISUAL_REGRESSION — Playwright visual diff per viewport.
+
+    Uses custom_cmds from verification.t3_visual if provided;
+    otherwise falls back to default playwright invocation.
+    """
     results: list[BrowserStageResult] = []
     for vp in routing.viewports:
         try:
@@ -188,7 +194,8 @@ def run_t3_visual_regression(
                 dev_command=routing.dev_command,
                 telegram_mode=telegram_mode,
             )
-            result = runner.run_visual(max_diff_pct=routing.max_diff_pct)
+            result = runner.run_visual(max_diff_pct=routing.max_diff_pct,
+                                       custom_cmds=custom_cmds)
             results.append(result)
         except ImportError:
             _log.info("visual_regression_skipped", viewport=vp, reason="PlaywrightRunner not available")

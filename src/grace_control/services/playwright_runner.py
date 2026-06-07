@@ -69,15 +69,18 @@ class PlaywrightRunner:
     def viewport_config(self) -> dict:
         return _VIEWPORT_CONFIG.get(self._viewport, _VIEWPORT_CONFIG["android"])
 
-    def run_e2e(self) -> BrowserStageResult:
-        return self._run_playwright("e2e")
+    def run_e2e(self, custom_cmds: list[list[str]] | None = None) -> BrowserStageResult:
+        return self._run_playwright("e2e", custom_cmds=custom_cmds)
 
-    def run_visual(self, max_diff_pct: float = 0.001) -> BrowserStageResult:
-        return self._run_playwright("visual", extra_env={"MAX_DIFF_PCT": str(max_diff_pct)})
+    def run_visual(self, max_diff_pct: float = 0.001,
+                   custom_cmds: list[list[str]] | None = None) -> BrowserStageResult:
+        return self._run_playwright("visual", extra_env={"MAX_DIFF_PCT": str(max_diff_pct)},
+                                    custom_cmds=custom_cmds)
 
     # ── internals ───────────────────────────────────────────────────────
 
-    def _run_playwright(self, mode: str, extra_env: dict | None = None) -> BrowserStageResult:
+    def _run_playwright(self, mode: str, extra_env: dict | None = None,
+                         custom_cmds: list[list[str]] | None = None) -> BrowserStageResult:
         result = BrowserStageResult(viewport=self._viewport)
 
         # Check if Playwright is available
@@ -85,6 +88,8 @@ class PlaywrightRunner:
             _log.error("playwright_missing", reason="npx playwright not available")
             result.passed = False
             result.errors = ["npx playwright not installed — cannot run frontend acceptance"]
+            if custom_cmds:
+                result.command = " ".join(custom_cmds[0])
             return result
 
         # Check for test files
@@ -97,6 +102,8 @@ class PlaywrightRunner:
             _log.warn("playwright_no_tests", mode=mode, reason=f"no {mode} test files found")
             result.passed = False
             result.errors = [f"No {mode} test files found — frontend gate cannot pass without tests"]
+            if custom_cmds:
+                result.command = " ".join(custom_cmds[0])
             return result
 
         t0 = time.time()
@@ -117,12 +124,17 @@ class PlaywrightRunner:
             if extra_env:
                 env.update(extra_env)
 
-            cmd = [
-                "npx", "playwright", "test",
-                "--config", str(self._worktree / "playwright.config.ts"),
-                "--reporter", "html,json,list",
-                f"--project={self._viewport}" if not self._has_projects() else "",
-            ]
+            # Use architect-provided custom commands if available,
+            # otherwise fall back to default playwright test invocation.
+            if custom_cmds:
+                cmd = list(custom_cmds[0])  # first verification command
+            else:
+                cmd = [
+                    "npx", "playwright", "test",
+                    "--config", str(self._worktree / "playwright.config.ts"),
+                    "--reporter", "html,json,list",
+                    f"--project={self._viewport}" if not self._has_projects() else "",
+                ]
             cmd = [c for c in cmd if c]
 
             _log.info("playwright_started", mode=mode, viewport=self._viewport,
