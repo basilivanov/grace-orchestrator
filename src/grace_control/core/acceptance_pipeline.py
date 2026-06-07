@@ -491,6 +491,7 @@ def _run_frontend_stages(
             worktree_root, run_dir, routing,
             telegram_mode=routing.telegram_mode,
             custom_cmds=t2b_commands if t2b_commands else None,
+            telegram_bot_token_env=routing.telegram_bot_token_env,
         )
         passed = all(r.passed for r in browser_results)
         screenshots = sum((r.screenshots for r in browser_results), [])
@@ -529,6 +530,7 @@ def _run_frontend_stages(
             worktree_root, run_dir, routing,
             telegram_mode=routing.telegram_mode,
             custom_cmds=t3v_commands if t3v_commands else None,
+            telegram_bot_token_env=routing.telegram_bot_token_env,
         )
         passed = all(r.passed for r in visual_results)
         screenshots = sum((r.screenshots for r in visual_results), [])

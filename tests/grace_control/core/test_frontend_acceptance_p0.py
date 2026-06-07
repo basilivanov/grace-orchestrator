@@ -608,3 +608,44 @@ class TestTelegramBridgeIntegration:
             assert captured_env and captured_env[0] == "MY_CUSTOM_TOKEN", (
                 f"Expected MY_CUSTOM_TOKEN, got {captured_env}"
             )
+
+    def test_pipeline_level_bot_token_propagation(self, tmp_path: Path):
+        """bot_token_env flows from spec.frontend → routing → runner in _run_frontend_stages."""
+        from unittest.mock import patch
+        from grace_control.core.acceptance_pipeline import _run_frontend_stages
+        from grace_control.core.contracts import ExecutionPacketContract, AcceptanceProfile
+
+        captured_env = []
+        class SpyBridge:
+            def __init__(self, worktree_path, dev_port, bot_token_env=""):
+                captured_env.append(bot_token_env)
+            def start(self):
+                from grace_control.services.telegram_bridge_service import BridgeResult
+                return BridgeResult(ok=True, public_url="https://abc.ngrok.io")
+            def stop(self):
+                pass
+
+        packet = ExecutionPacketContract(
+            packet_id="pkt_token", title="token test",
+            allowed_write_scope=[], frozen_scope=[],
+            acceptance_profile=AcceptanceProfile.STRICT,
+            verification={"t2_browser": [["npx", "pw"]]},
+            metadata={"frontend": {
+                "enabled": True,
+                "telegram_mode": "real",
+                "telegram_bot_token_env": "PIPELINE_TOKEN_123",
+            }},
+        )
+        (tmp_path / "tests" / "e2e").mkdir(parents=True)
+        (tmp_path / "tests" / "e2e" / "test.spec.ts").write_text("// test")
+
+        real_bridge = "grace_control.services.telegram_bridge_service.TelegramBridgeService"
+        real_subprocess = "subprocess.run"
+        real_dev = "grace_control.services.playwright_runner.PlaywrightRunner._start_dev_server"
+        with patch(real_bridge, side_effect=SpyBridge), \
+             patch(real_subprocess, return_value=type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()), \
+             patch(real_dev, return_value=True):
+            r = _run_frontend_stages(packet, worktree_root=tmp_path, run_dir=tmp_path / "runs")
+            assert captured_env and captured_env[0] == "PIPELINE_TOKEN_123", (
+                f"Expected PIPELINE_TOKEN_123, got {captured_env}"
+            )
