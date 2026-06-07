@@ -80,6 +80,10 @@ class PlaywrightRunner:
         return self._run_playwright("visual", extra_env={"MAX_DIFF_PCT": str(max_diff_pct)},
                                     custom_cmds=custom_cmds)
 
+    def run_a11y(self) -> BrowserStageResult:
+        """Run axe-core accessibility check. TZ_FRONTEND_ACCEPTANCE P2."""
+        return self._run_playwright("a11y")
+
     # ── internals ───────────────────────────────────────────────────────
 
     def _run_playwright(self, mode: str, extra_env: dict | None = None,
@@ -103,7 +107,7 @@ class PlaywrightRunner:
 
         # Check for test files (before dev-server/bridge to fail early)
         test_pattern = (
-            f"tests/e2e/**/*.spec.ts" if mode == "e2e"
+            f"tests/e2e/**/*.spec.ts" if mode in ("e2e", "a11y")
             else f"tests/e2e/**/*.visual.spec.ts"
         )
         test_files = list(self._worktree.glob(test_pattern))

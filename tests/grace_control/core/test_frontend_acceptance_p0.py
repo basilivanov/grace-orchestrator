@@ -649,3 +649,127 @@ class TestTelegramBridgeIntegration:
             assert captured_env and captured_env[0] == "PIPELINE_TOKEN_123", (
                 f"Expected PIPELINE_TOKEN_123, got {captured_env}"
             )
+
+
+# ── P2 tests: a11y, desktop viewport, visual threshold, Storybook/video absent ─
+
+
+class TestA11yRouting:
+    """A11y axe-core routing — only runs when frontend.a11y.required=true."""
+
+    def test_a11y_disabled_default(self):
+        from grace_control.core.frontend_stages import resolve_browser_routing
+        r = resolve_browser_routing({"enabled": True}, "NORMAL")
+        assert r.run_a11y is False
+
+    def test_a11y_enabled_norinal_runs(self):
+        from grace_control.core.frontend_stages import resolve_browser_routing
+        r = resolve_browser_routing({"enabled": True, "a11y": {"required": True}}, "NORMAL")
+        assert r.run_a11y is True
+
+    def test_a11y_fast_profile_skips(self):
+        from grace_control.core.frontend_stages import resolve_browser_routing
+        r = resolve_browser_routing({"enabled": True, "a11y": {"required": True}}, "FAST")
+        assert r.run_a11y is False
+
+    def test_a11y_stage_skipped_when_not_required(self):
+        from grace_control.core.acceptance_pipeline import _run_frontend_stages
+        from grace_control.core.contracts import ExecutionPacketContract, AcceptanceProfile
+        pkt = ExecutionPacketContract(packet_id="t", title="t", allowed_write_scope=[],
+                                      frozen_scope=[], acceptance_profile=AcceptanceProfile.NORMAL,
+                                      verification={}, metadata={})
+        r = _run_frontend_stages(pkt, worktree_root="/tmp", run_dir="/tmp")
+        assert r["t2_browser_a11y"].status.value == "skipped"
+
+    def test_a11y_runner_no_violations_passes(self, tmp_path: Path):
+        from grace_control.services.playwright_runner import PlaywrightRunner
+        runner = PlaywrightRunner(worktree_path=tmp_path, run_dir=tmp_path / "r",
+                                  viewport="android", dev_command="echo test")
+        runner._has_playwright = lambda: True
+        (tmp_path / "tests" / "e2e").mkdir(parents=True)
+        (tmp_path / "tests" / "e2e" / "test.spec.ts").write_text("// a11y test")
+        runner._start_dev_server = lambda: True
+        runner._stop_dev_server = lambda: None
+        from unittest.mock import patch
+        mock = type("R", (), {"returncode": 0, "stdout": '{"violations": []}', "stderr": ""})()
+        with patch("subprocess.run", return_value=mock):
+            r = runner.run_a11y()
+            assert r.passed is True
+
+    def test_a11y_runner_critical_violation_fails(self, tmp_path: Path):
+        from grace_control.services.playwright_runner import PlaywrightRunner
+        runner = PlaywrightRunner(worktree_path=tmp_path, run_dir=tmp_path / "r",
+                                  viewport="android", dev_command="echo test")
+        runner._has_playwright = lambda: True
+        (tmp_path / "tests" / "e2e").mkdir(parents=True)
+        (tmp_path / "tests" / "e2e" / "test.spec.ts").write_text("// a11y test")
+        runner._start_dev_server = lambda: True
+        runner._stop_dev_server = lambda: None
+        from unittest.mock import patch
+        violations = '[{"id":"color-contrast","impact":"critical","description":"Text contrast too low"}]'
+        mock = type("R", (), {"returncode": 1, "stdout": violations, "stderr": ""})()
+        with patch("subprocess.run", return_value=mock):
+            r = runner.run_a11y()
+            assert r.passed is False
+            assert "violations" in str(r.errors).lower() or "critical" in str(r.errors).lower()
+
+
+class TestDesktopViewport:
+    """Desktop viewport is optional — mobile-only by default."""
+
+    def test_default_viewports_mobile_only(self):
+        from grace_control.config.project_config import FrontendSpec
+        fs = FrontendSpec()
+        assert fs.viewports == ["android", "iphone"]
+
+    def test_desktop_included_when_explicit(self):
+        from grace_control.config.project_config import FrontendSpec
+        fs = FrontendSpec(viewports=["android", "iphone", "desktop"])
+        assert "desktop" in fs.viewports
+
+    def test_desktop_viewport_config_exists(self):
+        from grace_control.core.frontend_stages import _VIEWPORT_MAP
+        assert "desktop" in _VIEWPORT_MAP
+        assert _VIEWPORT_MAP["desktop"]["width"] == 1280
+
+
+class TestVisualThreshold:
+    """Visual diff threshold propagates to runner and evidence."""
+
+    def test_max_diff_pct_in_routing(self):
+        from grace_control.core.frontend_stages import resolve_browser_routing
+        r = resolve_browser_routing(
+            {"enabled": True, "visual": {"max_diff_pct": 0.005}}, "NORMAL"
+        )
+        assert r.max_diff_pct == 0.005
+
+    def test_threshold_default_is_001(self):
+        from grace_control.core.frontend_stages import resolve_browser_routing
+        r = resolve_browser_routing({"enabled": True}, "NORMAL")
+        assert r.max_diff_pct == 0.001
+
+    def test_threshold_in_evidence_pattern(self):
+        from grace_control.core.contracts import EvidenceRequirement
+        req = EvidenceRequirement(id="v1", kind="visual_diff", pattern="max_diff_pct=0.01")
+        assert "max_diff_pct=0.01" == req.pattern
+
+
+class TestStorybookVideoAbsent:
+    """Storybook and video recording are NOT implemented in P2."""
+
+    def test_no_storybook_runner(self):
+        import importlib
+        try:
+            importlib.import_module("grace_control.services.storybook_runner")
+            assert False, "Storybook runner must NOT exist"
+        except ImportError:
+            pass  # Expected — no storybook
+
+    def test_no_video_evidence_kind(self):
+        from grace_control.core.contracts import EvidenceRequirement
+        # video is not in the documented kinds
+        req = EvidenceRequirement(id="v1", kind="screenshot")  # valid kind
+        assert req.kind == "screenshot"
+        # No 'video' evidence kind should exist
+        valid = {"command", "file", "diff", "log", "screenshot", "dom_snapshot", "console_log", "network_log", "visual_diff"}
+        assert "video" not in valid

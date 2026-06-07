@@ -562,6 +562,42 @@ def _run_frontend_stages(
             skipped_reason=routing.reason,
         )
 
+    # T2_BROWSER_A11Y — axe-core accessibility check (P2)
+    if routing.run_a11y:
+        from grace_control.core.frontend_stages import run_a11y_check
+        a11y_results = run_a11y_check(
+            worktree_root, run_dir, routing,
+            telegram_mode=routing.telegram_mode,
+            telegram_bot_token_env=routing.telegram_bot_token_env,
+        )
+        a11y_passed = all(r.passed for r in a11y_results)
+        a11y_errors = sum((r.errors for r in a11y_results), [])
+        violations_count = sum(len(r.screenshots) for r in a11y_results)
+        result["t2_browser_a11y"] = StageResult(
+            name=StageName.T2_BROWSER_E2E,
+            status=StageStatus.PASSED if a11y_passed else StageStatus.FAILED,
+            summary=f"T2_BROWSER_A11Y: {len(a11y_results)} viewports, {violations_count} violations",
+            commands=[
+                CommandResult(
+                    command=f"npx playwright a11y --viewport={r.viewport}",
+                    cwd=str(worktree_root),
+                    exit_code=0 if r.passed else 1,
+                    stdout=r.stdout_snippet,
+                    stderr=r.stderr_snippet,
+                )
+                for r in a11y_results
+            ],
+            blocking_issues=a11y_errors if not a11y_passed else [],
+        )
+    else:
+        result["t2_browser_a11y"] = StageResult(
+            name=StageName.T2_BROWSER_E2E,
+            status=StageStatus.SKIPPED,
+            summary="T2_BROWSER_A11Y skipped: a11y not required",
+            commands=[],
+            skipped_reason="a11y not required",
+        )
+
     return result
 
 

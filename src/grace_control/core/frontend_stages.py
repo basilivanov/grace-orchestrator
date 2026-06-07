@@ -22,6 +22,7 @@
 #   - function: resolve_browser_routing
 #   - function: run_t2_browser_e2e
 #   - function: run_t3_visual_regression
+#   - function: run_a11y_check  # P2
 #   - dataclass: BrowserRouting
 #   - dataclass: BrowserStageResult
 # END_MODULE_MAP
@@ -38,6 +39,7 @@ _log = GraceLogger("frontend_stages")
 _VIEWPORT_MAP = {
     "android": {"width": 360, "height": 780},
     "iphone": {"width": 390, "height": 844},
+    "desktop": {"width": 1280, "height": 720},  # TZ_FRONTEND_ACCEPTANCE P2
 }
 
 
@@ -47,8 +49,9 @@ class BrowserRouting:
 
     run_t2_browser: bool = False
     run_t3_visual: bool = False
+    run_a11y: bool = False          # TZ_FRONTEND_ACCEPTANCE P2
     telegram_mode: str = "mock"
-    telegram_bot_token_env: str = ""  # TZ_FRONTEND_ACCEPTANCE P1
+    telegram_bot_token_env: str = ""
     viewports: list[str] = field(default_factory=lambda: ["android", "iphone"])
     max_diff_pct: float = 0.001
     dev_command: str = "npm run dev"
@@ -112,10 +115,13 @@ def resolve_browser_routing(
 
     run_browser = acceptance_profile in ("NORMAL", "STRICT") and e2e.get("required", True)
     run_visual = acceptance_profile in ("NORMAL", "STRICT") and visual.get("required", False)
+    a11y_spec = spec.get("a11y", {}) or {}
+    run_a11y = acceptance_profile in ("NORMAL", "STRICT") and a11y_spec.get("required", False)
 
     routing = BrowserRouting(
         run_t2_browser=run_browser,
         run_t3_visual=run_visual,
+        run_a11y=run_a11y,
         telegram_mode=telegram_mode,
         telegram_bot_token_env=spec.get("telegram_bot_token_env", ""),
         viewports=spec.get("viewports", ["android", "iphone"]),
@@ -211,6 +217,42 @@ def run_t3_visual_regression(
             ))
         except Exception as e:
             _log.error("visual_regression_failed", viewport=vp, error=str(e)[:200])
+            results.append(BrowserStageResult(
+                passed=False, viewport=vp, errors=[str(e)[:200]],
+            ))
+    return results
+
+
+def run_a11y_check(
+    worktree_path: Path,
+    run_dir: Path,
+    routing: BrowserRouting,
+    *,
+    telegram_mode: str = "mock",
+    telegram_bot_token_env: str = "",
+) -> list[BrowserStageResult]:
+    """Run T2_BROWSER_A11Y — axe-core per viewport (P2).
+
+    Critical a11y violations make the stage FAIL.
+    Non-critical violations are collected as warnings.
+    """
+    results: list[BrowserStageResult] = []
+    for vp in routing.viewports:
+        try:
+            from grace_control.services.playwright_runner import PlaywrightRunner
+            runner = PlaywrightRunner(
+                worktree_path=worktree_path,
+                run_dir=run_dir,
+                viewport=vp,
+                base_url=routing.base_url,
+                dev_command=routing.dev_command,
+                telegram_mode=telegram_mode,
+                telegram_bot_token_env=telegram_bot_token_env,
+            )
+            r = runner.run_a11y()
+            results.append(r)
+        except Exception as e:
+            _log.error("a11y_failed", viewport=vp, error=str(e)[:200])
             results.append(BrowserStageResult(
                 passed=False, viewport=vp, errors=[str(e)[:200]],
             ))

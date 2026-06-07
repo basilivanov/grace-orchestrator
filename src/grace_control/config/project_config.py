@@ -98,24 +98,28 @@ class FrontendVisualSpec(BaseModel):
     max_diff_pct: float = 0.001
 
 
+class FrontendA11ySpec(BaseModel):
+    """Accessibility check configuration via axe-core (TZ_FRONTEND_ACCEPTANCE P2)."""
+    required: bool = False
+
+
 class FrontendSpec(BaseModel):
-    """Frontend acceptance spec (TZ_FRONTEND_ACCEPTANCE P0).
+    """Frontend acceptance spec (TZ_FRONTEND_ACCEPTANCE P0/P2).
 
     When `enabled=True`, the orchestrator runs browser E2E (T2_BROWSER)
     and/or visual regression (T3_VISUAL) stages in addition to T0/T1/T2.
-
-    architect decides `enabled` and per-stage requirements.
-    orchestrator enforces profile constraints (FAST skips browser).
+    P2 adds a11y axe-core (T2_BROWSER_A11Y) and desktop viewport.
     """
     enabled: bool = False
     dev_command: str = "npm run dev"
     base_url: str = "http://localhost:3000"
     viewports: list[str] = Field(default_factory=lambda: ["android", "iphone"])
-    telegram_mode: str = "mock"  # "mock" | "real"
+    telegram_mode: str = "mock"
     telegram_user: dict[str, Any] = Field(default_factory=dict)
     telegram_bot_token_env: str = ""
     e2e: FrontendE2ESpec = Field(default_factory=FrontendE2ESpec)
     visual: FrontendVisualSpec = Field(default_factory=FrontendVisualSpec)
+    a11y: FrontendA11ySpec = Field(default_factory=FrontendA11ySpec)  # P2
 
 
 class ProjectConfig(BaseModel):
