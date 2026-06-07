@@ -1053,35 +1053,8 @@ class AdminAggregationService:
     # ── sessions (forward-compat) ───────────────────────────────────────
 
     def get_packet_sessions(self, db: Session, packet_id: str) -> dict[str, Any]:
-        try:
-            row = db.execute(
-                text("SELECT name FROM sqlite_master WHERE type='table' AND name='agent_sessions'")
-            ).first()
-        except Exception:
-            row = None
-        if row is None:
-            return {"sessions": [], "reason": "table_missing"}
-        try:
-            rows = db.execute(
-                text("SELECT id, external_id, role, executor_id, backend, attempt_number, status, parent_session_id, created_at, finished_at "
-                     "FROM agent_sessions WHERE packet_id = :pid ORDER BY created_at"),
-                {"pid": packet_id},
-            ).all()
-            sessions = [
-                {
-                    "id": r[0], "external_id": r[1] or "", "role": r[2] or "",
-                    "executor_id": r[3] or "", "backend": r[4] or "",
-                    "attempt_number": r[5] or 0, "status": r[6] or "",
-                    "parent_session_id": r[7] or "",
-                    "created_at": _iso(r[8]) if r[8] else None,
-                    "finished_at": _iso(r[9]) if r[9] else None,
-                }
-                for r in rows
-            ]
-            return {"sessions": sessions, "reason": "ok"}
-        except Exception:
-            return {"sessions": [], "reason": "query_failed"}
-
+        from grace_control.services.session_store import SessionStore
+        return SessionStore().get_sessions_for_packet(db, packet_id)
     # ── feature summary ─────────────────────────────────────────────────
 
     def get_feature_summary(self, db: Session, feature_id: str) -> dict[str, Any] | None:

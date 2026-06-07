@@ -299,6 +299,15 @@ class PacketExecutionAdapter:
             acceptance_report=None, evidence_verifier_report=skipped_evidence_report(reason), reviewer_report=skipped_reviewer_report(reason),
             evidence_path="", duration_ms=er.duration_ms, executor_id=executor_id)
         except: pass
+        # Clean up worktree + agent/* branches for terminal rejection.
+        # Extract packet_id and run_number from run_id (e.g. "pkt_xxx-R01").
+        try:
+            parts = run_id.rsplit("-R", 1)
+            if len(parts) == 2:
+                pkt, rn = parts[0], int(parts[1])
+                self._terminal_cleanup.run(pkt, attempt=rn)
+        except Exception:
+            pass
         return er
 
     async def _call_executor(self, packet_path: Path, packet_contract, attempt: int,
@@ -378,6 +387,7 @@ class PacketExecutionAdapter:
 
         # TZ_SESSION_RESUME.md Phase 3: resolve resume session before run
         resume_session_id: str | None = None
+        prev_internal_id: str | None = None
         fork = False
         resume_mode = executor.get("resume_mode", "never")
         role = executor.get("role", "coder")
@@ -394,15 +404,18 @@ class PacketExecutionAdapter:
                         db, pid, role, executor_id=executor_id)
                     if prev:
                         resume_session_id = prev.external_id
+                        prev_internal_id = prev.id
                 elif resume_mode == "on_fork":
                     prev = self._session_store.find_for_fork(db, pid, role)
                     if prev:
                         resume_session_id = prev.external_id
+                        prev_internal_id = prev.id
                         fork = True
                 elif resume_mode == "always":
                     prev = self._session_store.find_latest(db, pid, role)
                     if prev:
                         resume_session_id = prev.external_id
+                        prev_internal_id = prev.id
                 _log.info("session_resolved",
                           packet_id=pid, attempt=attempt, role=role,
                           resume_session_id=resume_session_id, fork=fork)
@@ -421,13 +434,13 @@ class PacketExecutionAdapter:
                 self._session_store.save(
                     db,
                     packet_id=pid,
-                    run_id=evidence_dir.name if evidence_dir else None,
+                    run_id=f"{pid}-R{attempt:02d}",
                     role=role,
                     executor_id=executor_id,
                     backend=executor.get("backend", "cli"),
                     attempt_number=attempt,
                     external_id=result.evidence.get("session_id"),
-                    parent_session_id=resume_session_id if fork else None,
+                    parent_session_id=prev_internal_id if fork else None,
                     status="completed" if result.accepted else "failed",
                 )
         return result

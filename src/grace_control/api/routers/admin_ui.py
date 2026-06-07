@@ -43,16 +43,18 @@ from fastapi.templating import Jinja2Templates
 
 from grace_control.db import get_db
 from grace_control.services.admin_aggregation_service import AdminAggregationService
-from grace_control.services.maintenance_service import MaintenanceService
+from grace_control.services.maintenance_service import MaintenanceService, CleanupResult
 from grace_control.ui.admin_template_filters import register as _register_filters
 from grace_control.ui.admin_template_filters import shell_url as _shell_url
+from grace_control.config.settings import settings as _settings
 
 router = APIRouter()
 _svc = AdminAggregationService()
+_project = Path(_settings.target_repo_root or ".").resolve()
 _maint_svc = MaintenanceService(
-    state_root=Path("/tmp/grace-orchestrator-export/.grace/state"),
-    worktree_root=Path("/tmp/grace-orchestrator-export/.grace/worktrees"),
-    project_root=Path("/tmp/grace-orchestrator-export"),
+    state_root=_project / _settings.state_root,
+    worktree_root=_project / _settings.worktree_root,
+    project_root=_project,
 )
 
 _TEMPLATES_DIR = Path(__file__).parent.parent.parent / "ui" / "templates"
@@ -684,7 +686,7 @@ def cleanup_action(
             packet_states=states, dry_run=dry_run,
         )
     else:
-        result = _maint_svc.CleanupResult()  # unknown action
+        result = CleanupResult()  # unknown action
         result.errors.append(f"unknown action: {action}")
 
     snap = _maint_svc.snapshot(packet_states=states)

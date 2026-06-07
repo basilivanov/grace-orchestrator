@@ -254,7 +254,10 @@ class MaintenanceService:
                 continue
             slug = path.name
             size = self.size_calculator.du(path)
-            state = packet_states.get(slug)
+            # Worktree slugs are "<pkt_id>-attempt-NNNN" but packet_states
+            # uses "<pkt_id>" as the key. Extract the packet_id for lookup.
+            packet_id = slug.rsplit("-attempt-", 1)[0] if "-attempt-" in slug else slug
+            state = packet_states.get(packet_id)
             is_stale = state in _TERMINAL_LIKE
             entries.append(WorktreeEntry(
                 slug=slug,
@@ -298,13 +301,29 @@ class MaintenanceService:
             result.worktrees_removed.append(slug)
             result.bytes_freed = size_before
             return result
-        try:
-            shutil.rmtree(path)
-            result.worktrees_removed.append(slug)
-            result.bytes_freed = size_before
-        except OSError as e:
-            result.errors.append(f"rmtree {slug}: {e}")
-            return result
+        # Use git worktree remove first, then prune stale metadata
+        from grace_control.services.git_service import GitService
+        git = GitService()
+        repo_root = self._find_git_root() or self.project_root
+        if repo_root:
+            rm_result = git.worktree_remove(repo_root, path, force=True)
+            if not rm_result.success:
+                # Fallback to filesystem removal if git fails
+                try:
+                    shutil.rmtree(path)
+                except OSError as e:
+                    result.errors.append(f"rmtree {slug}: {e}")
+                    return result
+            # Prune stale git worktree metadata
+            git.worktree_prune(repo_root)
+        else:
+            try:
+                shutil.rmtree(path)
+            except OSError as e:
+                result.errors.append(f"rmtree {slug}: {e}")
+                return result
+        result.worktrees_removed.append(slug)
+        result.bytes_freed = size_before
         # Also delete the matching agent branch, if any
         branch = f"agent/{slug}"
         if self._branch_exists(branch):

@@ -35,6 +35,10 @@ class AgentProfile:
         self.env = dict(raw.get("env", {}))
         self.input_mode = raw.get("input", {}).get("mode", "none") if isinstance(raw.get("input"), dict) else "none"
         self.input_template = raw.get("input", {}).get("template", "") if isinstance(raw.get("input"), dict) else ""
+        self.resume_mode = raw.get("resume_mode", "never")
+        self.resume_flag = raw.get("resume_flag", "")
+        self.fork_flag = raw.get("fork_flag", "")
+        self.inject_dir = raw.get("inject_dir", False)
         self._validate()
 
     def _validate(self) -> None:
@@ -62,6 +66,7 @@ class AgentProfile:
     def to_dict(self) -> dict[str, Any]:
         return {
             "executor_id": self.executor_id,
+            "backend": self.backend,
             "command": list(self.command),
             "extras": list(self.extras),
             "model": self.model,
@@ -71,6 +76,10 @@ class AgentProfile:
             "env": dict(self.env),
             "input_mode": self.input_mode,
             "input_template": self.input_template,
+            "resume_mode": self.resume_mode,
+            "resume_flag": self.resume_flag,
+            "fork_flag": self.fork_flag,
+            "inject_dir": self.inject_dir,
         }
 
 
