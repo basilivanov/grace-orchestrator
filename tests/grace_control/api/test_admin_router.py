@@ -285,6 +285,12 @@ def test_run_evidence_returns_stages(client):
 
 def test_sessions_returns_table_missing(client):
     _seed_rejected(client)
+    # Table exists by default (create_all). Drop it to exercise
+    # the forward-compat table_missing path.
+    from sqlalchemy import text as _t
+    with get_db() as db:
+        db.execute(_t("DROP TABLE IF EXISTS agent_sessions"))
+        db.commit()
     r = client.get("/api/admin/packet/p1/sessions")
     assert r.status_code == 200
     body = r.json()
