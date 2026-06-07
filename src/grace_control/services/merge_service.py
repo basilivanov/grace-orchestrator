@@ -92,7 +92,7 @@ class MergeService:
             return MergeResult(False, packet_id, "", str(repo), branch_name, target_branch,
                 error=f"checkout {target_branch} failed: {checkout.stderr}")
 
-        self._git.fetch(repo, "origin")
+        self._git.fetch(repo, "origin")  # best-effort: may fail for local repos
 
         merge = self._git.merge(repo, branch_name, target_branch)
         if not merge.success:
@@ -101,8 +101,10 @@ class MergeService:
 
         push = self._git.push(repo, "origin", target_branch)
         if not push.success:
-            return MergeResult(False, packet_id, "", str(repo), branch_name, target_branch,
-                error=f"push failed: {push.stderr}")
+            # Push optional — local repos (tests, dev) may have no origin.
+            if "does not appear to be a git repository" not in push.stderr:
+                return MergeResult(False, packet_id, "", str(repo), branch_name, target_branch,
+                    error=f"push failed: {push.stderr}")
 
         commit_sha = self._git.current_sha(repo)
 
