@@ -128,7 +128,8 @@ class TestFrontendStagesInAcceptancePipeline:
             ),
             worktree_root=Path("/tmp"), run_dir=Path("/tmp"),
         )
-        assert len(r["t2_browser"].commands) == 1
+        # 2 viewports (android + iphone) → 2 CommandResults
+        assert len(r["t2_browser"].commands) == 2
         assert "npx playwright test" in r["t2_browser"].commands[0].command
 
 
@@ -187,3 +188,79 @@ class TestEvidenceKindFrontend:
         (role / "diff.png").write_text("")  # empty = no regression
         req = EvidenceRequirement(id="v1", kind="visual_diff")
         assert _check_evidence_kind(req, [], tmp_path, [])
+
+    def test_visual_diff_report_json_within_threshold(self, tmp_path: Path):
+        from grace_control.core.evidence import _check_evidence_kind
+        role = tmp_path / "browser"
+        role.mkdir(parents=True)
+        (role / "diff-report.json").write_text('{"diff_pct": 0.0005}')
+        req = EvidenceRequirement(id="v1", kind="visual_diff", pattern="max_diff_pct=0.001")
+        assert _check_evidence_kind(req, [], tmp_path, [])
+
+    def test_visual_diff_report_json_exceeds_threshold(self, tmp_path: Path):
+        from grace_control.core.evidence import _check_evidence_kind
+        role = tmp_path / "browser"
+        role.mkdir(parents=True)
+        (role / "diff-report.json").write_text('{"diff_pct": 0.05}')
+        req = EvidenceRequirement(id="v1", kind="visual_diff", pattern="max_diff_pct=0.001")
+        assert not _check_evidence_kind(req, [], tmp_path, [])
+
+
+class TestEvidenceRunDirFallback:
+    """Evidence checker finds artifacts in run_dir/browser/ when worktree_path/browser/ is missing."""
+
+    def test_screenshot_found_in_run_dir(self, tmp_path: Path):
+        from grace_control.core.evidence import _check_evidence_kind
+        run_browser = tmp_path / "run" / "browser" / "android"
+        run_browser.mkdir(parents=True)
+        (run_browser / "screen.png").write_text("png")
+        req = EvidenceRequirement(id="s1", kind="screenshot")
+        assert _check_evidence_kind(req, [], tmp_path / "wt", [], run_dir=tmp_path / "run")
+
+    def test_console_log_in_run_dir(self, tmp_path: Path):
+        from grace_control.core.evidence import _check_evidence_kind
+        run_browser = tmp_path / "run" / "browser"
+        run_browser.mkdir(parents=True)
+        (run_browser / "console.log").write_text("info: test")
+        req = EvidenceRequirement(id="c1", kind="console_log", pattern="test")
+        assert _check_evidence_kind(req, [], tmp_path / "wt", [], run_dir=tmp_path / "run")
+
+    def test_network_log_in_run_dir(self, tmp_path: Path):
+        from grace_control.core.evidence import _check_evidence_kind
+        run_browser = tmp_path / "run" / "browser"
+        run_browser.mkdir(parents=True)
+        (run_browser / "network.har").write_text('{"entries": [{"url": "/api"}]}')
+        req = EvidenceRequirement(id="n1", kind="network_log", pattern="/api")
+        assert _check_evidence_kind(req, [], tmp_path / "wt", [], run_dir=tmp_path / "run")
+
+
+class TestPlaywrightMissingOrNoTests:
+    """When Playwright is missing or no test files: must not pass silently."""
+
+    def test_playwright_not_installed_fails(self):
+        from grace_control.core.frontend_stages import BrowserStageResult
+        from grace_control.services.playwright_runner import PlaywrightRunner
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            runner = PlaywrightRunner(
+                worktree_path=Path(d), run_dir=Path(d) / "runs",
+                viewport="android", base_url="http://localhost:3000",
+                dev_command="echo test",
+            )
+            # Mock _has_playwright to return False
+            runner._has_playwright = lambda: False
+            r = runner.run_e2e()
+            assert r.passed is False, f"Expected failed, got passed={r.passed}"
+            assert "not installed" in str(r.errors)
+
+    def test_no_test_files_fails(self, tmp_path: Path):
+        from grace_control.services.playwright_runner import PlaywrightRunner
+        runner = PlaywrightRunner(
+            worktree_path=tmp_path, run_dir=tmp_path / "runs",
+            viewport="android", base_url="http://localhost:3000",
+            dev_command="echo test",
+        )
+        runner._has_playwright = lambda: True
+        r = runner.run_e2e()
+        assert r.passed is False, f"Expected failed, got passed={r.passed}"
+        assert "no e2e test files" in str(r.errors).lower()

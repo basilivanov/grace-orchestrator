@@ -78,14 +78,13 @@ class PlaywrightRunner:
     # ── internals ───────────────────────────────────────────────────────
 
     def _run_playwright(self, mode: str, extra_env: dict | None = None) -> BrowserStageResult:
-        t0 = time.time()
         result = BrowserStageResult(viewport=self._viewport)
 
         # Check if Playwright is available
         if not self._has_playwright():
-            _log.info("playwright_skipped", reason="npx playwright not available")
-            result.passed = True
-            result.errors = ["npx playwright not installed — skipped"]
+            _log.error("playwright_missing", reason="npx playwright not available")
+            result.passed = False
+            result.errors = ["npx playwright not installed — cannot run frontend acceptance"]
             return result
 
         # Check for test files
@@ -95,18 +94,20 @@ class PlaywrightRunner:
         )
         test_files = list(self._worktree.glob(test_pattern))
         if not test_files:
-            _log.info("playwright_skipped", reason=f"no {mode} test files found")
-            result.passed = True
-            result.errors = [f"No {mode} test files found — skipped"]
+            _log.warn("playwright_no_tests", mode=mode, reason=f"no {mode} test files found")
+            result.passed = False
+            result.errors = [f"No {mode} test files found — frontend gate cannot pass without tests"]
             return result
 
-        # Start dev server
-        dev_ready = self._start_dev_server()
-        if not dev_ready:
-            result.errors = ["Dev server failed to start"]
-            return result
-
+        t0 = time.time()
+        dev_started = False
         try:
+            # Start dev server — must be inside try so cleanup runs on failure
+            dev_started = self._start_dev_server()
+            if not dev_started:
+                result.errors = ["Dev server failed to start"]
+                return result
+
             # Run Playwright
             browser_dir = self._run_dir / "browser" / self._viewport
             browser_dir.mkdir(parents=True, exist_ok=True)
@@ -116,14 +117,13 @@ class PlaywrightRunner:
             if extra_env:
                 env.update(extra_env)
 
-            vp = self.viewport_config
             cmd = [
                 "npx", "playwright", "test",
                 "--config", str(self._worktree / "playwright.config.ts"),
                 "--reporter", "html,json,list",
                 f"--project={self._viewport}" if not self._has_projects() else "",
             ]
-            cmd = [c for c in cmd if c]  # filter empty
+            cmd = [c for c in cmd if c]
 
             _log.info("playwright_started", mode=mode, viewport=self._viewport,
                       test_count=len(test_files))
@@ -134,6 +134,10 @@ class PlaywrightRunner:
             )
 
             result.duration_ms = int((time.time() - t0) * 1000)
+            result.command = " ".join(cmd)
+            result.exit_code = proc.returncode
+            result.stdout_snippet = proc.stdout[:500] if proc.stdout else ""
+            result.stderr_snippet = proc.stderr[:500] if proc.stderr else ""
 
             if proc.returncode == 0:
                 result.passed = True

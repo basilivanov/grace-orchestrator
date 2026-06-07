@@ -269,6 +269,7 @@ class AcceptancePipeline:
             worktree_path=worktree_root,
             changed_files=changed_files or [],
             profile=packet.acceptance_profile,
+            run_dir=Path(run_dir) if run_dir else None,
         )
         if evidence_issues:
             return AcceptanceReport(
@@ -494,10 +495,17 @@ def _run_frontend_stages(
         screenshots = sum((r.screenshots for r in browser_results), [])
         errors = sum((r.errors for r in browser_results), [])
 
-        # Build CommandResults from verification commands
-        cmd_results = _commands_to_results(
-            t2b_commands, worktree_path=str(worktree_root), run_dir=str(run_dir)
-        )
+        # Build CommandResults from actual browser execution
+        cmd_results = [
+            CommandResult(
+                command=r.command or " ".join(t2b_commands[i]) if i < len(t2b_commands) else f"npx playwright test",
+                cwd=str(worktree_root),
+                exit_code=r.exit_code if r.exit_code >= 0 else (0 if r.passed else 1),
+                stdout=r.stdout_snippet,
+                stderr=r.stderr_snippet,
+            )
+            for i, r in enumerate(browser_results)
+        ] if browser_results else _commands_to_results(t2b_commands, worktree_path=str(worktree_root), run_dir=str(run_dir))
         result["t2_browser"] = StageResult(
             name=StageName.T2_BROWSER_E2E,
             status=StageStatus.PASSED if passed else StageStatus.FAILED,
@@ -524,9 +532,16 @@ def _run_frontend_stages(
         screenshots = sum((r.screenshots for r in visual_results), [])
         errors = sum((r.errors for r in visual_results), [])
 
-        cmd_results = _commands_to_results(
-            t3v_commands, worktree_path=str(worktree_root), run_dir=str(run_dir)
-        )
+        cmd_results = [
+            CommandResult(
+                command=r.command or " ".join(t3v_commands[i]) if i < len(t3v_commands) else f"npx playwright test --visual",
+                cwd=str(worktree_root),
+                exit_code=r.exit_code if r.exit_code >= 0 else (0 if r.passed else 1),
+                stdout=r.stdout_snippet,
+                stderr=r.stderr_snippet,
+            )
+            for i, r in enumerate(visual_results)
+        ] if visual_results else _commands_to_results(t3v_commands, worktree_path=str(worktree_root), run_dir=str(run_dir))
         result["t3_visual"] = StageResult(
             name=StageName.T3_VISUAL_REGRESSION,
             status=StageStatus.PASSED if passed else StageStatus.FAILED,

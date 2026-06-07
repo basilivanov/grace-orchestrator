@@ -34,6 +34,7 @@ def check_expected_evidence(
     worktree_path: Path,
     changed_files: list[str],
     profile: AcceptanceProfile,
+    run_dir: Path | None = None,
 ) -> list[str]:
     issues: list[str] = []
 
@@ -44,7 +45,7 @@ def check_expected_evidence(
         if not req.required:
             continue
 
-        found = _check_evidence_kind(req, stage_results, worktree_path, changed_files)
+        found = _check_evidence_kind(req, stage_results, worktree_path, changed_files, run_dir=run_dir)
         if not found:
             issues.append(f"missing required evidence '{req.id}' (kind={req.kind})")
 
@@ -65,6 +66,8 @@ def _check_evidence_kind(
     stage_results: list[StageResult],
     worktree_path: Path,
     changed_files: list[str],
+    *,
+    run_dir: Path | None = None,
 ) -> bool:
     if req.kind == "command":
         for stage in stage_results:
@@ -102,47 +105,46 @@ def _check_evidence_kind(
             return any(req.pattern in f.read_text() for f in log_dir.rglob("*") if f.is_file())
         return any(log_dir.rglob("*"))
 
-    # TZ_FRONTEND_ACCEPTANCE P0 — new browser/visual evidence kinds
+    # TZ_FRONTEND_ACCEPTANCE P0 — new browser/visual evidence kinds.
+    # Check both worktree_path and run_dir since PlaywrightRunner writes
+    # artifacts to run_dir/browser/<viewport>/.
+    _browser_dirs: list[Path] = []
+    for root in (worktree_path, run_dir):
+        if root:
+            bd = Path(root) / "browser"
+            if bd.exists():
+                _browser_dirs.append(bd)
+
+    def _browser_glob(pattern: str) -> list[Path]:
+        result: list[Path] = []
+        for bd in _browser_dirs:
+            result.extend(bd.rglob(pattern))
+        return result
+
     if req.kind == "screenshot":
-        browser_dir = worktree_path / "browser" if worktree_path else Path()
-        if not browser_dir.exists():
-            return False
         if req.pattern:
-            return any(browser_dir.rglob(req.pattern))
-        pngs = list(browser_dir.rglob("*.png"))
+            return len(_browser_glob(req.pattern)) > 0
+        pngs = _browser_glob("*.png")
         return len(pngs) > 0 and all(p.stat().st_size > 0 for p in pngs)
 
     if req.kind == "dom_snapshot":
-        browser_dir = worktree_path / "browser" if worktree_path else Path()
-        if not browser_dir.exists():
-            return False
         if req.pattern:
-            matches = list(browser_dir.rglob(req.pattern))
-            return len(matches) > 0
-        html_files = list(browser_dir.rglob("*.html"))
-        return len(html_files) > 0
+            return len(_browser_glob(req.pattern)) > 0
+        return len(_browser_glob("*.html")) > 0
 
     if req.kind == "console_log":
-        browser_dir = worktree_path / "browser" if worktree_path else Path()
-        if not browser_dir.exists():
-            return False
-        log_files = list(browser_dir.rglob("*.log"))
+        log_files = _browser_glob("*.log") + _browser_glob("console.*")
         if not log_files:
             return False
-        # If pattern is "no_errors", fail if any log contains "error" (case-insensitive)
         if req.pattern == "no_errors":
             for f in log_files:
-                content = f.read_text().lower()
-                if "error" in content:
+                if "error" in f.read_text().lower():
                     return False
             return True
         return any(req.pattern in f.read_text() for f in log_files) if req.pattern else True
 
     if req.kind == "network_log":
-        browser_dir = worktree_path / "browser" if worktree_path else Path()
-        if not browser_dir.exists():
-            return False
-        har_files = list(browser_dir.rglob("*.har")) + list(browser_dir.rglob("*.json"))
+        har_files = _browser_glob("*.har") + _browser_glob("network*")
         if not har_files:
             return False
         if req.pattern:
@@ -150,21 +152,22 @@ def _check_evidence_kind(
         return True
 
     if req.kind == "visual_diff":
-        browser_dir = worktree_path / "browser" if worktree_path else Path()
-        if not browser_dir.exists():
-            return False
-        diff_files = list(browser_dir.rglob("*diff*.png"))
-        if not diff_files:
-            return False
-        # Pattern like "max_diff_pct=0.005" — parse threshold
-        if req.pattern and req.pattern.startswith("max_diff_pct="):
-            max_pct = float(req.pattern.split("=", 1)[1])
-            for df in diff_files:
-                if df.stat().st_size > 0:
-                    # Diff file exists and is non-empty → regression detected
-                    return False
-            return True
-        return len([d for d in diff_files if d.stat().st_size == 0]) > 0
+        # Check for diff-report.json which contains pixelmatch results
+        reports = _browser_glob("diff-report.json")
+        if not reports:
+            # Fallback: empty diff PNG = no regression (surrogate)
+            pngs = [p for p in _browser_glob("*diff*.png") if p.stat().st_size == 0]
+            return len(pngs) > 0
+        try:
+            import json
+            data = json.loads(reports[0].read_text())
+            diff_pct = float(data.get("diff_pct", 1.0))
+            max_pct = 0.001
+            if req.pattern and "=" in req.pattern:
+                max_pct = float(req.pattern.split("=", 1)[1])
+            return diff_pct <= max_pct
+        except Exception:
+            return len(_browser_glob("*diff*.png")) > 0
 
     return False
 

@@ -65,6 +65,10 @@ class BrowserStageResult:
     errors: list[str] = field(default_factory=list)
     trace_path: str = ""
     duration_ms: int = 0
+    command: str = ""           # Full command string ("npx playwright test ...")
+    exit_code: int = -1         # Actual exit code from subprocess
+    stdout_snippet: str = ""    # First 500 chars of stdout
+    stderr_snippet: str = ""    # First 500 chars of stderr
 
 
 def resolve_browser_routing(
