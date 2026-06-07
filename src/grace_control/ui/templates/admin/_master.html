@@ -16,6 +16,7 @@
     {% set f_sev = 'attention' if has_attn and f_ui.severity == 'muted' else f_ui.severity %}
     {% set fexpanded = f.id in expanded_features %}
     <div class="tn-feature severity-{{ f_sev }} {{ 'has-attention' if has_attn else '' }} {{ 'selected' if f.id == selected_feature_id else '' }}">
+      {% set f_dt = f.title | display_title('feature') %}
       <div class="tn-feature-head"
            hx-get="/admin/_partial/timeline?feature_id={{ f.id }}&filter={{ filter }}&expanded_features={{ (expanded_features + [f.id]) | join(',') }}&expanded_waves={{ expanded_waves | join(',') }}&search={{ search }}"
            hx-target="#timeline-pane"
@@ -23,7 +24,11 @@
            hx-push-url="{{ f.click_url }}"
            style="cursor: pointer;">
         <span class="dot" aria-hidden="true"></span>
-        <span class="title" title="{{ f.title or f.slug }}">{{ f.title or f.slug }}</span>
+        <span class="title" title="{{ f.title or f.slug or f.id }}">
+          {{ f_dt.title }}{% if f_dt.is_placeholder %}
+            <span class="title-slug muted small">({{ f_dt.original or f.slug or f.id }})</span>
+          {% endif %}
+        </span>
         <span class="meta">
           {{ f.wave_count }} wave{{ '' if f.wave_count == 1 else 's' }} ·
           {{ f.total_packets }} packet{{ '' if f.total_packets == 1 else 's' }}{% if has_attn %} ·

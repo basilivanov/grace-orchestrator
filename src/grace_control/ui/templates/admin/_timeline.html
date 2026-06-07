@@ -2,13 +2,15 @@
    hx-swap="outerHTML" on #timeline-pane replaces this whole element.
 
    UI layer:
-   - Top: filter chips (calm, with attention state color only on actual count)
-   - Selected feature: title, description, compact progress summary
-   - Each wave: entire card is clickable → opens Wave details in right pane
-   - Packets inside a wave: clickable row → opens Packet details in right pane
-   - Selected wave: stronger blue left border (matches Wave details mode)
-   - Selected packet: blue outline + bg
-   - Wave title and packet titles wrap to 2 lines (line-clamp)
+   - Selected feature block: explicit label + title (with fallback) +
+     feature_id + summary
+   - Each wave: structured card (title row / wave_id+order row / status
+     row / packet cards) — no more flat "#1 · wave_xxx · 1 packet" string
+   - Packets: grid card (title full width, packet_id|status, attempts|
+     stage, started|duration) — visible info, no tooltip-only fields
+   - Selected wave: blue left border + light blue background
+   - Selected packet: blue outline + light blue background
+   - 2-line title wrap on all titles; word-break for long identifiers
    - Raw state NOT shown as primary UI language. #}
 {% set state_counts = features | sum_packets | state_count %}
 <div class="console-middle" id="timeline-pane">
@@ -49,48 +51,73 @@
         <h2 class="ft-h">Feature timeline</h2>
         <div class="empty">Feature not found.</div>
       {% else %}
+        {# ── Selected feature block ────────────────────────────────── #}
+        {% set f_dt = f.title | display_title('feature') %}
         {% set f_ui = f.status | ui_state %}
         {% set f_has_attn = f.attention_count > 0 %}
         {% set f_sev = 'attention' if f_has_attn and f_ui.severity == 'muted' else f_ui.severity %}
-        <header class="ft-head severity-{{ f_sev }} selected">
-          <h2 class="ft-h">{{ f.title or f.slug }}</h2>
-          {% if f.description %}<div class="ft-desc muted">{{ f.description }}</div>{% endif %}
-          <div class="ft-summary muted small">
+        <section class="ft-feature-selected severity-{{ f_sev }} {{ 'has-attention' if f_has_attn else '' }}">
+          <div class="ft-feature-selected-label">Selected feature</div>
+          <h2 class="ft-feature-selected-title"
+              title="{{ f.title or f.slug or f.id }}">
+            {{ f_dt.title }}
+          </h2>
+          {% if f_dt.is_placeholder %}
+            <div class="ft-feature-selected-slug muted small">
+              slug: <span class="mono">{{ f_dt.original or f.slug or '—' }}</span>
+            </div>
+          {% endif %}
+          <div class="ft-feature-selected-id muted small">
+            feature_id: <span class="mono">{{ f.id }}</span>
+          </div>
+          <div class="ft-feature-selected-summary muted">
             {{ f.wave_count }} wave{{ '' if f.wave_count == 1 else 's' }} ·
-            {{ f.total_packets }} packet{{ '' if f.total_packets == 1 else 's' }}{% if f.attention_count > 0 %} ·
+            {{ f.total_packets }} packet{{ '' if f.total_packets == 1 else 's' }}{% if f_has_attn %} ·
             <span class="attn-count">{{ f.attention_count }} needs attention</span>{% endif %}
           </div>
-        </header>
+          {% if f.description %}<div class="ft-feature-selected-desc muted small">{{ f.description }}</div>{% endif %}
+        </section>
 
+        {# ── Wave cards ─────────────────────────────────────────────── #}
         {% for w in (f.waves or []) %}
           {% set w_ui = w.status | ui_state %}
           {% set w_has_attn = w.attention_count > 0 %}
           {% set w_sev = 'attention' if w_has_attn and w_ui.severity == 'muted' else w_ui.severity %}
           {% set w_selected = w.id == selected_wave_id %}
           {% set wpackets = (w.packets or []) | filter_by_state(filter) %}
+          {% set w_dt = w.title | display_title('wave') %}
           <div class="ft-wave severity-{{ w_sev }} {{ 'selected' if w_selected else '' }} {{ 'has-attention' if w_has_attn else '' }}"
-               title="{{ w.title or w.slug or w.id }}
-wave_id: {{ w.id }}
-order: #{{ w.order }}
-{{ w.total_packets }} packet{{ '' if w.total_packets == 1 else 's' }}{% if w_has_attn %} · {{ w.attention_count }} needs attention{% endif %}"
+               title="click to open Wave details in the right pane"
                hx-get="/admin/_partial/detail?wave_id={{ w.id }}&feature_id={{ f.id }}&filter={{ filter }}&expanded_features={{ expanded_features | join(',') }}&expanded_waves={{ expanded_waves | join(',') }}&search={{ search }}"
                hx-target="#detail-pane"
                hx-swap="outerHTML"
                hx-push-url="{{ w.click_url }}">
             <div class="ft-wave-head">
-              <span class="dot" aria-hidden="true"></span>
-              <span class="ft-wave-title">{{ w.title or w.slug or w.id }}</span>
-              <span class="ft-wave-meta muted small">
-                #{{ w.order }} ·
-                <span class="mono">{{ w.id }}</span> ·
-                {{ w.total_packets }} packet{{ '' if w.total_packets == 1 else 's' }}{% if w.attention_count > 0 %} ·
+              <div class="ft-wave-title-row">
+                <span class="ft-wave-order muted small">Wave #{{ w.order }}</span>
+                <h3 class="ft-wave-title"
+                    title="{{ w.title or w.slug or w.id }}">
+                  {{ w_dt.title }}
+                </h3>
+                <span class="ft-wave-status badge severity-{{ w_sev }}">{{ w_ui.label }}</span>
+              </div>
+              <div class="ft-wave-id muted small">
+                wave_id: <span class="mono">{{ w.id }}</span>
+                {% if w_dt.is_placeholder %}
+                  · slug: <span class="mono">{{ w_dt.original or w.slug or '—' }}</span>
+                {% endif %}
+              </div>
+              <div class="ft-wave-meta muted small">
+                {{ w.total_packets }} packet{{ '' if w.total_packets == 1 else 's' }}{% if w_has_attn %} ·
                 <span class="attn-count">{{ w.attention_count }} needs attention</span>{% endif %}
-              </span>
+              </div>
             </div>
             <div class="ft-packets">
               {% if wpackets %}
                 {% for p in wpackets %}
                   {% set p_ui = p.state | ui_state %}
+                  {% set p_dt = p.title | display_title('packet') %}
+                  {% set p_stage = p.stage or {} %}
                   <div class="ft-packet severity-{{ p_ui.severity }} {{ 'selected' if p.id == selected_packet_id else '' }}"
                        title="{{ p.title or p.slug or p.id }}
 {{ p.id }}
@@ -101,12 +128,43 @@ attempts: {{ p.attempt_count }}/{{ p.max_attempts }}"
                        hx-swap="outerHTML"
                        hx-push-url="{{ p.click_url }}"
                        hx-on:click="event.stopPropagation()">
-                    <span class="dot" aria-hidden="true"></span>
-                    <span class="ft-title">{{ p.title or p.slug or p.id }}</span>
-                    <span class="ft-pkt-meta muted small">
-                      <span class="mono">{{ p.id }}</span> ·
-                      {{ p_ui.label }}{% if p.attempt_count %} · {{ p.attempt_count }}/{{ p.max_attempts }}{% endif %}
-                    </span>
+                    <div class="ft-pkt-title-row">
+                      <h4 class="ft-pkt-title"
+                          title="{{ p.title or p.slug or p.id }}">
+                        {{ p_dt.title }}
+                      </h4>
+                      <span class="ft-pkt-status badge severity-{{ p_ui.severity }}">{{ p_ui.label }}</span>
+                    </div>
+                    <div class="ft-pkt-id muted small">
+                      packet_id: <span class="mono">{{ p.id }}</span>
+                      {% if p_dt.is_placeholder %}
+                        · slug: <span class="mono">{{ p_dt.original or p.slug or '—' }}</span>
+                      {% elif p.slug and p.slug != p_dt.title %}
+                        · slug: <span class="mono">{{ p.slug }}</span>
+                      {% endif %}
+                    </div>
+                    <div class="ft-pkt-grid">
+                      <div class="ft-pkt-cell">
+                        <span class="ft-pkt-key">attempts</span>
+                        <span class="ft-pkt-val mono">{{ p.attempt_count }}/{{ p.max_attempts }}</span>
+                      </div>
+                      <div class="ft-pkt-cell">
+                        <span class="ft-pkt-key">stage</span>
+                        <span class="ft-pkt-val">{{ p_stage.label or '—' }}</span>
+                      </div>
+                      <div class="ft-pkt-cell">
+                        <span class="ft-pkt-key">started</span>
+                        <span class="ft-pkt-val mono">
+                          {% if p.started_at %}{{ p.started_at | fmt_time_short }}{% else %}not started{% endif %}
+                        </span>
+                      </div>
+                      <div class="ft-pkt-cell">
+                        <span class="ft-pkt-key">duration</span>
+                        <span class="ft-pkt-val mono">
+                          {% if p.duration_seconds %}{{ p.duration_seconds | fmt_duration }}{% else %}—{% endif %}
+                        </span>
+                      </div>
+                    </div>
                   </div>
                 {% endfor %}
               {% else %}

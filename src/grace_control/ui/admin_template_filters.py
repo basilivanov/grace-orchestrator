@@ -107,6 +107,86 @@ def raw_state(state: str | None) -> str:
     return str(state) if state else "—"
 
 
+# ── Fallback titles ─────────────────────────────────────────────────────
+# When a feature/wave/packet has a too-short or obviously technical title
+# ("t", "d", "w1", "p1"), the UI shows "Untitled {kind}" as the main
+# label and keeps the original as slug metadata.
+
+# Title kinds (in order: feature, wave, packet)
+_TITLE_KIND_LABELS = {
+    "feature": "Untitled feature",
+    "wave":    "Untitled wave",
+    "packet":  "Untitled packet",
+}
+
+# Titles that look like obvious placeholders. Lower-cased for comparison.
+_PLACEHOLDER_TITLES = frozenset([
+    "t", "d", "w1", "w2", "w3", "p1", "p2", "p3",
+    "test", "todo", "fix", "fixme", "none", "null", "-",
+    "untitled", "n/a", "na",
+])
+
+
+def _is_placeholder_title(title: str | None) -> bool:
+    """Heuristic: title is a placeholder if it is:
+      - empty / None
+      - very short (< 3 chars)
+      - all-letters single token in the known placeholder set
+      - looks like an identifier (e.g. "w1", "p1", "foo", "bar")
+    """
+    if not title:
+        return True
+    t = title.strip()
+    if not t:
+        return True
+    tl = t.lower()
+    if tl in _PLACEHOLDER_TITLES:
+        return True
+    if len(t) < 3:
+        return True
+    # Single token that looks like an identifier (w1, p1, foo, bar, abc)
+    # OR starts with w/p followed by digits (common auto-naming)
+    if " " not in t and ("_" not in t) and ("-" not in t):
+        # Pure short identifier
+        if len(t) <= 4 and t.isalnum():
+            # Common auto-named waves/packets: w1, w2, p1, p2
+            if (t[0] in ("w", "p") and t[1:].isdigit()) or tl in ("foo", "bar", "baz", "abc", "test"):
+                return True
+    return False
+
+
+def display_title(title: str | None, kind: str = "feature") -> dict[str, str]:
+    """Jinja filter: returns a dict suitable for rendering titles.
+
+    Usage in template:
+        {{ f.title | display_title('feature') }}
+
+    Returns:
+      {
+        "title":     the human-readable title to show as the main heading,
+        "is_placeholder": True if the original title was a placeholder,
+        "original":  the original (un-trimmed) title — show as slug/meta
+                     when is_placeholder is True.
+      }
+
+    When the title is "good" (long, not a placeholder), `title` == original
+    and is_placeholder is False.
+    """
+    fallback = _TITLE_KIND_LABELS.get(kind, "Untitled")
+    original = (title or "").strip()
+    if _is_placeholder_title(original):
+        return {
+            "title": fallback,
+            "is_placeholder": True,
+            "original": original or "",
+        }
+    return {
+        "title": original,
+        "is_placeholder": False,
+        "original": original,
+    }
+
+
 # ── Time / duration helpers ──────────────────────────────────────────────
 # Used by the packet pipeline view, header, and run cards.
 
@@ -383,4 +463,5 @@ def register(env: Any) -> None:
     env.filters["fmt_duration_ms"] = fmt_duration_ms
     env.filters["fmt_time_short"] = fmt_time_short
     env.filters["safe_str"] = safe_str
+    env.filters["display_title"] = display_title
     env.globals["shell_url"] = shell_url

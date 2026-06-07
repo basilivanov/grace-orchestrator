@@ -356,13 +356,22 @@ def test_browser_wave_click_shows_wave_details(browser):
             wait_until="domcontentloaded",
         )
         page.wait_for_selector("#timeline-pane", timeout=10000)
-        # Click the wave card
+        # Click the wave card (not on a packet row inside it)
         wave = page.query_selector(".ft-wave")
         assert wave is not None, "no .ft-wave in timeline"
-        wave.click()
-        page.wait_for_selector("#detail-pane", timeout=10000)
+        # Click the wave title row to ensure we don't hit a packet
+        wave_title_row = page.query_selector(".ft-wave .ft-wave-title-row")
+        if wave_title_row is not None:
+            wave_title_row.click()
+        else:
+            wave.click()
+        # Wait for the URL to update with wave_id
+        page.wait_for_function(
+            f"() => new URL(window.location.href).searchParams.has('wave_id')",
+            timeout=10000,
+        )
         # Detail pane now shows wave-head-bar
-        page.wait_for_selector(".wave-head-bar", timeout=5000)
+        page.wait_for_selector("#detail-pane .wave-head-bar", timeout=10000)
         # And does NOT show packet pipeline
         assert page.query_selector(".pipeline-view") is None, (
             "wave click should NOT show packet pipeline"

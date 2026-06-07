@@ -1129,10 +1129,29 @@ class AdminAggregationService:
             packets = db.query(Packet).filter_by(feature_id=f.id).all()
             packets_by_wave: dict[str, list[dict[str, Any]]] = {w.id: [] for w in waves}
             for p in packets:
+                # Per-packet last run for stage + timing
+                last_run = (
+                    db.query(PacketRun)
+                    .filter_by(packet_id=p.id)
+                    .order_by(PacketRun.run_number.desc())
+                    .first()
+                )
+                stage = self._derive_packet_stage(p, last_run)
+                started_at = (
+                    _iso(last_run.started_at)
+                    if last_run and last_run.started_at else None
+                )
+                duration_seconds = (
+                    _elapsed_seconds(last_run.started_at, last_run.finished_at)
+                    if last_run else None
+                )
                 packets_by_wave.setdefault(p.wave_id, []).append({
                     "id": p.id, "slug": p.slug, "title": p.title,
                     "state": p.state, "attempt_count": p.attempt_count,
                     "max_attempts": p.max_attempts,
+                    "stage": stage,
+                    "started_at": started_at,
+                    "duration_seconds": duration_seconds,
                 })
             # Build wave rows with attention counters
             wave_rows: list[dict[str, Any]] = []
@@ -1171,6 +1190,39 @@ class AdminAggregationService:
                 "waves": wave_rows,
             })
         return {"features": out}
+
+    def _derive_packet_stage(
+        self, p: Packet, last_run: PacketRun | None
+    ) -> dict[str, str]:
+        """Derive the current pipeline stage for a packet.
+
+        Returns a small dict with `label` (human stage name) and
+        `key` (machine name). Used by the timeline and wave details
+        to show "what stage is this packet at" without tooltips.
+
+        Heuristic (cheap; avoids the full _derive_pipeline call per packet):
+          - no run, draft/ready:        "Materialized"
+          - last_run.status == running: "Coder run"
+          - last_run.status == accepted
+            or state in accepted/merged:"Merge"
+          - last_run.status in rejected/failed
+            or state in rejected/failed/blocked: "Reviewer gate"
+          - default (no run, running):  "Coder run"
+        """
+        state = (p.state or "draft").lower()
+        run_status = (last_run.status if last_run else "").lower() if last_run else ""
+        if not last_run:
+            if state in ("draft", "ready"):
+                return {"key": "materialized", "label": "Materialized"}
+            return {"key": "materialized", "label": "Not started"}
+        if run_status == "running" or state == "running":
+            return {"key": "coder_run", "label": "Coder run"}
+        if state in ("accepted", "merged") or run_status == "accepted":
+            return {"key": "merge", "label": "Merge"}
+        if state in ("rejected", "failed", "blocked", "blocked_recoverable",
+                     "blocked_final") or run_status in ("rejected", "failed"):
+            return {"key": "reviewer", "label": "Reviewer gate"}
+        return {"key": "coder_run", "label": "Coder run"}
 
     # ── wave detail ────────────────────────────────────────────────────
 
@@ -1223,6 +1275,7 @@ class AdminAggregationService:
                 _elapsed_seconds(last_run.started_at, last_run.finished_at)
                 if last_run else None
             )
+            stage = self._derive_packet_stage(p, last_run)
             packet_rows.append({
                 "id": p.id,
                 "title": p.title,
@@ -1232,6 +1285,7 @@ class AdminAggregationService:
                 "max_attempts": p.max_attempts,
                 "started_at": started_at,
                 "duration_seconds": duration_seconds,
+                "stage": stage,
             })
 
         counts = {"all": len(packet_rows), "failed": 0, "running": 0,
@@ -1266,7 +1320,64 @@ class AdminAggregationService:
             },
             "counts": counts,
             "packets": packet_rows,
+            "stage_progress": self._derive_wave_stage_progress(packet_rows),
         }
+
+    def _derive_wave_stage_progress(
+        self, packets: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Aggregate per-stage packet counts for the wave progress block.
+
+        Each entry has:
+          - key: machine stage name (e.g. "materialized", "coder_run", ...)
+          - label: human name (e.g. "Materialized", "Coder run", ...)
+          - reached: count of packets that have reached this stage
+          - total: total packets in the wave
+          - severity: 'ok' / 'attention' / 'muted' for the progress bar style
+
+        A packet is considered to have "reached" stage X if its current
+        stage is X or later in the pipeline order. Pipeline order:
+          1. materialized
+          2. coder_run
+          3. reviewer
+          4. merge
+        """
+        stage_order = [
+            ("materialized", "Materialized"),
+            ("coder_run", "Coder run"),
+            ("reviewer", "Reviewer gate"),
+            ("merge", "Merge reached"),
+        ]
+        total = len(packets)
+        if total == 0:
+            return [
+                {"key": k, "label": l, "reached": 0, "total": 0,
+                 "severity": "muted"}
+                for k, l in stage_order
+            ]
+        # Map each packet to its current stage index
+        index_for = {k: i for i, (k, _) in enumerate(stage_order)}
+        result: list[dict[str, Any]] = []
+        for i, (key, label) in enumerate(stage_order):
+            # Packets that have reached at least this stage
+            reached = sum(
+                1 for p in packets
+                if index_for.get(p.get("stage", {}).get("key", ""), 0) >= i
+            )
+            if reached == total:
+                severity = "ok"
+            elif reached == 0:
+                severity = "muted"
+            else:
+                severity = "attention"
+            result.append({
+                "key": key,
+                "label": label,
+                "reached": reached,
+                "total": total,
+                "severity": severity,
+            })
+        return result
 
     # ── search ──────────────────────────────────────────────────────────
 
