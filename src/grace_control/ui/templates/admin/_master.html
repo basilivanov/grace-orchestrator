@@ -1,59 +1,63 @@
-{# Master tree fragment — Features → Waves → Packets, each click is hx-get #}
-{% for f in features %}
-  {% set fexpanded = f.id in expanded_features %}
-  <div class="tn-feature">
-    <div class="tn-feature-head"
-         hx-get="/admin/_partial/timeline?feature_id={{ f.id }}{% if filter %}&filter={{ filter }}{% endif %}"
-         hx-target="#timeline-pane"
-         hx-swap="outerHTML"
-         hx-push-url="true"
-         style="cursor: pointer;">
-      <span class="caret">{{ '▾' if fexpanded else '▸' }}</span>
-      <span class="pill {{ f.status | status_class }}">{{ f.status }}</span>
-      <span class="title" title="{{ f.title or f.slug }}">{{ f.title or f.slug }}</span>
-      <span class="count">{{ f.waves | sum_packet_count }}</span>
-    </div>
-    {% if fexpanded %}
-    <div class="tn-wave">
-      {% for w in (f.waves or []) %}
-        {% set wexpanded = w.id in expanded_waves %}
-        <div class="tn-wave-head" style="cursor: pointer;"
-             hx-get="/admin/_partial/timeline?feature_id={{ f.id }}{% if filter %}&filter={{ filter }}{% endif %}"
-             hx-target="#timeline-pane"
-             hx-swap="outerHTML"
-             hx-push-url="true"
-             hx-vals='{"toggle_wave": "{{ w.id }}"}'>
-          <span class="caret">{{ '▾' if wexpanded else '▸' }}</span>
-          <span class="pill {{ w.status | status_class }}">{{ w.status }}</span>
-          <span class="title" title="{{ w.title or w.slug }}">{{ w.title or w.slug }}</span>
-          <span class="order">#{{ w.order }}</span>
-        </div>
-        {% if wexpanded %}
-        <div class="tn-packets">
-          {% for p in (w.packets or []) %}
-            {% if (not search) or (p | matches_search(search)) %}
-            <div class="tn-packet {{ 'selected' if p.id == selected_packet_id else '' }}"
-                 title="{{ p.title or p.slug or p.id }}
+{# Master tree partial — self-wrapping: returns <div id="master-tree">.
+   hx-swap="outerHTML" on #master-tree replaces this whole element.
+   All clickable items carry server-pre-computed click_url. #}
+<div id="master-tree" class="master-tree">
+  {% for f in features %}
+    {% set fexpanded = f.id in expanded_features %}
+    <div class="tn-feature">
+      <div class="tn-feature-head"
+           hx-get="/admin/_partial/timeline?feature_id={{ f.id }}&filter={{ filter }}&expanded_features={{ (expanded_features + [f.id]) | join(',') }}&expanded_waves={{ expanded_waves | join(',') }}&search={{ search }}"
+           hx-target="#timeline-pane"
+           hx-swap="outerHTML"
+           hx-push-url="{{ f.click_url }}"
+           style="cursor: pointer;">
+        <span class="caret">{{ '▾' if fexpanded else '▸' }}</span>
+        <span class="pill {{ f.status | status_class }}">{{ f.status }}</span>
+        <span class="title" title="{{ f.title or f.slug }}">{{ f.title or f.slug }}</span>
+        <span class="count">{{ f.waves | sum_packet_count }}</span>
+      </div>
+      {% if fexpanded %}
+      <div class="tn-wave">
+        {% for w in (f.waves or []) %}
+          {% set wexpanded = w.id in expanded_waves %}
+          {% set new_ew = (expanded_waves | reject('equalto', w.id) | list) if w.id in expanded_waves else (expanded_waves + [w.id]) %}
+          <div class="tn-wave-head" style="cursor: pointer;"
+               hx-get="/admin/_partial/timeline?feature_id={{ f.id }}&filter={{ filter }}&expanded_features={{ (expanded_features + [f.id]) | join(',') }}&expanded_waves={{ new_ew | join(',') }}&search={{ search }}"
+               hx-target="#timeline-pane"
+               hx-swap="outerHTML"
+               hx-push-url="{{ w.click_url }}">
+            <span class="caret">{{ '▾' if wexpanded else '▸' }}</span>
+            <span class="pill {{ w.status | status_class }}">{{ w.status }}</span>
+            <span class="title" title="{{ w.title or w.slug }}">{{ w.title or w.slug }}</span>
+            <span class="order">#{{ w.order }}</span>
+          </div>
+          {% if wexpanded %}
+          <div class="tn-packets">
+            {% for p in (w.packets or []) %}
+              {% if (not search) or (p | matches_search(search)) %}
+              <div class="tn-packet {{ 'selected' if p.id == selected_packet_id else '' }}"
+                   title="{{ p.title or p.slug or p.id }}
 {{ p.id }}
 state: {{ p.state }}
 attempts: {{ p.attempt_count }}/{{ p.max_attempts }}"
-                 hx-get="/admin/_partial/detail?packet_id={{ p.id }}&feature_id={{ f.id }}"
-                 hx-target="#detail-pane"
-                 hx-swap="outerHTML"
-                 hx-push-url="true"
-                 style="cursor: pointer;">
-              <span class="pill {{ p.state }}">{{ p.state }}</span>
-              <span class="pkt-title">{{ p.title or p.slug or p.id }}</span>
-              <span class="pkt-attempts">{{ p.attempt_count }}/{{ p.max_attempts }}</span>
-            </div>
-            {% endif %}
-          {% endfor %}
-        </div>
-        {% endif %}
-      {% endfor %}
+                   hx-get="/admin/_partial/detail?packet_id={{ p.id }}&feature_id={{ f.id }}&tab=timeline&search={{ search }}&filter={{ filter }}&expanded_features={{ (expanded_features + [f.id]) | join(',') }}&expanded_waves={{ expanded_waves | join(',') }}"
+                   hx-target="#detail-pane"
+                   hx-swap="outerHTML"
+                   hx-push-url="{{ p.click_url }}"
+                   style="cursor: pointer;">
+                <span class="pill {{ p.state }}">{{ p.state }}</span>
+                <span class="pkt-title">{{ p.title or p.slug or p.id }}</span>
+                <span class="pkt-attempts">{{ p.attempt_count }}/{{ p.max_attempts }}</span>
+              </div>
+              {% endif %}
+            {% endfor %}
+          </div>
+          {% endif %}
+        {% endfor %}
+      </div>
+      {% endif %}
     </div>
-    {% endif %}
-  </div>
-{% else %}
-<div class="empty">No features</div>
-{% endfor %}
+  {% else %}
+  <div class="empty">No features</div>
+  {% endfor %}
+</div>

@@ -1,104 +1,107 @@
-{# Right pane: packet detail (header, state machine, why-failed, tabs) #}
-{% if not selected_packet_id %}
-  <div class="detail-empty">
-    Select a packet on the left to see why it failed, what the worker did, and where the artifacts are.
-  </div>
-{% else %}
-  {% if not packet %}
-    <div class="banner err">Packet not found: {{ selected_packet_id }}</div>
+{# Packet detail partial — self-wrapping: returns <div id="detail-pane">.
+   hx-swap="outerHTML" on #detail-pane replaces this whole element. #}
+<div class="console-detail" id="detail-pane">
+  {% if not selected_packet_id %}
+    <div class="detail-empty">
+      Select a packet on the left to see why it failed, what the worker did, and where the artifacts are.
+    </div>
   {% else %}
-    {% set p = packet %}
-    <a class="back-link" href="/admin" data-topnav="true">← back to overview</a>
-    <div class="pkt-head-bar">
-      <h1>{{ p.title or p.slug or p.id }}</h1>
-      <span class="badge {{ p.state }}">{{ p.state }}</span>
-      <span class="id-slug">
-        <span class="id-chip">{{ p.id }}</span>
-        {% if p.slug %}<span class="slug-chip">{{ p.slug }}</span>{% endif %}
-      </span>
-    </div>
+    {% if not packet %}
+      <div class="banner err">Packet not found: {{ selected_packet_id }}</div>
+    {% else %}
+      {% set p = packet %}
+      <a class="back-link" href="/admin" data-topnav="true">← back to overview</a>
+      <div class="pkt-head-bar">
+        <h1>{{ p.title or p.slug or p.id }}</h1>
+        <span class="badge {{ p.state }}">{{ p.state }}</span>
+        <span class="id-slug">
+          <span class="id-chip">{{ p.id }}</span>
+          {% if p.slug %}<span class="slug-chip">{{ p.slug }}</span>{% endif %}
+        </span>
+      </div>
 
-    {# State machine #}
-    {% set sm = p.state_machine or {} %}
-    {% set steps = sm.steps or [] %}
-    {% if steps %}
-    <div class="state-machine">
-      {% for s in steps %}
-        <div class="sm-step {{ s.state | state_machine_class }}">
-          <div class="dot"></div>
-          <div class="label">{{ s.label }}</div>
-          <div class="time">{{ s.time[-8:] if s.time else '' }}</div>
-          {% if s.meta %}<div class="meta" title="{{ s.meta }}">{{ s.meta }}</div>{% endif %}
-        </div>
-        {% if not loop.last %}
-          {% set last_done = (steps[loop.index0].state == 'done') %}
-          <div class="sm-arrow {{ 'done' if last_done else '' }}">→</div>
-        {% endif %}
-      {% endfor %}
-    </div>
-    {% endif %}
+      {# State machine #}
+      {% set sm = p.state_machine or {} %}
+      {% set steps = sm.steps or [] %}
+      {% if steps %}
+      <div class="state-machine">
+        {% for s in steps %}
+          <div class="sm-step {{ s.state | state_machine_class }}">
+            <div class="dot"></div>
+            <div class="label">{{ s.label }}</div>
+            <div class="time">{{ s.time[-8:] if s.time else '' }}</div>
+            {% if s.meta %}<div class="meta" title="{{ s.meta }}">{{ s.meta }}</div>{% endif %}
+          </div>
+          {% if not loop.last %}
+            {% set last_done = (steps[loop.index0].state == 'done') %}
+            <div class="sm-arrow {{ 'done' if last_done else '' }}">→</div>
+          {% endif %}
+        {% endfor %}
+      </div>
+      {% endif %}
 
-    {# Why it failed #}
-    {% set bd = p.blocking_decision or {} %}
-    {% if bd.has_blocking %}
-      {% set is_warn = bd.state and bd.state.startswith('blocked') %}
-      <div class="why-failed {{ 'warn' if is_warn else '' }}">
-        <h2>Why it {{ 'was rejected' if bd.state == 'rejected' else 'failed' }}</h2>
-        <div class="reason-text"><strong>State: </strong>
-          <span class="badge {{ bd.state }}">{{ bd.state }}</span>
-        </div>
-        {% if bd.decided_by %}<div class="reason-text"><strong>Decision by: </strong>{{ bd.decided_by }}</div>{% endif %}
-        {% if bd.action %}<div class="reason-text"><strong>Action: </strong>{{ bd.action }}</div>{% endif %}
-        {% if bd.reason %}<div class="reason-text"><strong>Reason: </strong>{{ bd.reason }}</div>{% endif %}
-        {% if bd.at %}<div class="muted small">at {{ bd.at }}</div>{% endif %}
-        {% set lf = bd.last_failure or {} %}
-        {% if lf.summary %}<div class="reason-text" style="margin-top: 8px;"><strong>Summary: </strong>{{ lf.summary }}</div>{% endif %}
-        {% if lf.stages %}
-          <ul>
-            {% for st in lf.stages %}
-              {% set marker = '✗' if st.status == 'failed' else ('✓' if st.status == 'passed' else '·') %}
-              <li>{{ marker }} {{ st.name }}: {{ st.status }}</li>
-              {% for iss in (st.blocking_issues or []) %}
-                <li style="margin-left: 12px; color: var(--err);">  {{ iss }}</li>
+      {# Why it failed #}
+      {% set bd = p.blocking_decision or {} %}
+      {% if bd.has_blocking %}
+        {% set is_warn = bd.state and bd.state.startswith('blocked') %}
+        <div class="why-failed {{ 'warn' if is_warn else '' }}">
+          <h2>Why it {{ 'was rejected' if bd.state == 'rejected' else 'failed' }}</h2>
+          <div class="reason-text"><strong>State: </strong>
+            <span class="badge {{ bd.state }}">{{ bd.state }}</span>
+          </div>
+          {% if bd.decided_by %}<div class="reason-text"><strong>Decision by: </strong>{{ bd.decided_by }}</div>{% endif %}
+          {% if bd.action %}<div class="reason-text"><strong>Action: </strong>{{ bd.action }}</div>{% endif %}
+          {% if bd.reason %}<div class="reason-text"><strong>Reason: </strong>{{ bd.reason }}</div>{% endif %}
+          {% if bd.at %}<div class="muted small">at {{ bd.at }}</div>{% endif %}
+          {% set lf = bd.last_failure or {} %}
+          {% if lf.summary %}<div class="reason-text" style="margin-top: 8px;"><strong>Summary: </strong>{{ lf.summary }}</div>{% endif %}
+          {% if lf.stages %}
+            <ul>
+              {% for st in lf.stages %}
+                {% set marker = '✗' if st.status == 'failed' else ('✓' if st.status == 'passed' else '·') %}
+                <li>{{ marker }} {{ st.name }}: {{ st.status }}</li>
+                {% for iss in (st.blocking_issues or []) %}
+                  <li style="margin-left: 12px; color: var(--err);">  {{ iss }}</li>
+                {% endfor %}
               {% endfor %}
-            {% endfor %}
-          </ul>
-        {% endif %}
-        {% if lf.command_preview %}
-          <div style="margin-top: 6px;">
-            <strong class="small">Last command:</strong>
-            <pre class="command-preview">{{ lf.command_preview | join(' ') }}</pre>
-          </div>
-        {% endif %}
-        {% if lf.stderr_tail %}
-          <div style="margin-top: 6px;">
-            <strong class="small">Stderr tail:</strong>
-            <pre class="stderr-tail">{{ lf.stderr_tail }}</pre>
-          </div>
-        {% endif %}
-        {% set next_text = [bd, p.recommendation] | next_action_text %}
-        {% if next_text %}
-          <div class="next-action {{ [bd, p.recommendation] | next_action_class }}">
-            <span class="label">Next:</span>
-            <span>{{ next_text }}</span>
-          </div>
-        {% endif %}
+            </ul>
+          {% endif %}
+          {% if lf.command_preview %}
+            <div style="margin-top: 6px;">
+              <strong class="small">Last command:</strong>
+              <pre class="command-preview">{{ lf.command_preview | join(' ') }}</pre>
+            </div>
+          {% endif %}
+          {% if lf.stderr_tail %}
+            <div style="margin-top: 6px;">
+              <strong class="small">Stderr tail:</strong>
+              <pre class="stderr-tail">{{ lf.stderr_tail }}</pre>
+            </div>
+          {% endif %}
+          {% set next_text = [bd, p.recommendation] | next_action_text %}
+          {% if next_text %}
+            <div class="next-action {{ [bd, p.recommendation] | next_action_class }}">
+              <span class="label">Next:</span>
+              <span>{{ next_text }}</span>
+            </div>
+          {% endif %}
+        </div>
+      {% endif %}
+
+      {# Tab bar — hx-get for each tab, swaps only #packet-tab-content #}
+      <nav class="tabs" id="packet-tabs">
+        {% for t in tabs %}
+          <a href="{{ tab_urls[t] }}"
+             class="{{ 'active' if t == active_tab else '' }}"
+             hx-get="/admin/_partial/tab?packet_id={{ p.id }}&tab={{ t }}{% if selected_feature_id %}&feature_id={{ selected_feature_id }}{% endif %}"
+             hx-target="#packet-tab-content"
+             hx-swap="outerHTML"
+             hx-push-url="{{ tab_urls[t] }}">{{ t }}</a>
+        {% endfor %}
+      </nav>
+      <div id="packet-tab-content">
+        {% include "_tab.html" %}
       </div>
     {% endif %}
-
-    {# Tab bar — hx-get for each tab, swaps only #packet-tab-content #}
-    <nav class="tabs" id="packet-tabs">
-      {% for t in tabs %}
-        <a href="/admin/_partial/tab?packet_id={{ p.id }}&tab={{ t }}{% if selected_feature_id %}&feature_id={{ selected_feature_id }}{% endif %}"
-           class="{{ 'active' if t == active_tab else '' }}"
-           hx-get="/admin/_partial/tab?packet_id={{ p.id }}&tab={{ t }}{% if selected_feature_id %}&feature_id={{ selected_feature_id }}{% endif %}"
-           hx-target="#packet-tab-content"
-           hx-swap="outerHTML"
-           hx-push-url="true">{{ t }}</a>
-      {% endfor %}
-    </nav>
-    <div id="packet-tab-content">
-      {% include "_tab.html" %}
-    </div>
   {% endif %}
-{% endif %}
+</div>

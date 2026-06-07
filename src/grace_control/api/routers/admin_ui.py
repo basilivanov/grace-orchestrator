@@ -42,6 +42,7 @@ from fastapi.templating import Jinja2Templates
 from grace_control.db import get_db
 from grace_control.services.admin_aggregation_service import AdminAggregationService
 from grace_control.ui.admin_template_filters import register as _register_filters
+from grace_control.ui.admin_template_filters import shell_url as _shell_url
 
 router = APIRouter()
 _svc = AdminAggregationService()
@@ -70,6 +71,38 @@ def _packet_detail(packet_id: str) -> dict | None:
         return _svc.get_packet_detail(db, packet_id)
 
 
+def _split_sets(*vals: str) -> list[list[str]]:
+    """Parse comma-separated query strings into sorted lists."""
+    out = []
+    for v in vals:
+        s = sorted(x for x in (v or "").split(",") if x)
+        out.append(s)
+    return out
+
+
+def _ctx(
+    *,
+    search: str = "",
+    filter: str = "all",
+    selected_feature_id: str | None = None,
+    selected_packet_id: str | None = None,
+    tab: str = "timeline",
+    expanded_features: list[str] | None = None,
+    expanded_waves: list[str] | None = None,
+) -> dict:
+    """Build the common shell_url() context for templates."""
+    return {
+        "search": search,
+        "filter": filter,
+        "selected_feature_id": selected_feature_id,
+        "selected_packet_id": selected_packet_id,
+        "active_tab": tab,
+        "expanded_features": expanded_features or [],
+        "expanded_waves": expanded_waves or [],
+        "shell_url": _shell_url,
+    }
+
+
 # ── Top-level pages (full reload allowed) ───────────────────────────────────
 
 
@@ -95,20 +128,77 @@ def admin_console(
     features = features_data.get("features", [])
 
     # Expand feature/wave sets from query string (comma-separated)
-    ef = set(s for s in expanded_features.split(",") if s)
-    ew = set(s for s in expanded_waves.split(",") if s)
+    ef, ew = _split_sets(expanded_features, expanded_waves)
+    ef_set = set(ef)
+    ew_set = set(ew)
     # If a packet is selected, auto-expand its feature/wave so it's visible
-    if packet_id and not ef and not ew:
+    if packet_id and not ef_set and not ew_set:
         for f in features:
             for w in (f.get("waves") or []):
                 for p in (w.get("packets") or []):
                     if p["id"] == packet_id:
-                        ef.add(f["id"])
-                        ew.add(w["id"])
+                        ef_set.add(f["id"])
+                        ew_set.add(w["id"])
                         break
+    ef = sorted(ef_set)
+    ew = sorted(ew_set)
 
     # Load packet detail if selected
     packet = _packet_detail(packet_id) if packet_id else None
+
+    # Pre-compute click URLs for each feature / wave / packet.
+    for f in features:
+        new_ef = sorted(set(ef) | {f["id"]})
+        f["click_url"] = _shell_url(
+            feature_id=f["id"], expanded_features=new_ef, expanded_waves=ew,
+            search=search, filter=filter,
+        )
+        for w in (f.get("waves") or []):
+            new_ew = sorted(set(ew) ^ {w["id"]})
+            w["click_url"] = _shell_url(
+                feature_id=f["id"], expanded_features=new_ef, expanded_waves=new_ew,
+                search=search, filter=filter,
+            )
+            for p in (w.get("packets") or []):
+                p["click_url"] = _shell_url(
+                    feature_id=f["id"], packet_id=p["id"], tab="timeline",
+                    expanded_features=new_ef, expanded_waves=new_ew,
+                    search=search, filter=filter,
+                )
+
+    # Pre-compute filter chip URLs.
+    chips: list[dict] = []
+    for chip_filter in ("all", "failed", "running", "blocked", "attention"):
+        chips.append({
+            "filter": chip_filter,
+            "url": _shell_url(
+                feature_id=feature_id, filter=chip_filter,
+                expanded_features=ef, expanded_waves=ew, search=search,
+            ),
+        })
+
+    # Pre-compute packet click URLs in the rendered feature timeline.
+    if feature_id:
+        for f in features:
+            if f["id"] != feature_id:
+                continue
+            for w in (f.get("waves") or []):
+                for p in (w.get("packets") or []):
+                    p["click_url"] = _shell_url(
+                        feature_id=f["id"], packet_id=p["id"], tab="timeline",
+                        filter=filter, expanded_features=ef, expanded_waves=ew,
+                        search=search,
+                    )
+
+    # Pre-compute tab URLs for packet detail.
+    tab_urls: dict[str, str] = {}
+    if packet:
+        for t in _TABS:
+            tab_urls[t] = _shell_url(
+                feature_id=feature_id, packet_id=packet_id, tab=t,
+                expanded_features=ef, expanded_waves=ew,
+                search=search, filter=filter,
+            )
 
     ctx = {
         "request": request,
@@ -124,6 +214,9 @@ def admin_console(
         "packet": packet,
         "expanded_features": ef,
         "expanded_waves": ew,
+        "chips": chips,
+        "tab_urls": tab_urls,
+        "shell_url": _shell_url,
         "total_packets": sum(
             len(p) for f in features for w in (f.get("waves") or [])
             for p in [w.get("packets") or []] for p in p
@@ -174,9 +267,37 @@ def partial_master(
     """
     features_data = _features_data()
     features = features_data.get("features", [])
+    ef, ew = _split_sets(expanded_features, expanded_waves)
 
-    ef = set(s for s in expanded_features.split(",") if s)
-    ew = set(s for s in expanded_waves.split(",") if s)
+    # Pre-compute click URLs for each feature, wave, packet.
+    for f in features:
+        new_ef = sorted(set(ef) | {f["id"]})
+        f["click_url"] = _shell_url(
+            feature_id=f["id"],
+            expanded_features=new_ef,
+            expanded_waves=ew,
+            search=search,
+            filter=filter,
+        )
+        for w in (f.get("waves") or []):
+            new_ew = sorted(set(ew) ^ {w["id"]})  # toggle wave
+            w["click_url"] = _shell_url(
+                feature_id=f["id"],
+                expanded_features=new_ef,
+                expanded_waves=new_ew,
+                search=search,
+                filter=filter,
+            )
+            for p in (w.get("packets") or []):
+                p["click_url"] = _shell_url(
+                    feature_id=f["id"],
+                    packet_id=p["id"],
+                    tab="timeline",
+                    expanded_features=new_ef,
+                    expanded_waves=new_ew,
+                    search=search,
+                    filter=filter,
+                )
 
     return _templates.TemplateResponse(request, "_master.html", {
         "request": request,
@@ -187,6 +308,7 @@ def partial_master(
         "selected_packet_id": packet_id,
         "expanded_features": ef,
         "expanded_waves": ew,
+        "shell_url": _shell_url,
     })
 
 
@@ -206,16 +328,46 @@ def partial_timeline(
     """
     features_data = _features_data()
     features = features_data.get("features", [])
-
-    ef = set(s for s in expanded_features.split(",") if s)
-    ew = set(s for s in expanded_waves.split(",") if s)
-
+    ef, ew = _split_sets(expanded_features, expanded_waves)
+    ew_set = set(ew)
     # If toggle_wave is in the query, flip it in the URL we push.
     if toggle_wave:
-        if toggle_wave in ew:
-            ew.discard(toggle_wave)
+        if toggle_wave in ew_set:
+            ew_set.discard(toggle_wave)
         else:
-            ew.add(toggle_wave)
+            ew_set.add(toggle_wave)
+    ew = sorted(ew_set)
+
+    # Pre-compute chip URLs and packet click URLs.
+    chips: list[dict] = []
+    for chip_filter in ("all", "failed", "running", "blocked", "attention"):
+        chips.append({
+            "filter": chip_filter,
+            "url": _shell_url(
+                feature_id=feature_id,
+                filter=chip_filter,
+                expanded_features=ef,
+                expanded_waves=ew,
+                search="",
+            ),
+        })
+
+    # Pre-compute packet click URLs in the rendered feature.
+    if feature_id:
+        for f in features:
+            if f["id"] != feature_id:
+                continue
+            for w in (f.get("waves") or []):
+                for p in (w.get("packets") or []):
+                    p["click_url"] = _shell_url(
+                        feature_id=f["id"],
+                        packet_id=p["id"],
+                        tab="timeline",
+                        filter=filter,
+                        expanded_features=ef,
+                        expanded_waves=ew,
+                        search="",
+                    )
 
     return _templates.TemplateResponse(request, "_timeline.html", {
         "request": request,
@@ -225,6 +377,8 @@ def partial_timeline(
         "selected_packet_id": packet_id,
         "expanded_features": ef,
         "expanded_waves": ew,
+        "chips": chips,
+        "shell_url": _shell_url,
     })
 
 
@@ -234,6 +388,8 @@ def partial_detail(
     packet_id: str = Query(...),
     feature_id: str | None = None,
     tab: str = "timeline",
+    search: str = "",
+    filter: str = "all",
     expanded_features: str = "",
     expanded_waves: str = "",
 ) -> HTMLResponse:
@@ -242,7 +398,16 @@ def partial_detail(
     Swaps only #detail-pane (outerHTML). Pushes URL with hx-push-url=true.
     Preserves master tree state (search, filter, expanded) via query params.
     """
+    ef, ew = _split_sets(expanded_features, expanded_waves)
+    active_tab = tab if tab in _TABS else "timeline"
     packet = _packet_detail(packet_id)
+    tab_urls: dict[str, str] = {}
+    for t in _TABS:
+        tab_urls[t] = _shell_url(
+            feature_id=feature_id, packet_id=packet_id, tab=t,
+            expanded_features=ef, expanded_waves=ew,
+            search=search, filter=filter,
+        )
     if packet is None:
         return _templates.TemplateResponse(request, "_detail.html", {
             "request": request,
@@ -250,7 +415,13 @@ def partial_detail(
             "selected_feature_id": feature_id,
             "packet": None,
             "tabs": _TABS,
-            "active_tab": tab,
+            "active_tab": active_tab,
+            "tab_urls": tab_urls,
+            "search": search,
+            "filter": filter,
+            "expanded_features": ef,
+            "expanded_waves": ew,
+            "shell_url": _shell_url,
         })
 
     return _templates.TemplateResponse(request, "_detail.html", {
@@ -259,7 +430,13 @@ def partial_detail(
         "selected_packet_id": packet_id,
         "selected_feature_id": feature_id,
         "tabs": _TABS,
-        "active_tab": tab if tab in _TABS else "timeline",
+        "active_tab": active_tab,
+        "tab_urls": tab_urls,
+        "search": search,
+        "filter": filter,
+        "expanded_features": ef,
+        "expanded_waves": ew,
+        "shell_url": _shell_url,
     })
 
 
@@ -281,6 +458,7 @@ def partial_tab(
     if packet is None:
         return _templates.TemplateResponse(request, "_tab.html", {
             "request": request, "packet": None, "active_tab": tab,
+            "shell_url": _shell_url,
         })
 
     # Pre-fetch data for the requested tab
@@ -332,4 +510,5 @@ def partial_tab(
         "evidence": evidence,
         "logs_text": logs_text,
         "artifacts": artifacts,
+        "shell_url": _shell_url,
     })

@@ -1,79 +1,84 @@
-{# Middle pane: filter chips + selected feature timeline #}
+{# Feature timeline partial — self-wrapping: returns <div id="timeline-pane">.
+   hx-swap="outerHTML" on #timeline-pane replaces this whole element. #}
 {% set state_counts = features | sum_packets | state_count %}
-<div class="middle-filter" id="filter-chips">
-  {% for chip in [
-       ('all', 'All', state_counts.all, 'all packets'),
-       ('failed', 'Failed', state_counts.failed, 'rejected or failed — needs attention'),
-       ('running', 'Running', state_counts.running, 'currently executing'),
-       ('blocked', 'Blocked', state_counts.blocked, 'blocked — manual or recoverable'),
-       ('attention', 'Need attn', state_counts.attention, 'requires human attention'),
-     ] %}
-    {% set cls = 'active' if chip[0] == filter
-                  else ('err' if chip[0] == 'failed' and chip[2] > 0
-                  else ('warn' if chip[0] == 'blocked' and chip[2] > 0
-                  else ('ok' if chip[0] == 'running' and chip[2] > 0
-                  else ''))) %}
-    <div class="chip {{ cls }}"
-         title="{{ chip[3] }}"
-         hx-get="/admin/_partial/timeline?feature_id={{ selected_feature_id or '' }}&filter={{ chip[0] }}"
-         hx-target="#timeline-pane"
-         hx-swap="outerHTML"
-         hx-push-url="true"
-         style="cursor: pointer;">
-      <span class="n">{{ chip[2] }}</span> {{ chip[1] }}
-    </div>
-  {% endfor %}
-</div>
+<div class="console-middle" id="timeline-pane">
+  <div class="middle-filter" id="filter-chips">
+    {% for chip in chips %}
+      {% set state_count = state_counts[chip.filter] %}
+      {% set cls = 'active' if chip.filter == filter
+                    else ('err' if chip.filter == 'failed' and state_count > 0
+                    else ('warn' if chip.filter == 'blocked' and state_count > 0
+                    else ('ok' if chip.filter == 'running' and state_count > 0
+                    else ''))) %}
+      {% set labels = {'all': 'All', 'failed': 'Failed', 'running': 'Running',
+                       'blocked': 'Blocked', 'attention': 'Need attn'} %}
+      {% set tips = {'all': 'all packets',
+                    'failed': 'rejected or failed — needs attention',
+                    'running': 'currently executing',
+                    'blocked': 'blocked — manual or recoverable',
+                    'attention': 'requires human attention'} %}
+      <div class="chip {{ cls }}"
+           title="{{ tips[chip.filter] }}"
+           hx-get="/admin/_partial/timeline?feature_id={{ selected_feature_id or '' }}&filter={{ chip.filter }}&expanded_features={{ expanded_features | join(',') }}&expanded_waves={{ expanded_waves | join(',') }}&search={{ search }}"
+           hx-target="#timeline-pane"
+           hx-swap="outerHTML"
+           hx-push-url="{{ chip.url }}"
+           style="cursor: pointer;">
+        <span class="n">{{ state_count }}</span> {{ labels[chip.filter] }}
+      </div>
+    {% endfor %}
+  </div>
 
-<div class="feature-timeline" id="feature-timeline">
-  {% if not selected_feature_id %}
-    <h2>Feature timeline</h2>
-    <div class="empty">Click a feature on the left to see all its packets and their progress.</div>
-  {% else %}
-    {% set f = features | selectattr('id', 'equalto', selected_feature_id) | first %}
-    {% if not f %}
+  <div class="feature-timeline" id="feature-timeline">
+    {% if not selected_feature_id %}
       <h2>Feature timeline</h2>
-      <div class="empty">Feature not found.</div>
+      <div class="empty">Click a feature on the left to see all its packets and their progress.</div>
     {% else %}
-      <h2>{{ f.title or f.slug }}</h2>
-      {% if f.description %}<div class="ft-desc">{{ f.description }}</div>{% endif %}
-      {% for w in (f.waves or []) %}
-        {% set wpackets = (w.packets or []) | filter_by_state(filter) %}
-        <div class="ft-wave">
-          <div class="ft-wave-head">
-            <span class="pill {{ w.status | status_class }}">{{ w.status }}</span>
-            <span>{{ w.title or w.slug }}</span>
-            <span class="muted mono small">#{{ w.order }}</span>
-          </div>
-          <div class="ft-packets">
-            {% if wpackets %}
-              {% for p in wpackets %}
-                <div class="ft-packet {{ 'selected' if p.id == selected_packet_id else '' }}"
-                     title="{{ p.title or p.slug }}
+      {% set f = features | selectattr('id', 'equalto', selected_feature_id) | first %}
+      {% if not f %}
+        <h2>Feature timeline</h2>
+        <div class="empty">Feature not found.</div>
+      {% else %}
+        <h2>{{ f.title or f.slug }}</h2>
+        {% if f.description %}<div class="ft-desc">{{ f.description }}</div>{% endif %}
+        {% for w in (f.waves or []) %}
+          {% set wpackets = (w.packets or []) | filter_by_state(filter) %}
+          <div class="ft-wave">
+            <div class="ft-wave-head">
+              <span class="pill {{ w.status | status_class }}">{{ w.status }}</span>
+              <span>{{ w.title or w.slug }}</span>
+              <span class="muted mono small">#{{ w.order }}</span>
+            </div>
+            <div class="ft-packets">
+              {% if wpackets %}
+                {% for p in wpackets %}
+                  <div class="ft-packet {{ 'selected' if p.id == selected_packet_id else '' }}"
+                       title="{{ p.title or p.slug }}
 {{ p.id }}
 state: {{ p.state }}
 attempts: {{ p.attempt_count }}/{{ p.max_attempts }}"
-                     hx-get="/admin/_partial/detail?packet_id={{ p.id }}&feature_id={{ f.id }}"
-                     hx-target="#detail-pane"
-                     hx-swap="outerHTML"
-                     hx-push-url="true"
-                     style="cursor: pointer;">
-                  <span class="pill {{ p.state }} ft-state">{{ p.state }}</span>
-                  <span class="ft-title">{{ p.title or p.slug or p.id }}</span>
-                  <span class="ft-attempts">{{ p.attempt_count }}/{{ p.max_attempts }}</span>
-                  {% if p.state in ('rejected', 'failed') %}
-                    <span class="ft-fail" title="failed — needs attention">✗ failed</span>
-                  {% endif %}
+                       hx-get="/admin/_partial/detail?packet_id={{ p.id }}&feature_id={{ f.id }}&tab=timeline&filter={{ filter }}&expanded_features={{ expanded_features | join(',') }}&expanded_waves={{ expanded_waves | join(',') }}&search={{ search }}"
+                       hx-target="#detail-pane"
+                       hx-swap="outerHTML"
+                       hx-push-url="{{ p.click_url }}"
+                       style="cursor: pointer;">
+                    <span class="pill {{ p.state }} ft-state">{{ p.state }}</span>
+                    <span class="ft-title">{{ p.title or p.slug or p.id }}</span>
+                    <span class="ft-attempts">{{ p.attempt_count }}/{{ p.max_attempts }}</span>
+                    {% if p.state in ('rejected', 'failed') %}
+                      <span class="ft-fail" title="failed — needs attention">✗ failed</span>
+                    {% endif %}
+                  </div>
+                {% endfor %}
+              {% else %}
+                <div class="muted small" style="padding: 4px;">
+                  {{ 'no packets match filter' if (w.packets or []) else 'no packets' }}
                 </div>
-              {% endfor %}
-            {% else %}
-              <div class="muted small" style="padding: 4px;">
-                {{ 'no packets match filter' if (w.packets or []) else 'no packets' }}
-              </div>
-            {% endif %}
+              {% endif %}
+            </div>
           </div>
-        </div>
-      {% endfor %}
+        {% endfor %}
+      {% endif %}
     {% endif %}
-  {% endif %}
+  </div>
 </div>

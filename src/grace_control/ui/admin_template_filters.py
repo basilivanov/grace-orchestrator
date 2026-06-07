@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import urlencode
 
 
 def sum_packet_count(waves: list[dict[str, Any]] | None) -> int:
@@ -156,6 +157,54 @@ def next_action_class(args: tuple | list) -> str:
     return cls
 
 
+def shell_url(
+    feature_id: Any = None,
+    packet_id: Any = None,
+    tab: str = "timeline",
+    search: str = "",
+    filter: str = "all",
+    expanded_features: Any = None,
+    expanded_waves: Any = None,
+) -> str:
+    """Build the operator console shell URL from current state.
+
+    Used for hx-push-url so the address bar always points to /admin?…
+    (not /admin/_partial/…). Refreshing the URL restores the same view.
+
+    `expanded_features`/`expanded_waves` may be set/list/str (comma-joined).
+    """
+    params: list[tuple[str, str]] = []
+    if feature_id:
+        params.append(("feature_id", str(feature_id)))
+    if packet_id:
+        params.append(("packet_id", str(packet_id)))
+    if tab and tab != "timeline":
+        params.append(("tab", tab))
+    if search:
+        params.append(("search", search))
+    if filter and filter != "all":
+        params.append(("filter", filter))
+
+    def _join(v: Any) -> str:
+        if v is None or v == "":
+            return ""
+        if isinstance(v, str):
+            return v
+        if isinstance(v, (set, frozenset, list, tuple)):
+            return ",".join(str(x) for x in v if x)
+        return str(v)
+
+    ef = _join(expanded_features)
+    ew = _join(expanded_waves)
+    if ef:
+        params.append(("expanded_features", ef))
+    if ew:
+        params.append(("expanded_waves", ew))
+    if not params:
+        return "/admin"
+    return "/admin?" + urlencode(params)
+
+
 def register(env: Any) -> None:
     env.filters["sum_packet_count"] = sum_packet_count
     env.filters["sum_packets"] = sum_packets
@@ -166,3 +215,4 @@ def register(env: Any) -> None:
     env.filters["state_machine_class"] = state_machine_class
     env.filters["next_action_text"] = next_action_text
     env.filters["next_action_class"] = next_action_class
+    env.globals["shell_url"] = shell_url
