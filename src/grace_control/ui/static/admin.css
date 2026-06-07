@@ -2379,3 +2379,68 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   .view-tabs { padding: 6px 10px 0 10px; }
   .view-tab { padding: 5px 10px; font-size: 11px; }
 }
+
+/* ── Session chain (TZ_SESSION_RESUME.md Phase 4) ──────────────────── */
+.session-chain {
+  margin-top: 8px;
+}
+.session-node {
+  border-left: 2px solid var(--border);
+  padding: 8px 12px;
+  margin-bottom: 2px;
+  position: relative;
+}
+.session-node.session-active {
+  border-left-color: var(--sev-ok);
+  background: color-mix(in srgb, var(--sev-ok) 4%, transparent);
+}
+.session-node.session-failed {
+  border-left-color: var(--sev-crit);
+  background: color-mix(in srgb, var(--sev-crit) 4%, transparent);
+}
+.session-fork-arrow {
+  position: absolute;
+  left: -14px;
+  top: 6px;
+  font-size: 14px;
+  color: var(--fg-3);
+  font-family: var(--mono);
+}
+.session-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.session-id {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--fg);
+}
+.session-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.session-meta .pipe { color: var(--border); }
+.session-tag {
+  display: inline-block;
+  padding: 1px 5px;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  background: var(--bg-2);
+  color: var(--fg-3);
+  border-radius: 3px;
+}
+.session-tag-active {
+  background: color-mix(in srgb, var(--sev-ok) 20%, var(--bg-2));
+  color: var(--sev-ok);
+}
+
+@media (max-width: 768px) {
+  .session-node { padding: 6px 8px; }
+  .session-id { font-size: 11px; }
+  .session-meta { font-size: 10px; }
+}

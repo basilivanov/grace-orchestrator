@@ -51,6 +51,8 @@ class RecoveryDecision(BaseModel):
     reviewer_instruction: str | None = None
     max_attempts_reached: bool = False
     audit_payload: dict[str, Any] = Field(default_factory=dict)
+    resume_session_id: str | None = None  # TZ_SESSION_RESUME.md Phase 3
+    fork_session: bool = False            # TZ_SESSION_RESUME.md Phase 3
 
 
 class FailureSignal(BaseModel):

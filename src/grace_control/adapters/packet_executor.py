@@ -57,12 +57,14 @@ class PacketExecutionAdapter:
         from grace_control.services.packet_materializer import PacketMaterializer
         from grace_control.services.evidence_service import EvidenceService
         from grace_control.core.cleanup_on_state import TerminalStateCleanup
+        from grace_control.services.session_store import SessionStore
         self._materializer = PacketMaterializer(); self._evidence = EvidenceService(db_factory=get_db)
         self._inspector = WorktreeInspector(); self._committer = AgentCommitService()
         self._worktree_cleanup = WorktreeCleanupService()
         self._terminal_cleanup = TerminalStateCleanup(
             project_root=project_root, worktree_root=worktree_root,
         )
+        self._session_store = SessionStore()
 
     async def execute(self, packet_id: str, worker_id: str,
                        claim_data: dict | None = None) -> ExecutionResult:
@@ -373,9 +375,54 @@ class PacketExecutionAdapter:
             )
 
         from grace_control.config.settings import settings
+
+        # TZ_SESSION_RESUME.md Phase 3: resolve resume session before run
+        resume_session_id: str | None = None
+        fork = False
+        resume_mode = executor.get("resume_mode", "never")
+        role = executor.get("role", "coder")
+        executor_id = executor.get("executor_id", "")
+        if resume_mode in ("always", "on_retry", "on_fork") and attempt > 0:
+            with get_db() as db:
+                if resume_mode == "on_retry":
+                    prev = self._session_store.find_latest(
+                        db, pid, role, executor_id=executor_id)
+                    if prev:
+                        resume_session_id = prev.external_id
+                elif resume_mode == "on_fork":
+                    prev = self._session_store.find_for_fork(db, pid, role)
+                    if prev:
+                        resume_session_id = prev.external_id
+                        fork = True
+                elif resume_mode == "always":
+                    prev = self._session_store.find_latest(db, pid, role)
+                    if prev:
+                        resume_session_id = prev.external_id
+                _log.info("session_resolved",
+                          packet_id=pid, attempt=attempt, role=role,
+                          resume_session_id=resume_session_id, fork=fork)
+
         req = ExecutionRequest(packet_id=pid,
             spec={"attempt_count":attempt,"base_ref":base_ref,"allowed_write_scope":eff or [],"frozen_scope":packet_contract.frozen_scope or []},
             worktree_path=wt_path, branch_name=branch,
             scope_paths=list(eff or []), executor=executor, timeout_s=settings.agent_timeout_seconds,
-            session_dir=self.state_root, evidence_dir=evidence_dir)
-        return await self._backend.run(req)
+            session_dir=self.state_root, evidence_dir=evidence_dir,
+            resume_session_id=resume_session_id, fork_session=fork)
+        result = await self._backend.run(req)
+
+        # TZ_SESSION_RESUME.md Phase 3: save session after run
+        if result.evidence.get("session_id"):
+            with get_db() as db:
+                self._session_store.save(
+                    db,
+                    packet_id=pid,
+                    run_id=evidence_dir.name if evidence_dir else None,
+                    role=role,
+                    executor_id=executor_id,
+                    backend=executor.get("backend", "cli"),
+                    attempt_number=attempt,
+                    external_id=result.evidence.get("session_id"),
+                    parent_session_id=resume_session_id if fork else None,
+                    status="completed" if result.accepted else "failed",
+                )
+        return result

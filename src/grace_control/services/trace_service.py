@@ -23,6 +23,7 @@
 #       - get_packet_trace
 #       - get_run_trace
 #       - get_feature_trace
+#       - get_session_chain
 #       - search
 # END_MODULE_MAP
 
@@ -73,6 +74,7 @@ class TraceService:
             .all()
         )
         last_failure = self._last_failure(runs)
+        session_chain = self.get_session_chain(db, packet_id)
         return {
             "packet_id": packet.id,
             "feature_id": packet.feature_id,
@@ -86,6 +88,7 @@ class TraceService:
             "timeline": [self._event_to_dict(e) for e in events],
             "last_failure": last_failure,
             "recommended_next_action": self._recommend(packet, last_failure),
+            "session_chain": session_chain,
         }
 
     # START_FUNCTION_CONTRACT
@@ -248,6 +251,16 @@ class TraceService:
             "payload": e.payload_json or {},
             "trace_id": e.trace_id or "",
         }
+
+    def get_session_chain(self, db: Session, packet_id: str) -> list[dict[str, Any]]:
+        """Return the session chain for `packet_id` (TZ_SESSION_RESUME.md Phase 5).
+
+        Returns [] if the agent_sessions table doesn't exist or no sessions found.
+        """
+        from grace_control.services.session_store import SessionStore
+        store = SessionStore()
+        result = store.get_sessions_for_packet(db, packet_id)
+        return result.get("sessions", [])
 
     def _last_failure(self, runs: list[PacketRun]) -> dict[str, Any] | None:
         for r in reversed(runs):

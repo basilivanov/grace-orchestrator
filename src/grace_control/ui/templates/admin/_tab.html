@@ -91,9 +91,45 @@
     {% elif active_tab == 'sessions' %}
       <div class="tab-h">Agent sessions</div>
       {% if sessions and sessions.reason == 'table_missing' %}
-        <div class="banner warn">Sessions table not yet created (TZ_SESSION_RESUME pending).</div>
+        <div class="banner warn">Sessions not yet tracked (TZ_SESSION_RESUME pending).</div>
       {% elif sessions and sessions.sessions %}
-        <ul>{% for s in sessions.sessions %}<li>{{ s.id }} — {{ s.role }} (attempt {{ s.attempt }})</li>{% endfor %}</ul>
+        <div class="session-chain">
+          {% for s in sessions.sessions %}
+            <div class="session-node {% if s.status == 'active' %}session-active{% elif s.status == 'failed' %}session-failed{% endif %}"
+                 {% if s.parent_session_id %}style="margin-left: 28px"{% endif %}>
+              {% if s.parent_session_id %}
+                <div class="session-fork-arrow" title="fork/resume from {{ s.parent_session_id }}">&#8627;</div>
+              {% endif %}
+              <div class="session-row">
+                <span class="session-id mono">{{ s.id }}</span>
+                <span class="session-role badge severity-{% if s.role == 'coder' %}ok-soft{% elif s.role == 'architect' %}attn-soft{% elif s.role == 'verifier' %}ok-soft{% else %}muted{% endif %}">{{ s.role }}</span>
+                {% if s.status == 'forked' %}<span class="session-tag">fork</span>{% endif %}
+                {% if s.status == 'active' %}<span class="session-tag session-tag-active">active</span>{% endif %}
+              </div>
+              <div class="session-meta muted small">
+                <span>executor: <code class="mono">{{ s.executor_id or '—' }}</code></span>
+                <span class="pipe">|</span>
+                <span>attempt: <code>{{ s.attempt_number }}</code></span>
+                <span class="pipe">|</span>
+                <span>status: {{ s.status }}</span>
+                <span class="pipe">|</span>
+                <span>started: {% if s.created_at %}{{ s.created_at | fmt_time_short }}{% else %}—{% endif %}</span>
+                {% if s.duration_seconds %}
+                <span class="pipe">|</span>
+                <span>duration: {{ s.duration_seconds | fmt_duration }}</span>
+                {% endif %}
+                {% if s.external_id %}
+                <span class="pipe">|</span>
+                <span title="openCode session ID">session: <code class="mono">{{ s.external_id }}</code></span>
+                {% endif %}
+                {% if s.fork_of %}
+                <span class="pipe">|</span>
+                <span>fork of <code class="mono">{{ s.fork_of }}</code></span>
+                {% endif %}
+              </div>
+            </div>
+          {% endfor %}
+        </div>
       {% else %}
         <div class="empty">No agent sessions</div>
       {% endif %}
