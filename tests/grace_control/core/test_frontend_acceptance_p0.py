@@ -185,9 +185,18 @@ class TestEvidenceKindFrontend:
         from grace_control.core.evidence import _check_evidence_kind
         role = tmp_path / "browser"
         role.mkdir(parents=True)
-        (role / "diff.png").write_text("")  # empty = no regression
-        req = EvidenceRequirement(id="v1", kind="visual_diff")
+        (role / "diff-report.json").write_text('{"diff_pct": 0.0005}')
+        req = EvidenceRequirement(id="v1", kind="visual_diff", pattern="max_diff_pct=0.001")
         assert _check_evidence_kind(req, [], tmp_path, [])
+
+    def test_visual_diff_no_report_fails(self, tmp_path: Path):
+        """Without diff-report.json, visual evidence fails (no weak fallback)."""
+        from grace_control.core.evidence import _check_evidence_kind
+        role = tmp_path / "browser"
+        role.mkdir(parents=True)
+        (role / "diff.png").write_text("")  # old surrogate — should IGNORE
+        req = EvidenceRequirement(id="v1", kind="visual_diff")
+        assert not _check_evidence_kind(req, [], tmp_path, [])
 
     def test_visual_diff_report_json_within_threshold(self, tmp_path: Path):
         from grace_control.core.evidence import _check_evidence_kind
@@ -696,7 +705,50 @@ class TestA11yRouting:
             r = runner.run_a11y()
             assert r.passed is True
 
-    def test_a11y_runner_critical_violation_fails(self, tmp_path: Path):
+    def test_a11y_report_generated_on_run(self, tmp_path: Path):
+        from grace_control.services.playwright_runner import PlaywrightRunner
+        runner = PlaywrightRunner(worktree_path=tmp_path, run_dir=tmp_path / "r",
+                                  viewport="android", dev_command="echo test")
+        runner._has_playwright = lambda: True
+        (tmp_path / "tests" / "e2e").mkdir(parents=True)
+        (tmp_path / "tests" / "e2e" / "test.spec.ts").write_text("// a11y")
+        runner._start_dev_server = lambda: True
+        runner._stop_dev_server = lambda: None
+        from unittest.mock import patch
+        violations = '[{"id":"color-contrast","impact":"critical","description":"Low contrast"}]'
+        mock = type("R", (), {"returncode": 1, "stdout": violations, "stderr": ""})()
+        with patch("subprocess.run", return_value=mock):
+            r = runner.run_a11y()
+        # a11y-report.json should be created
+        report_path = tmp_path / "r" / "browser" / "android" / "a11y-report.json"
+        assert report_path.exists(), f"a11y-report.json not found at {report_path}"
+        import json
+        data = json.loads(report_path.read_text())
+        assert data["violations_count"] == 1
+        assert data["critical_count"] == 1
+        assert data["passed"] is False
+
+    def test_a11y_evidence_checker_validates_report(self, tmp_path: Path):
+        from grace_control.core.evidence import _check_evidence_kind
+        from grace_control.core.contracts import EvidenceRequirement
+        browser_dir = tmp_path / "browser"
+        browser_dir.mkdir(parents=True)
+        (browser_dir / "a11y-report.json").write_text(
+            '{"violations":[{"id":"c1","impact":"critical"}], "violations_count":1, "critical_count":1, "passed":false}'
+        )
+        req = EvidenceRequirement(id="a1", kind="a11y_report", pattern="max_critical=0")
+        assert not _check_evidence_kind(req, [], tmp_path, [])
+
+    def test_a11y_evidence_no_critical_passes(self, tmp_path: Path):
+        from grace_control.core.evidence import _check_evidence_kind
+        from grace_control.core.contracts import EvidenceRequirement
+        browser_dir = tmp_path / "browser"
+        browser_dir.mkdir(parents=True)
+        (browser_dir / "a11y-report.json").write_text(
+            '{"violations":[{"id":"c1","impact":"minor"}], "violations_count":1, "critical_count":0, "passed":true}'
+        )
+        req = EvidenceRequirement(id="a1", kind="a11y_report")
+        assert _check_evidence_kind(req, [], tmp_path, [])
         from grace_control.services.playwright_runner import PlaywrightRunner
         runner = PlaywrightRunner(worktree_path=tmp_path, run_dir=tmp_path / "r",
                                   viewport="android", dev_command="echo test")

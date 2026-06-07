@@ -52,6 +52,7 @@ class StageName(str, Enum):
     T1_TARGETED_TESTS = "T1_TARGETED_TESTS"
     T2_FULL_TESTS = "T2_FULL_TESTS"
     T2_BROWSER_E2E = "T2_BROWSER_E2E"              # TZ_FRONTEND_ACCEPTANCE P0
+    T2_BROWSER_A11Y = "T2_BROWSER_A11Y"            # TZ_FRONTEND_ACCEPTANCE P2
     T3_VISUAL_REGRESSION = "T3_VISUAL_REGRESSION"  # TZ_FRONTEND_ACCEPTANCE P0
 
 
@@ -119,7 +120,7 @@ class VerificationSpec:
 @dataclass(frozen=True)
 class EvidenceRequirement:
     id: str
-    kind: str  # command | file | diff | log | screenshot | dom_snapshot | console_log | network_log | visual_diff
+    kind: str  # command | file | diff | log | screenshot | dom_snapshot | console_log | network_log | visual_diff | a11y_report
     required: bool = True
     pattern: str | None = None
 

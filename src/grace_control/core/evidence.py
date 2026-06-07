@@ -152,12 +152,11 @@ def _check_evidence_kind(
         return True
 
     if req.kind == "visual_diff":
-        # Check for diff-report.json which contains pixelmatch results
+        # Check for diff-report.json which contains pixelmatch results.
+        # No weak fallback — must have a real report.
         reports = _browser_glob("diff-report.json")
         if not reports:
-            # Fallback: empty diff PNG = no regression (surrogate)
-            pngs = [p for p in _browser_glob("*diff*.png") if p.stat().st_size == 0]
-            return len(pngs) > 0
+            return False
         try:
             import json
             data = json.loads(reports[0].read_text())
@@ -167,7 +166,25 @@ def _check_evidence_kind(
                 max_pct = float(req.pattern.split("=", 1)[1])
             return diff_pct <= max_pct
         except Exception:
-            return len(_browser_glob("*diff*.png")) > 0
+            return False
+
+    # TZ_FRONTEND_ACCEPTANCE P2 — a11y accessibility check evidence
+    if req.kind == "a11y_report":
+        reports = _browser_glob("a11y-report.json")
+        if not reports:
+            return False
+        try:
+            import json
+            data = json.loads(reports[0].read_text())
+            violations = data.get("violations", [])
+            critical = [v for v in violations if v.get("impact") == "critical"]
+            # Pattern like "max_critical=0" means zero critical violations allowed
+            max_critical = 0
+            if req.pattern and req.pattern.startswith("max_critical="):
+                max_critical = int(req.pattern.split("=", 1)[1])
+            return len(critical) <= max_critical
+        except Exception:
+            return False
 
     return False
 

@@ -574,7 +574,7 @@ def _run_frontend_stages(
         a11y_errors = sum((r.errors for r in a11y_results), [])
         violations_count = sum(len(r.screenshots) for r in a11y_results)
         result["t2_browser_a11y"] = StageResult(
-            name=StageName.T2_BROWSER_E2E,
+            name=StageName.T2_BROWSER_A11Y,
             status=StageStatus.PASSED if a11y_passed else StageStatus.FAILED,
             summary=f"T2_BROWSER_A11Y: {len(a11y_results)} viewports, {violations_count} violations",
             commands=[
@@ -591,7 +591,7 @@ def _run_frontend_stages(
         )
     else:
         result["t2_browser_a11y"] = StageResult(
-            name=StageName.T2_BROWSER_E2E,
+            name=StageName.T2_BROWSER_A11Y,
             status=StageStatus.SKIPPED,
             summary="T2_BROWSER_A11Y skipped: a11y not required",
             commands=[],

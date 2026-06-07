@@ -42,6 +42,7 @@ _PLAYWRIGHT_TIMEOUT = 120
 _VIEWPORT_CONFIG = {
     "android": {"width": 360, "height": 780},
     "iphone": {"width": 390, "height": 844},
+    "desktop": {"width": 1280, "height": 720},  # TZ_FRONTEND_ACCEPTANCE P2
 }
 
 
@@ -208,6 +209,10 @@ class PlaywrightRunner:
             for png in sorted(browser_dir.rglob("*.png")):
                 result.screenshots.append(str(png))
 
+            # TZ_FRONTEND_ACCEPTANCE P2 — generate a11y-report.json for a11y mode
+            if mode == "a11y":
+                self._write_a11y_report(browser_dir, all_stdout, all_stderr, result)
+
             # Collect trace if failed
             if not result.passed:
                 trace_dir = self._run_dir / "traces" / self._viewport
@@ -311,3 +316,45 @@ class PlaywrightRunner:
             inject_mock_script(self._worktree)
         except ImportError:
             pass
+
+    def _write_a11y_report(
+        self,
+        browser_dir: Path,
+        all_stdout: list[str],
+        all_stderr: list[str],
+        result: BrowserStageResult,
+    ) -> None:
+        """Parse a11y output and write a11y-report.json for evidence. P2."""
+        violations = []
+        combined = "\n".join(all_stdout) + "\n" + "\n".join(all_stderr)
+        # Try to extract JSON violations from the output
+        import json as _json
+        try:
+            # Look for JSON array/object in output
+            for line in combined.split("\n"):
+                line = line.strip()
+                if line.startswith("[") or line.startswith("{"):
+                    try:
+                        data = _json.loads(line)
+                        if isinstance(data, list):
+                            violations = data
+                        elif isinstance(data, dict) and "violations" in data:
+                            violations = data["violations"]
+                    except _json.JSONDecodeError:
+                        pass
+        except Exception:
+            pass
+        # If stdout contains "critical" but no structured JSON, generate synthetic
+        if not violations and ("critical" in combined.lower() or "violation" in combined.lower()):
+            violations = [{"id": "a11y-error", "impact": "critical", "description": combined[:200]}]
+        report = {
+            "viewport": self._viewport,
+            "violations": violations,
+            "violations_count": len(violations),
+            "critical_count": sum(1 for v in violations if v.get("impact") == "critical"),
+            "passed": result.passed,
+        }
+        (browser_dir / "a11y-report.json").write_text(_json.dumps(report, indent=2))
+        result.screenshots.append(str(browser_dir / "a11y-report.json"))
+        _log.info("a11y_report_written", viewport=self._viewport,
+                  violations=len(violations), passed=result.passed)
