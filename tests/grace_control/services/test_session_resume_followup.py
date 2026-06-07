@@ -3,9 +3,8 @@ from __future__ import annotations
 
 import pytest
 from pathlib import Path
-from unittest.mock import patch, MagicMock
 
-from grace_control.config.agent_profiles import load_agent_profiles, AgentProfile
+from grace_control.config.agent_profiles import load_agent_profiles
 from grace_control.services.agent_run_service import _extract_session_id
 
 
@@ -122,14 +121,95 @@ class TestMaintenanceStaleDetection:
         })
         assert len(entries) == 3
         assert all(e.is_stale for e in entries)
-        assert all(e.is_stale for e in entries)
 
 
-class TestTerminalStateCleanup:
-    """TerminalStateCleanup on fast reject."""
-    pass  # Placeholder — hard to unit-test without real git worktrees.
+class TestAgentRunServiceSessionExtractionIntegration:
+    """Integration: AgentRunService.run() extracts session_id when backend=cli + command[0]=agy."""
 
+    @pytest.mark.asyncio
+    async def test_cli_backend_agy_command_extracts_conversation_id(self, tmp_path: Path):
+        from grace_control.services.agent_run_service import AgentRunService
+        from grace_control.services.process_supervisor import ProcessSupervisor, ProcessResult
 
-class TestRecoveryDecisionAudit:
-    """Session resume audit fields in result_json."""
-    pass  # Placeholder — tested via integration in adapter tests.
+        called = []
+
+        class FakeSupervisor:
+            async def run(self, command, cwd, env=None, timeout_seconds=600, stdin_text=None):
+                called.append(command)
+                return ProcessResult(
+                    stdout="Conversation ID: conv_test_123\nTask complete.",
+                    stderr="",
+                    exit_code=0,
+                    duration_ms=100,
+                )
+
+        svc = AgentRunService()
+        svc._supervisor = FakeSupervisor()
+
+        executor = {
+            "executor_id": "coder_agy",
+            "command": ["agy", "run", "--model", "gpt-4"],
+            "backend": "cli",  # This is the critical part — must derive agy from command[0]
+            "model": "gpt-4",
+            "input_mode": "none",
+        }
+
+        wtree = tmp_path / "wt"
+        wtree.mkdir()
+        state = tmp_path / "state"
+        state.mkdir()
+
+        result = await svc.run(
+            executor,
+            packet_id="pkt_test",
+            worktree_path=wtree,
+            state_root=state,
+            packet_markdown="test task",
+            timeout_seconds=10,
+        )
+
+        assert result["session_id"] == "conv_test_123", (
+            f"Expected conv_test_123, got {result.get('session_id')}"
+        )
+        assert called, "FakeSupervisor.run() was never called"
+
+    @pytest.mark.asyncio
+    async def test_cli_backend_opencode_command_extracts_session_id(self, tmp_path: Path):
+        from grace_control.services.agent_run_service import AgentRunService
+        from grace_control.services.process_supervisor import ProcessResult
+
+        class FakeSupervisor:
+            async def run(self, command, cwd, env=None, timeout_seconds=600, stdin_text=None):
+                return ProcessResult(
+                    stdout="Session: ses_opencode_456\nDone.",
+                    stderr="",
+                    exit_code=0,
+                    duration_ms=100,
+                )
+
+        svc = AgentRunService()
+        svc._supervisor = FakeSupervisor()
+
+        executor = {
+            "executor_id": "coder-deepseek-flash",
+            "command": ["opencode", "run", "--model", "deepseek-v4"],
+            "backend": "cli",
+            "model": "deepseek-v4",
+            "input_mode": "none",
+        }
+
+        wtree = tmp_path / "wt"
+        wtree.mkdir()
+        state = tmp_path / "state"
+        state.mkdir()
+
+        result = await svc.run(
+            executor,
+            packet_id="pkt_test2",
+            worktree_path=wtree,
+            state_root=state,
+            packet_markdown="test task 2",
+            timeout_seconds=10,
+        )
+
+        assert result["session_id"] == "ses_opencode_456"
