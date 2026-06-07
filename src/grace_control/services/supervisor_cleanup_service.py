@@ -102,6 +102,8 @@ class SupervisorCleanupService:
                 self._cleanup_state_files(report, older_than_days=stale_state_days)
             if stale_leases:
                 self._release_stale_leases(report, older_than_minutes=stale_lease_minutes)
+            # TZ_FRONTEND_ACCEPTANCE P1 — kill orphan frontend processes
+            self._kill_frontend_processes(report)
         finally:
             report.duration_seconds = time.time() - start
             _log.info(
@@ -252,3 +254,32 @@ class SupervisorCleanupService:
             msg = f"stale leases: {e!s}"[:200]
             report.errors.append(msg)
             _log.warn("lease_cleanup_failed", error=str(e)[:200])
+
+    @staticmethod
+    def _kill_frontend_processes(report: CleanupReport) -> None:
+        """Kill leftover dev-server and ngrok processes from crashed packets.
+
+        TZ_FRONTEND_ACCEPTANCE P1/1.7/3.5 — ensures ports are freed and
+        no orphan processes linger after packet execution.
+        """
+        for pattern, label in [
+            (["node", "npm run dev"], "dev-server (npm)"),
+            (["node", "vite"], "dev-server (vite)"),
+            (["node", "next"], "dev-server (next)"),
+            (["ngrok", "http"], "ngrok tunnel"),
+        ]:
+            try:
+                r = subprocess.run(
+                    ["pgrep", "-f", " ".join(pattern)],
+                    capture_output=True, text=True, timeout=5,
+                )
+                pids = r.stdout.strip().split()
+                for pid_str in pids:
+                    pid = int(pid_str)
+                    try:
+                        os.kill(pid, signal.SIGTERM)
+                        report.errors.append(f"killed {label} (pid={pid})")
+                    except OSError:
+                        pass
+            except Exception:
+                pass

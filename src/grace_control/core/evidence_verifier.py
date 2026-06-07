@@ -156,8 +156,66 @@ async def run_evidence_verifier(
     try:
         from grace_control.core.executor_selector import resolve_model
         executor = resolve_model("verifier")
+        is_multimodal = executor.get("multimodal", False)
+        # Collect multimodal evidence if available
+        multimodal_ctx = ""
+        if is_multimodal:
+            multimodal_ctx = _build_multimodal_context(packet, acceptance_report, worktree_path, run_dir)
+        full_prompt = prompt_template + "\n\n## Context\n\n" + "\n".join(prompt_parts) + multimodal_ctx
         raw = await run_llm(full_prompt, role="verifier", model=executor["model"],
                             cli="verifier-cheap")
         return parse_evidence_verifier_json(raw)
     except Exception as e:
         return skipped_evidence_report(f"evidence verifier error: {e}")
+
+
+def _build_multimodal_context(
+    packet,
+    acceptance_report,
+    worktree_path: "Path",
+    run_dir: "Path",
+) -> str:
+    """Collect visual/browser evidence for the multimodal verifier prompt.
+
+    TZ_FRONTEND_ACCEPTANCE P1 — when executor has multimodal:true,
+    includes screenshot paths and visual diff results.
+    Otherwise returns empty string.
+    """
+    from pathlib import Path as _P
+    parts: list[str] = []
+    parts.append("\n\n## Visual Evidence\n")
+
+    # Check run_dir first (where PlaywrightRunner writes), then worktree
+    browser_dir = _P(run_dir) / "browser" if run_dir else _P(worktree_path) / "browser"
+    if not browser_dir.exists():
+        parts.append("No browser artifacts found.")
+        return "\n".join(parts)
+
+    screenshots = list(browser_dir.rglob("*.png"))
+    if screenshots:
+        parts.append(f"Screenshots ({len(screenshots)}):")
+        for s in sorted(screenshots)[:8]:  # Limit to 8 for token budget
+            rel = s.relative_to(_P(run_dir) if run_dir else _P(worktree_path))
+            parts.append(f"  <image>{rel}</image>")
+
+    # Diff reports
+    diff_reports = list(browser_dir.rglob("*diff-report*.json"))
+    if diff_reports:
+        for dr in diff_reports[:2]:
+            try:
+                import json
+                data = json.loads(dr.read_text())
+                parts.append(f"Visual diff: {data.get('diff_pct', '?')}% (threshold {data.get('max_diff_pct', '?')})")
+            except Exception:
+                pass
+
+    # Console logs
+    console_logs = list(browser_dir.rglob("console*.log"))
+    if console_logs:
+        parts.append(f"\nConsole log ({len(console_logs)} files):")
+        for cl in console_logs[:2]:
+            content = cl.read_text()[:500]
+            if "error" in content.lower():
+                parts.append(f"  {cl.name}: has errors")
+
+    return "\n".join(parts)

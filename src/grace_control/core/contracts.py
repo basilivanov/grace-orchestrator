@@ -178,6 +178,41 @@ class AcceptanceReport:
         return asdict(self)
 
 
+# TZ_FRONTEND_ACCEPTANCE P1 — multimodal evidence + visual regression dataclasses
+
+@dataclass(frozen=True)
+class ScreenshotRef:
+    """Reference to a screenshot artifact for multimodal verifier prompts."""
+    path: str
+    viewport: str = ""
+    url: str = ""
+    description: str = ""
+
+
+@dataclass(frozen=True)
+class DomSnapshotRef:
+    """Reference to a DOM/AX-tree snapshot artifact."""
+    path: str
+    selector: str = ""
+    aria_role: str = ""
+
+
+@dataclass
+class MultimodalEvidencePack:
+    """Bundle of browser/visual evidence for the verifier LLM.
+
+    When executor is multimodal: paths become image_url/image tags.
+    Otherwise: fall back to text descriptions ("2 screenshots saved at ...").
+    """
+    screenshots: list[ScreenshotRef] = field(default_factory=list)
+    dom_snapshots: list[DomSnapshotRef] = field(default_factory=list)
+    console_log_path: str = ""
+    network_log_path: str = ""
+    visual_diff_path: str = ""
+    visual_diff_pct: float = 0.0
+    multimodal_executor: bool = False
+
+
 def _has_abs_or_parent(path: str) -> bool:
     return path.startswith("/") or ".." in Path(path).parts
 
