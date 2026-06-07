@@ -655,6 +655,18 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   font-size: 10px;
   flex-shrink: 0;
 }
+.tn-packet .pkt-size {
+  color: var(--fg-3);
+  font-family: var(--mono);
+  font-size: 10px;
+  flex-shrink: 0;
+  margin-left: 4px;
+}
+.size-info {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--fg-3);
+}
 
 /* ── Middle pane: feature timeline ──────────────────────────────────── */
 

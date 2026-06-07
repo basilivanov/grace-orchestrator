@@ -74,6 +74,7 @@ attempts: {{ p.attempt_count }}/{{ p.max_attempts }}"
                 <span class="dot" aria-hidden="true"></span>
                 <span class="pkt-title">{{ p.title or p.slug or p.id }}</span>
                 <span class="pkt-attempts muted">{{ p.attempt_count }}/{{ p.max_attempts }}</span>
+                {% if p.size_bytes %}<span class="pkt-size muted" title="Run artifacts size">{{ p.size_bytes | fmt_size }}</span>{% endif %}
               </div>
               {% endif %}
             {% endfor %}

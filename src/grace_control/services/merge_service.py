@@ -120,6 +120,16 @@ class MergeService:
                 error=f"state transition failed: {str(e)[:200]}",
             )
 
+        # TZ_RETENTION_POLICY.md Phase 1: after successful merge, delete ALL
+        # attempt-branches for this packet (not just the merged one). This
+        # keeps the target repo clean — typically a 3-attempt packet leaves
+        # 3 `agent/<id>-attempt-NNNN` refs otherwise.
+        try:
+            self._cleanup_packet_branches(repo, packet_id)
+        except Exception as e:
+            _log.warn("merge_branch_cleanup_failed",
+                packet_id=packet_id, error=str(e)[:200])
+
         _log.info("merge_packet_done",
             packet_id=packet_id, commit_sha=commit_sha[:12], branch=branch_name)
 
@@ -137,6 +147,7 @@ class MergeService:
         1. `git worktree remove --force` — unregister from `git worktree list`.
         2. `shutil.rmtree` — fallback if the path still exists.
         3. `git worktree prune` — drop stale admin files in `.git/worktrees/`.
+        4. `git branch -D` for the specific merged branch (TZ_RETENTION_POLICY Phase 1).
 
         If `target_repo_root` is None, falls back to legacy behaviour (rmtree
         only); callers that have a repo handle should pass it.
@@ -153,8 +164,52 @@ class MergeService:
                 if not prune.success:
                     _log.warn("worktree_prune_failed",
                         repo=str(repo), stderr=prune.stderr[:200])
+                # TZ_RETENTION_POLICY Phase 1: delete the merged branch.
+                # The full sweep across all attempt-branches happens in
+                # `merge_packet`; here we just remove the single branch that
+                # was passed in (the one we just merged).
+                if branch:
+                    del_result = self._git._run(
+                        ["branch", "-D", branch], repo
+                    )
+                    if not del_result.success:
+                        _log.warn("worktree_branch_delete_failed",
+                            branch=branch, stderr=del_result.stderr[:200])
             if wt.exists():
                 import shutil
                 shutil.rmtree(wt, ignore_errors=True)
         except Exception as e:
             _log.warn("worktree_cleanup_failed", worktree=str(worktree_path), error=str(e)[:200])
+
+    def _cleanup_packet_branches(self, repo: Path, packet_id: str) -> None:
+        """Delete ALL `agent/<packet_id>-attempt-*` branches after a successful
+        merge (TZ_RETENTION_POLICY.md Phase 1).
+
+        Best-effort: logs failures per branch, never raises. Called from
+        `merge_packet` after the state transition to MERGED.
+        """
+        pattern = f"agent/{packet_id}-attempt-*"
+        list_result = self._git._run(
+            ["branch", "--list", pattern], repo
+        )
+        if not list_result.success:
+            _log.warn("merge_branch_list_failed",
+                packet_id=packet_id, pattern=pattern,
+                stderr=list_result.stderr[:200])
+            return
+        for line in list_result.stdout.splitlines():
+            branch = line.strip()
+            if not branch:
+                continue
+            if branch.startswith("* "):
+                branch = branch[2:].strip()
+            if not branch:
+                continue
+            del_result = self._git._run(["branch", "-D", branch], repo)
+            if del_result.success:
+                _log.info("merge_branch_deleted",
+                    packet_id=packet_id, branch=branch)
+            else:
+                _log.warn("merge_branch_delete_failed",
+                    packet_id=packet_id, branch=branch,
+                    stderr=del_result.stderr[:200])

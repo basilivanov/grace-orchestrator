@@ -109,7 +109,8 @@
               </div>
               <div class="ft-wave-meta muted small">
                 {{ w.total_packets }} packet{{ '' if w.total_packets == 1 else 's' }}{% if w_has_attn %} ·
-                <span class="attn-count">{{ w.attention_count }} needs attention</span>{% endif %}
+                <span class="attn-count">{{ w.attention_count }} needs attention</span>{% endif %}{% if w.size_bytes %} ·
+                <span class="size-info" title="Total size of all run artifacts in this wave">{{ w.size_bytes | fmt_size }}</span>{% endif %}
               </div>
             </div>
             <div class="ft-packets">
@@ -164,6 +165,12 @@ attempts: {{ p.attempt_count }}/{{ p.max_attempts }}"
                           {% if p.duration_seconds %}{{ p.duration_seconds | fmt_duration }}{% else %}—{% endif %}
                         </span>
                       </div>
+                      {% if p.size_bytes %}
+                      <div class="ft-pkt-cell">
+                        <span class="ft-pkt-key">size</span>
+                        <span class="ft-pkt-val mono" title="Total size of run artifacts">{{ p.size_bytes | fmt_size }}</span>
+                      </div>
+                      {% endif %}
                     </div>
                   </div>
                 {% endfor %}

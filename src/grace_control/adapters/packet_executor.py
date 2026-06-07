@@ -56,9 +56,13 @@ class PacketExecutionAdapter:
             self._backend = backend
         from grace_control.services.packet_materializer import PacketMaterializer
         from grace_control.services.evidence_service import EvidenceService
+        from grace_control.core.cleanup_on_state import TerminalStateCleanup
         self._materializer = PacketMaterializer(); self._evidence = EvidenceService(db_factory=get_db)
         self._inspector = WorktreeInspector(); self._committer = AgentCommitService()
         self._worktree_cleanup = WorktreeCleanupService()
+        self._terminal_cleanup = TerminalStateCleanup(
+            project_root=project_root, worktree_root=worktree_root,
+        )
 
     async def execute(self, packet_id: str, worker_id: str,
                        claim_data: dict | None = None) -> ExecutionResult:
@@ -234,6 +238,14 @@ class PacketExecutionAdapter:
                 model=getattr(result, "model", "") or executor.get("model",""),
                 command_preview=getattr(result, "command_preview", None),
                 prompt=getattr(result, "prompt", ""))
+            # TZ_RETENTION_POLICY Phase 1: on REJECTED / BLOCKED, clean up
+            # worktree + all attempt-branches for this packet. Run artifacts
+            # in .grace/state/.../runs/R0X/ are NOT touched.
+            try:
+                self._terminal_cleanup.run(packet_id=packet_id, attempt=rn)
+            except Exception as e:
+                _log.warn("terminal_cleanup_exception",
+                    packet_id=packet_id, state=domain, error=str(e)[:200])
             _log.info("adapter_execute_done", packet_id=packet_id, accepted=False, duration_ms=er.duration_ms); return er
 
         if prof == AcceptanceProfile.FAST:
@@ -260,6 +272,22 @@ class PacketExecutionAdapter:
         self._evidence.update_run_result(run_id=run_id, status=status, legacy_result=safe_data,
             acceptance_report=accept_report, evidence_verifier_report=evr, reviewer_report=rvr,
             evidence_path=er.evidence_path, duration_ms=er.duration_ms, executor_id=executor.get("executor_id",""))
+        # TZ_RETENTION_POLICY Phase 1: on REJECTED (acceptance failure), clean
+        # up worktree + all attempt-branches for this packet. Run artifacts
+        # in .grace/state/ are NOT touched.
+        if status in ("rejected", "failed", "blocked", "blocked_recoverable", "blocked_final"):
+            try:
+                # The attempt number is encoded in run_id (e.g. pkt_xxx-R03).
+                rn = None
+                if run_id and run_id.rfind("-R") != -1:
+                    try:
+                        rn = int(run_id.rsplit("-R", 1)[-1])
+                    except ValueError:
+                        rn = None
+                self._terminal_cleanup.run(packet_id=packet_id, attempt=rn)
+            except Exception as e:
+                _log.warn("terminal_cleanup_exception",
+                    packet_id=packet_id, state=status, error=str(e)[:200])
         _log.info("adapter_execute_done", packet_id=packet_id, accepted=(status=="accepted"), duration_ms=dur)
         return er
 

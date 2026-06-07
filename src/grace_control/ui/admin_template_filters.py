@@ -244,6 +244,35 @@ def fmt_duration_ms(ms: int | float | None) -> str:
     return fmt_duration(ms / 1000.0)
 
 
+def fmt_size(num_bytes: int | float | None) -> str:
+    """Format a byte count as a human-readable string (B/KB/MB/GB/TB/PB).
+
+    TZ_RETENTION_POLICY.md Phase 2. Examples:
+        0       -> "0 B"
+        512     -> "512 B"
+        1024    -> "1.0 KB"
+        1572864 -> "1.5 MB"
+        2 GB    -> "2.0 GB"
+        None    -> "0 B"
+    """
+    if num_bytes is None:
+        return "0 B"
+    n = float(num_bytes)
+    if n == 0:
+        return "0 B"
+    sign = "-" if n < 0 else ""
+    n = abs(n)
+    if n < 1024:
+        return f"{sign}{int(n) if n == int(n) else n} B"
+    original = n
+    for unit, divisor in (("KB", 1024), ("MB", 1024**2), ("GB", 1024**3), ("TB", 1024**4)):
+        n = original / divisor
+        if n < 1024:
+            return f"{sign}{n:.1f} {unit}"
+    n = original / 1024**5
+    return f"{sign}{n:.1f} PB"
+
+
 def safe_str(v: Any, fallback: str = "—") -> str:
     """Render a value as a string with a fallback for None/empty."""
     if v is None or v == "":
@@ -461,6 +490,7 @@ def register(env: Any) -> None:
     env.filters["raw_state"] = raw_state
     env.filters["fmt_duration"] = fmt_duration
     env.filters["fmt_duration_ms"] = fmt_duration_ms
+    env.filters["fmt_size"] = fmt_size
     env.filters["fmt_time_short"] = fmt_time_short
     env.filters["safe_str"] = safe_str
     env.filters["display_title"] = display_title

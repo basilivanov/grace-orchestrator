@@ -66,6 +66,12 @@
           <span class="pkt-meta-label">status</span>
           <span class="pkt-meta-value">{{ w_ui.label }}</span>
         </div>
+        {% if wave.total_size_bytes %}
+        <div class="pkt-meta-row">
+          <span class="pkt-meta-label">runs size</span>
+          <span class="pkt-meta-value mono" title="Total size of all run artifacts in this wave">{{ wave.total_size_bytes | fmt_size }}</span>
+        </div>
+        {% endif %}
       </div>
 
       {# ── Summary section: per-state counts ───────────────────────── #}
@@ -199,6 +205,7 @@ attempts: {{ p.attempt_count }}/{{ p.max_attempts }}"
       {% set p_finished = p.packet.updated_at if p.packet else None %}
       {% set p_duration = p.elapsed_seconds %}
       {% set p_worker = p.worker_id %}
+      {% set p_total_size_bytes = p.total_size_bytes or 0 %}
       {% set pipeline = p.pipeline or {} %}
       {% set stages = pipeline.stages or [] %}
 
@@ -260,6 +267,12 @@ attempts: {{ p.attempt_count }}/{{ p.max_attempts }}"
           <span class="pkt-meta-label">worker</span>
           <span class="pkt-meta-value mono">{{ p_worker or '—' }}</span>
         </div>
+        {% if p_total_size_bytes %}
+        <div class="pkt-meta-row">
+          <span class="pkt-meta-label">runs size</span>
+          <span class="pkt-meta-value mono" title="Total size of all run artifacts in .grace/state/">{{ p_total_size_bytes | fmt_size }}</span>
+        </div>
+        {% endif %}
       </div>
 
       {# ── GRACE pipeline (replaces state-machine) ───────────────────── #}

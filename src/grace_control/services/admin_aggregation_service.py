@@ -145,6 +145,12 @@ def _build_artifact_tree(evidence_dir: Path) -> list[dict[str, Any]]:
 class AdminAggregationService:
     """Read-only aggregator for the admin SPA. Composes existing services."""
 
+    def __init__(self, state_root: "Path | str | None" = None,
+                 worktree_root: "Path | str | None" = None):
+        # Lazy import to avoid cycle with size_calculator at module load.
+        from grace_control.services.size_calculator import SizeCalculator
+        self._size_calc = SizeCalculator(state_root=state_root, worktree_root=worktree_root)
+
     # ── overview ─────────────────────────────────────────────────────────
 
     def get_overview(self, db: Session) -> dict[str, Any]:
@@ -262,6 +268,9 @@ class AdminAggregationService:
             for r in runs
         ]
 
+        # TZ_RETENTION_POLICY Phase 2: include run sizes in packet detail.
+        runs_breakdown = self._size_calc.packet_runs_breakdown(packet_id)
+
         return {
             "packet": {
                 "id": p.id,
@@ -285,6 +294,8 @@ class AdminAggregationService:
             "recommendation": recommendation,
             "sessions_summary": sessions_summary,
             "runs_summary": runs_summary,
+            "runs_breakdown": runs_breakdown.to_dict(),
+            "total_size_bytes": runs_breakdown.size_bytes,
             "blocking_decision": self.get_packet_blocking_decision(db, packet_id),
             "state_machine": self._derive_state_machine(db, p, runs),
             "pipeline": self._derive_pipeline(db, p, runs),
@@ -1152,6 +1163,7 @@ class AdminAggregationService:
                     "stage": stage,
                     "started_at": started_at,
                     "duration_seconds": duration_seconds,
+                    "size_bytes": self._size_calc.packet_runs_size(p.id),
                 })
             # Build wave rows with attention counters
             wave_rows: list[dict[str, Any]] = []
@@ -1164,12 +1176,14 @@ class AdminAggregationService:
                         "blocked_recoverable", "blocked_final",
                     )
                 )
+                w_size = sum(p.get("size_bytes", 0) for p in wpackets)
                 wave_rows.append({
                     "id": w.id, "slug": w.slug, "title": w.title,
                     "order": w.order, "status": w.status,
                     "packets": wpackets,
                     "total_packets": len(wpackets),
                     "attention_count": w_attn,
+                    "size_bytes": w_size,
                 })
             # Feature-level counters
             all_packets = [pp for wpackets in packets_by_wave.values() for pp in wpackets]
@@ -1286,6 +1300,7 @@ class AdminAggregationService:
                 "started_at": started_at,
                 "duration_seconds": duration_seconds,
                 "stage": stage,
+                "size_bytes": self._size_calc.packet_runs_size(p.id),
             })
 
         counts = {"all": len(packet_rows), "failed": 0, "running": 0,
@@ -1302,6 +1317,8 @@ class AdminAggregationService:
                 counts["attention"] += 1
             elif s in ("accepted", "merged"):
                 counts["done"] += 1
+
+        total_size = sum(p.get("size_bytes", 0) for p in packet_rows)
 
         return {
             "wave": {
@@ -1321,6 +1338,7 @@ class AdminAggregationService:
             "counts": counts,
             "packets": packet_rows,
             "stage_progress": self._derive_wave_stage_progress(packet_rows),
+            "total_size_bytes": total_size,
         }
 
     def _derive_wave_stage_progress(
