@@ -660,3 +660,266 @@ Evidence tab уже умеет показывать стадии из `acceptanc
 | 13 | Timestamp format? | **24h везде (HH:MM:SS[.mmm])** |
 | 14 | Artifact sizes? | **Байты от сервера, fmtSize на клиенте** |
 | 15 | Smart artifact rendering? | **Image=always inline, text<1MB, binary<256KB hex** |
+
+---
+
+## P3 — HTMX refactor + calm UI + GRACE pipeline (2026-06-07)
+
+**Why:** vanilla SPA admin (`admin.js` ~720 строк hash routing + fetch + ручная DOM-конструкция + ручной polling) оказался overengineered. HTMX даёт server-rendered HTML с минимальным JS, естественным browser back/forward, и progressive enhancement (работает без JS).
+
+**Срез:** frontend полностью переписан с vanilla SPA на HTMX + server-rendered partials. Backend (read endpoints, aggregation service) остаётся как есть. Новая data shape: derived `ui_state` / `state_severity` / `stage` / `duration_seconds` / `started_at` / `display_title`.
+
+### 3.1 Архитектурные решения HTMX
+
+| # | Решение | Значение |
+|---|---------|----------|
+| 20 | Frontend | **HTMX** (`htmx.org` 1.9+), **без** билд-шага, **без** npm, **без** React, **без** SPA routing |
+| 21 | Server-rendered | Jinja2 templates + FastAPI endpoints возвращают HTML partials |
+| 22 | Navigation | `<a href>` fallback + `hx-get` для HTMX. URL всегда `/admin?feature_id=…&wave_id=…&packet_id=…&filter=…&tab=…` |
+| 23 | HTMX swap | `hx-swap="outerHTML"`. Каждый partial возвращает **свой корневой wrapper** (чтобы outerHTML swap не ломал grid context) |
+| 24 | `hx-push-url` | **всегда** указывает на shell URL (`/admin?…`), **никогда** на `/admin/_partial/…` |
+| 25 | Polling | `hx-trigger="load, every 5s"` на `_stats.html` (только stats bar) — остальное не poll'ится |
+| 26 | Server | расширяем существующий FastAPI, новый роутер `/admin/_partial/…` (HTML partials) |
+| 27 | Layout | **3-col при ≥1440px** (master / timeline / detail), **2-col при ≥1100px** (master / detail, timeline tab'ом), **1-col при ≤768px** (стекается, mobile-friendly) |
+| 28 | Click routing | URL-state driven: feature_id + wave_id + packet_id в query string → back/forward работает из коробки |
+| 29 | Display layer | **5 levels of severity** (CSS tokens): `ok` / `ok-soft` / `muted` / `attention` / `critical` (бэкенд state strings не меняются) |
+| 30 | Calm UI | **No raw state pills** в master pane — только severity dot + meta `N waves · M packets · K needs attention` |
+| 31 | Status never color-only | каждый badge имеет **text + title tooltip** (a11y + скриншот-тестируемость) |
+| 32 | 24h time | `HH:MM:SS` (`fmt_time_short`), `HH:MM:SS.mmm` (`fmt_time_ms`), duration `"2m 16s"` (`fmt_duration`) |
+| 33 | Sizes | `fmtSize()` — B/KB/MB/GB smart unit |
+| 34 | Forward-compat | TZ_SESSION_RESUME, TZ_FRONTEND_ACCEPTANCE — Evidence/Sessions tabs уже описаны в P0 |
+
+### 3.2 Display layer (`admin_template_filters.py`)
+
+| Filter | Возвращает | Используется для |
+|--------|------------|------------------|
+| `ui_state(raw_state)` | enum: `READY / RUNNING / PASSED / FAILED / BLOCKED / ATTENTION / IDLE` | все badge'ы и pill'ы |
+| `state_label(ui_state)` | человекочитаемый: `"Running"`, `"Reviewer rejected"`, `"Idle"` | текст badge'а |
+| `state_severity(ui_state)` | `ok / ok-soft / muted / attention / critical` | CSS class на badge + border-left |
+| `is_attention(ui_state)` | `bool` | фильтр `attention`, meta-счётчики, лейблы в detail |
+| `raw_state(...)` | строка | маленький metadata блок в detail-pane (raw: rejected) |
+| `fmt_duration(seconds)` | `"2m 16s"` / `"1h 5m"` / `"58s"` | duration cell в packet card |
+| `fmt_time_short(iso)` | `"07:01:44"` | started cell в packet card |
+| `safe_str(s)` | `""` для None | защита от `None.title` |
+| `display_title(title, kind)` | `{title, is_placeholder, original, kind}` | **fallback для short/technical titles** — `"t"` → `Untitled feature`, original хранится как slug |
+| `shell_url(feature_id, wave_id, packet_id, tab, filter, search, expanded_features, expanded_waves)` | `"/admin?feature_id=…&wave_id=…"` | **Jinja global** — единая точка построения shell URL |
+| `ui_tab_label(tab_key)` | `"Spec"`, `"Attempts"`, `"Agent sessions"`, `"Evidence"`, `"Logs"`, `"Artifacts"`, `"Events"` | human-friendly tab labels |
+
+**Mapping table (raw → ui_state):**
+
+| Raw state | UI state | Severity | Label |
+|-----------|----------|----------|-------|
+| `draft` | `IDLE` | `muted` | `Idle` |
+| `not_started` | `IDLE` | `muted` | `Not started` |
+| `ready` | `READY` | `ok-soft` | `Ready` |
+| `claimed` | `RUNNING` | `attention` | `Claimed` |
+| `running` | `RUNNING` | `attention` | `Running` |
+| `accepted` | `PASSED` | `ok` | `Accepted` |
+| `merged` | `PASSED` | `ok` | `Merged` |
+| `rejected` | `FAILED` | `critical` | `Reviewer rejected` |
+| `failed` | `FAILED` | `critical` | `Failed` |
+| `blocked` | `BLOCKED` | `critical` | `Blocked` |
+| `blocked_recoverable` | `BLOCKED` | `attention` | `Blocked (recoverable)` |
+| `blocked_final` | `BLOCKED` | `critical` | `Blocked (final)` |
+| `degraded` | `ATTENTION` | `attention` | `Degraded` |
+
+### 3.3 GRACE pipeline view
+
+**9 stages** (расположены в порядке выполнения):
+
+| # | Stage | Откуда данные |
+|---|-------|---------------|
+| 1 | `Materialized` | packet существует в DB |
+| 2 | `Executor selected` | `claim` event (executor/worker picked) |
+| 3 | `Coder run` | last PacketRun.status (running/done/failed) |
+| 4 | `T0 — Scope & lint` | `evidence.stages[T0_SCOPE_AND_LINT]` (NORMAL profile: skipped) |
+| 5 | `T1 — Targeted tests` | `evidence.stages[T1_TARGETED_TESTS]` (NORMAL: skipped) |
+| 6 | `T2 — Full tests` | `evidence.stages[T2_FULL_TESTS]` (NORMAL: skipped) |
+| 7 | `Evidence verifier` | `verifier:applied` event с `verdict: pass` |
+| 8 | `Reviewer gate` | `release:accepted` (PASS) или `release:rejected` (FAIL с reason) |
+| 9 | `Merge` | `merge:done` event |
+
+**Status per stage:** `done / running / failed / skipped / pending` (определяется по derived logic).
+
+**Service helper:** `_derive_pipeline(packet_id, db) → List[Stage]`
+
+| Helper | Возвращает |
+|--------|------------|
+| `_stage_coder_run(pkt, last_run)` | `{key, label, status, meta}` |
+| `_stage_acceptance(pkt, acceptance_report, profile)` | T0/T1/T2 stages с учётом профиля |
+| `_stage_verifier(events)` | verifier stage |
+| `_stage_reviewer(events, last_run)` | reviewer gate (PASS/FAIL/SKIP) |
+| `_stage_merge(events, packet)` | merge stage |
+
+**UI:** `.pipeline-view` — CSS grid `repeat(auto-fit, minmax(180px, 1fr))`, каждый stage = `.stage.stage-{status}` card с label + status text + duration.
+
+**Pipeline clicked → switches active tab** (e.g. click `T1 — Targeted tests` → Evidence tab).
+
+### 3.4 Layout density & fallback titles
+
+**`display_title(title, kind)` filter** — placeholder detection:
+
+```python
+_PLACEHOLDER_TITLES = {"t", "d", "w1", "p1", "p2", "w3", "foo", "bar", "baz", "abc", "test"}
+_PLACEHOLDER_RE = re.compile(r"^[a-z]?\d{0,2}$|^[a-z]{1,2}$")
+
+def _is_placeholder(title: str) -> bool:
+    if not title or len(title) < 3: return True
+    if title.lower() in _PLACEHOLDER_TITLES: return True
+    if _PLACEHOLDER_RE.match(title.lower()): return True
+    return False
+```
+
+**Если placeholder:** возвращает `{title: "Untitled feature", is_placeholder: True, original: "t", kind: "feature"}`. Original сохраняется в `slug: t` метаданных.
+
+**Packet stage derivation** (`_derive_packet_stage`):
+
+| State | Last run | Stage |
+|-------|----------|-------|
+| `draft` / `not_started` | — | `materialized` |
+| `claimed` / `running` | running | `coder` |
+| `accepted` | passed | `verifier` |
+| `merged` | — | `merge` |
+| `rejected` / `failed` | failed | `reviewer` |
+| `blocked` | — | `reviewer` |
+
+**Packet card grid (4 cells):**
+
+```
+attempts: 3/3      | stage: Reviewer gate
+started: 07:01:44  | duration: 1m 03s
+```
+
+**Wave details section** (правая колонка при `selected_wave_id`):
+
+| Section | Content |
+|---------|---------|
+| Header | `Selected wave` label + title (fallback) + Wave #N + status badge + raw state + slug |
+| Summary | 5 cells: total / rejected-failed / running / blocked / done |
+| Wave progress | 4 stage rows: Materialized / Coder run / Reviewer gate / Merge — `reached/total` + horizontal bar (`width: %`) + severity (ok/attention/muted) |
+| Packets in this wave | extended cards (4-cell grid + status badge) |
+
+### 3.5 File layout (после HTMX refactor)
+
+```
+src/grace_control/ui/
+├── templates/
+│   └── admin/
+│       ├── console.html          # shell page (3-pane grid)
+│       ├── _master.html          # master tree (left column)
+│       ├── _timeline.html        # feature timeline (middle column)
+│       ├── _detail.html          # detail pane (right column)
+│       ├── _tab.html             # tab body
+│       └── _stats.html           # stats bar (polled)
+└── static/
+    └── admin.css                 # ~1500 строк: tokens, severity, pipeline, layout, responsive
+```
+
+### 3.6 HTMX partial contract
+
+| Endpoint | Возвращает | Wrapper class | Container (in shell) |
+|----------|------------|---------------|---------------------|
+| `GET /admin/_partial/master?feature_id=…&filter=…&search=…` | HTML partial | `.master-tree` (`id="master-tree"`) | `#master-pane` (mounted in shell) |
+| `GET /admin/_partial/timeline?feature_id=…&filter=…&search=…` | HTML partial | `.console-middle` (`id="timeline-pane"`) | `#timeline-pane` |
+| `GET /admin/_partial/detail?feature_id=…&wave_id=…&packet_id=…` | HTML partial | `.console-detail` (`id="detail-pane"`) | `#detail-pane` |
+| `GET /admin/_partial/tab?packet_id=…&tab=…` | HTML partial | `#packet-tab-content` | `#packet-tab-content` |
+| `GET /admin/_partial/stats` | HTML partial | `#stats-bar-container` | `#stats-bar-container` (`hx-trigger="load, every 5s"`) |
+
+**Правило:** partial = его собственный корневой wrapper, swap = `outerHTML` заменяет на этот же wrapper (grid context сохраняется).
+
+### 3.7 URL state model
+
+| Param | Scope | Set by | Notes |
+|-------|-------|--------|-------|
+| `feature_id` | always | master click, header, "back to features" | Обязателен для non-empty view |
+| `wave_id` | optional | wave card click | опускается в URL когда `packet_id` установлен (packet_id = "the only packet matters") |
+| `packet_id` | optional | packet card click, breadcrumb | при установке wave_id опускается |
+| `filter` | optional | filter chips (`all` / `attention` / `running` / `failed` / `passed`) | default: `all` |
+| `search` | optional | search box | substring filter по title/slug/id |
+| `tab` | optional | tab click, pipeline stage click | `events` (default) / `spec` / `attempts` / `sessions` / `evidence` / `logs` / `artifacts` |
+| `expanded_features` | optional | master tree expansion | comma-separated feature ids |
+| `expanded_waves` | optional | master tree expansion | comma-separated wave ids |
+
+**`shell_url(feature_id, wave_id, packet_id, tab, filter, search, expanded_features, expanded_waves)`** — Jinja global, единственный способ построить URL.
+
+**Pre-computed `click_url`** — каждый feature/wave/packet/tab/chip имеет `click_url` в Python DTO (не в Jinja — Jinja list comprehension не поддерживается).
+
+### 3.8 Click bubbling fix (wave/packet cards)
+
+**Проблема:** клик на packet row внутри wave card бабблит на parent `<a>` или `<div hx-get>`, открывая wave details вместо packet details.
+
+**Решение:**
+- Wave = `<div class="ft-wave" hx-get="…wave_id=…">`
+- Packet внутри wave = `<div class="ft-pkt" hx-on:click="event.stopPropagation()" hx-get="…packet_id=…">`
+- Аналогично для master tree (`.tn-packet` stopPropagation, `.tn-wave-head` отдельно hx-get)
+
+`<a>` внутри `<a>` — invalid HTML → используем `<div>` + `event.stopPropagation()`.
+
+### 3.9 CSS severity tokens
+
+```css
+--sev-ok: #2da44e;
+--sev-ok-soft: #9bc4a4;
+--sev-muted: #8b949e;
+--sev-attn: #d29922;
+--sev-attn-soft: #d2a36b;
+--sev-crit: #cf222e;
+--sev-crit-soft: #d97780;
+--sev-crit-bg: rgba(207, 34, 46, 0.08);
+--sev-attn-bg: rgba(210, 153, 34, 0.10);
+```
+
+**Применение:**
+- `.severity-{ok,ok-soft,muted,attn,attn-soft,crit}` → `border-left: 3px solid var(--sev-*)` + background tint
+- `.badge.severity-*` → цвет текста
+- `.stage.stage-{done,failed,running,skipped,pending}` → pipeline stage colors
+
+### 3.10 Tab labels (P3)
+
+| Tab key | Label | Tab key | Label |
+|---------|-------|---------|-------|
+| `events` | Events | `evidence` | Evidence |
+| `spec` | Spec | `logs` | Logs |
+| `attempts` | Attempts | `artifacts` | Artifacts |
+| `sessions` | Agent sessions | | |
+
+`ui_tab_label()` Jinja filter — единая точка перевода.
+
+### 3.11 Acceptance summary (2026-06-07, P3)
+
+- **HTMX контракт**: все partials self-wrapping; `hx-swap="outerHTML"` сохраняет grid context
+- **Shell URL**: `shell_url()` Jinja global, pre-computed `click_url` per object
+- **Calm UI**: 5 severity levels (CSS tokens), `ui_state/state_label/state_severity/is_attention` filters
+- **GRACE pipeline view**: 9 stages derived from events + evidence + acceptance, CSS grid
+- **Feature → Wave → Packet navigation**: URL state, wave details mode, click bubbling fix
+- **Layout density**: `display_title` filter (placeholder fallback), packet grid (4 cells), wave progress (4 bars)
+- **CSS**: ~1500 строк; responsive breakpoints 1440 / 1100 / 768 / 390
+- **Templates**:
+  - `console.html` — shell
+  - `_master.html` — master tree с `display_title` fallback
+  - `_timeline.html` — feature banner + structured wave/packet cards
+  - `_detail.html` — wave details (header + summary + progress + packet list) + packet details (header + meta + pipeline + tabs)
+  - `_tab.html` — tab body
+  - `_stats.html` — stats bar (polled 5s)
+- **Tests** (40+ новых):
+  - `tests/ui/test_admin_ui_htmx_layout.py` — 9 тестов
+  - `tests/ui/test_admin_ui_calm_display.py` — 14 тестов
+  - `tests/ui/test_admin_ui_wave_selection.py` — 14 тестов
+  - `tests/ui/test_admin_ui_layout_density.py` — 17 тестов
+  - `tests/grace_control/services/test_admin_aggregation_service.py` — 44 теста (+3 wave_detail)
+- **Test results**: `pytest tests/grace_control/ tests/ui -q` → **546 passed / 25 pre-existing failed** (без регрессий)
+
+### 3.12 Operator UX fixes (по feedback, P3)
+
+| # | Feedback | Fix |
+|---|----------|-----|
+| 1 | "Сейчас потерял смысловой слой пайплайна. Он показывает технические transition-события" | Новый **GRACE pipeline view** (9 семантических стадий) вместо сырых event'ов в packet detail header |
+| 2 | "Операторский pipeline: что именно делал GRACE, кто работал, сколько заняло" | Pipeline view с executor, model, duration per stage |
+| 3 | "Табы timeline / spec / runs … по факту не работают" | Tab state в URL + partial contract; tabs работают при любом packet click |
+| 4 | "Tabs must never push /admin/_partial/tab?… as the visible URL" | `hx-push-url` указывает на shell URL, не на partial URL |
+| 5 | "t / d / 1 wave · 1 packet" — placeholder titles | `display_title` filter: "Untitled feature", original в slug |
+| 6 | "Структура появилась, а 'карточки работы' ещё выглядят как сырые строки из БД" | Structured `.ft-wave-*` / `.ft-pkt-grid` rows вместо flat string concatenation |
+| 7 | "Синее выделение верхнего блока непонятно" | `Selected feature` явный label |
+| 8 | "Справа при выборе волны слишком пусто" | Wave details с Summary (5 cells) + Wave progress (4 bars) + extended packet list |
+| 9 | "Сделать fallback labels" | `display_title` filter с kind-specific fallback ("Untitled feature" / "Untitled wave" / "Untitled packet") |
+| 10 | "T0/T1/T2 stages отсутствуют для NORMAL профиля" | Stages **всегда** shown, помечены `skipped` для NORMAL |
