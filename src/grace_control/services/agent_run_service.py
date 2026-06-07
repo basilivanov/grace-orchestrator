@@ -210,6 +210,15 @@ class AgentRunService:
 
         # TZ_SESSION_RESUME.md Phase 2: extract session_id from stdout
         backend = executor.get("backend", "cli")
+        # When backend=cli (universal backend), derive the actual CLI kind
+        # from command[0] so session extraction uses the right patterns
+        # (e.g. AGY needs Conversation ID, opencode needs Session: ses_...).
+        if backend == "cli":
+            cmd = executor.get("command", [])
+            if isinstance(cmd, list) and cmd:
+                first = str(cmd[0]).lower()
+                if first in ("agy", "opencode", "codex"):
+                    backend = first
         result_session_id = _extract_session_id(result.stdout, backend)
 
         return {

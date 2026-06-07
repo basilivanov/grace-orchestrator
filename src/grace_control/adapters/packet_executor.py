@@ -443,4 +443,12 @@ class PacketExecutionAdapter:
                     parent_session_id=prev_internal_id if fork else None,
                     status="completed" if result.accepted else "failed",
                 )
+        # Persist session_resume audit info in evidence so it appears
+        # in PacketRun.result_json for trace and recovery audit trail.
+        if resume_session_id:
+            result.evidence["session_resume"] = {
+                "resume_session_id": resume_session_id,
+                "fork": fork,
+                "prev_internal_id": prev_internal_id,
+            }
         return result
