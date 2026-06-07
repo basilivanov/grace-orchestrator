@@ -1,8 +1,9 @@
 # ТЗ: Session Resume — переиспользование LLM-сессий в GRACE пайплайне
 
-**Статус:** pending
+**Статус:** pending implementation (ТЗ готово, см. фазы ниже)
 **Приоритет:** P1
-**Дата:** 2026-06-07
+**Дата:** 2026-06-07 (обновлено 2026-06-07 — добавлены admin UI + retention integration)
+**Связанные TZ:** TZ_RETENTION_POLICY.md (cleanup `.opencode/` + worktree → branch deletion), TZ_ADMIN_PANEL.md (admin UI for session chains)
 
 ---
 
@@ -17,11 +18,24 @@
 - Прогретый кэш модели (KV-cache на стороне провайдера) теряется
 - Время cold start × N попыток
 
+### Дополнительная проблема (2026-06-07)
+
+Сессии opencode хранятся в `.opencode/` внутри worktree. При cleanup worktree
+(по `TZ_RETENTION_POLICY.md` Phase 1) **все сессии теряются** — нет cross-reference
+между LLM-сессией и packet_id в DB. Оператор не может:
+- посмотреть цепочку сессий пакета
+- понять, какая модель работала на каком attempt
+- сделать pause/resume долгой задачи между перезапусками worker'а
+
 ## Решение
 
 Ввести **session resume** — при повторных запусках агента на том же пакете
 передавать `session_id` предыдущей сессии. LLM продолжает разговор с полным
 контекстом предыдущей попытки.
+
+**Дополнительно:** централизованное хранение session metadata в `agent_sessions`
+таблице — даёт cross-reference packet ↔ session, видимость в admin UI, и
+защиту от потери при cleanup worktree (сессия в БД переживает cleanup).
 
 ## Матрица ролей
 
@@ -352,6 +366,244 @@ Phase 4: Observability
 | `src/grace_control/core/feature_recovery.py` | Поля `resume_session_id`, `fork_session` в `RecoveryDecision` |
 | `src/grace_control/core/recovery_controller.py` | Session resolution при формировании decision |
 | `src/grace_control/api/routers/trace.py` | Session chain в trace output |
+| `src/grace_control/api/routers/admin_ui.py` | `GET /admin/_partial/sessions` partial (см. §Admin UI) |
+| `src/grace_control/services/admin_aggregation_service.py` | `get_packet_sessions()` method |
+| `src/grace_control/ui/templates/admin/_tab.html` | Sessions tab content (cross-ref) |
+| `src/grace_control/ui/static/admin.css` | Session chain styles |
+
+---
+
+## Admin UI (2026-06-07, новый раздел)
+
+### Tab "Agent sessions" в packet detail
+
+`ui_tab_label("sessions")` → "Agent sessions" (уже есть по TZ_ADMIN_PANEL §3.10).
+
+**Содержимое tab:**
+
+| Column | Source |
+|--------|--------|
+| `ses_001` (id) | `agent_sessions.id` |
+| role | `agent_sessions.role` |
+| executor_id | `agent_sessions.executor_id` |
+| attempt_number | `agent_sessions.attempt_number` |
+| status | `agent_sessions.status` (active / completed / failed / forked) |
+| created_at | `agent_sessions.created_at` (HH:MM:SS) |
+| duration | `finished_at - created_at` (fmt_duration) |
+| fork_of | `agent_sessions.parent_session_id` (если есть) |
+| link | `agent_sessions.external_id` (deep-link to opencode, если возможно) |
+
+**Visual chain:**
+
+```
+ses_001 (coder-deepseek-flash, attempt 0, completed)
+   └── ses_002 (coder-deepseek-flash, attempt 1, completed) [resume]
+         └── ses_003 (coder-sonnet, attempt 2, active) [fork]
+```
+
+**Если таблица `agent_sessions` не существует** (миграция не применена):
+- Banner: "Sessions not yet tracked (TZ_SESSION_RESUME pending)"
+- (Уже реализовано в `get_packet_sessions` через `sqlite_master` check, см. TZ_ADMIN_PANEL §Account for TZ_SESSION_RESUME)
+
+### Endpoint
+
+```
+GET /api/admin/packet/{id}/sessions
+  → { sessions: [...], reason: "ok" | "table_missing" }
+  → (уже описан в TZ_ADMIN_PANEL.md §Account for TZ_SESSION_RESUME)
+```
+
+**Изменение:** теперь `sessions` это список dict'ов с полями:
+```json
+[
+  {
+    "id": "ses_001",
+    "external_id": "ses_abc123",
+    "role": "coder",
+    "executor_id": "coder-deepseek-flash",
+    "attempt_number": 0,
+    "status": "completed",
+    "parent_session_id": null,
+    "created_at": "2026-06-07T10:00:00",
+    "finished_at": "2026-06-07T10:05:00",
+    "duration_seconds": 300,
+    "fork_of": null
+  },
+  {
+    "id": "ses_002",
+    "external_id": "ses_def456",
+    "role": "coder",
+    "executor_id": "coder-deepseek-flash",
+    "attempt_number": 1,
+    "status": "completed",
+    "parent_session_id": "ses_001",
+    "fork_of": "ses_001",
+    "created_at": "2026-06-07T10:10:00",
+    "finished_at": "2026-06-07T10:18:00",
+    "duration_seconds": 480
+  }
+]
+```
+
+---
+
+## Retention integration (2026-06-07, новый раздел)
+
+### Связь с TZ_RETENTION_POLICY.md
+
+**Проблема:** при cleanup worktree (по retention policy) `.opencode/` сессии теряются.
+**Решение:** session metadata хранится в `agent_sessions` таблице → **не теряется** при cleanup worktree. Это даёт:
+- Cross-reference packet ↔ session в admin
+- Возможность resume при следующем attempt (если `external_id` сохранён)
+- Audit trail: кто какую модель запускал на каком attempt
+
+### `.opencode/` cleanup — НЕ НУЖЕН отдельный
+
+С `.opencode/` session storage:
+- LLM-контекст всё равно в DB opencode (SQLite в `~/.local/share/opencode/storage/` или `~/.opencode/opencode.db`)
+- При cleanup worktree теряется только **локальная копия**, opencode DB на хосте остаётся
+- Session resume через `--session <external_id>` работает напрямую с opencode DB
+- Поэтому **отдельный cleanup `.opencode/` НЕ нужен** — opencode сам управляет своей DB (через retention config, см. OpenCode PR #16730)
+
+### Retention для `agent_sessions` (БД-таблица)
+
+| State пакета | Поведение |
+|--------------|-----------|
+| Active (RUNNING) | Записи остаются |
+| MERGED | Записи **остаются** (audit trail + возможен future resume) |
+| REJECTED / FAILED | Записи **остаются** (для анализа) |
+| BLOCKED_FINAL | Записи **остаются** (пока не удалили пакет) |
+| Пакет удалён вручную (SQL) | Каскад `ON DELETE CASCADE` для `agent_sessions` (по `packet_id`) |
+
+**TTL на записи в `agent_sessions` НЕ вводим** (по решению оператора, см. TZ_RETENTION_POLICY §Не-цели).
+
+---
+
+## Порядок реализации (детализированный)
+
+### Phase 1: Schema + Store (1-2 дня)
+
+**Файлы:**
+- `src/grace_control/db/schema.py` — добавить `AgentSession` класс
+- `src/grace_control/db/migrations/00XX_agent_sessions.py` — Alembic migration (если используется) или `db/__init__.py:_SQLITE_COLUMN_MIGRATIONS` (если inline) + CREATE TABLE
+- `src/grace_control/services/session_store.py` — `SessionStore` CRUD
+- `src/grace_control/config/agent_profiles.yaml` — добавить `resume_mode`, `resume_flag`, `fork_flag` в каждый профиль
+
+**Тесты:**
+- `tests/grace_control/db/test_agent_session_schema.py` — миграция применяется
+- `tests/grace_control/services/test_session_store.py` — save/find_latest/find_for_fork/mark_completed
+
+### Phase 2: CLI Integration (2-3 дня)
+
+**Файлы:**
+- `src/grace_control/agent/backend.py` — `ExecutionRequest.resume_session_id`, `fork_session`
+- `src/grace_control/agent/universal_cli_backend.py` — пробросить в `AgentRunService`
+- `src/grace_control/services/agent_run_service.py` — параметры, инъекция CLI flags, `_extract_session_id()`
+- `src/grace_control/config/agent_profiles.yaml` — конкретные флаги для opencode/agy
+
+**Парсинг session_id:**
+```python
+# src/grace_control/services/agent_run_service.py
+import re
+import json
+
+_SESSION_PATTERNS = {
+    "opencode": [
+        re.compile(r'"session_id":\s*"(ses_\w+)"'),
+        re.compile(r'Session:\s*(ses_\w+)'),
+    ],
+    "agy": [
+        re.compile(r'Conversation ID:\s*(\S+)'),
+    ],
+}
+
+def _extract_session_id(stdout: str, backend: str) -> str | None:
+    for pat in _SESSION_PATTERNS.get(backend, []):
+        m = pat.search(stdout)
+        if m:
+            return m.group(1)
+    # Try JSON parse
+    try:
+        data = json.loads(stdout)
+        if isinstance(data, dict) and "session_id" in data:
+            return data["session_id"]
+    except (json.JSONDecodeError, TypeError):
+        pass
+    return None
+```
+
+**Тесты:**
+- `tests/grace_control/services/test_agent_run_service.py` — resume flags в command
+- `tests/grace_control/services/test_session_id_extraction.py` — все regex паттерны
+
+### Phase 3: Pipeline Wiring (2-3 дня)
+
+**Файлы:**
+- `src/grace_control/adapters/packet_executor.py:_call_executor` — session lookup перед run, save после run
+- `src/grace_control/core/feature_recovery.py` — `RecoveryDecision.resume_session_id`, `fork_session`
+- `src/grace_control/core/recovery_controller.py` — `_apply_decision` вызывает `SessionStore`:
+  - `RETRY_SAME_CODER` → `find_latest(role="coder", executor_id=same)` → `resume_session_id`
+  - `SWITCH_CODER` → `find_for_fork(role="coder")` → `resume_session_id` + `fork=True`
+  - `ARCHITECT_REPACK` → `find_latest(role="architect")` → `resume_session_id`
+
+**Тесты:**
+- `tests/grace_control/core/test_recovery_with_resume.py` — RETRY передаёт session
+- `tests/grace_control/core/test_recovery_with_fork.py` — SWITCH передаёт session + fork=True
+- `tests/grace_control/adapters/test_packet_executor_session.py` — lookup + save
+
+### Phase 4: Admin UI (1-2 дня)
+
+**Файлы:**
+- `src/grace_control/services/admin_aggregation_service.py` — `get_packet_sessions(packet_id)`:
+  - Проверить наличие таблицы `agent_sessions` через `sqlite_master` (forward-compat)
+  - Если есть → query `SELECT * FROM agent_sessions WHERE packet_id=? ORDER BY created_at`
+  - Если нет → `{sessions: [], reason: "table_missing"}`
+- `src/grace_control/api/routers/admin_ui.py` — endpoint `GET /api/admin/packet/{id}/sessions` (уже описан в TZ_ADMIN_PANEL)
+- `src/grace_control/ui/templates/admin/_tab.html` — Sessions tab content
+- `src/grace_control/ui/static/admin.css` — session chain styles (`.session-chain`, `.session-node`, `.session-fork-arrow`)
+
+**Тесты:**
+- `tests/grace_control/services/test_admin_aggregation_sessions.py` — get_packet_sessions
+- `tests/ui/test_admin_ui_sessions_tab.py` — рендеринг цепочки, banner если table_missing
+
+### Phase 5: Observability + polish (1 день)
+
+**Файлы:**
+- `src/grace_control/api/routers/trace.py` — добавить session chain в `grace trace --packet <id>`
+- `src/grace_control/services/trace_service.py` — `get_session_chain(packet_id)` → список сессий с fork arrows
+- CLI: `grace trace --session <external_id>` — показать packet context для данной сессии
+
+**Тесты:**
+- `tests/grace_control/api/test_trace_with_sessions.py` — trace выводит chain
+
+---
+
+## Метрики успеха
+
+| Метрика | Без resume | С resume | Как измерить |
+|---------|-----------|----------|--------------|
+| Токены на retry (coder) | 100% (полный контекст) | ~40% (delta + acceptance errors) | `agent_sessions.prompt_tokens_total` aggregate |
+| Время cold start | ~15-30s | ~5s (прогретый KV-cache) | `agent_sessions.duration_seconds` first attempt |
+| Качество retry | Не знает что пробовал | Видит ошибки, не повторяет | acceptance pass rate per attempt_number |
+| Recovery chain visibility | Только в logs | Admin UI + grace trace | feature flag `session_resume_enabled` |
+
+**KPI для включения (gradual rollout):**
+- 1000 пакетов в `agent_sessions` таблице
+- ≥30% coder attempts используют resume
+- Acceptance pass rate (attempt 2+): ≥2x vs control group
+
+---
+
+## Риски (обновлено 2026-06-07)
+
+| Риск | Вероятность | Митигация |
+|------|-------------|-----------|
+| opencode/agy меняют формат session_id | Medium | Regex с fallback, graceful degradation (без resume) |
+| Слишком длинный контекст при 5+ resume | Medium | Лимит на глубину resume chain (configurable, default 5) |
+| Resume на другой worktree | Low | Session привязана к packet_id, worktree создаётся для того же пакета |
+| Fork не поддерживается бэкендом | Low | Fallback на новую сессию, log warning |
+| OpenCode session потеряна (`.opencode/` cleanup) | Low | Resume через `external_id` в opencode DB, не через `.opencode/` |
+| `agent_sessions` migration не применена | Medium | Forward-compat через `sqlite_master` check (уже есть) |
 
 ---
 
