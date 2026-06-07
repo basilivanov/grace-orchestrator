@@ -102,6 +102,70 @@ def _check_evidence_kind(
             return any(req.pattern in f.read_text() for f in log_dir.rglob("*") if f.is_file())
         return any(log_dir.rglob("*"))
 
+    # TZ_FRONTEND_ACCEPTANCE P0 — new browser/visual evidence kinds
+    if req.kind == "screenshot":
+        browser_dir = worktree_path / "browser" if worktree_path else Path()
+        if not browser_dir.exists():
+            return False
+        if req.pattern:
+            return any(browser_dir.rglob(req.pattern))
+        pngs = list(browser_dir.rglob("*.png"))
+        return len(pngs) > 0 and all(p.stat().st_size > 0 for p in pngs)
+
+    if req.kind == "dom_snapshot":
+        browser_dir = worktree_path / "browser" if worktree_path else Path()
+        if not browser_dir.exists():
+            return False
+        if req.pattern:
+            matches = list(browser_dir.rglob(req.pattern))
+            return len(matches) > 0
+        html_files = list(browser_dir.rglob("*.html"))
+        return len(html_files) > 0
+
+    if req.kind == "console_log":
+        browser_dir = worktree_path / "browser" if worktree_path else Path()
+        if not browser_dir.exists():
+            return False
+        log_files = list(browser_dir.rglob("*.log"))
+        if not log_files:
+            return False
+        # If pattern is "no_errors", fail if any log contains "error" (case-insensitive)
+        if req.pattern == "no_errors":
+            for f in log_files:
+                content = f.read_text().lower()
+                if "error" in content:
+                    return False
+            return True
+        return any(req.pattern in f.read_text() for f in log_files) if req.pattern else True
+
+    if req.kind == "network_log":
+        browser_dir = worktree_path / "browser" if worktree_path else Path()
+        if not browser_dir.exists():
+            return False
+        har_files = list(browser_dir.rglob("*.har")) + list(browser_dir.rglob("*.json"))
+        if not har_files:
+            return False
+        if req.pattern:
+            return any(req.pattern in f.read_text() for f in har_files)
+        return True
+
+    if req.kind == "visual_diff":
+        browser_dir = worktree_path / "browser" if worktree_path else Path()
+        if not browser_dir.exists():
+            return False
+        diff_files = list(browser_dir.rglob("*diff*.png"))
+        if not diff_files:
+            return False
+        # Pattern like "max_diff_pct=0.005" — parse threshold
+        if req.pattern and req.pattern.startswith("max_diff_pct="):
+            max_pct = float(req.pattern.split("=", 1)[1])
+            for df in diff_files:
+                if df.stat().st_size > 0:
+                    # Diff file exists and is non-empty → regression detected
+                    return False
+            return True
+        return len([d for d in diff_files if d.stat().st_size == 0]) > 0
+
     return False
 
 

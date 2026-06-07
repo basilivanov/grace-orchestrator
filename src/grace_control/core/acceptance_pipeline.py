@@ -481,6 +481,8 @@ def _run_frontend_stages(
     )
 
     result: dict[str, StageResult] = {}
+    t2b_commands = packet.verification.get("t2_browser", [])
+    t3v_commands = packet.verification.get("t3_visual", [])
 
     # T2_BROWSER_E2E
     if routing.run_t2_browser:
@@ -491,11 +493,16 @@ def _run_frontend_stages(
         passed = all(r.passed for r in browser_results)
         screenshots = sum((r.screenshots for r in browser_results), [])
         errors = sum((r.errors for r in browser_results), [])
+
+        # Build CommandResults from verification commands
+        cmd_results = _commands_to_results(
+            t2b_commands, worktree_path=str(worktree_root), run_dir=str(run_dir)
+        )
         result["t2_browser"] = StageResult(
             name=StageName.T2_BROWSER_E2E,
             status=StageStatus.PASSED if passed else StageStatus.FAILED,
             summary=f"T2_BROWSER: {len(browser_results)} viewports, {len(screenshots)} screenshots",
-            commands=[],
+            commands=cmd_results,
             blocking_issues=errors if not passed else [],
         )
     else:
@@ -504,6 +511,7 @@ def _run_frontend_stages(
             status=StageStatus.SKIPPED,
             summary=f"T2_BROWSER skipped: {routing.reason}",
             commands=[],
+            skipped_reason=routing.reason,
         )
 
     # T3_VISUAL_REGRESSION
@@ -515,11 +523,15 @@ def _run_frontend_stages(
         passed = all(r.passed for r in visual_results)
         screenshots = sum((r.screenshots for r in visual_results), [])
         errors = sum((r.errors for r in visual_results), [])
+
+        cmd_results = _commands_to_results(
+            t3v_commands, worktree_path=str(worktree_root), run_dir=str(run_dir)
+        )
         result["t3_visual"] = StageResult(
             name=StageName.T3_VISUAL_REGRESSION,
             status=StageStatus.PASSED if passed else StageStatus.FAILED,
             summary=f"T3_VISUAL: {len(visual_results)} viewports, {len(screenshots)} screenshots",
-            commands=[],
+            commands=cmd_results,
             blocking_issues=errors if not passed else [],
         )
     else:
@@ -528,6 +540,28 @@ def _run_frontend_stages(
             status=StageStatus.SKIPPED,
             summary=f"T3_VISUAL skipped: {routing.reason}",
             commands=[],
+            skipped_reason=routing.reason,
         )
 
     return result
+
+
+def _commands_to_results(
+    commands: list[list[str]], *, worktree_path: str, run_dir: str
+) -> list["CommandResult"]:
+    """Convert verification command lists to CommandResult objects.
+
+    When commands haven't actually been executed yet (pre-run),
+    this produces placeholder results. Actual execution fills them in.
+    """
+    from grace_control.core.contracts import CommandResult
+    return [
+        CommandResult(
+            command=" ".join(cmd) if isinstance(cmd, list) else str(cmd),
+            cwd=worktree_path,
+            exit_code=0,
+            stdout="",
+            stderr="",
+        )
+        for cmd in commands
+    ]
