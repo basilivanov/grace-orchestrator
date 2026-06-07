@@ -48,6 +48,7 @@ class BrowserRouting:
     run_t2_browser: bool = False
     run_t3_visual: bool = False
     telegram_mode: str = "mock"
+    telegram_bot_token_env: str = ""  # TZ_FRONTEND_ACCEPTANCE P1
     viewports: list[str] = field(default_factory=lambda: ["android", "iphone"])
     max_diff_pct: float = 0.001
     dev_command: str = "npm run dev"
@@ -116,6 +117,7 @@ def resolve_browser_routing(
         run_t2_browser=run_browser,
         run_t3_visual=run_visual,
         telegram_mode=telegram_mode,
+        telegram_bot_token_env=spec.get("telegram_bot_token_env", ""),
         viewports=spec.get("viewports", ["android", "iphone"]),
         max_diff_pct=visual.get("max_diff_pct", 0.001),
         dev_command=spec.get("dev_command", "npm run dev"),
@@ -135,6 +137,7 @@ def run_t2_browser_e2e(
     *,
     telegram_mode: str = "mock",
     custom_cmds: list[list[str]] | None = None,
+    telegram_bot_token_env: str = "",
 ) -> list[BrowserStageResult]:
     """Run T2_BROWSER_E2E — Playwright E2E tests per viewport.
 
@@ -152,6 +155,7 @@ def run_t2_browser_e2e(
                 base_url=routing.base_url,
                 dev_command=routing.dev_command,
                 telegram_mode=telegram_mode,
+                telegram_bot_token_env=telegram_bot_token_env,
             )
             result = runner.run_e2e(custom_cmds=custom_cmds)
             results.append(result)
@@ -176,6 +180,7 @@ def run_t3_visual_regression(
     *,
     telegram_mode: str = "mock",
     custom_cmds: list[list[str]] | None = None,
+    telegram_bot_token_env: str = "",
 ) -> list[BrowserStageResult]:
     """Run T3_VISUAL_REGRESSION — Playwright visual diff per viewport.
 
@@ -193,6 +198,7 @@ def run_t3_visual_regression(
                 base_url=routing.base_url,
                 dev_command=routing.dev_command,
                 telegram_mode=telegram_mode,
+                telegram_bot_token_env=telegram_bot_token_env,
             )
             result = runner.run_visual(max_diff_pct=routing.max_diff_pct,
                                        custom_cmds=custom_cmds)

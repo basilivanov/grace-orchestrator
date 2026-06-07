@@ -56,6 +56,7 @@ class PlaywrightRunner:
         base_url: str = "http://localhost:3000",
         dev_command: str = "npm run dev",
         telegram_mode: str = "mock",
+        telegram_bot_token_env: str = "",
     ) -> None:
         self._worktree = Path(worktree_path)
         self._run_dir = Path(run_dir)
@@ -63,7 +64,9 @@ class PlaywrightRunner:
         self._base_url = base_url
         self._dev_command = dev_command
         self._telegram_mode = telegram_mode
+        self._telegram_bot_token_env = telegram_bot_token_env
         self._dev_proc: subprocess.Popen | None = None
+        self._bridge: "TelegramBridgeService | None" = None
 
     @property
     def viewport_config(self) -> dict:
@@ -98,31 +101,7 @@ class PlaywrightRunner:
                 result.command = " ; ".join(" ".join(c) for c in custom_cmds)
             return result
 
-        # TZ_FRONTEND_ACCEPTANCE P1/3.3 — real Telegram bridge (STRICT+real)
-        ngrok_url = ""
-        bridge = None
-        if self._telegram_mode == "real":
-            try:
-                from grace_control.services.telegram_bridge_service import TelegramBridgeService
-                bridge = TelegramBridgeService(
-                    worktree_path=self._worktree,
-                    dev_port=int(self._base_url.rsplit(":", 1)[-1]) if ":" in self._base_url else 3000,
-                )
-                bridge_result = bridge.start()
-                if bridge_result.ok:
-                    ngrok_url = bridge_result.public_url
-                    _log.info("telegram_bridge_active", ngrok_url=ngrok_url)
-                else:
-                    _log.warn("telegram_bridge_failed", error=bridge_result.error)
-                    # Downgrade to mock — real mode failed but we continue
-                    self._telegram_mode = "mock"
-                    self._inject_telegram_mock()
-            except Exception as e:
-                _log.error("telegram_bridge_error", error=str(e)[:200])
-                self._telegram_mode = "mock"
-                self._inject_telegram_mock()
-
-        # Check for test files
+        # Check for test files (before dev-server/bridge to fail early)
         test_pattern = (
             f"tests/e2e/**/*.spec.ts" if mode == "e2e"
             else f"tests/e2e/**/*.visual.spec.ts"
@@ -137,13 +116,34 @@ class PlaywrightRunner:
             return result
 
         t0 = time.time()
-        dev_started = False
+        ngrok_url = ""
+        self._bridge = None
         try:
             # Start dev server — must be inside try so cleanup runs on failure
-            dev_started = self._start_dev_server()
-            if not dev_started:
+            if not self._start_dev_server():
                 result.errors = ["Dev server failed to start"]
                 return result
+
+            # TZ_FRONTEND_ACCEPTANCE P1/3.3 — real Telegram bridge AFTER dev-server is ready.
+            if self._telegram_mode == "real":
+                from grace_control.services.telegram_bridge_service import TelegramBridgeService
+                dev_port = int(self._base_url.rsplit(":", 1)[-1]) if ":" in self._base_url else 3000
+                self._bridge = TelegramBridgeService(
+                    worktree_path=self._worktree,
+                    dev_port=dev_port,
+                    bot_token_env=self._telegram_bot_token_env,
+                )
+                bridge_result = self._bridge.start()
+                if bridge_result.ok:
+                    ngrok_url = bridge_result.public_url
+                    _log.info("telegram_bridge_active", ngrok_url=ngrok_url)
+                else:
+                    # STRICT+real: bridge failure is a hard fail.
+                    # NORMAL+real was already downgraded to mock by routing.
+                    _log.error("telegram_bridge_failed_on_strict", error=bridge_result.error)
+                    result.passed = False
+                    result.errors = [f"Telegram bridge failed (STRICT+real): {bridge_result.error}"]
+                    return result
 
             # Run Playwright
             browser_dir = self._run_dir / "browser" / self._viewport
@@ -219,8 +219,9 @@ class PlaywrightRunner:
             _log.error("playwright_error", mode=mode, viewport=self._viewport, error=str(e)[:200])
         finally:
             self._stop_dev_server()
-            if bridge:
-                bridge.stop()
+            if self._bridge:
+                self._bridge.stop()
+                self._bridge = None
 
         return result
 

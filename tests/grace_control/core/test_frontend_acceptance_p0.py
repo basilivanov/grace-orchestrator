@@ -494,3 +494,117 @@ class TestPlaywrightInstall:
                 r = runner.run_e2e()
                 mock_install.assert_called_once()  # install was attempted
                 assert r.passed or "test files" in str(r.errors).lower()
+
+    def test_playwright_install_idempotent_skip(self):
+        """When chromium is already installed, install is skipped entirely."""
+        from unittest.mock import patch
+        from importlib import reload
+        import grace_control.services.process_supervisor as ps
+
+        # mock subprocess.run: first call succeeds (version check)
+        calls = []
+        def fake_run(cmd, **kwargs):
+            calls.append(" ".join(cmd) if isinstance(cmd, list) else str(cmd))
+            if "--version" in str(cmd):
+                return type("R", (), {"returncode": 0})()
+            return type("R", (), {"returncode": 0})()
+
+        with patch("subprocess.run", side_effect=fake_run):
+            res = ps.playwright_install_browsers()
+            assert res is True
+            # Only version check ran, not install
+            assert not any("install chromium" in c for c in calls), (
+                f"install should be skipped when version check passes, calls: {calls}"
+            )
+
+
+class TestTelegramBridgeIntegration:
+    """STRICT+real bridge integration: failure → hard fail, cleanup."""
+
+    def test_bridge_failure_fails_strict(self, tmp_path: Path):
+        from grace_control.services.playwright_runner import PlaywrightRunner
+        from unittest.mock import patch, MagicMock
+        runner = PlaywrightRunner(
+            worktree_path=tmp_path, run_dir=tmp_path / "runs",
+            viewport="android", base_url="http://localhost:3000",
+            dev_command="echo test", telegram_mode="real",
+            telegram_bot_token_env="MY_TOKEN",
+        )
+        runner._has_playwright = lambda: True
+        (tmp_path / "tests" / "e2e").mkdir(parents=True)
+        (tmp_path / "tests" / "e2e" / "test.spec.ts").write_text("// test")
+        runner._start_dev_server = lambda: True
+        runner._stop_dev_server = lambda: None
+
+        # Mock bridge to fail
+        class FakeBridge:
+            def start(self):
+                from grace_control.services.telegram_bridge_service import BridgeResult
+                return BridgeResult(error="ngrok not installed")
+            def stop(self):
+                pass
+
+        real_bridge_cls = "grace_control.services.telegram_bridge_service.TelegramBridgeService"
+        with patch(real_bridge_cls, return_value=FakeBridge()):
+            r = runner.run_e2e()
+            assert r.passed is False, f"STRICT+real bridge failure must fail, got passed={r.passed}"
+            assert "ngrok not installed" in str(r.errors)
+
+    def test_bridge_stopped_on_dev_server_success(self, tmp_path: Path):
+        """bridge.stop() is called in finally when dev-server succeeds."""
+        from grace_control.services.playwright_runner import PlaywrightRunner
+        from unittest.mock import patch, MagicMock
+        runner = PlaywrightRunner(
+            worktree_path=tmp_path, run_dir=tmp_path / "runs",
+            viewport="android", base_url="http://localhost:3000",
+            dev_command="echo test", telegram_mode="real",
+            telegram_bot_token_env="MY_TOKEN",
+        )
+        runner._has_playwright = lambda: True
+        (tmp_path / "tests" / "e2e").mkdir(parents=True)
+        (tmp_path / "tests" / "e2e" / "test.spec.ts").write_text("// test")
+        runner._start_dev_server = lambda: True  # succeeds, so bridge IS created
+        runner._stop_dev_server = lambda: None
+
+        bridge_stop_called = []
+        class FakeBridge:
+            def start(self):
+                from grace_control.services.telegram_bridge_service import BridgeResult
+                return BridgeResult(ok=True, public_url="https://abc.ngrok.io")
+            def stop(self):
+                bridge_stop_called.append(True)
+
+        with patch("grace_control.services.telegram_bridge_service.TelegramBridgeService", return_value=FakeBridge()):
+            runner.run_e2e()
+            assert bridge_stop_called, "bridge.stop() must be called on successful run"
+
+    def test_bot_token_env_propagated(self, tmp_path: Path):
+        from grace_control.services.playwright_runner import PlaywrightRunner
+        from unittest.mock import patch, MagicMock
+        runner = PlaywrightRunner(
+            worktree_path=tmp_path, run_dir=tmp_path / "runs",
+            viewport="android", base_url="http://localhost:3000",
+            dev_command="echo test", telegram_mode="real",
+            telegram_bot_token_env="MY_CUSTOM_TOKEN",
+        )
+        runner._has_playwright = lambda: True
+        (tmp_path / "tests" / "e2e").mkdir(parents=True)
+        (tmp_path / "tests" / "e2e" / "test.spec.ts").write_text("// test")
+        runner._start_dev_server = lambda: True
+        runner._stop_dev_server = lambda: None
+
+        captured_env = []
+        class SpyBridge:
+            def __init__(self, worktree_path, dev_port, bot_token_env=""):
+                captured_env.append(bot_token_env)
+            def start(self):
+                from grace_control.services.telegram_bridge_service import BridgeResult
+                return BridgeResult(ok=True, public_url="https://abc.ngrok.io")
+            def stop(self):
+                pass
+
+        with patch("grace_control.services.telegram_bridge_service.TelegramBridgeService", side_effect=SpyBridge):
+            runner.run_e2e()
+            assert captured_env and captured_env[0] == "MY_CUSTOM_TOKEN", (
+                f"Expected MY_CUSTOM_TOKEN, got {captured_env}"
+            )
