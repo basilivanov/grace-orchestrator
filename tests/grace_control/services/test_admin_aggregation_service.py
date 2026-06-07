@@ -28,6 +28,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
+from sqlalchemy import text
 
 from grace_control.db import get_db, init_db
 from grace_control.db.schema import (
@@ -333,6 +334,10 @@ def test_logs_tail_truncates(db_url, svc, session, tmp_path):
 
 
 def test_sessions_returns_table_missing_when_no_table(db_url, svc, session):
+    # Table exists by default (create_all). Drop it to test the
+    # forward-compat path where migration hasn't been applied yet.
+    session.execute(text("DROP TABLE IF EXISTS agent_sessions"))
+    session.commit()
     out = svc.get_packet_sessions(session, "p1")
     assert out["reason"] == "table_missing"
     assert out["sessions"] == []

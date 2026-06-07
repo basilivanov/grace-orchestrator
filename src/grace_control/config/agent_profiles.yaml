@@ -1,6 +1,9 @@
 agents:
   architect-premium:
     backend: cli
+    resume_mode: always
+    resume_flag: "--session"
+    fork_flag: "--fork"
     command:
     - opencode
     - run
@@ -17,6 +20,9 @@ agents:
     model: deepseek/deepseek-v4-pro
   coder-deepseek-flash:
     backend: cli
+    resume_mode: on_retry
+    resume_flag: "--session"
+    fork_flag: "--fork"
     command:
     - opencode
     - run
@@ -106,6 +112,9 @@ agents:
     timeout_seconds: 900
   coder-sonnet:
     backend: cli
+    resume_mode: on_retry
+    resume_flag: "--session"
+    fork_flag: "--fork"
     command:
     - opencode
     - run
@@ -125,6 +134,8 @@ agents:
     timeout_seconds: 900
   coder_agy:
     backend: cli
+    resume_mode: on_retry
+    resume_flag: "--conversation"
     command:
     - agy
     - run
@@ -138,6 +149,9 @@ agents:
     timeout_seconds: 900
   coder_opencode:
     backend: cli
+    resume_mode: on_retry
+    resume_flag: "--session"
+    fork_flag: "--fork"
     command:
     - opencode
     - run
@@ -163,6 +177,7 @@ agents:
     timeout_seconds: 900
   context-collector-flash:
     backend: cli
+    resume_mode: never
     command:
     - opencode
     - run
@@ -198,6 +213,7 @@ agents:
     timeout_seconds: 900
   verifier-cheap:
     backend: cli
+    resume_mode: never
     command:
     - opencode
     - run

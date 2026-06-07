@@ -205,4 +205,32 @@ class SelfEvolutionSession(Base):
     rollback_plan = Column(JSON, nullable=True)
     prompt = Column(Text, nullable=True)
 
+
+class AgentSession(Base):
+    """Tracks LLM sessions for resume/fork across attempts.
+
+    TZ_SESSION_RESUME.md Phase 1. Records every agent run (coder,
+    architect, verifier, reviewer) so the operator can:
+    - View session chain in admin UI (cross-reference packet ↔ session)
+    - Recover from worktree cleanup (sessions survive in DB)
+    - Audit which model ran which attempt
+    """
+
+    __tablename__ = "agent_sessions"
+
+    id = Column(String, primary_key=True)            # internal UID (ses_XXXX)
+    external_id = Column(String, nullable=True, index=True)  # session_id from opencode/agy
+    packet_id = Column(String, nullable=False, index=True)
+    run_id = Column(String, nullable=True, index=True)  # PacketRun.id
+    role = Column(String, nullable=False)             # coder | architect | verifier | reviewer
+    executor_id = Column(String, nullable=True)       # agent profile ID
+    backend = Column(String, nullable=False)          # opencode | agy
+    attempt_number = Column(Integer, nullable=False)
+    status = Column(String, nullable=False, default="active")  # active | completed | failed | forked
+    parent_session_id = Column(String, nullable=True) # for forks — points to original
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    finished_at = Column(DateTime, nullable=True)
+    # Forward-compat: if the table doesn't exist, callers should
+    # detect via sqlite_master and skip silently.
+
 # END_BLOCK_TABLES
