@@ -3,12 +3,12 @@
 Asserts:
 1. `api/main.py` is wiring-only (<150 lines) and contains no DB-aggregation.
 2. `create_app()` is the entrypoint; main.py delegates to it.
-3. Routers split: dashboard, artifacts, ws, health, trace, events, diagnostics
-   each own their routes.
-4. Lifespan moved out of main.py into api/lifespan.py.
-5. DashboardService owns DB-aggregation for /api/dashboard.
-6. Artifact path traversal is still blocked.
-7. All previously-passing endpoints still respond.
+3. Lifespan moved out of main.py into api/lifespan.py.
+4. Artifact path traversal is still blocked.
+
+NOTE: dashboard router/service tests were deleted in admin v2 (TZ_ADMIN_PANEL)
+because the old dashboard was replaced with the new `/admin` SPA + `/api/admin/*`
+API. See src/grace_control/api/routers/admin.py and tests/grace_control/api/test_admin_router.py.
 """
 import os
 import time
@@ -42,16 +42,13 @@ def test_main_py_delegates_to_create_app():
     assert "app = create_app()" in text
 
 
-def test_app_factory_wires_all_routers():
+def test_app_factory_wires_admin_router():
     text = APP_FACTORY.read_text()
-    for router in (
-        "dashboard.router", "health.router", "ws.router",
-        "features.router", "packets.router", "artifacts.router",
-        "workers.router", "architect.router", "self_evolution.router",
-        "recovery.router", "trace.router", "events.router",
-        "diagnostics.router",
-    ):
-        assert router in text, f"app_factory does not include {router}"
+    assert "admin.router" in text, "app_factory must include admin.router"
+    assert "/api/admin" in text, "app_factory must expose /api/admin/* routes"
+    # Admin SPA shell + static mount.
+    assert "/admin" in text
+    assert "StaticFiles" in text
 
 
 def test_lifespan_moved_out_of_main_py():
@@ -63,20 +60,6 @@ def test_lifespan_moved_out_of_main_py():
     assert "check_feature_completion" in text
     assert "settings.wave_gate_interval_seconds" in text
     assert "settings.feature_gate_interval_seconds" in text
-
-
-def test_dashboard_service_owns_db_aggregation():
-    """The dashboard DB-aggregation loops must live in services/, not routers/."""
-    from pathlib import Path
-    services_dir = ROOT / "src" / "grace_control" / "services"
-    dash_service = services_dir / "dashboard_service.py"
-    assert dash_service.exists(), "DashboardService must live in services/"
-    src = dash_service.read_text()
-    assert "db.query(Feature)" in src
-    # The router must NOT contain the loops.
-    dash_router = (ROOT / "src" / "grace_control" / "api" / "routers" / "dashboard.py").read_text()
-    assert "db.query" not in dash_router
-    assert "DashboardService" in dash_router
 
 
 def test_artifact_path_traversal_blocked(tmp_path, monkeypatch):
@@ -122,33 +105,45 @@ def test_artifact_path_traversal_blocked(tmp_path, monkeypatch):
     assert r_bad.status_code == 403, r_bad.text
 
 
-def test_dashboard_routes_still_respond(tmp_path, monkeypatch):
-    """/, /test, /api/dashboard still answer 200/HTML after the move."""
+def test_admin_routes_still_respond(tmp_path, monkeypatch):
+    """Admin v2 endpoints answer 200 after the cutover from dashboard."""
     from grace_control.api.main import app
-    db_url = f"sqlite:///{tmp_path}/w5_dash.db"
+    db_url = f"sqlite:///{tmp_path}/w5_admin.db"
     os.environ["GRACE_DB_URL"] = db_url
     from grace_control.db import init_db
     init_db(db_url)
     client = TestClient(app)
-    r = client.get("/api/dashboard")
+    assert client.get("/api/admin/overview").status_code == 200
+    assert client.get("/api/admin/system/health").status_code == 200
+    assert client.get("/api/admin/system/workers").status_code == 200
+    assert client.get("/api/admin/search").status_code == 200
+    # Admin shell.
+    r = client.get("/admin")
     assert r.status_code == 200
-    body = r.json()
-    assert "features" in body
-    assert "workers" in body
-    assert "stats" in body
+    assert "<html" in r.text
 
 
-def test_openapi_surface_unchanged_after_w5():
-    """No paths were removed by the W5 split."""
+def test_openapi_contains_admin_endpoints():
+    """All new admin endpoints must be in /openapi.json after v2 cutover."""
     from grace_control.api.main import app
     client = TestClient(app)
     r = client.get("/openapi.json")
     paths = r.json()["paths"]
     must_have = [
-        "/api/dashboard", "/api/trace/packets/{packet_id}",
-        "/api/events", "/api/diagnostics/state",
-        "/api/architect/plan", "/api/packets/claim",
-        "/api/workers/", "/api/recovery/evaluate/{packet_id}",
+        "/api/admin/overview",
+        "/api/admin/packet/{packet_id}/detail",
+        "/api/admin/packet/{packet_id}/blocking_decision",
+        "/api/admin/packet/{packet_id}/timeline",
+        "/api/admin/packet/{packet_id}/runs",
+        "/api/admin/packet/{packet_id}/sessions",
+        "/api/admin/packet/{packet_id}/runs/{run_id}/artifacts",
+        "/api/admin/packet/{packet_id}/runs/{run_id}/artifacts/file",
+        "/api/admin/packet/{packet_id}/runs/{run_id}/logs",
+        "/api/admin/feature/{feature_id}/summary",
+        "/api/admin/search",
+        "/api/admin/system/health",
+        "/api/admin/system/workers",
+        "/admin",
     ]
     for p in must_have:
-        assert p in paths, f"OpenAPI lost {p} after W5"
+        assert p in paths, f"OpenAPI missing {p}"
