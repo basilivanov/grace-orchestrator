@@ -1,0 +1,48 @@
+{# Stats bar fragment — 1-click failed/blocked/running chips #}
+{% set stats = overview.stats or {} %}
+{% set states = stats.by_state or {} %}
+{% set h = overview.health or {} %}
+{% set blocked = (states.blocked or 0) + (states.blocked_recoverable or 0) + (states.blocked_final or 0) %}
+{% set failed = (states.rejected or 0) + (states.failed or 0) %}
+{% set running = states.running or 0 %}
+<div class="stats-bar">
+  <span class="stats-title">Pipeline</span>
+  <span class="stat {{ 'ok' if h.supervisor_alive else 'err' }}"
+        title="{{ 'Supervisor alive' if h.supervisor_alive else 'Supervisor DOWN' }}">
+    <span class="n">{{ '●' if h.supervisor_alive else '○' }}</span> supervisor
+  </span>
+  <span class="stat" title="Workers alive"><span class="n">{{ stats.workers or 0 }}</span> workers</span>
+  <span class="stat" title="Features"><span class="n">{{ stats.features or 0 }}</span> features</span>
+  <span class="stat" title="Packets"><span class="n">{{ stats.packets or 0 }}</span> packets</span>
+  {% if running %}
+  <span class="stat ok clickable"
+        hx-get="/admin/_partial/timeline?filter=running"
+        hx-target="#timeline-pane"
+        hx-swap="outerHTML"
+        hx-push-url="true"
+        title="Packets running — click to filter">
+    <span class="n">{{ running }}</span> running
+  </span>
+  {% endif %}
+  {% if blocked %}
+  <span class="stat warn clickable"
+        hx-get="/admin/_partial/timeline?filter=blocked"
+        hx-target="#timeline-pane"
+        hx-swap="outerHTML"
+        hx-push-url="true"
+        title="Packets blocked — click to filter (1-click to all blocked)">
+    <span class="n">{{ blocked }}</span> blocked
+  </span>
+  {% endif %}
+  {% if failed %}
+  <span class="stat err clickable"
+        hx-get="/admin/_partial/timeline?filter=failed"
+        hx-target="#timeline-pane"
+        hx-swap="outerHTML"
+        hx-push-url="true"
+        title="Packets failed — click to filter (1-click to all failed)">
+    <span class="n">{{ failed }}</span> failed
+  </span>
+  {% endif %}
+</div>
+<script>setHealth({{ (h or {}) | tojson }});</script>

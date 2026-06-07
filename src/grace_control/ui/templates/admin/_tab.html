@@ -1,0 +1,84 @@
+{# Tab body — rendered as hx-get response, swaps only #packet-tab-content #}
+{% if not packet %}
+  <div class="banner err">Packet not found</div>
+{% else %}
+  {% set p = packet %}
+  {% if active_tab == 'timeline' %}
+    <div class="muted small mb">Total: {{ timeline_total or 0 }}</div>
+    <table class="responsive-table">
+      <thead><tr><th>Time</th><th>Event</th><th>Component</th><th>Reason</th><th>Payload</th></tr></thead>
+      <tbody>
+        {% for ev in (timeline_events or []) %}
+        <tr>
+          <td class="mono">{{ ev.timestamp }}</td>
+          <td class="mono">{{ ev.event_type }}</td>
+          <td class="mono">{{ ev.component or '' }}</td>
+          <td class="small">{{ ev.reason or '' }}</td>
+          <td>
+            {% if ev.payload and (ev.payload | length) > 0 %}
+              <details><summary>view</summary>
+                <pre>{{ ev.payload | tojson(indent=2) }}</pre>
+              </details>
+            {% else %}<span class="muted">—</span>{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% elif active_tab == 'spec' %}
+    <pre>{{ p.spec_json | tojson(indent=2) if p.spec_json is mapping else (p.spec_json or '{}') }}</pre>
+  {% elif active_tab == 'runs' %}
+    <table class="responsive-table">
+      <thead><tr><th>Run</th><th>Status</th><th>Worker</th><th>Model</th><th>Duration</th></tr></thead>
+      <tbody>
+        {% for r in (runs or []) %}
+        <tr>
+          <td class="mono">{{ r.run_id }}</td>
+          <td><span class="pill {{ r.status }}">{{ r.status }}</span></td>
+          <td class="mono">{{ r.worker_id or '—' }}</td>
+          <td class="mono small">{{ r.model or '—' }}</td>
+          <td class="mono small">{{ r.duration_ms }} ms</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% elif active_tab == 'sessions' %}
+    {% if sessions and sessions.reason == 'table_missing' %}
+      <div class="banner warn">Sessions table not yet created (TZ_SESSION_RESUME pending).</div>
+    {% elif sessions and sessions.sessions %}
+      <ul>{% for s in sessions.sessions %}<li>{{ s.id }} — {{ s.role }} (attempt {{ s.attempt }})</li>{% endfor %}</ul>
+    {% else %}
+      <div class="empty">No sessions</div>
+    {% endif %}
+  {% elif active_tab == 'evidence' %}
+    {% if evidence and evidence.stages %}
+      <h3>Acceptance stages</h3>
+      <ul>
+        {% for st in evidence.stages %}
+          <li>{{ st.name }}: {{ st.status }}
+            {% if st.blocking_issues %}
+              <ul>{% for iss in st.blocking_issues %}<li class="text-err">{{ iss }}</li>{% endfor %}</ul>
+            {% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <div class="empty">No evidence yet</div>
+    {% endif %}
+  {% elif active_tab == 'logs' %}
+    <div class="muted small mb">Showing last 200 lines of stderr</div>
+    <pre>{{ logs_text or '(no logs)' }}</pre>
+  {% elif active_tab == 'artifacts' %}
+    {% if artifacts and artifacts.tree %}
+      <ul>{% for n in artifacts.tree recursive %}
+        <li>{{ n.name }} {% if n.size %}<span class="muted">({{ n.size }} B)</span>{% endif %}
+          {% if n.children %}<ul>{{ loop(n.children) }}</ul>{% endif %}
+        </li>
+      {% endfor %}</ul>
+    {% else %}
+      <div class="empty">No artifacts</div>
+    {% endif %}
+  {% else %}
+    <div class="banner warn">Unknown tab: {{ active_tab }}</div>
+  {% endif %}
+{% endif %}

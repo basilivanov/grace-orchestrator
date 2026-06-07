@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}GRACE Admin · System{% endblock %}
+{% block content %}
+<h2>System</h2>
+<div class="card">
+  <h3>Health</h3>
+  <pre>{{ health | tojson(indent=2) }}</pre>
+</div>
+<div class="card">
+  <h3>Workers</h3>
+  {% if workers %}
+  <table class="responsive-table">
+    <thead><tr><th>ID</th><th>Status</th><th>Current packet</th><th>Heartbeat</th></tr></thead>
+    <tbody>
+      {% for w in workers %}
+      <tr>
+        <td class="mono">{{ w.id }}</td>
+        <td><span class="pill {{ w.status }}">{{ w.status }}</span></td>
+        <td class="mono small">{{ w.current_packet_id or '—' }}</td>
+        <td class="mono small">{{ w.last_heartbeat or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty">No workers</div>
+  {% endif %}
+</div>
+{% endblock %}

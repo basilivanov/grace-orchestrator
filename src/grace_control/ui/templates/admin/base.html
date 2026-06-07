@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}GRACE Admin{% endblock %}</title>
+  <link rel="stylesheet" href="/static/admin.css">
+  <script src="https://unpkg.com/htmx.org@2.0.4" crossorigin="anonymous"></script>
+  <script src="/static/admin.js" defer></script>
+</head>
+<body>
+  <div id="app">
+    <header class="hdr">
+      <a href="/admin" class="logo" data-topnav="true">GRACE</a>
+      <span id="health" class="health">...</span>
+      <span id="clock" class="time">--:--:--</span>
+    </header>
+    <nav id="nav" class="nav">
+      <a href="/admin" data-topnav="true" class="{% if active_nav == 'overview' %}active{% endif %}">Overview</a>
+      <a href="/admin/system" data-topnav="true" class="{% if active_nav == 'system' %}active{% endif %}">System</a>
+    </nav>
+    <main id="main" class="main">
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+</body>
+</html>

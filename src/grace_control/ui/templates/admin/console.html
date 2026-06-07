@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}GRACE Admin · Overview{% endblock %}
+{% block content %}
+{# Stats bar — polls every 5s, swaps only the stats-bar container #}
+<div id="stats-bar-container"
+     hx-get="/admin/_partial/stats"
+     hx-trigger="load, every 5s"
+     hx-swap="innerHTML">
+  {% include "_stats.html" %}
+</div>
+
+<div class="console">
+  {# Master tree (left) — swaps when search changes #}
+  <div class="console-master" id="master-pane">
+    <div class="master-search">
+      <input type="search" name="search" placeholder="search packets…"
+             value="{{ search or '' }}"
+             hx-get="/admin/_partial/master"
+             hx-trigger="input changed delay:200ms, search"
+             hx-target="#master-tree"
+             hx-swap="outerHTML"
+             hx-push-url="false"
+             hx-include="[name='filter']"
+             autocomplete="off">
+      <span class="match-count">{{ total_packets }} packet{{ '' if total_packets == 1 else 's' }}</span>
+    </div>
+    <div id="master-tree"
+         hx-get="/admin/_partial/master"
+         hx-trigger="load"
+         hx-swap="outerHTML"
+         hx-include="[name='search']"
+         hx-push-url="false">
+      {% include "_master.html" %}
+    </div>
+  </div>
+
+  {# Middle pane: feature timeline (swaps on feature click + filter) #}
+  <div class="console-middle" id="timeline-pane">
+    {% include "_timeline.html" %}
+  </div>
+
+  {# Right pane: packet detail (swaps on packet click + tab click) #}
+  <div class="console-detail" id="detail-pane">
+    {% include "_detail.html" %}
+  </div>
+</div>
+{% endblock %}
