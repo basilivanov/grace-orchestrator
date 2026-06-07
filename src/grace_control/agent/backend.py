@@ -40,6 +40,8 @@ class ExecutionRequest:
     session_dir: Path | None = None
     trace_id: str = ""
     evidence_dir: Path | None = None  # canonical run evidence path (W12)
+    resume_session_id: str | None = None  # TZ_SESSION_RESUME §Phase 2
+    fork_session: bool = False            # TZ_SESSION_RESUME §Phase 2 (fork=readonly copy)
 
 
 @dataclass

@@ -3,22 +3,78 @@
 # purpose: Orchestrate a single CLI agent run: render command template,
 #          build env (inheriting parent), handle stdin/file/none input modes,
 #          spawn process with timeout, collect artifacts. No hardcoded CLI names.
+#          Also injects session resume flags (TZ_SESSION_RESUME.md Phase 2)
+#          and extracts session_id from agent stdout.
 # inputs: executor dict (from AgentProfile.to_dict()), context params.
 # returns: dict with accepted, domain_status, stdout, stderr, exit_code, etc.
+#          Includes 'session_id' field when extractable from stdout.
 # side_effects: Spawns subprocess, writes artifacts.
 # error_behavior: Never raises; errors in result dict.
 # END_MODULE_CONTRACT
 # START_MODULE_MAP
 # mapping:   - class: AgentRunService
+#             - function: _extract_session_id
 # END_MODULE_MAP
 
 from __future__ import annotations
+import json
+import re
 from pathlib import Path
 from typing import Any
 from grace_control.services.agent_artifact_collector import AgentArtifactCollector
 from grace_control.services.agent_env_builder import AgentEnvBuilder
 from grace_control.services.command_template_renderer import CommandTemplateRenderer
 from grace_control.services.process_supervisor import ProcessSupervisor
+from grace_control.core.structured_logger import GraceLogger
+
+_log = GraceLogger("agent_run_service")
+
+
+# Session ID extraction patterns per backend (TZ_SESSION_RESUME.md Phase 2)
+_SESSION_PATTERNS: dict[str, list[re.Pattern]] = {
+    "opencode": [
+        re.compile(r'"session_id":\s*"(ses_\w+)"'),
+        re.compile(r'Session:\s*(ses_\w+)'),
+        re.compile(r'Session:\s*(\S+)'),
+    ],
+    "agy": [
+        re.compile(r'Conversation ID:\s*(\S+)'),
+    ],
+    "cli": [  # fallback for unknown backends
+        re.compile(r'"session_id":\s*"(ses_\w+)"'),
+        re.compile(r'Session:\s*(ses_\w+)'),
+    ],
+}
+
+
+def _extract_session_id(stdout: str, backend: str) -> str | None:
+    """Extract the session/external ID from agent stdout.
+
+    Args:
+        stdout: Raw stdout from the agent subprocess.
+        backend: The backend type from the executor dict
+                 (e.g. "opencode", "agy", "cli").
+
+    Returns:
+        The session ID string if found, None otherwise.
+    """
+    patterns = _SESSION_PATTERNS.get(backend, _SESSION_PATTERNS["cli"])
+    for pat in patterns:
+        m = pat.search(stdout)
+        if m:
+            sid = m.group(1)
+            _log.info("session_id_extracted", backend=backend, session_id=sid)
+            return sid
+    # Try JSON parse as last resort
+    try:
+        data = json.loads(stdout)
+        if isinstance(data, dict) and "session_id" in data:
+            sid = data["session_id"]
+            _log.info("session_id_extracted_json", backend=backend, session_id=sid)
+            return str(sid)
+    except (json.JSONDecodeError, TypeError):
+        pass
+    return None
 
 
 class AgentRunService:
@@ -29,7 +85,9 @@ class AgentRunService:
         self._collector = AgentArtifactCollector()
 
     async def run(self, executor: dict, *, packet_id: str, worktree_path: Path, state_root: Path,
-                  packet_markdown: str, timeout_seconds: int = 600, run_dir: Path | None = None) -> dict[str, Any]:
+                  packet_markdown: str, timeout_seconds: int = 600, run_dir: Path | None = None,
+                  resume_session_id: str | None = None,
+                  fork: bool = False) -> dict[str, Any]:
         ctx = {
             "packet_id": packet_id,
             "model": executor.get("model", ""),
@@ -108,6 +166,22 @@ class AgentRunService:
                 rendered_extras.append(pending_flag)
         command = command + rendered_extras
 
+        # TZ_SESSION_RESUME.md Phase 2: inject session resume/fork flags
+        resume_mode = executor.get("resume_mode", "never")
+        if resume_session_id and resume_mode != "never":
+            resume_flag = executor.get("resume_flag", "--session")
+            command.append(resume_flag)
+            command.append(resume_session_id)
+            if fork:
+                fork_flag = executor.get("fork_flag")
+                if fork_flag:
+                    command.append(fork_flag)
+            _log.info("session_resume_injected",
+                      packet_id=packet_id,
+                      resume_session_id=resume_session_id,
+                      fork=fork,
+                      resume_mode=resume_mode)
+
         preview_env = self._env_builder.preview(env)
 
         cwd_template = str(executor.get("cwd", "{worktree_path}"))
@@ -134,6 +208,10 @@ class AgentRunService:
             command_preview=command, env_preview=preview_env,
         )
 
+        # TZ_SESSION_RESUME.md Phase 2: extract session_id from stdout
+        backend = executor.get("backend", "cli")
+        result_session_id = _extract_session_id(result.stdout, backend)
+
         return {
             "accepted": accepted,
             "domain_status": domain_status,
@@ -151,4 +229,5 @@ class AgentRunService:
             "duration_ms": result.duration_ms,
             "reason": "" if result.exit_code == 0 else f"exit_code={result.exit_code}",
             "artifacts": list(artifacts.values()),
+            "session_id": result_session_id,
         }

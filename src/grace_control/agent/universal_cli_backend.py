@@ -80,6 +80,8 @@ class UniversalCliAgentBackend(ExecutionBackend):
             packet_markdown=packet_markdown,
             timeout_seconds=request.timeout_s,
             run_dir=request.evidence_dir,
+            resume_session_id=request.resume_session_id,
+            fork=request.fork_session,
         )
 
         accepted = bool(out.get("accepted"))
