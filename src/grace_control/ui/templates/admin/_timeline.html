@@ -69,7 +69,7 @@
               <span class="dot" aria-hidden="true"></span>
               <span class="ft-wave-title">{{ w.title or w.slug }}</span>
               <span class="ft-wave-meta muted small">
-                #{{ w.order }} ·
+                #{{ w.order }} · {{ w.id }} ·
                 {{ w.total_packets }} packet{{ '' if w.total_packets == 1 else 's' }}{% if w.attention_count > 0 %} ·
                 <span class="attn-count">{{ w.attention_count }} needs attention</span>{% endif %}
               </span>
@@ -90,7 +90,9 @@ attempts: {{ p.attempt_count }}/{{ p.max_attempts }}"
                        style="cursor: pointer;">
                     <span class="dot" aria-hidden="true"></span>
                     <span class="ft-title">{{ p.title or p.slug or p.id }}</span>
-                    <span class="ft-attempts muted small">{{ p.attempt_count }}/{{ p.max_attempts }}</span>
+                    <span class="ft-pkt-meta muted small">
+                      {{ p.id }} · {{ p_ui.label }}{% if p.attempt_count %} · {{ p.attempt_count }}/{{ p.max_attempts }}{% endif %}
+                    </span>
                   </div>
                 {% endfor %}
               {% else %}

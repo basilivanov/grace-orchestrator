@@ -217,13 +217,10 @@ def test_detail_pane_shows_raw_state_in_metadata():
         pytest.skip("no rejected packet in DB")
     status, body = _get(f"/admin/_partial/detail?packet_id={pid}")
     assert status == 200
-    # The raw state appears in a small "raw:" line
+    # The raw state appears in the head (e.g. "raw: rejected") and at the
+    # bottom of the needs-attention panel ("raw: rejected / rejected").
     assert re.search(r'raw:\s*\w+', body), (
         "raw backend state should be visible in detail metadata (e.g. 'raw: rejected')"
-    )
-    # The raw state also appears in the 'state:' chip near the title
-    assert re.search(r'state:\s*\w+', body), (
-        "raw state should be visible in detail head metadata"
     )
 
 

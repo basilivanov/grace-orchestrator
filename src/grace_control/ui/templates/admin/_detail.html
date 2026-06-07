@@ -1,12 +1,11 @@
 {# Packet detail partial — self-wrapping: returns <div id="detail-pane">.
    hx-swap="outerHTML" on #detail-pane replaces this whole element.
 
-   UI layer:
-   - Header: title + small severity badge (raw state as small meta)
-   - "Needs attention" panel (only for failing packets): calm, not loud red
-   - State machine: kept as visual progress
-   - Tabs: clean
-   - Raw state is still visible in metadata, not as primary UI language. #}
+   UI:
+   - Header: title + small severity badge + ID/slug/full metadata block
+   - GRACE pipeline (replaces the old Created/Claimed/Reviewed state machine)
+   - Each stage card is clickable (switches the active tab)
+   - Tab bar with correct packet_id (fixes the "Packet not found" tab bug) #}
 <div class="console-detail" id="detail-pane">
   {% if not selected_packet_id %}
     <div class="detail-empty">
@@ -19,46 +18,117 @@
       {% set p = packet %}
       {% set p_state = p.packet.state if p.packet else p.state %}
       {% set p_ui = p_state | ui_state %}
-      {% set p_title = (p.packet.title if p.packet else None) or p.title or p.slug or p.id %}
+      {% set p_title = (p.packet.title if p.packet else None) or p.title or p.slug or selected_packet_id %}
       {% set p_slug = (p.packet.slug if p.packet else None) or p.slug %}
+      {% set p_packet_id = (p.packet.id if p.packet else None) or selected_packet_id %}
+      {% set p_feature_id = (p.packet.feature_id if p.packet else None) or '' %}
+      {% set p_wave_id = (p.packet.wave_id if p.packet else None) or '' %}
+      {% set p_attempt = (p.packet.attempt_count if p.packet else None) or 0 %}
+      {% set p_max_attempts = (p.packet.max_attempts if p.packet else None) or 0 %}
+      {% set p_started = p.started_at %}
+      {% set p_finished = p.packet.updated_at if p.packet else None %}
+      {% set p_duration = p.elapsed_seconds %}
+      {% set p_worker = p.worker_id %}
+      {% set pipeline = p.pipeline or {} %}
+      {% set stages = pipeline.stages or [] %}
+
       <a class="back-link" href="/admin" data-topnav="true">← back to overview</a>
+
+      {# ── Header ──────────────────────────────────────────────────────── #}
       <div class="pkt-head-bar severity-{{ p_ui.severity }} {{ 'selected' if p_ui.severity == 'critical' else '' }}">
-        <h1>{{ p_title }}</h1>
-        {% if p_ui.show == 'badge' %}
-          <span class="badge severity-{{ p_ui.severity }}">{{ p_ui.label }}</span>
-        {% else %}
-          <span class="muted small">{{ p_ui.label }}</span>
-        {% endif %}
-        <span class="id-slug">
-          <span class="id-chip">{{ p.id }}</span>
-          {% if p_slug %}<span class="slug-chip">{{ p_slug }}</span>{% endif %}
-        </span>
-        <span class="raw-state muted small" title="raw backend state">state: {{ p_state or '—' }}</span>
-      </div>
-
-      {# State machine #}
-      {% set sm = p.state_machine or {} %}
-      {% set steps = sm.steps or [] %}
-      {% if steps %}
-      <div class="state-machine">
-        {% for s in steps %}
-          <div class="sm-step {{ s.state | state_machine_class }}">
-            <div class="dot"></div>
-            <div class="label">{{ s.label }}</div>
-            <div class="time">{{ s.time[-8:] if s.time else '' }}</div>
-            {% if s.meta %}<div class="meta" title="{{ s.meta }}">{{ s.meta }}</div>{% endif %}
+        <div class="pkt-head-main">
+          <h1>{{ p_title }}</h1>
+          <div class="pkt-head-sub">
+            {% if p_ui.show == 'badge' %}
+              <span class="badge severity-{{ p_ui.severity }}">{{ p_ui.label }}</span>
+            {% else %}
+              <span class="muted small">{{ p_ui.label }}</span>
+            {% endif %}
+            {% if p_slug %}<span class="slug-chip">{{ p_slug }}</span>{% endif %}
+            <span class="raw-state muted small" title="raw backend state">raw: {{ p_state or '—' }}</span>
           </div>
-          {% if not loop.last %}
-            {% set last_done = (steps[loop.index0].state == 'done') %}
-            <div class="sm-arrow {{ 'done' if last_done else '' }}">→</div>
-          {% endif %}
-        {% endfor %}
+        </div>
       </div>
-      {% endif %}
 
-      {# Needs-attention panel (only for failing packets).
-         Replaces the old "WHY IT WAS REJECTED" header. Raw state remains
-         visible as small metadata inside the panel. #}
+      {# ── Metadata block: ids, timing, attempt, worker ──────────────── #}
+      <div class="pkt-meta-block">
+        <div class="pkt-meta-row">
+          <span class="pkt-meta-label">packet_id</span>
+          <span class="pkt-meta-value mono">{{ p_packet_id }}</span>
+        </div>
+        <div class="pkt-meta-row">
+          <span class="pkt-meta-label">feature_id</span>
+          <span class="pkt-meta-value mono">{{ p_feature_id or '—' }}</span>
+        </div>
+        <div class="pkt-meta-row">
+          <span class="pkt-meta-label">wave_id</span>
+          <span class="pkt-meta-value mono">{{ p_wave_id or '—' }}</span>
+        </div>
+        <div class="pkt-meta-row">
+          <span class="pkt-meta-label">started</span>
+          <span class="pkt-meta-value mono">
+            {% if p_started %}{{ p_started | fmt_time_short }}{% else %}not started{% endif %}
+          </span>
+        </div>
+        <div class="pkt-meta-row">
+          <span class="pkt-meta-label">finished</span>
+          <span class="pkt-meta-value mono">
+            {% if p_finished and p_state not in ('running', 'ready', 'draft') %}{{ p_finished | fmt_time_short }}{% else %}—{% endif %}
+          </span>
+        </div>
+        <div class="pkt-meta-row">
+          <span class="pkt-meta-label">duration</span>
+          <span class="pkt-meta-value mono">
+            {% if p_duration %}{{ p_duration | fmt_duration }}{% elif p_started and p_state == 'running' %}running…{% else %}—{% endif %}
+          </span>
+        </div>
+        <div class="pkt-meta-row">
+          <span class="pkt-meta-label">attempt</span>
+          <span class="pkt-meta-value mono">{{ p_attempt }}/{{ p_max_attempts }}</span>
+        </div>
+        <div class="pkt-meta-row">
+          <span class="pkt-meta-label">worker</span>
+          <span class="pkt-meta-value mono">{{ p_worker or '—' }}</span>
+        </div>
+      </div>
+
+      {# ── GRACE pipeline (replaces state-machine) ───────────────────── #}
+      <section class="pipeline-view">
+        <h2 class="pipeline-h">Pipeline</h2>
+        <div class="pipeline-stages">
+          {% for s in stages %}
+            <div class="stage stage-{{ s.status }}"
+                 title="click to inspect — opens {{ s.target_tab }} tab"
+                 hx-get="/admin/_partial/tab?packet_id={{ p_packet_id }}&feature_id={{ p_feature_id }}&tab={{ s.target_tab }}"
+                 hx-target="#packet-tab-content"
+                 hx-swap="outerHTML"
+                 hx-push-url="{{ shell_url(feature_id=p_feature_id, packet_id=p_packet_id, tab=s.target_tab) }}"
+                 style="cursor: pointer;">
+              <div class="stage-status">
+                {% if s.status == 'done' %}✓
+                {% elif s.status == 'failed' %}✕
+                {% elif s.status == 'running' %}●
+                {% elif s.status == 'skipped' %}—
+                {% else %}○{% endif %}
+              </div>
+              <div class="stage-body">
+                <div class="stage-label">{{ s.label }}</div>
+                <div class="stage-meta">
+                  {% if s.meta %}<span>{{ s.meta }}</span>{% endif %}
+                  {% if s.started_at and s.status != 'skipped' and s.status != 'pending' %}
+                    <span class="muted small"> · {{ s.started_at | fmt_time_short }}</span>
+                  {% endif %}
+                  {% if s.duration_ms and s.duration_ms > 0 %}
+                    <span class="muted small"> · {{ s.duration_ms | fmt_duration_ms }}</span>
+                  {% endif %}
+                </div>
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+      </section>
+
+      {# ── Needs attention (calm, replaces "Why it failed") ──────────── #}
       {% set bd = p.blocking_decision or {} %}
       {% if bd.has_blocking %}
         {% set bd_ui = bd.state | ui_state %}
@@ -67,7 +137,7 @@
           <div class="na-meta muted small">
             <span class="badge severity-{{ bd_ui.severity }}">{{ bd_ui.label }}</span>
             {% if bd.decided_by %}<span> · decided by {{ bd.decided_by }}</span>{% endif %}
-            {% if bd.at %}<span> · {{ bd.at }}</span>{% endif %}
+            {% if bd.at %}<span> · {{ bd.at | fmt_time_short }}</span>{% endif %}
           </div>
           {% if bd.action %}<div class="na-row"><strong>What happened: </strong>{{ bd.action }}</div>{% endif %}
           {% if bd.reason %}<div class="na-row"><strong>Why: </strong>{{ bd.reason }}</div>{% endif %}
@@ -107,15 +177,23 @@
         </section>
       {% endif %}
 
-      {# Tab bar — hx-get for each tab, swaps only #packet-tab-content #}
+      {# ── Tab bar (fixes the "Packet not found" tab bug) ───────────── #}
       <nav class="tabs" id="packet-tabs">
+        {% set tab_labels = {
+             'timeline': 'Events',
+             'spec': 'Spec',
+             'runs': 'Attempts',
+             'sessions': 'Agent sessions',
+             'evidence': 'Evidence',
+             'logs': 'Logs',
+             'artifacts': 'Artifacts'} %}
         {% for t in tabs %}
           <a href="{{ tab_urls[t] }}"
              class="{{ 'active' if t == active_tab else '' }}"
-             hx-get="/admin/_partial/tab?packet_id={{ p.id }}&tab={{ t }}{% if selected_feature_id %}&feature_id={{ selected_feature_id }}{% endif %}"
+             hx-get="/admin/_partial/tab?packet_id={{ p_packet_id }}&feature_id={{ p_feature_id }}&tab={{ t }}"
              hx-target="#packet-tab-content"
              hx-swap="outerHTML"
-             hx-push-url="{{ tab_urls[t] }}">{{ t }}</a>
+             hx-push-url="{{ tab_urls[t] }}">{{ tab_labels[t] or t }}</a>
         {% endfor %}
       </nav>
       <div id="packet-tab-content">

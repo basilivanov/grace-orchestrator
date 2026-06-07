@@ -1231,3 +1231,228 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .text-err { color: var(--err); }
 .text-muted { color: var(--fg-3); }
 .empty { color: var(--fg-3); font-style: italic; padding: 8px 0; }
+
+/* ── Packet detail: header / metadata / pipeline / attempts ──────────── */
+
+.pkt-head-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 14px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-2);
+  border-radius: 6px;
+}
+.pkt-head-bar.severity-ok { border-left-color: var(--sev-ok-soft); }
+.pkt-head-bar.severity-attention { border-left-color: var(--sev-attn); }
+.pkt-head-bar.severity-critical { border-left-color: var(--sev-crit); }
+.pkt-head-bar.severity-muted { border-left-color: var(--border-2); }
+.pkt-head-main h1 {
+  margin: 0 0 4px 0;
+  font-size: 16px;
+  color: var(--fg);
+}
+.pkt-head-sub {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.pkt-head-sub .slug-chip {
+  color: var(--fg-2);
+  font-family: var(--mono);
+  font-size: 10px;
+  background: var(--bg-3);
+  padding: 1px 6px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+}
+.pkt-head-sub .raw-state {
+  font-family: var(--mono);
+  font-size: 10px;
+}
+
+/* Metadata block: packet_id, feature_id, wave_id, started, finished, … */
+.pkt-meta-block {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 4px 12px;
+  padding: 8px 14px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.pkt-meta-row {
+  display: flex;
+  gap: 6px;
+  font-size: 11px;
+  align-items: baseline;
+}
+.pkt-meta-label {
+  color: var(--fg-3);
+  font-family: var(--mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  flex-shrink: 0;
+  min-width: 64px;
+}
+.pkt-meta-value {
+  color: var(--fg);
+  font-size: 11px;
+  word-break: break-all;
+}
+.mono { font-family: var(--mono); }
+
+/* Pipeline view: GRACE operator pipeline. Replaces state-machine. */
+.pipeline-view {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 14px;
+}
+.pipeline-h {
+  margin: 0 0 8px 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-2);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.pipeline-stages {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 6px;
+}
+.stage {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  transition: background 0.1s, border-color 0.1s;
+}
+.stage:hover { background: var(--border); }
+.stage-status {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  font-size: 12px;
+  font-family: var(--mono);
+  color: var(--fg-3);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  margin-top: 1px;
+}
+.stage-done { background: rgba(74, 222, 128, 0.05); border-left: 3px solid var(--sev-ok); }
+.stage-done .stage-status { color: var(--sev-ok); border-color: var(--sev-ok-soft); }
+.stage-done .stage-label { color: var(--fg); }
+
+.stage-failed { background: var(--sev-crit-bg); border-left: 3px solid var(--sev-crit); }
+.stage-failed .stage-status { color: var(--sev-crit); border-color: var(--sev-crit-soft); }
+.stage-failed .stage-label { color: var(--fg); }
+
+.stage-running { background: rgba(95, 158, 230, 0.06); border-left: 3px solid var(--accent); }
+.stage-running .stage-status { color: var(--accent); border-color: var(--accent); }
+.stage-running .stage-label { color: var(--fg); }
+
+.stage-skipped { background: var(--bg-2); border-left: 3px solid var(--border); opacity: 0.7; }
+.stage-skipped .stage-status { color: var(--fg-3); }
+.stage-skipped .stage-label { color: var(--fg-3); }
+
+.stage-pending { background: var(--bg-2); border-left: 3px solid var(--border); }
+.stage-pending .stage-status { color: var(--fg-3); }
+.stage-pending .stage-label { color: var(--fg-2); }
+
+.stage-body { flex: 1; min-width: 0; }
+.stage-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--fg);
+  margin-bottom: 1px;
+}
+.stage-meta {
+  font-size: 10px;
+  color: var(--fg-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Tab body: human-readable labels + attempt cards */
+.tab-h {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-2);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+}
+.attempts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.attempt-card {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-2);
+  border-radius: 4px;
+  padding: 8px 12px;
+}
+.attempt-card.severity-ok       { border-left-color: var(--sev-ok-soft); }
+.attempt-card.severity-attention { border-left-color: var(--sev-attn); }
+.attempt-card.severity-critical  { border-left-color: var(--sev-crit); }
+.attempt-card.severity-muted    { border-left-color: var(--border-2); }
+.attempt-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+.attempt-num {
+  font-weight: 600;
+  color: var(--fg);
+  font-size: 13px;
+}
+.attempt-meta { font-size: 11px; }
+
+.evidence-stages {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.evidence-stage {
+  padding: 6px 10px;
+  border-left: 3px solid var(--border-2);
+  background: var(--bg-2);
+  margin-bottom: 4px;
+  border-radius: 0 3px 3px 0;
+}
+.evidence-stage.severity-ok { border-left-color: var(--sev-ok-soft); }
+.evidence-stage.severity-attention { border-left-color: var(--sev-attn); }
+.evidence-stage.severity-critical { border-left-color: var(--sev-crit); }
+.evidence-stage.severity-muted { border-left-color: var(--border-2); }
+.evidence-stage ul { margin: 4px 0 0 18px; }
+
+/* Wave meta in timeline shows wave_id too */
+.ft-wave-head .ft-wave-meta { word-break: break-all; }
+.ft-pkt-meta {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+}
+
+/* State machine (legacy) — keep the styles for any cached CSS but
+   don't render the old transition timeline. */
+.state-machine { display: none; }

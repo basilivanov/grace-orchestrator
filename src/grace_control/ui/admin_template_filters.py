@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlencode
 
@@ -104,6 +105,70 @@ def is_attention(state: str | None) -> bool:
 def raw_state(state: str | None) -> str:
     """Jinja filter: returns the raw backend state unchanged (for debug metadata)."""
     return str(state) if state else "—"
+
+
+# ── Time / duration helpers ──────────────────────────────────────────────
+# Used by the packet pipeline view, header, and run cards.
+
+def fmt_duration(seconds: float | int | None) -> str:
+    """Format a duration in seconds as a short human string.
+
+    Examples:
+      5      -> "5s"
+      75     -> "1m 15s"
+      3725   -> "1h 2m"
+      None   -> ""
+    """
+    if seconds is None:
+        return ""
+    s = int(seconds)
+    if s < 0:
+        return ""
+    if s < 60:
+        return f"{s}s"
+    if s < 3600:
+        m, sec = divmod(s, 60)
+        return f"{m}m {sec}s"
+    h, rem = divmod(s, 3600)
+    m = rem // 60
+    if m == 0:
+        return f"{h}h"
+    return f"{h}h {m}m"
+
+
+def fmt_time_short(iso: str | None) -> str:
+    """Format an ISO timestamp as HH:MM:SS (24h, server-local portion).
+
+    Returns "" if iso is falsy or unparseable.
+    """
+    if not iso:
+        return ""
+    if isinstance(iso, str):
+        try:
+            # Accept 'Z' suffix and '+00:00'
+            s = iso.replace("Z", "+00:00") if iso.endswith("Z") else iso
+            dt = datetime.fromisoformat(s)
+        except (ValueError, TypeError):
+            return ""
+    else:
+        dt = iso
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.strftime("%H:%M:%S")
+
+
+def fmt_duration_ms(ms: int | float | None) -> str:
+    """Format milliseconds as a short duration string."""
+    if ms is None:
+        return ""
+    return fmt_duration(ms / 1000.0)
+
+
+def safe_str(v: Any, fallback: str = "—") -> str:
+    """Render a value as a string with a fallback for None/empty."""
+    if v is None or v == "":
+        return fallback
+    return str(v)
 
 
 def sum_packet_count(waves: list[dict[str, Any]] | None) -> int:
@@ -306,4 +371,8 @@ def register(env: Any) -> None:
     env.filters["state_severity"] = state_severity
     env.filters["is_attention"] = is_attention
     env.filters["raw_state"] = raw_state
+    env.filters["fmt_duration"] = fmt_duration
+    env.filters["fmt_duration_ms"] = fmt_duration_ms
+    env.filters["fmt_time_short"] = fmt_time_short
+    env.filters["safe_str"] = safe_str
     env.globals["shell_url"] = shell_url
