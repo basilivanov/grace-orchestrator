@@ -89,7 +89,7 @@ class PlaywrightRunner:
             result.passed = False
             result.errors = ["npx playwright not installed — cannot run frontend acceptance"]
             if custom_cmds:
-                result.command = " ".join(custom_cmds[0])
+                result.command = " ; ".join(" ".join(c) for c in custom_cmds)
             return result
 
         # Check for test files
@@ -103,7 +103,7 @@ class PlaywrightRunner:
             result.passed = False
             result.errors = [f"No {mode} test files found — frontend gate cannot pass without tests"]
             if custom_cmds:
-                result.command = " ".join(custom_cmds[0])
+                result.command = " ; ".join(" ".join(c) for c in custom_cmds)
             return result
 
         t0 = time.time()
@@ -124,42 +124,51 @@ class PlaywrightRunner:
             if extra_env:
                 env.update(extra_env)
 
-            # Use architect-provided custom commands if available,
-            # otherwise fall back to default playwright test invocation.
+            # Build command list: architect-provided custom commands or default.
+            cmds_to_run: list[list[str]] = []
             if custom_cmds:
-                cmd = list(custom_cmds[0])  # first verification command
+                cmds_to_run = [list(c) for c in custom_cmds]
             else:
-                cmd = [
+                cmds_to_run = [[
                     "npx", "playwright", "test",
                     "--config", str(self._worktree / "playwright.config.ts"),
                     "--reporter", "html,json,list",
                     f"--project={self._viewport}" if not self._has_projects() else "",
-                ]
-            cmd = [c for c in cmd if c]
+                ]]
 
-            _log.info("playwright_started", mode=mode, viewport=self._viewport,
-                      test_count=len(test_files))
-            proc = subprocess.run(
-                cmd, cwd=str(self._worktree), env=env,
-                capture_output=True, text=True,
-                timeout=_PLAYWRIGHT_TIMEOUT,
-            )
+            # Execute all commands sequentially, combine results
+            all_passed = True
+            all_commands: list[str] = []
+            all_stdout: list[str] = []
+            all_stderr: list[str] = []
+            worst_exit = 0
+
+            for c in cmds_to_run:
+                c = [p for p in c if p]  # filter empty
+                _log.info("playwright_started", mode=mode, viewport=self._viewport,
+                          test_count=len(test_files), command=" ".join(c))
+                proc = subprocess.run(
+                    c, cwd=str(self._worktree), env=env,
+                    capture_output=True, text=True,
+                    timeout=_PLAYWRIGHT_TIMEOUT,
+                )
+                all_commands.append(" ".join(c))
+                all_stdout.append(proc.stdout[:500] if proc.stdout else "")
+                all_stderr.append(proc.stderr[:500] if proc.stderr else "")
+                if proc.returncode != 0:
+                    all_passed = False
+                    result.errors.append(proc.stderr[:500] or proc.stdout[:500])
+                worst_exit = max(worst_exit, proc.returncode)
 
             result.duration_ms = int((time.time() - t0) * 1000)
-            result.command = " ".join(cmd)
-            result.exit_code = proc.returncode
-            result.stdout_snippet = proc.stdout[:500] if proc.stdout else ""
-            result.stderr_snippet = proc.stderr[:500] if proc.stderr else ""
-
-            if proc.returncode == 0:
-                result.passed = True
+            result.command = " ; ".join(all_commands)
+            result.exit_code = worst_exit
+            result.stdout_snippet = "\n---\n".join(all_stdout)
+            result.stderr_snippet = "\n---\n".join(all_stderr)
+            result.passed = all_passed
+            if all_passed:
                 _log.info("playwright_completed", mode=mode, viewport=self._viewport,
-                          duration_ms=result.duration_ms)
-            else:
-                result.passed = False
-                result.errors.append(proc.stderr[:500] or proc.stdout[:500])
-                _log.warn("playwright_failed", mode=mode, viewport=self._viewport,
-                          exit_code=proc.returncode, stderr=proc.stderr[:200])
+                          duration_ms=result.duration_ms, commands=len(all_commands))
 
             # Collect screenshots
             for png in sorted(browser_dir.rglob("*.png")):

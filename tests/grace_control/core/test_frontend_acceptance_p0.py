@@ -277,3 +277,56 @@ class TestPlaywrightMissingOrNoTests:
         runner._has_playwright = lambda: True
         r = runner.run_e2e(custom_cmds=custom)
         assert "login.spec.ts" in r.command, f"Expected login.spec.ts, got: {r.command}"
+
+    def test_custom_commands_actually_executed(self, tmp_path: Path):
+        """subprocess.run() is called with the exact architect-provided command."""
+        from unittest.mock import patch, MagicMock
+        from grace_control.services.playwright_runner import PlaywrightRunner
+        custom = [["npx", "playwright", "test", "tests/e2e/login.spec.ts"]]
+        runner = PlaywrightRunner(
+            worktree_path=tmp_path, run_dir=tmp_path / "runs",
+            viewport="android", base_url="http://localhost:3000",
+            dev_command="echo test",
+        )
+        runner._has_playwright = lambda: True
+        runner._start_dev_server = lambda: True
+        runner._stop_dev_server = lambda: None
+        # Create a test file so the runner doesn't bail early
+        (tmp_path / "tests" / "e2e").mkdir(parents=True)
+        (tmp_path / "tests" / "e2e" / "test.spec.ts").write_text("// test")
+        mock_run = MagicMock(returncode=0, stdout="", stderr="")
+        with patch("subprocess.run", return_value=mock_run) as mock_subprocess:
+            r = runner.run_e2e(custom_cmds=custom)
+            mock_subprocess.assert_called_once()
+            called_cmd = mock_subprocess.call_args[0][0]
+            assert "tests/e2e/login.spec.ts" in called_cmd, (
+                f"Expected login.spec.ts in subprocess command, got: {called_cmd}"
+            )
+
+    def test_multiple_custom_commands_all_executed(self, tmp_path: Path):
+        """All commands in verification.t2_browser are executed, not just the first."""
+        from unittest.mock import patch, MagicMock
+        from grace_control.services.playwright_runner import PlaywrightRunner
+        custom = [
+            ["npx", "playwright", "test", "tests/e2e/login.spec.ts"],
+            ["npx", "playwright", "test", "tests/e2e/dashboard.spec.ts"],
+        ]
+        runner = PlaywrightRunner(
+            worktree_path=tmp_path, run_dir=tmp_path / "runs",
+            viewport="android", base_url="http://localhost:3000",
+            dev_command="echo test",
+        )
+        runner._has_playwright = lambda: True
+        runner._start_dev_server = lambda: True
+        runner._stop_dev_server = lambda: None
+        (tmp_path / "tests" / "e2e").mkdir(parents=True)
+        (tmp_path / "tests" / "e2e" / "test.spec.ts").write_text("// test")
+        mock_run = MagicMock(returncode=0, stdout="", stderr="")
+        with patch("subprocess.run", return_value=mock_run) as mock_subprocess:
+            r = runner.run_e2e(custom_cmds=custom)
+            assert mock_subprocess.call_count == 2, (
+                f"Expected 2 subprocess calls, got {mock_subprocess.call_count}"
+            )
+            calls = [call[0][0] for call in mock_subprocess.call_args_list]
+            assert any("login.spec.ts" in " ".join(c) for c in calls)
+            assert any("dashboard.spec.ts" in " ".join(c) for c in calls)
