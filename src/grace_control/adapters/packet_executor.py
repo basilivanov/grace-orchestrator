@@ -221,13 +221,19 @@ class PacketExecutionAdapter:
             ev.save_agent_log(packet_id, rn, result, self.state_root)
             self._evidence.update_run_result(run_id=run_id, status="accepted", legacy_result=sd,
                 acceptance_report=accept_report, evidence_verifier_report=evr, reviewer_report=rvr,
-                evidence_path=ep, duration_ms=er.duration_ms, executor_id=ex_id, commit_sha=sha)
+                evidence_path=ep, duration_ms=er.duration_ms, executor_id=ex_id, commit_sha=sha,
+                model=getattr(result, "model", "") or executor.get("model",""),
+                command_preview=getattr(result, "command_preview", None),
+                prompt=getattr(result, "prompt", ""))
             _log.info("adapter_execute_done", packet_id=packet_id, accepted=True, duration_ms=er.duration_ms); return er
         def _rej(domain, reason, evr, rvr):
             er = _mk(False, domain, r=reason, e="")
             self._evidence.update_run_result(run_id=run_id, status=domain, legacy_result=sd,
                 acceptance_report=accept_report, evidence_verifier_report=evr, reviewer_report=rvr,
-                evidence_path="", duration_ms=er.duration_ms, executor_id=ex_id)
+                evidence_path="", duration_ms=er.duration_ms, executor_id=ex_id,
+                model=getattr(result, "model", "") or executor.get("model",""),
+                command_preview=getattr(result, "command_preview", None),
+                prompt=getattr(result, "prompt", ""))
             _log.info("adapter_execute_done", packet_id=packet_id, accepted=False, duration_ms=er.duration_ms); return er
 
         if prof == AcceptanceProfile.FAST:

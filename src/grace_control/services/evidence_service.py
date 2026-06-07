@@ -104,6 +104,9 @@ class EvidenceService:
         duration_ms: int,
         executor_id: str = "",
         commit_sha: str = "",
+        model: str = "",
+        command_preview: list | None = None,
+        prompt: str = "",
     ) -> None:
         try:
             with self._db() as db:
@@ -132,6 +135,12 @@ class EvidenceService:
                     existing.finished_at = datetime.now(timezone.utc)
                     existing.duration_ms = duration_ms
                     existing.executor_id = executor_id
+                    if model:
+                        existing.model = model
+                    if command_preview is not None:
+                        existing.command_preview = list(command_preview)
+                    if prompt:
+                        existing.prompt = prompt
                     self._log_rejection(status, accept_dict)
         except Exception:
             _log.warn("update_run_result_failed", run_id=run_id, status=status)

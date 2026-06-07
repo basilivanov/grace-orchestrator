@@ -78,6 +78,9 @@ def init_db(db_url: str | None = None) -> None:
 # every startup. Each entry: (table, column, SQL DDL fragment).
 _SQLITE_COLUMN_MIGRATIONS: list[tuple[str, str, str]] = [
     ("features", "degraded_reason", "ALTER TABLE features ADD COLUMN degraded_reason TEXT"),
+    ("packet_runs", "model", "ALTER TABLE packet_runs ADD COLUMN model VARCHAR"),
+    ("packet_runs", "command_preview", "ALTER TABLE packet_runs ADD COLUMN command_preview JSON"),
+    ("packet_runs", "prompt", "ALTER TABLE packet_runs ADD COLUMN prompt TEXT"),
 ]
 
 

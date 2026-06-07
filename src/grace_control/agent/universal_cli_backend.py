@@ -100,6 +100,9 @@ class UniversalCliAgentBackend(ExecutionBackend):
             reason=out.get("reason", ""),
             errors=[out.get("reason")] if out.get("reason") else [],
             registry_reason="",
+            model=out.get("model", ""),
+            command_preview=out.get("command_preview", []),
+            prompt=out.get("prompt", ""),
         )
 
     async def cancel(self, request: ExecutionRequest) -> None:

@@ -58,6 +58,11 @@ class ExecutionResult:
     reason: str = ""
     errors: list[str] = field(default_factory=list)
     registry_reason: str = ""
+    # Admin v2: which model/command/prompt was used. Optional — legacy
+    # backends may not populate them. Default-empty is safe.
+    model: str = ""
+    command_preview: list[str] = field(default_factory=list)
+    prompt: str = ""
 
     @property
     def ok(self) -> bool:
@@ -80,6 +85,9 @@ class ExecutionResult:
             "reason": self.reason,
             "errors": list(self.errors),
             "registry_reason": self.registry_reason,
+            "model": self.model,
+            "command_preview": list(self.command_preview),
+            "prompt": self.prompt,
         }
 
 

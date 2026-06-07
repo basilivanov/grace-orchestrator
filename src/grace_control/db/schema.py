@@ -136,6 +136,12 @@ class PacketRun(Base):
     finished_at = Column(DateTime)
     duration_ms = Column(Integer)
 
+    # Admin v2: which model / which command / which prompt was used.
+    # Populated by packet_executor at run_started. Nullable for legacy rows.
+    model = Column(String, nullable=True)
+    command_preview = Column(JSON, nullable=True)
+    prompt = Column(Text, nullable=True)
+
 
 class Worker(Base):
     """Worker table — registered execution agent."""

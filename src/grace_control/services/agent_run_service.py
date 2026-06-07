@@ -139,6 +139,8 @@ class AgentRunService:
             "domain_status": domain_status,
             "executor_id": executor.get("executor_id", "unknown"),
             "command_preview": command,
+            "model": executor.get("model", ""),
+            "prompt": stdin_text or packet_markdown or "",
             "exit_code": result.exit_code,
             "stdout": result.stdout,
             "stderr": result.stderr,

@@ -28,10 +28,11 @@ from fastapi.responses import JSONResponse
 
 from grace_control.api.lifespan import lifespan
 from grace_control.api.routers import (
+    admin,
+    admin_ui,
     agents,
     architect,
     artifacts,
-    dashboard,
     diagnostics,
     events,
     features,
@@ -90,8 +91,12 @@ def create_app(settings: GraceSettings | None = None) -> FastAPI:
             content={"error": {"code": "INTERNAL_ERROR", "message": str(exc)[:200]}},
         )
 
-    # Routers — no path prefix on dashboard / health / ws (they own / and /api/dashboard).
-    app.include_router(dashboard.router, tags=["dashboard-root"])
+    # Admin v2 — replaces the deleted dashboard router.
+    # Mounts:
+    #   - JSON API at /api/admin/* (read-only, for other consumers)
+    #   - HTMX UI at /admin and /admin/_partial/* (server-rendered HTML)
+    app.include_router(admin.router, tags=["admin"])
+    app.include_router(admin_ui.router, tags=["admin-ui"])
     app.include_router(health.router, tags=["health"])
     app.include_router(ws.router, tags=["ws"])
 
@@ -108,5 +113,20 @@ def create_app(settings: GraceSettings | None = None) -> FastAPI:
     app.include_router(agents.router, prefix="/api/agents", tags=["agents"])
     app.include_router(tools.router, prefix="/api/tools", tags=["tools"])
     app.include_router(lifecycle.router, tags=["lifecycle"])
+
+    # Admin UI — static assets for /static/* (HTMX is loaded from CDN in the template).
+    from pathlib import Path as _P
+    from fastapi.staticfiles import StaticFiles as _SF
+    from fastapi.responses import RedirectResponse
+
+    _ui_dir = _P(__file__).resolve().parents[1] / "ui"
+    _admin_static = _ui_dir / "static"
+    if _admin_static.exists():
+        app.mount("/static", _SF(directory=str(_admin_static)), name="static")
+
+    @app.get("/", include_in_schema=False)
+    async def _root_redirect():
+        """Root URL → /admin (the operator console)."""
+        return RedirectResponse(url="/admin", status_code=307)
 
     return app
