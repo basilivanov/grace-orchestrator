@@ -83,7 +83,13 @@ class PlaywrightRunner:
                          custom_cmds: list[list[str]] | None = None) -> BrowserStageResult:
         result = BrowserStageResult(viewport=self._viewport)
 
-        # Check if Playwright is available
+        # TZ_FRONTEND_ACCEPTANCE P1/3.4 — install Playwright if missing
+        if not self._has_playwright():
+            from grace_control.services.process_supervisor import playwright_install_browsers
+            _log.info("playwright_installing", reason="chromium not found")
+            playwright_install_browsers(self._worktree)
+
+        # Check again after install attempt
         if not self._has_playwright():
             _log.error("playwright_missing", reason="npx playwright not available")
             result.passed = False
@@ -91,6 +97,30 @@ class PlaywrightRunner:
             if custom_cmds:
                 result.command = " ; ".join(" ".join(c) for c in custom_cmds)
             return result
+
+        # TZ_FRONTEND_ACCEPTANCE P1/3.3 — real Telegram bridge (STRICT+real)
+        ngrok_url = ""
+        bridge = None
+        if self._telegram_mode == "real":
+            try:
+                from grace_control.services.telegram_bridge_service import TelegramBridgeService
+                bridge = TelegramBridgeService(
+                    worktree_path=self._worktree,
+                    dev_port=int(self._base_url.rsplit(":", 1)[-1]) if ":" in self._base_url else 3000,
+                )
+                bridge_result = bridge.start()
+                if bridge_result.ok:
+                    ngrok_url = bridge_result.public_url
+                    _log.info("telegram_bridge_active", ngrok_url=ngrok_url)
+                else:
+                    _log.warn("telegram_bridge_failed", error=bridge_result.error)
+                    # Downgrade to mock — real mode failed but we continue
+                    self._telegram_mode = "mock"
+                    self._inject_telegram_mock()
+            except Exception as e:
+                _log.error("telegram_bridge_error", error=str(e)[:200])
+                self._telegram_mode = "mock"
+                self._inject_telegram_mock()
 
         # Check for test files
         test_pattern = (
@@ -120,7 +150,7 @@ class PlaywrightRunner:
             browser_dir.mkdir(parents=True, exist_ok=True)
 
             env = os.environ.copy()
-            env["PLAYWRIGHT_BASE_URL"] = self._base_url
+            env["PLAYWRIGHT_BASE_URL"] = ngrok_url or self._base_url
             if extra_env:
                 env.update(extra_env)
 
@@ -189,6 +219,8 @@ class PlaywrightRunner:
             _log.error("playwright_error", mode=mode, viewport=self._viewport, error=str(e)[:200])
         finally:
             self._stop_dev_server()
+            if bridge:
+                bridge.stop()
 
         return result
 

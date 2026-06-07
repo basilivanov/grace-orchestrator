@@ -154,10 +154,14 @@ async def run_evidence_verifier(
     full_prompt = f"{prompt_template}\n\n## Context\n\n" + "\n".join(prompt_parts)
 
     try:
-        from grace_control.config.agent_profiles import get_agent_profile
-        executor = get_agent_profile("verifier-cheap")
-        is_multimodal = executor.multimodal if executor else False
-        model = executor.model if executor else "deepseek/deepseek-v4-flash"
+        from grace_control.config.agent_profiles import get_agent_profile, load_agent_profiles
+        # Find the verifier profile — prefer verifier-cheap, fallback to any verifier
+        profile = get_agent_profile("verifier-cheap")
+        if not profile:
+            profs = load_agent_profiles()
+            profile = next((p for k, p in profs.items() if "verif" in k.lower()), None)
+        is_multimodal = profile.multimodal if profile else False
+        model = profile.model if profile else "deepseek/deepseek-v4-flash"
         # Collect multimodal evidence if available
         multimodal_ctx = ""
         if is_multimodal:

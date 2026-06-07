@@ -86,7 +86,8 @@ class VisualBaselineManager:
         if reports:
             return self._compare_from_reports(reports, result, max_diff_pct)
 
-        # Fallback: compare screenshots pairwise
+        # Fallback: no diff-reports, compare against baselines using
+        # a real image diff when available, or fail closed.
         screenshots = sorted(browser_dir.rglob("*.png"))
         baselines = self._find_baselines(screenshots)
         if not baselines:
@@ -95,6 +96,8 @@ class VisualBaselineManager:
                       count=len(screenshots))
             return result
 
+        # Try real pixelmatch via Pillow, fall back to reporting
+        # "unverified" rather than passing on a file-size surrogate.
         return self._compare_pixelmatch(screenshots, baselines, result, max_diff_pct)
 
     # ── internals ───────────────────────────────────────────────────────
@@ -134,20 +137,45 @@ class VisualBaselineManager:
         result: VisualDiffResult,
         max_pct: float,
     ) -> VisualDiffResult:
-        worst_pct = 0.0
-        for s in screenshots:
-            bl = baselines.get(s.name)
-            if not bl:
-                continue
-            # Rough surrogate: size difference ratio as proxy for diff_pct
-            # In production this would call actual pixelmatch/pillow
-            if s.stat().st_size > 0 and bl.stat().st_size > 0:
-                ratio = abs(s.stat().st_size - bl.stat().st_size) / max(s.stat().st_size, bl.stat().st_size)
-                worst_pct = max(worst_pct, ratio)
-            result.diff_path = str(s)
-            result.baseline_path = str(bl)
-        result.diff_pct = worst_pct
-        result.passed = worst_pct <= max_pct
-        _log.info("visual_diff_compared_fallback", viewport=result.viewport,
-                  diff_pct=worst_pct, max_pct=max_pct, passed=result.passed)
+        """Try real image comparison via Pillow. Fail closed if unavailable."""
+        try:
+            from PIL import Image
+            import math
+            worst_pct = 0.0
+            for s in screenshots:
+                bl = baselines.get(s.name)
+                if not bl:
+                    continue
+                img1 = Image.open(s).convert("RGB")
+                img2 = Image.open(bl).convert("RGB")
+                if img1.size != img2.size:
+                    _log.warn("visual_size_mismatch", current=s.name, baseline=bl.name)
+                    result.diff_pct = 1.0
+                    result.passed = False
+                    result.diff_path = str(s)
+                    result.baseline_path = str(bl)
+                    return result
+                # Compute pixel difference percentage
+                total = img1.size[0] * img1.size[1]
+                diff_pixels = sum(
+                    1 for x, (p1, p2) in enumerate(zip(img1.getdata(), img2.getdata()))
+                    if p1 != p2
+                )
+                pct = diff_pixels / total if total > 0 else 0.0
+                worst_pct = max(worst_pct, pct)
+                result.diff_path = str(s)
+                result.baseline_path = str(bl)
+            result.diff_pct = worst_pct
+            result.passed = worst_pct <= max_pct
+        except ImportError:
+            # Pillow not available — fail closed (can't verify visual regression)
+            result.passed = False
+            result.error = "Pillow not installed — cannot perform visual comparison"
+            _log.warn("visual_pillow_missing", error=result.error)
+        except Exception as e:
+            result.passed = False
+            result.error = f"visual comparison error: {e}"
+            _log.error("visual_compare_error", error=str(e)[:200])
+        _log.info("visual_diff_compared", viewport=result.viewport,
+                  diff_pct=result.diff_pct, max_pct=max_pct, passed=result.passed)
         return result

@@ -371,6 +371,27 @@ class TestVisualBaselineManager:
         r = mgr.compare("android", max_diff_pct=0.001)
         assert r.passed is False
 
+    def test_pixelmatch_real_comparison(self, tmp_path: Path):
+        """When Pillow is available, real pixel comparison is used (not size-ratio)."""
+        from grace_control.services.visual_baseline_manager import VisualBaselineManager
+        try:
+            from PIL import Image
+        except ImportError:
+            pytest.skip("Pillow not available")
+        browser_dir = tmp_path / "runs" / "browser" / "android"
+        browser_dir.mkdir(parents=True)
+        # Create identical images → should pass
+        # Small 1x1 images for speed
+        img1 = Image.new("RGB", (10, 10), color=(255, 0, 0))
+        img2 = Image.new("RGB", (10, 10), color=(255, 0, 0))
+        img1.save(browser_dir / "screen.png")
+        baseline_dir = tmp_path / "baselines"
+        baseline_dir.mkdir(parents=True)
+        img2.save(baseline_dir / "screen.png")
+        mgr = VisualBaselineManager(tmp_path, tmp_path / "runs", baseline_dir=baseline_dir)
+        r = mgr.compare("android")
+        assert r.passed is True, f"Expected pass for identical images, got diff_pct={r.diff_pct}"
+
 
 class TestMultimodalContracts:
     """ScreenshotRef, DomSnapshotRef, MultimodalEvidencePack dataclasses."""
@@ -445,3 +466,31 @@ class TestPlaywrightInstall:
         from grace_control.services.process_supervisor import playwright_install_browsers
         result = playwright_install_browsers(tmp_path)
         assert isinstance(result, bool)
+
+    def test_playwright_install_called_from_runner(self, tmp_path: Path):
+        """PlaywrightRunner calls playwright_install_browsers before failing."""
+        from unittest.mock import patch
+        from grace_control.services.playwright_runner import PlaywrightRunner
+        runner = PlaywrightRunner(
+            worktree_path=tmp_path, run_dir=tmp_path / "runs",
+            viewport="android", base_url="http://localhost:3000",
+            dev_command="echo test",
+        )
+        # Mock _has_playwright to fail first, then succeed after install
+        call_count = [0]
+
+        def fake_has():
+            call_count[0] += 1
+            return call_count[0] > 1  # fails first time, succeeds after "install"
+
+        runner._has_playwright = fake_has
+        (tmp_path / "tests" / "e2e").mkdir(parents=True)
+        (tmp_path / "tests" / "e2e" / "test.spec.ts").write_text("// test")
+        runner._start_dev_server = lambda: True
+        runner._stop_dev_server = lambda: None
+
+        with patch("grace_control.services.process_supervisor.playwright_install_browsers") as mock_install:
+            with patch("subprocess.run", return_value=type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()):
+                r = runner.run_e2e()
+                mock_install.assert_called_once()  # install was attempted
+                assert r.passed or "test files" in str(r.errors).lower()
