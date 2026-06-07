@@ -80,7 +80,7 @@ class GitService:
         if not rev.success or rev.stdout.strip() != "true":
             return GitRepoInfo(path=path, is_git=False, current_branch="", is_clean=False)
         branch = self._run(["rev-parse", "--abbrev-ref", "HEAD"], path)
-        status = self._run(["status", "--porcelain"], path)
+        status = self._run(["status", "--porcelain", "-uno"], path)
         is_clean = status.success and not status.stdout.strip()
         return GitRepoInfo(
             path=path,
