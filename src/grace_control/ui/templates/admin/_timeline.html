@@ -4,8 +4,11 @@
    UI layer:
    - Top: filter chips (calm, with attention state color only on actual count)
    - Selected feature: title, description, compact progress summary
-   - Each wave: title + packet count + attention count
-   - Packets inside a wave: smaller, muted, severity dot only
+   - Each wave: entire card is clickable → opens Wave details in right pane
+   - Packets inside a wave: clickable row → opens Packet details in right pane
+   - Selected wave: stronger blue left border (matches Wave details mode)
+   - Selected packet: blue outline + bg
+   - Wave title and packet titles wrap to 2 lines (line-clamp)
    - Raw state NOT shown as primary UI language. #}
 {% set state_counts = features | sum_packets | state_count %}
 <div class="console-middle" id="timeline-pane">
@@ -26,7 +29,7 @@
                     'attention': 'requires human attention'} %}
       <div class="chip {{ cls }}"
            title="{{ tips[chip.filter] }}"
-           hx-get="/admin/_partial/timeline?feature_id={{ selected_feature_id or '' }}&filter={{ chip.filter }}&expanded_features={{ expanded_features | join(',') }}&expanded_waves={{ expanded_waves | join(',') }}&search={{ search }}"
+           hx-get="/admin/_partial/timeline?feature_id={{ selected_feature_id or '' }}&wave_id={{ selected_wave_id or '' }}&filter={{ chip.filter }}&expanded_features={{ expanded_features | join(',') }}&expanded_waves={{ expanded_waves | join(',') }}&search={{ search }}"
            hx-target="#timeline-pane"
            hx-swap="outerHTML"
            hx-push-url="{{ chip.url }}"
@@ -49,7 +52,7 @@
         {% set f_ui = f.status | ui_state %}
         {% set f_has_attn = f.attention_count > 0 %}
         {% set f_sev = 'attention' if f_has_attn and f_ui.severity == 'muted' else f_ui.severity %}
-        <header class="ft-head severity-{{ f_sev }}">
+        <header class="ft-head severity-{{ f_sev }} selected">
           <h2 class="ft-h">{{ f.title or f.slug }}</h2>
           {% if f.description %}<div class="ft-desc muted">{{ f.description }}</div>{% endif %}
           <div class="ft-summary muted small">
@@ -63,13 +66,23 @@
           {% set w_ui = w.status | ui_state %}
           {% set w_has_attn = w.attention_count > 0 %}
           {% set w_sev = 'attention' if w_has_attn and w_ui.severity == 'muted' else w_ui.severity %}
+          {% set w_selected = w.id == selected_wave_id %}
           {% set wpackets = (w.packets or []) | filter_by_state(filter) %}
-          <section class="ft-wave severity-{{ w_sev }}">
+          <div class="ft-wave severity-{{ w_sev }} {{ 'selected' if w_selected else '' }} {{ 'has-attention' if w_has_attn else '' }}"
+               title="{{ w.title or w.slug or w.id }}
+wave_id: {{ w.id }}
+order: #{{ w.order }}
+{{ w.total_packets }} packet{{ '' if w.total_packets == 1 else 's' }}{% if w_has_attn %} · {{ w.attention_count }} needs attention{% endif %}"
+               hx-get="/admin/_partial/detail?wave_id={{ w.id }}&feature_id={{ f.id }}&filter={{ filter }}&expanded_features={{ expanded_features | join(',') }}&expanded_waves={{ expanded_waves | join(',') }}&search={{ search }}"
+               hx-target="#detail-pane"
+               hx-swap="outerHTML"
+               hx-push-url="{{ w.click_url }}">
             <div class="ft-wave-head">
               <span class="dot" aria-hidden="true"></span>
-              <span class="ft-wave-title">{{ w.title or w.slug }}</span>
+              <span class="ft-wave-title">{{ w.title or w.slug or w.id }}</span>
               <span class="ft-wave-meta muted small">
-                #{{ w.order }} · {{ w.id }} ·
+                #{{ w.order }} ·
+                <span class="mono">{{ w.id }}</span> ·
                 {{ w.total_packets }} packet{{ '' if w.total_packets == 1 else 's' }}{% if w.attention_count > 0 %} ·
                 <span class="attn-count">{{ w.attention_count }} needs attention</span>{% endif %}
               </span>
@@ -79,29 +92,30 @@
                 {% for p in wpackets %}
                   {% set p_ui = p.state | ui_state %}
                   <div class="ft-packet severity-{{ p_ui.severity }} {{ 'selected' if p.id == selected_packet_id else '' }}"
-                       title="{{ p.title or p.slug }}
+                       title="{{ p.title or p.slug or p.id }}
 {{ p.id }}
 state: {{ p.state }}
 attempts: {{ p.attempt_count }}/{{ p.max_attempts }}"
-                       hx-get="/admin/_partial/detail?packet_id={{ p.id }}&feature_id={{ f.id }}&tab=timeline&filter={{ filter }}&expanded_features={{ expanded_features | join(',') }}&expanded_waves={{ expanded_waves | join(',') }}&search={{ search }}"
+                       hx-get="/admin/_partial/detail?packet_id={{ p.id }}&feature_id={{ f.id }}&wave_id={{ w.id }}&tab=timeline&filter={{ filter }}&expanded_features={{ expanded_features | join(',') }}&expanded_waves={{ expanded_waves | join(',') }}&search={{ search }}"
                        hx-target="#detail-pane"
                        hx-swap="outerHTML"
                        hx-push-url="{{ p.click_url }}"
-                       style="cursor: pointer;">
+                       hx-on:click="event.stopPropagation()">
                     <span class="dot" aria-hidden="true"></span>
                     <span class="ft-title">{{ p.title or p.slug or p.id }}</span>
                     <span class="ft-pkt-meta muted small">
-                      {{ p.id }} · {{ p_ui.label }}{% if p.attempt_count %} · {{ p.attempt_count }}/{{ p.max_attempts }}{% endif %}
+                      <span class="mono">{{ p.id }}</span> ·
+                      {{ p_ui.label }}{% if p.attempt_count %} · {{ p.attempt_count }}/{{ p.max_attempts }}{% endif %}
                     </span>
                   </div>
                 {% endfor %}
               {% else %}
-                <div class="muted small" style="padding: 4px;">
+                <div class="muted small ft-pkt-empty">
                   {{ 'no packets match filter' if (w.packets or []) else 'no packets' }}
                 </div>
               {% endif %}
             </div>
-          </section>
+          </div>
         {% endfor %}
       {% endif %}
     {% endif %}

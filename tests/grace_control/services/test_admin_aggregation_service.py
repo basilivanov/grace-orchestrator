@@ -439,6 +439,61 @@ def test_features_tree_clean_feature_has_zero_attention(db_url, svc, session):
     assert feat["waves"][0]["attention_count"] == 0
 
 
+# ── 12c. wave detail (right-pane Wave mode) ───────────────────────────
+
+def test_get_wave_detail_returns_wave_with_packets_and_counts(
+    db_url, svc, session,
+):
+    """get_wave_detail returns the wave header, feature context, per-state
+    counts, and the list of packets with timing data. Used by the
+    right pane when only wave_id is selected."""
+    _seed_tree(session)
+    out = svc.get_wave_detail(session, "F_TREE_SVC", "W_TREE_SVC_1")
+    assert out is not None
+    assert out["wave"]["id"] == "W_TREE_SVC_1"
+    assert out["wave"]["title"] == "Tree Wave 1"
+    assert out["wave"]["order"] == 1
+    assert out["wave"]["status"] == "DEGRADED"
+    assert out["feature"]["id"] == "F_TREE_SVC"
+    # 1 rejected packet in wave 1
+    assert out["counts"]["all"] == 1
+    assert out["counts"]["failed"] == 1
+    assert out["counts"]["attention"] == 1
+    assert out["counts"]["running"] == 0
+    assert out["counts"]["done"] == 0
+    # Packet list
+    assert len(out["packets"]) == 1
+    p = out["packets"][0]
+    assert p["id"] == "p_tree_svc_1"
+    assert p["state"] == "rejected"
+    assert p["attempt_count"] == 2
+    assert "started_at" in p
+    assert "duration_seconds" in p
+
+
+def test_get_wave_detail_clean_wave_has_zero_attention(
+    db_url, svc, session,
+):
+    """A wave with only draft/running packets has attention=0."""
+    _seed_tree(session)
+    out = svc.get_wave_detail(session, "F_TREE_SVC", "W_TREE_SVC_2")
+    assert out is not None
+    assert out["wave"]["id"] == "W_TREE_SVC_2"
+    assert out["counts"]["all"] == 1
+    assert out["counts"]["failed"] == 0
+    assert out["counts"]["attention"] == 0
+
+
+def test_get_wave_detail_returns_none_for_missing_wave(
+    db_url, svc, session,
+):
+    """Missing wave returns None (UI shows 'Wave not found' banner)."""
+    _seed_tree(session)
+    assert svc.get_wave_detail(session, "F_TREE_SVC", "W_NOPE") is None
+    # And for a wave that exists but belongs to a different feature
+    assert svc.get_wave_detail(session, "F_NOPE", "W_TREE_SVC_1") is None
+
+
 def _seed_tree(session):
     """Seed a 1-feature / 2-wave / 2-packet tree for /features endpoint tests."""
     f = Feature(

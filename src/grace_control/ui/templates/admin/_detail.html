@@ -1,17 +1,121 @@
 {# Packet detail partial — self-wrapping: returns <div id="detail-pane">.
    hx-swap="outerHTML" on #detail-pane replaces this whole element.
 
-   UI:
-   - Header: title + small severity badge + ID/slug/full metadata block
-   - GRACE pipeline (replaces the old Created/Claimed/Reviewed state machine)
-   - Each stage card is clickable (switches the active tab)
-   - Tab bar with correct packet_id (fixes the "Packet not found" tab bug) #}
+   Modes (mutually exclusive):
+   1. Wave details: selected_wave_id is set, no selected_packet_id.
+      Shows wave header, status summary, and a clickable list of packets.
+   2. Packet details: selected_packet_id is set.
+      Header: title + small severity badge + ID/slug/full metadata block
+      GRACE pipeline (replaces the old Created/Claimed/Reviewed state machine)
+      Each stage card is clickable (switches the active tab)
+      Tab bar with correct packet_id (fixes the "Packet not found" tab bug)
+   3. Empty: nothing selected. #}
 <div class="console-detail" id="detail-pane">
-  {% if not selected_packet_id %}
-    <div class="detail-empty">
-      Select a packet on the left to see why it failed, what the worker did, and where the artifacts are.
-    </div>
-  {% else %}
+  {# ── Mode 1: Wave details ──────────────────────────────────────────── #}
+  {% if selected_wave_id and not selected_packet_id %}
+    {% if not wave %}
+      <div class="banner warn">Wave not found: {{ selected_wave_id }}</div>
+    {% else %}
+      {% set w = wave.wave %}
+      {% set f = wave.feature %}
+      {% set counts = wave.counts %}
+      {% set w_packets = wave.packets or [] %}
+      {% set w_ui = w.status | ui_state %}
+      {% set w_has_attn = counts.attention > 0 %}
+      {% set w_sev = 'attention' if w_has_attn and w_ui.severity == 'muted' else w_ui.severity %}
+
+      <a class="back-link" href="/admin" data-topnav="true">← back to overview</a>
+
+      {# ── Wave header ─────────────────────────────────────────────── #}
+      <div class="wave-head-bar severity-{{ w_sev }}">
+        <div class="wave-head-main">
+          <h1>{{ w.title or w.slug or w.id }}</h1>
+          <div class="wave-head-sub">
+            {% if w_ui.show == 'badge' %}
+              <span class="badge severity-{{ w_ui.severity }}">{{ w_ui.label }}</span>
+            {% else %}
+              <span class="muted small">{{ w_ui.label }}</span>
+            {% endif %}
+            {% if w.slug %}<span class="slug-chip">{{ w.slug }}</span>{% endif %}
+            <span class="raw-state muted small" title="raw backend state">raw: {{ w.status or '—' }}</span>
+          </div>
+        </div>
+      </div>
+
+      {# ── Wave metadata block ─────────────────────────────────────── #}
+      <div class="pkt-meta-block">
+        <div class="pkt-meta-row">
+          <span class="pkt-meta-label">wave_id</span>
+          <span class="pkt-meta-value mono">{{ w.id }}</span>
+        </div>
+        <div class="pkt-meta-row">
+          <span class="pkt-meta-label">order</span>
+          <span class="pkt-meta-value mono">#{{ w.order }}</span>
+        </div>
+        <div class="pkt-meta-row">
+          <span class="pkt-meta-label">feature_id</span>
+          <span class="pkt-meta-value mono">{{ f.id }}</span>
+        </div>
+        <div class="pkt-meta-row">
+          <span class="pkt-meta-label">total</span>
+          <span class="pkt-meta-value mono">{{ counts.all }} packet{{ '' if counts.all == 1 else 's' }}</span>
+        </div>
+        <div class="pkt-meta-row">
+          <span class="pkt-meta-label">failed</span>
+          <span class="pkt-meta-value mono {{ 'attn' if counts.failed > 0 else '' }}">{{ counts.failed }}</span>
+        </div>
+        <div class="pkt-meta-row">
+          <span class="pkt-meta-label">running</span>
+          <span class="pkt-meta-value mono {{ 'ok' if counts.running > 0 else '' }}">{{ counts.running }}</span>
+        </div>
+        <div class="pkt-meta-row">
+          <span class="pkt-meta-label">blocked</span>
+          <span class="pkt-meta-value mono {{ 'attn' if counts.blocked > 0 else '' }}">{{ counts.blocked }}</span>
+        </div>
+        <div class="pkt-meta-row">
+          <span class="pkt-meta-label">done</span>
+          <span class="pkt-meta-value mono {{ 'ok' if counts.done > 0 else '' }}">{{ counts.done }}</span>
+        </div>
+      </div>
+
+      {# ── Wave packets (clickable list) ───────────────────────────── #}
+      <section class="wave-packets-section">
+        <h2 class="pipeline-h">Packets in this wave</h2>
+        <div class="wave-packets">
+          {% if w_packets %}
+            {% for p in w_packets %}
+              {% set p_ui = p.state | ui_state %}
+              <a class="wave-packet-card severity-{{ p_ui.severity }}"
+                 href="{{ p.click_url }}"
+                 title="{{ p.title or p.slug or p.id }}
+{{ p.id }}
+state: {{ p.state }}
+attempts: {{ p.attempt_count }}/{{ p.max_attempts }}"
+                 hx-get="/admin/_partial/detail?packet_id={{ p.id }}&feature_id={{ f.id }}&wave_id={{ w.id }}&tab=timeline&filter={{ filter }}&expanded_features={{ expanded_features | join(',') }}&expanded_waves={{ expanded_waves | join(',') }}&search={{ search }}"
+                 hx-target="#detail-pane"
+                 hx-swap="outerHTML"
+                 hx-push-url="{{ p.click_url }}">
+                <div class="wave-pkt-head">
+                  <span class="dot" aria-hidden="true"></span>
+                  <span class="wave-pkt-title">{{ p.title or p.slug or p.id }}</span>
+                  <span class="wave-pkt-status badge severity-{{ p_ui.severity }}">{{ p_ui.label }}</span>
+                </div>
+                <div class="wave-pkt-meta muted small">
+                  <span class="mono">{{ p.id }}</span>
+                  {% if p.attempt_count %}<span>· {{ p.attempt_count }}/{{ p.max_attempts }} attempts</span>{% endif %}
+                  {% if p.started_at %}<span>· started {{ p.started_at | fmt_time_short }}</span>{% endif %}
+                  {% if p.duration_seconds %}<span>· {{ p.duration_seconds | fmt_duration }}</span>{% endif %}
+                </div>
+              </a>
+            {% endfor %}
+          {% else %}
+            <div class="empty">No packets in this wave.</div>
+          {% endif %}
+        </div>
+      </section>
+    {% endif %}
+  {# ── Mode 2: Packet details ────────────────────────────────────────── #}
+  {% elif selected_packet_id %}
     {% if not packet %}
       <div class="banner warn">Packet not found: {{ selected_packet_id }}</div>
     {% else %}
@@ -200,5 +304,10 @@
         {% include "_tab.html" %}
       </div>
     {% endif %}
+  {# ── Mode 3: Empty ────────────────────────────────────────────────── #}
+  {% else %}
+    <div class="detail-empty">
+      Select a feature, wave, or packet to inspect.
+    </div>
   {% endif %}
 </div>

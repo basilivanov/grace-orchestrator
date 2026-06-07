@@ -1172,6 +1172,102 @@ class AdminAggregationService:
             })
         return {"features": out}
 
+    # ── wave detail ────────────────────────────────────────────────────
+
+    def get_wave_detail(
+        self, db: Session, feature_id: str, wave_id: str
+    ) -> dict[str, Any] | None:
+        """Return a single wave with its feature context and packets.
+
+        Used by the right pane when the user clicks a wave (not a packet).
+        Returns None if the wave does not exist (or is not in the feature).
+
+        Shape:
+          {
+            "wave":       {id, title, slug, order, status, feature_id},
+            "feature":    {id, title, slug, status},
+            "counts":     {all, failed, running, blocked, attention, done},
+            "packets":    [{id, title, slug, state, attempt_count, max_attempts,
+                            started_at, duration_seconds, severity}, ...]
+          }
+        """
+        feature = db.query(Feature).filter_by(id=feature_id).first()
+        if not feature:
+            return None
+        wave = (
+            db.query(Wave)
+            .filter_by(id=wave_id, feature_id=feature_id)
+            .first()
+        )
+        if not wave:
+            return None
+
+        packets = (
+            db.query(Packet)
+            .filter_by(wave_id=wave_id, feature_id=feature_id)
+            .order_by(Packet.id)
+            .all()
+        )
+
+        # Per-packet started_at / duration: take from latest run when present.
+        packet_rows: list[dict[str, Any]] = []
+        for p in packets:
+            last_run = (
+                db.query(PacketRun)
+                .filter_by(packet_id=p.id)
+                .order_by(PacketRun.run_number.desc())
+                .first()
+            )
+            started_at = _iso(last_run.started_at) if last_run and last_run.started_at else None
+            duration_seconds = (
+                _elapsed_seconds(last_run.started_at, last_run.finished_at)
+                if last_run else None
+            )
+            packet_rows.append({
+                "id": p.id,
+                "title": p.title,
+                "slug": p.slug,
+                "state": p.state,
+                "attempt_count": p.attempt_count,
+                "max_attempts": p.max_attempts,
+                "started_at": started_at,
+                "duration_seconds": duration_seconds,
+            })
+
+        counts = {"all": len(packet_rows), "failed": 0, "running": 0,
+                  "blocked": 0, "attention": 0, "done": 0}
+        for p in packet_rows:
+            s = p["state"]
+            if s in ("rejected", "failed"):
+                counts["failed"] += 1
+                counts["attention"] += 1
+            elif s == "running":
+                counts["running"] += 1
+            elif s in ("blocked", "blocked_recoverable", "blocked_final"):
+                counts["blocked"] += 1
+                counts["attention"] += 1
+            elif s in ("accepted", "merged"):
+                counts["done"] += 1
+
+        return {
+            "wave": {
+                "id": wave.id,
+                "title": wave.title,
+                "slug": wave.slug,
+                "order": wave.order,
+                "status": wave.status,
+                "feature_id": feature.id,
+            },
+            "feature": {
+                "id": feature.id,
+                "title": feature.title,
+                "slug": feature.slug,
+                "status": feature.status,
+            },
+            "counts": counts,
+            "packets": packet_rows,
+        }
+
     # ── search ──────────────────────────────────────────────────────────
 
     def search(self, db: Session, q: str, limit: int = 50) -> dict[str, Any]:

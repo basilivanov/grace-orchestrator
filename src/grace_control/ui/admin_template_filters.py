@@ -220,7 +220,7 @@ def state_count(packets: list[dict[str, Any]] | None) -> dict[str, int]:
     """Return counts grouped by operator-facing categories."""
     packets = packets or []
     out = {"all": len(packets), "failed": 0, "running": 0,
-           "blocked": 0, "attention": 0}
+           "blocked": 0, "attention": 0, "done": 0}
     for p in packets:
         s = p.get("state")
         if s in ("rejected", "failed"):
@@ -231,6 +231,8 @@ def state_count(packets: list[dict[str, Any]] | None) -> dict[str, int]:
         elif s in ("blocked", "blocked_recoverable", "blocked_final"):
             out["blocked"] += 1
             out["attention"] += 1
+        elif s in ("accepted", "merged"):
+            out["done"] += 1
     return out
 
 
@@ -311,6 +313,7 @@ def next_action_class(args: tuple | list) -> str:
 def shell_url(
     feature_id: Any = None,
     packet_id: Any = None,
+    wave_id: Any = None,
     tab: str = "timeline",
     search: str = "",
     filter: str = "all",
@@ -323,10 +326,15 @@ def shell_url(
     (not /admin/_partial/…). Refreshing the URL restores the same view.
 
     `expanded_features`/`expanded_waves` may be set/list/str (comma-joined).
+    `wave_id` is only included when a wave is explicitly selected (e.g.
+    user clicked a wave card). When a packet is also selected, packet_id
+    takes precedence in the detail pane.
     """
     params: list[tuple[str, str]] = []
     if feature_id:
         params.append(("feature_id", str(feature_id)))
+    if wave_id and not packet_id:
+        params.append(("wave_id", str(wave_id)))
     if packet_id:
         params.append(("packet_id", str(packet_id)))
     if tab and tab != "timeline":

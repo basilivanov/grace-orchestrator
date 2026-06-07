@@ -71,6 +71,11 @@ def _packet_detail(packet_id: str) -> dict | None:
         return _svc.get_packet_detail(db, packet_id)
 
 
+def _wave_detail(feature_id: str, wave_id: str) -> dict | None:
+    with get_db() as db:
+        return _svc.get_wave_detail(db, feature_id, wave_id)
+
+
 def _split_sets(*vals: str) -> list[list[str]]:
     """Parse comma-separated query strings into sorted lists."""
     out = []
@@ -85,6 +90,7 @@ def _ctx(
     search: str = "",
     filter: str = "all",
     selected_feature_id: str | None = None,
+    selected_wave_id: str | None = None,
     selected_packet_id: str | None = None,
     tab: str = "timeline",
     expanded_features: list[str] | None = None,
@@ -95,6 +101,7 @@ def _ctx(
         "search": search,
         "filter": filter,
         "selected_feature_id": selected_feature_id,
+        "selected_wave_id": selected_wave_id,
         "selected_packet_id": selected_packet_id,
         "active_tab": tab,
         "expanded_features": expanded_features or [],
@@ -110,6 +117,7 @@ def _ctx(
 def admin_console(
     request: Request,
     feature_id: str | None = None,
+    wave_id: str | None = None,
     packet_id: str | None = None,
     tab: str = "timeline",
     search: str = "",
@@ -140,11 +148,23 @@ def admin_console(
                         ef_set.add(f["id"])
                         ew_set.add(w["id"])
                         break
+    elif wave_id and not ef_set and not ew_set:
+        # If a wave is selected, auto-expand its feature so it's visible
+        for f in features:
+            for w in (f.get("waves") or []):
+                if w["id"] == wave_id:
+                    ef_set.add(f["id"])
+                    ew_set.add(w["id"])
+                    break
     ef = sorted(ef_set)
     ew = sorted(ew_set)
 
-    # Load packet detail if selected
+    # Load packet detail if selected; else wave detail if selected
     packet = _packet_detail(packet_id) if packet_id else None
+    wave = (
+        _wave_detail(feature_id, wave_id)
+        if (wave_id and feature_id and not packet_id) else None
+    )
 
     # Pre-compute click URLs for each feature / wave / packet.
     for f in features:
@@ -154,9 +174,11 @@ def admin_console(
             search=search, filter=filter,
         )
         for w in (f.get("waves") or []):
-            new_ew = sorted(set(ew) ^ {w["id"]})
+            new_ew = sorted(set(ew) | {w["id"]}) if w["id"] != wave_id else sorted(set(ew))
+            # Wave click URL: expand the wave so its packets are visible
             w["click_url"] = _shell_url(
-                feature_id=f["id"], expanded_features=new_ef, expanded_waves=new_ew,
+                feature_id=f["id"], wave_id=w["id"],
+                expanded_features=new_ef, expanded_waves=new_ew,
                 search=search, filter=filter,
             )
             for p in (w.get("packets") or []):
@@ -172,7 +194,8 @@ def admin_console(
         chips.append({
             "filter": chip_filter,
             "url": _shell_url(
-                feature_id=feature_id, filter=chip_filter,
+                feature_id=feature_id, wave_id=wave_id,
+                filter=chip_filter,
                 expanded_features=ef, expanded_waves=ew, search=search,
             ),
         })
@@ -200,6 +223,15 @@ def admin_console(
                 search=search, filter=filter,
             )
 
+    # Pre-compute wave click URLs in the detail-pane packet list
+    if wave:
+        for p in (wave.get("packets") or []):
+            p["click_url"] = _shell_url(
+                feature_id=feature_id, packet_id=p["id"], tab="timeline",
+                filter=filter, expanded_features=ef, expanded_waves=ew,
+                search=search,
+            )
+
     ctx = {
         "request": request,
         "active_nav": "overview",
@@ -210,8 +242,10 @@ def admin_console(
         "search": search,
         "filter": filter,
         "selected_feature_id": feature_id,
+        "selected_wave_id": wave_id,
         "selected_packet_id": packet_id,
         "packet": packet,
+        "wave": wave,
         "expanded_features": ef,
         "expanded_waves": ew,
         "chips": chips,
@@ -256,6 +290,7 @@ def partial_master(
     search: str = "",
     filter: str = "all",
     feature_id: str | None = None,
+    wave_id: str | None = None,
     packet_id: str | None = None,
     expanded_features: str = "",
     expanded_waves: str = "",
@@ -280,13 +315,11 @@ def partial_master(
             filter=filter,
         )
         for w in (f.get("waves") or []):
-            new_ew = sorted(set(ew) ^ {w["id"]})  # toggle wave
+            new_ew = sorted(set(ew) | {w["id"]}) if w["id"] != wave_id else sorted(set(ew))
             w["click_url"] = _shell_url(
-                feature_id=f["id"],
-                expanded_features=new_ef,
-                expanded_waves=new_ew,
-                search=search,
-                filter=filter,
+                feature_id=f["id"], wave_id=w["id"],
+                expanded_features=new_ef, expanded_waves=new_ew,
+                search=search, filter=filter,
             )
             for p in (w.get("packets") or []):
                 p["click_url"] = _shell_url(
@@ -305,6 +338,7 @@ def partial_master(
         "search": search,
         "filter": filter,
         "selected_feature_id": feature_id,
+        "selected_wave_id": wave_id,
         "selected_packet_id": packet_id,
         "expanded_features": ef,
         "expanded_waves": ew,
@@ -316,6 +350,7 @@ def partial_master(
 def partial_timeline(
     request: Request,
     feature_id: str | None = None,
+    wave_id: str | None = None,
     packet_id: str | None = None,
     filter: str = "all",
     expanded_features: str = "",
@@ -344,7 +379,7 @@ def partial_timeline(
         chips.append({
             "filter": chip_filter,
             "url": _shell_url(
-                feature_id=feature_id,
+                feature_id=feature_id, wave_id=wave_id,
                 filter=chip_filter,
                 expanded_features=ef,
                 expanded_waves=ew,
@@ -352,12 +387,19 @@ def partial_timeline(
             ),
         })
 
-    # Pre-compute packet click URLs in the rendered feature.
+    # Pre-compute wave click URLs (select wave → detail pane)
+    # and packet click URLs in the rendered feature.
     if feature_id:
         for f in features:
             if f["id"] != feature_id:
                 continue
             for w in (f.get("waves") or []):
+                new_ew_wave = sorted(set(ew) | {w["id"]}) if w["id"] != wave_id else sorted(set(ew))
+                w["click_url"] = _shell_url(
+                    feature_id=f["id"], wave_id=w["id"],
+                    expanded_features=ef, expanded_waves=new_ew_wave,
+                    filter=filter, search="",
+                )
                 for p in (w.get("packets") or []):
                     p["click_url"] = _shell_url(
                         feature_id=f["id"],
@@ -374,6 +416,7 @@ def partial_timeline(
         "features": features,
         "filter": filter,
         "selected_feature_id": feature_id,
+        "selected_wave_id": wave_id,
         "selected_packet_id": packet_id,
         "expanded_features": ef,
         "expanded_waves": ew,
@@ -385,7 +428,8 @@ def partial_timeline(
 @router.get("/admin/_partial/detail", response_class=HTMLResponse)
 def partial_detail(
     request: Request,
-    packet_id: str = Query(...),
+    packet_id: str | None = None,
+    wave_id: str | None = None,
     feature_id: str | None = None,
     tab: str = "timeline",
     search: str = "",
@@ -393,13 +437,64 @@ def partial_detail(
     expanded_features: str = "",
     expanded_waves: str = "",
 ) -> HTMLResponse:
-    """Packet detail fragment — swaps on packet click.
+    """Detail fragment — renders Wave details or Packet details.
+
+    - If `packet_id` is provided → packet details.
+    - Else if `wave_id` (and `feature_id`) is provided → wave details.
+    - Else → empty detail pane.
 
     Swaps only #detail-pane (outerHTML). Pushes URL with hx-push-url=true.
     Preserves master tree state (search, filter, expanded) via query params.
     """
     ef, ew = _split_sets(expanded_features, expanded_waves)
     active_tab = tab if tab in _TABS else "timeline"
+
+    # Wave detail mode (no packet)
+    if not packet_id and wave_id and feature_id:
+        wave = _wave_detail(feature_id, wave_id)
+        # Pre-compute packet click URLs in the wave
+        if wave:
+            for p in (wave.get("packets") or []):
+                p["click_url"] = _shell_url(
+                    feature_id=feature_id, packet_id=p["id"], tab="timeline",
+                    filter=filter, expanded_features=ef, expanded_waves=ew,
+                    search=search,
+                )
+        return _templates.TemplateResponse(request, "_detail.html", {
+            "request": request,
+            "packet": None,
+            "wave": wave,
+            "selected_feature_id": feature_id,
+            "selected_wave_id": wave_id,
+            "selected_packet_id": None,
+            "tabs": _TABS,
+            "active_tab": active_tab,
+            "tab_urls": {},
+            "search": search,
+            "filter": filter,
+            "expanded_features": ef,
+            "expanded_waves": ew,
+            "shell_url": _shell_url,
+        })
+
+    if not packet_id:
+        return _templates.TemplateResponse(request, "_detail.html", {
+            "request": request,
+            "packet": None,
+            "wave": None,
+            "selected_feature_id": feature_id,
+            "selected_wave_id": wave_id,
+            "selected_packet_id": None,
+            "tabs": _TABS,
+            "active_tab": active_tab,
+            "tab_urls": {},
+            "search": search,
+            "filter": filter,
+            "expanded_features": ef,
+            "expanded_waves": ew,
+            "shell_url": _shell_url,
+        })
+
     packet = _packet_detail(packet_id)
     tab_urls: dict[str, str] = {}
     for t in _TABS:
@@ -413,7 +508,9 @@ def partial_detail(
             "request": request,
             "selected_packet_id": packet_id,
             "selected_feature_id": feature_id,
+            "selected_wave_id": wave_id,
             "packet": None,
+            "wave": None,
             "tabs": _TABS,
             "active_tab": active_tab,
             "tab_urls": tab_urls,
@@ -427,8 +524,10 @@ def partial_detail(
     return _templates.TemplateResponse(request, "_detail.html", {
         "request": request,
         "packet": packet,
+        "wave": None,
         "selected_packet_id": packet_id,
         "selected_feature_id": feature_id,
+        "selected_wave_id": wave_id,
         "tabs": _TABS,
         "active_tab": active_tab,
         "tab_urls": tab_urls,
@@ -446,6 +545,7 @@ def partial_tab(
     packet_id: str = Query(...),
     tab: str = "timeline",
     feature_id: str | None = None,
+    wave_id: str | None = None,
 ) -> HTMLResponse:
     """Tab body fragment — swaps on tab click.
 

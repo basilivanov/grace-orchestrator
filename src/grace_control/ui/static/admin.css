@@ -707,16 +707,62 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   font-family: var(--mono);
 }
 .feature-timeline .ft-summary .attn-count { color: var(--sev-attn); font-weight: 500; }
-.feature-timeline .ft-wave {
-  border-left: 2px solid var(--border);
-  padding: 6px 0 6px 12px;
-  margin: 8px 0;
-  background: var(--bg-3);
+
+/* Selected feature header gets a subtle blue left accent */
+.feature-timeline .ft-head.selected {
+  background: rgba(95, 158, 230, 0.04);
+  border-left: 2px solid var(--accent);
+  padding-left: 8px;
+  margin-left: -8px;
   border-radius: 0 4px 4px 0;
 }
+
+/* ── Wave card: fully clickable surface ─────────────────────────────────
+   - Entire .ft-wave is one clickable <a> element
+   - Click anywhere → wave details (right pane)
+   - Packets inside are ALSO clickable; HTMX handles nearest-match
+   - Selected wave: stronger blue left border + light blue background
+   - Attention wave: thin yellow marker only (no loud red)
+   - 2-line title wrap (line-clamp) for readable titles
+   - Hover / focus states for keyboard / mouse discoverability */
+.feature-timeline .ft-wave {
+  display: block;
+  text-decoration: none;
+  color: inherit;
+  border-left: 3px solid var(--border-2);
+  padding: 10px 12px;
+  margin: 8px 0;
+  background: var(--bg-3);
+  border-radius: 0 6px 6px 0;
+  cursor: pointer;
+  transition: background 0.1s, border-left-color 0.1s;
+}
+.feature-timeline .ft-wave:hover {
+  background: var(--bg-2);
+  border-left-color: var(--accent);
+}
+.feature-timeline .ft-wave:focus,
+.feature-timeline .ft-wave:focus-visible {
+  outline: none;
+  border-left-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(95, 158, 230, 0.3);
+}
 .feature-timeline .ft-wave.severity-ok { border-left-color: var(--sev-ok-soft); }
-.feature-timeline .ft-wave.severity-attention { border-left-color: var(--sev-attn); }
+.feature-timeline .ft-wave.severity-muted { border-left-color: var(--border-2); }
+.feature-timeline .ft-wave.severity-attention {
+  /* Thin yellow marker only (no loud red) */
+  border-left-color: var(--sev-attn-soft);
+}
+.feature-timeline .ft-wave.severity-attention.has-attention {
+  border-left-color: var(--sev-attn);
+}
 .feature-timeline .ft-wave.severity-critical { border-left-color: var(--sev-crit); }
+.feature-timeline .ft-wave.selected {
+  background: rgba(95, 158, 230, 0.10);
+  border-left-color: var(--accent);
+  border-left-width: 4px;
+  padding-left: 11px;
+}
 .feature-timeline .ft-wave-head {
   display: flex;
   align-items: center;
@@ -724,58 +770,105 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   font-size: 12px;
   font-weight: 500;
   color: var(--fg);
-  margin-bottom: 6px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
 }
 .feature-timeline .ft-wave-head .dot { display: none; }
-.feature-timeline .ft-wave-head .ft-wave-title { color: var(--fg); }
+.feature-timeline .ft-wave-head .ft-wave-title {
+  color: var(--fg);
+  font-size: 13px;
+  font-weight: 600;
+  /* Wrap to 2 lines max, do not ellipsize aggressively */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-clamp: 2;
+  overflow: hidden;
+  word-break: break-word;
+  flex: 1 1 auto;
+  min-width: 0;
+}
 .feature-timeline .ft-wave-head .ft-wave-meta {
   color: var(--fg-3);
   font-family: var(--mono);
   font-size: 10px;
   font-weight: 400;
+  flex-shrink: 0;
+  word-break: break-all;
 }
-.feature-timeline .ft-wave-head .ft-wave-meta .attn-count { color: var(--sev-attn); font-weight: 500; }
+.feature-timeline .ft-wave-head .ft-wave-meta .attn-count {
+  color: var(--sev-attn);
+  font-weight: 500;
+}
 .feature-timeline .ft-packets {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  margin-top: 2px;
+  gap: 4px;
+  margin-top: 4px;
 }
 .ft-packet {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 3px 6px;
+  padding: 6px 8px;
   border: 1px solid var(--border);
-  border-radius: 3px;
+  border-radius: 4px;
   background: var(--bg-2);
   cursor: pointer;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--fg-2);
+  transition: background 0.1s, border-color 0.1s;
 }
-.ft-packet:hover { background: var(--bg-3); }
+.ft-packet:hover {
+  background: var(--bg-3);
+  border-color: var(--border-2);
+}
+.ft-packet:focus,
+.ft-packet:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(95, 158, 230, 0.25);
+}
 .ft-packet.selected {
   border-color: var(--accent);
-  background: rgba(95, 158, 230, 0.08);
+  background: rgba(95, 158, 230, 0.10);
+  border-left: 3px solid var(--accent);
 }
-.ft-packet .ft-state { display: none; } /* raw state hidden; severity dot only */
+.ft-packet .ft-state { display: none; }
 .ft-packet .dot { display: none; }
 .ft-packet .ft-title {
-  flex: 1;
+  flex: 1 1 auto;
   min-width: 0;
-  white-space: nowrap;
+  /* Wrap to 2 lines max */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-clamp: 2;
   overflow: hidden;
-  text-overflow: ellipsis;
+  word-break: break-word;
   color: var(--fg-2);
 }
 .ft-packet.selected .ft-title { color: var(--fg); }
+.ft-packet .ft-pkt-meta {
+  flex-shrink: 0;
+  color: var(--fg-3);
+  font-family: var(--mono);
+  font-size: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 50%;
+}
 .ft-packet .ft-attempts {
   flex-shrink: 0;
   color: var(--fg-3);
   font-family: var(--mono);
   font-size: 10px;
 }
-.ft-packet .ft-fail { display: none; } /* redundant with severity dot */
+.ft-packet .ft-fail { display: none; }
+.ft-pkt-empty {
+  padding: 4px 8px;
+}
 
 /* Middle pane filter chips (1-click to failed/running/blocked) */
 .middle-filter {
@@ -1188,7 +1281,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   html, body { overflow-x: hidden; max-width: 100vw; }
   body, .main, .console, .pkt-head-bar, .state-machine, .why-failed,
   .feature-timeline, .master-tree, .middle-filter,
-  .ft-packet, .tn-packet, .tn-feature-head, .tn-wave-head {
+  .ft-packet, .tn-packet, .tn-feature-head, .tn-wave-head,
+  .ft-wave, .wave-packet-card, .wave-head-bar {
     max-width: 100%;
     overflow-x: hidden;
     word-break: break-word;
@@ -1196,8 +1290,14 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   pre { max-width: 100%; white-space: pre-wrap; word-break: break-all; }
   .pkt-head-bar { flex-wrap: wrap; }
   .pkt-head-bar h1 { font-size: 14px; word-break: break-all; }
+  .wave-head-bar h1 { font-size: 14px; word-break: break-all; }
   .stats-bar { flex-wrap: wrap; }
   .filter-chips, .middle-filter { flex-wrap: wrap; }
+  /* Wave card on mobile: bigger tap target, packet rows inside stack */
+  .feature-timeline .ft-wave { padding: 8px 10px; }
+  .feature-timeline .ft-wave-head .ft-wave-title { font-size: 13px; }
+  .ft-packet { padding: 8px 10px; font-size: 12px; }
+  .wave-packet-card { padding: 8px 10px; }
   /* Show the back link on mobile */
   .back-link { display: inline-block; }
 }
@@ -1456,3 +1556,155 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 /* State machine (legacy) — keep the styles for any cached CSS but
    don't render the old transition timeline. */
 .state-machine { display: none; }
+
+/* ── Wave details mode (right pane when only wave_id is selected) ──── */
+.wave-head-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 14px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-2);
+  border-radius: 6px;
+}
+.wave-head-bar.severity-ok { border-left-color: var(--sev-ok-soft); }
+.wave-head-bar.severity-attention { border-left-color: var(--sev-attn); }
+.wave-head-bar.severity-critical { border-left-color: var(--sev-crit); }
+.wave-head-bar.severity-muted { border-left-color: var(--border-2); }
+.wave-head-main h1 {
+  margin: 0 0 4px 0;
+  font-size: 16px;
+  color: var(--fg);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-clamp: 2;
+  overflow: hidden;
+  word-break: break-word;
+}
+.wave-head-sub {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.wave-head-sub .slug-chip {
+  color: var(--fg-2);
+  font-family: var(--mono);
+  font-size: 10px;
+  background: var(--bg-3);
+  padding: 1px 6px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+}
+.wave-head-sub .raw-state {
+  font-family: var(--mono);
+  font-size: 10px;
+}
+
+/* Clickable packet card list inside wave details */
+.wave-packets-section {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 14px;
+}
+.wave-packets {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+.wave-packet-card {
+  display: block;
+  text-decoration: none;
+  color: inherit;
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-2);
+  border-radius: 4px;
+  padding: 8px 10px;
+  cursor: pointer;
+  transition: background 0.1s, border-color 0.1s, border-left-color 0.1s;
+}
+.wave-packet-card:hover {
+  background: var(--bg-2);
+  border-color: var(--border-2);
+  border-left-color: var(--accent);
+}
+.wave-packet-card:focus,
+.wave-packet-card:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(95, 158, 230, 0.25);
+}
+.wave-packet-card.severity-ok { border-left-color: var(--sev-ok-soft); }
+.wave-packet-card.severity-attention { border-left-color: var(--sev-attn); }
+.wave-packet-card.severity-critical { border-left-color: var(--sev-crit); }
+.wave-packet-card.severity-muted { border-left-color: var(--border-2); }
+.wave-pkt-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 2px;
+  flex-wrap: wrap;
+}
+.wave-pkt-head .dot { display: none; }
+.wave-pkt-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--fg);
+  font-weight: 500;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-clamp: 2;
+  overflow: hidden;
+  word-break: break-word;
+}
+.wave-pkt-status {
+  flex-shrink: 0;
+}
+.wave-pkt-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 2px;
+}
+.wave-pkt-meta .mono { font-size: 10px; }
+
+/* pkmeta values get color accents for non-zero counts */
+.pkt-meta-value.attn { color: var(--sev-attn); font-weight: 500; }
+.pkt-meta-value.ok { color: var(--sev-ok); font-weight: 500; }
+
+/* ── Master tree: selected feature gets subtle blue accent ─────────── */
+.tn-feature.selected {
+  background: rgba(95, 158, 230, 0.05);
+  border-left: 3px solid var(--accent);
+  padding-left: 3px;
+}
+.tn-feature.selected.severity-attention {
+  /* Attention selected: blue wins, not yellow */
+  border-left-color: var(--accent);
+}
+.tn-feature.selected.severity-critical {
+  border-left-color: var(--accent);
+}
+.tn-feature-head:focus,
+.tn-feature-head:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--accent);
+  border-radius: 3px;
+}
+.tn-wave-head:focus,
+.tn-wave-head:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+.tn-packet:focus,
+.tn-packet:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--accent);
+}

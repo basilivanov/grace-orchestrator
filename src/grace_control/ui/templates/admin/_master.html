@@ -61,11 +61,11 @@
 {{ p.id }}
 state: {{ p.state }}
 attempts: {{ p.attempt_count }}/{{ p.max_attempts }}"
-                   hx-get="/admin/_partial/detail?packet_id={{ p.id }}&feature_id={{ f.id }}&tab=timeline&search={{ search }}&filter={{ filter }}&expanded_features={{ (expanded_features + [f.id]) | join(',') }}&expanded_waves={{ expanded_waves | join(',') }}"
+                   hx-get="/admin/_partial/detail?packet_id={{ p.id }}&feature_id={{ f.id }}&wave_id={{ w.id }}&tab=timeline&search={{ search }}&filter={{ filter }}&expanded_features={{ (expanded_features + [f.id]) | join(',') }}&expanded_waves={{ expanded_waves | join(',') }}"
                    hx-target="#detail-pane"
                    hx-swap="outerHTML"
                    hx-push-url="{{ p.click_url }}"
-                   style="cursor: pointer;">
+                   hx-on:click="event.stopPropagation()">
                 <span class="dot" aria-hidden="true"></span>
                 <span class="pkt-title">{{ p.title or p.slug or p.id }}</span>
                 <span class="pkt-attempts muted">{{ p.attempt_count }}/{{ p.max_attempts }}</span>
