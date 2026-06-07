@@ -382,7 +382,12 @@ class PacketExecutionAdapter:
         resume_mode = executor.get("resume_mode", "never")
         role = executor.get("role", "coder")
         executor_id = executor.get("executor_id", "")
-        if resume_mode in ("always", "on_retry", "on_fork") and attempt > 0:
+
+        # TZ: attempt 7+ with NEW_ARCHITECT → fresh session (no resume).
+        # Also initial architect (attempt 0) has no session to resume.
+        force_fresh = (role == "architect" and attempt >= 7)
+
+        if not force_fresh and resume_mode in ("always", "on_retry", "on_fork") and attempt > 0:
             with get_db() as db:
                 if resume_mode == "on_retry":
                     prev = self._session_store.find_latest(
