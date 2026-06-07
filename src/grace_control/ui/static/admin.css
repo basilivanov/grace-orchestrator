@@ -2185,3 +2185,197 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   word-break: break-word;
 }
 .wave-pkt-val.mono { font-size: 11px; }
+
+/* ── Maintenance pane (TZ_RETENTION_POLICY.md Phase 3) ─────────────── */
+.maintenance-pane {
+  padding: 20px 24px;
+  max-width: 1100px;
+}
+.maintenance-pane .pane-head { margin-bottom: 18px; }
+.maintenance-pane .pane-h { font-size: 18px; font-weight: 600; }
+.maintenance-pane .pane-sub { margin-top: 4px; }
+
+.maint-section { margin-bottom: 28px; }
+.maint-h {
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--fg-2);
+  margin-bottom: 10px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.maint-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+.maint-cell {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 10px 12px;
+}
+.maint-cell-key {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--fg-3);
+  margin-bottom: 4px;
+}
+.maint-cell-val {
+  font-size: 18px;
+  font-weight: 500;
+  color: var(--fg);
+}
+.maint-cell-val.maint-attn { color: var(--sev-attn); }
+.maint-cell-sub { margin-top: 2px; }
+.maint-callout {
+  background: var(--bg-2);
+  border-left: 3px solid var(--sev-ok-soft);
+  padding: 10px 14px;
+  border-radius: 0 4px 4px 0;
+}
+.maint-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.maint-table th {
+  text-align: left;
+  font-weight: 500;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--fg-3);
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.maint-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-soft, var(--border));
+  vertical-align: middle;
+}
+.maint-table td.num { text-align: right; }
+.maint-table td.mono { font-family: var(--mono); font-size: 11px; }
+.maint-row-stale {
+  background: color-mix(in srgb, var(--sev-attn-bg, var(--bg-2)) 30%, transparent);
+}
+.maint-tag {
+  display: inline-block;
+  padding: 1px 5px;
+  margin-left: 6px;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  background: var(--sev-attn-bg, var(--bg-2));
+  color: var(--sev-attn);
+  border-radius: 3px;
+}
+.maint-bulk-action {
+  margin-top: 12px;
+  display: flex;
+  justify-content: flex-end;
+}
+.maint-btn {
+  font-family: inherit;
+  font-size: 12px;
+  padding: 5px 12px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+  color: var(--fg);
+  cursor: pointer;
+  transition: background 80ms;
+}
+.maint-btn:hover { background: var(--bg-3, var(--bg-2)); }
+.maint-btn-danger {
+  background: var(--bg-2);
+  color: var(--sev-crit);
+  border-color: color-mix(in srgb, var(--sev-crit) 30%, var(--border));
+}
+.maint-btn-danger:hover {
+  background: color-mix(in srgb, var(--sev-crit) 12%, var(--bg-2));
+}
+.maint-btn-primary {
+  background: var(--sev-ok-soft);
+  color: var(--sev-ok);
+  border-color: color-mix(in srgb, var(--sev-ok) 30%, var(--border));
+}
+.maint-btn-primary:hover {
+  background: color-mix(in srgb, var(--sev-ok) 16%, var(--bg-2));
+}
+.maint-btn-secondary {
+  background: var(--bg-2);
+  color: var(--fg-2);
+}
+.maint-result {
+  margin-bottom: 16px;
+  padding: 8px 12px;
+  border-radius: 3px;
+  font-size: 12px;
+}
+.maint-result-ok {
+  background: color-mix(in srgb, var(--sev-ok) 10%, transparent);
+  border-left: 3px solid var(--sev-ok);
+}
+.maint-result-err {
+  background: color-mix(in srgb, var(--sev-crit) 10%, transparent);
+  border-left: 3px solid var(--sev-crit);
+}
+.maint-result ul { margin: 4px 0 0 18px; }
+.maint-footer {
+  margin-top: 18px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+@media (max-width: 768px) {
+  .maintenance-pane { padding: 12px 14px; }
+  .maint-table { font-size: 11px; }
+  .maint-table th, .maint-table td { padding: 4px 6px; }
+  .maint-cell-val { font-size: 15px; }
+}
+
+/* ── Top-level view tabs (Overview / Maintenance) ──────────────────── */
+.view-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 6px 16px 0 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+.view-tab {
+  display: inline-block;
+  padding: 6px 14px;
+  font-size: 12px;
+  color: var(--fg-3);
+  text-decoration: none;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 4px 4px 0 0;
+  margin-bottom: -1px;
+  transition: color 80ms, background 80ms;
+}
+.view-tab:hover {
+  color: var(--fg-2);
+  background: var(--bg-2);
+}
+.view-tab-active {
+  color: var(--fg);
+  background: var(--bg-2);
+  border-color: var(--border);
+}
+.console-maintenance {
+  padding: 0;
+  background: var(--bg);
+}
+
+@media (max-width: 768px) {
+  .view-tabs { padding: 6px 10px 0 10px; }
+  .view-tab { padding: 5px 10px; font-size: 11px; }
+}

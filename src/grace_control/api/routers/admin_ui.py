@@ -29,6 +29,8 @@
 #       - GET  /admin/_partial/timeline
 #       - GET  /admin/_partial/detail
 #       - GET  /admin/_partial/tab
+#       - GET  /admin/_partial/maintenance
+#       - POST /admin/maintenance/cleanup
 # END_MODULE_MAP
 
 from __future__ import annotations
@@ -41,11 +43,17 @@ from fastapi.templating import Jinja2Templates
 
 from grace_control.db import get_db
 from grace_control.services.admin_aggregation_service import AdminAggregationService
+from grace_control.services.maintenance_service import MaintenanceService
 from grace_control.ui.admin_template_filters import register as _register_filters
 from grace_control.ui.admin_template_filters import shell_url as _shell_url
 
 router = APIRouter()
 _svc = AdminAggregationService()
+_maint_svc = MaintenanceService(
+    state_root=Path("/tmp/grace-orchestrator-export/.grace/state"),
+    worktree_root=Path("/tmp/grace-orchestrator-export/.grace/worktrees"),
+    project_root=Path("/tmp/grace-orchestrator-export"),
+)
 
 _TEMPLATES_DIR = Path(__file__).parent.parent.parent / "ui" / "templates"
 _templates = Jinja2Templates(directory=str(_TEMPLATES_DIR / "admin"))
@@ -124,12 +132,15 @@ def admin_console(
     filter: str = "all",
     expanded_features: str = "",
     expanded_waves: str = "",
+    view: str = "overview",
 ) -> HTMLResponse:
     """The main operator console — server-rendered with HTMX.
 
     Top-level navigation. Within the page, HTMX handles all interactions
     (feature click → partial timeline update, packet click → partial detail
     update, tab click → partial tab update, search → partial master update).
+
+    `view` switches between "overview" (default) and "maintenance".
     """
     features_data = _features_data()
     overview = _overview_data()
@@ -249,6 +260,7 @@ def admin_console(
         "expanded_features": ef,
         "expanded_waves": ew,
         "chips": chips,
+        "view": view,
         "tab_urls": tab_urls,
         "shell_url": _shell_url,
         "total_packets": sum(
@@ -256,6 +268,11 @@ def admin_console(
             for p in [w.get("packets") or []] for p in p
         ),
     }
+    # Maintenance view: pass snapshot for the inlined _maintenance.html
+    if view == "maintenance":
+        with get_db() as db:
+            states = _packet_states_map(db)
+        ctx["snapshot"] = _maint_svc.snapshot(packet_states=states)
     return _templates.TemplateResponse(request, "console.html", ctx)
 
 
@@ -610,5 +627,70 @@ def partial_tab(
         "evidence": evidence,
         "logs_text": logs_text,
         "artifacts": artifacts,
+        "shell_url": _shell_url,
+    })
+
+
+# ── Maintenance tab (TZ_RETENTION_POLICY.md Phase 3) ───────────────────────
+
+
+def _packet_states_map(db) -> dict[str, str]:
+    """Return {packet_id: state} for all packets (used to flag stale worktrees)."""
+    from grace_control.db.schema import Packet
+    return {p.id: (p.state or "draft") for p in db.query(Packet).all()}
+
+
+@router.get("/admin/_partial/maintenance", response_class=HTMLResponse)
+def partial_maintenance(request: Request) -> HTMLResponse:
+    """Maintenance tab fragment — disk usage, branches, worktrees, actions.
+
+    Swaps into #detail-pane (outerHTML). Pushes URL via hx-push-url.
+    Refreshes on every 5s polling tick (same as other panes).
+    """
+    with get_db() as db:
+        states = _packet_states_map(db)
+    snap = _maint_svc.snapshot(packet_states=states)
+    return _templates.TemplateResponse(request, "_maintenance.html", {
+        "request": request,
+        "snapshot": snap,
+        "shell_url": _shell_url,
+    })
+
+
+@router.post("/admin/maintenance/cleanup", response_class=HTMLResponse)
+def cleanup_action(
+    request: Request,
+    action: str = Query(..., description="worktree|branch|stale"),
+    slug: str | None = Query(None),
+    branch: str | None = Query(None),
+    dry_run: bool = Query(False),
+) -> HTMLResponse:
+    """Run a manual cleanup action and re-render the maintenance pane.
+
+    Actions:
+      - worktree: delete a specific worktree (slug required)
+      - branch:   delete a specific agent/* branch (branch required)
+      - stale:    delete all worktrees for terminal-state packets
+    """
+    with get_db() as db:
+        states = _packet_states_map(db)
+
+    if action == "worktree" and slug:
+        result = _maint_svc.cleanup_worktree(slug, dry_run=dry_run)
+    elif action == "branch" and branch:
+        result = _maint_svc.cleanup_branch(branch, dry_run=dry_run)
+    elif action == "stale":
+        result = _maint_svc.cleanup_stale_worktrees(
+            packet_states=states, dry_run=dry_run,
+        )
+    else:
+        result = _maint_svc.CleanupResult()  # unknown action
+        result.errors.append(f"unknown action: {action}")
+
+    snap = _maint_svc.snapshot(packet_states=states)
+    return _templates.TemplateResponse(request, "_maintenance.html", {
+        "request": request,
+        "snapshot": snap,
+        "last_result": result,
         "shell_url": _shell_url,
     })

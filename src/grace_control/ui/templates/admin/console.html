@@ -5,7 +5,17 @@
    The container carries the polling trigger. #}
 {% include "_stats.html" %}
 
-<div class="console">
+{# Top-level view switcher (Overview / Maintenance). The active view
+   replaces the entire console grid below. Maintenance is rendered by
+   the /admin/_partial/maintenance endpoint, swapped into #view-root. #}
+<nav class="view-tabs">
+  <a class="view-tab {% if not view == 'maintenance' %}view-tab-active{% endif %}"
+     href="{{ shell_url(view='overview') }}">Overview</a>
+  <a class="view-tab {% if view == 'maintenance' %}view-tab-active{% endif %}"
+     href="{{ shell_url(view='maintenance') }}">Maintenance</a>
+</nav>
+
+<div class="console" id="view-root">
   {# Master tree (left) — wrappers come from _master.html partial #}
   <div class="console-master" id="master-pane">
     <div class="master-search">
@@ -25,9 +35,17 @@
   </div>
 
   {# Middle pane: feature timeline (wrappers come from _timeline.html partial) #}
+  {% if view == 'maintenance' %}
+    {# Maintenance view replaces the entire console grid with a single pane. #}
+  </div>
+  <div class="console-maintenance" id="view-root">
+    {% include "_maintenance.html" %}
+  </div>
+  {% else %}
   {% include "_timeline.html" %}
 
   {# Right pane: packet detail (wrappers come from _detail.html partial) #}
   {% include "_detail.html" %}
 </div>
+{% endif %}
 {% endblock %}

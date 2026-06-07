@@ -1,0 +1,218 @@
+{# ── Maintenance pane (TZ_RETENTION_POLICY.md Phase 3) ─────────────────────
+   Self-wrapping root: <section id="detail-pane" class="detail-pane maintenance-pane">
+   Swaps via HTMX outerHTML into the same #detail-pane element.
+   ─────────────────────────────────────────────────────────────────────── #}
+<section id="detail-pane" class="detail-pane maintenance-pane"
+         hx-get="/admin/_partial/maintenance"
+         hx-trigger="load delay:5s"
+         hx-swap="none"
+         data-poll="maintenance">
+
+  <header class="pane-head">
+    <h1 class="pane-h">Maintenance</h1>
+    <p class="pane-sub muted small">
+      Disk usage, stale branches, and stale worktrees. All cleanup is manual —
+      nothing happens automatically.
+    </p>
+  </header>
+
+  {# ── Action result banner (only on POST response) ─────────────────── #}
+  {% if last_result %}
+  <div class="maint-result {% if last_result.errors %}maint-result-err{% else %}maint-result-ok{% endif %}">
+    {% if last_result.errors %}
+      <strong>Cleanup failed:</strong>
+      <ul>{% for e in last_result.errors %}<li>{{ e }}</li>{% endfor %}</ul>
+    {% else %}
+      <strong>OK.</strong>
+      Freed {{ last_result.bytes_freed_human }}.
+      {% if last_result.worktrees_removed %}
+        Removed {{ last_result.worktrees_removed | length }} worktree(s):
+        {{ last_result.worktrees_removed | join(', ') }}.
+      {% endif %}
+      {% if last_result.branches_deleted %}
+        Deleted {{ last_result.branches_deleted | length }} branch(es):
+        {{ last_result.branches_deleted | join(', ') }}.
+      {% endif %}
+      {% if last_result.dry_run %} (dry-run){% endif %}
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {# ── Disk usage section ─────────────────────────────────────────── #}
+  <section class="maint-section">
+    <h2 class="maint-h">Disk usage</h2>
+    <div class="maint-grid">
+      <div class="maint-cell">
+        <div class="maint-cell-key">Worktrees</div>
+        <div class="maint-cell-val size-info" title=".grace/worktrees/">
+          {{ snapshot.disk.worktrees_total_human }}
+        </div>
+        <div class="maint-cell-sub muted small">
+          {{ snapshot.disk.worktree_count }} dir(s)
+        </div>
+      </div>
+      <div class="maint-cell">
+        <div class="maint-cell-key">Run artifacts</div>
+        <div class="maint-cell-val size-info" title=".grace/state/ — kept forever">
+          {{ snapshot.disk.state_total_human }}
+        </div>
+        <div class="maint-cell-sub muted small">
+          {{ snapshot.disk.packet_count }} packet(s), {{ snapshot.disk.run_count }} run(s)
+        </div>
+      </div>
+      <div class="maint-cell">
+        <div class="maint-cell-key">Agent branches</div>
+        <div class="maint-cell-val size-info">
+          {{ snapshot.agent_branch_count }}
+        </div>
+        <div class="maint-cell-sub muted small">
+          {% if snapshot.git_available %}
+            git root: <code>{{ snapshot.git_root }}</code>
+          {% else %}
+            no git repo
+          {% endif %}
+        </div>
+      </div>
+      <div class="maint-cell">
+        <div class="maint-cell-key">Stale worktrees</div>
+        <div class="maint-cell-val size-info {% if snapshot.stale_worktree_count %}maint-attn{% endif %}">
+          {{ snapshot.stale_worktree_count }} ({{ snapshot.stale_worktree_total_human }})
+        </div>
+        <div class="maint-cell-sub muted small">
+          worktrees for terminal-state packets
+        </div>
+      </div>
+    </div>
+  </section>
+
+  {# ── Stale worktrees section ─────────────────────────────────────── #}
+  <section class="maint-section">
+    <h2 class="maint-h">Worktrees</h2>
+    {% if snapshot.worktrees %}
+    <table class="maint-table">
+      <thead>
+        <tr>
+          <th>slug</th>
+          <th>state</th>
+          <th class="num">size</th>
+          <th>actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for w in snapshot.worktrees %}
+        <tr class="{% if w.is_stale %}maint-row-stale{% endif %}">
+          <td class="mono">
+            {{ w.slug }}
+            {% if w.is_stale %}<span class="maint-tag">stale</span>{% endif %}
+          </td>
+          <td>
+            {% if w.packet_state %}
+              <span class="badge severity-{{ w.packet_state | state_severity }}">
+                {{ w.packet_state | state_label }}
+              </span>
+            {% else %}
+              <span class="muted small">unknown</span>
+            {% endif %}
+          </td>
+          <td class="num size-info">{{ w.size_human }}</td>
+          <td>
+            <button class="maint-btn maint-btn-danger"
+                    hx-post="/admin/maintenance/cleanup?action=worktree&slug={{ w.slug }}"
+                    hx-target="#detail-pane"
+                    hx-swap="outerHTML"
+                    hx-confirm="Remove worktree {{ w.slug }} and its branch?"
+                    title="Remove worktree dir and matching agent/* branch">
+              Clean up
+            </button>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="muted small">No worktrees in <code>{{ snapshot.disk.worktree_count }}</code>.</p>
+    {% endif %}
+
+    {% if snapshot.stale_worktree_count %}
+    <div class="maint-bulk-action">
+      <button class="maint-btn maint-btn-primary"
+              hx-post="/admin/maintenance/cleanup?action=stale"
+              hx-target="#detail-pane"
+              hx-swap="outerHTML"
+              hx-confirm="Remove all {{ snapshot.stale_worktree_count }} stale worktree(s) ({{ snapshot.stale_worktree_total_human }})?">
+        Clean up all stale ({{ snapshot.stale_worktree_count }}, {{ snapshot.stale_worktree_total_human }})
+      </button>
+    </div>
+    {% endif %}
+  </section>
+
+  {# ── Branches section ────────────────────────────────────────────── #}
+  <section class="maint-section">
+    <h2 class="maint-h">Branches</h2>
+    {% set agent_branches = snapshot.branches | selectattr('is_agent_branch') | list %}
+    {% if agent_branches %}
+    <table class="maint-table">
+      <thead>
+        <tr>
+          <th>branch</th>
+          <th>actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for b in agent_branches %}
+        <tr>
+          <td class="mono">
+            {{ b.name }}
+            {% if b.is_current %}<span class="maint-tag">HEAD</span>{% endif %}
+          </td>
+          <td>
+            {% if not b.is_current %}
+            <button class="maint-btn maint-btn-danger"
+                    hx-post="/admin/maintenance/cleanup?action=branch&branch={{ b.name }}"
+                    hx-target="#detail-pane"
+                    hx-swap="outerHTML"
+                    hx-confirm="Delete branch {{ b.name }}?"
+                    title="git branch -D {{ b.name }}">
+              Delete
+            </button>
+            {% else %}
+            <span class="muted small">current HEAD</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="muted small">No agent/* branches in the project repo.</p>
+    {% endif %}
+  </section>
+
+  {# ── Archives placeholder (TZ: no auto-archive, runs kept forever) #}
+  <section class="maint-section">
+    <h2 class="maint-h">Run artifacts archive</h2>
+    <div class="maint-callout">
+      <p class="muted small">
+        <strong>Run artifacts in <code>.grace/state/</code> are kept forever.</strong>
+        There is no automatic tar.gz archive and no TTL — every coder run, log
+        file, and JSON evidence blob remains on disk for future LLM analysis.
+      </p>
+      <p class="muted small">
+        Disk is cheap. Re-running a packet is expensive. The cost trade-off
+        favours keeping the artifacts.
+      </p>
+    </div>
+  </section>
+
+  {# ── Last refresh + manual refresh button ───────────────────────── #}
+  <footer class="maint-footer muted small">
+    Snapshot taken at <code>{{ snapshot.taken_at }}</code>.
+    <button class="maint-btn maint-btn-secondary"
+            hx-get="/admin/_partial/maintenance"
+            hx-target="#detail-pane"
+            hx-swap="outerHTML">
+      Refresh
+    </button>
+  </footer>
+
+</section>

@@ -428,6 +428,7 @@ def shell_url(
     filter: str = "all",
     expanded_features: Any = None,
     expanded_waves: Any = None,
+    view: str = "overview",
 ) -> str:
     """Build the operator console shell URL from current state.
 
@@ -438,8 +439,13 @@ def shell_url(
     `wave_id` is only included when a wave is explicitly selected (e.g.
     user clicked a wave card). When a packet is also selected, packet_id
     takes precedence in the detail pane.
+
+    `view` switches between "overview" (default) and "maintenance"
+    (TZ_RETENTION_POLICY.md Phase 3).
     """
     params: list[tuple[str, str]] = []
+    if view and view != "overview":
+        params.append(("view", view))
     if feature_id:
         params.append(("feature_id", str(feature_id)))
     if wave_id and not packet_id:
