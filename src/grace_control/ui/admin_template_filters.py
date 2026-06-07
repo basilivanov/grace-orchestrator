@@ -20,6 +20,92 @@ from typing import Any
 from urllib.parse import urlencode
 
 
+# ── UI display layer ──────────────────────────────────────────────────────
+# Maps raw backend states to calm, operator-friendly labels. Backend
+# state strings are NOT changed. Only the labels/severity/CSS shown in
+# the UI are mapped here. This keeps the raw state available in
+# detail-metadata while removing visual noise from navigation/structure.
+
+# severity values:
+#   ok       — done / healthy / running
+#   muted    — waiting / draft / not started / cancelled
+#   attention — needs human review but not final
+#   critical — selected failed/rejected/blocking only (one place)
+#
+# show_pill values:
+#   "none"   — do not render any pill in navigation rows
+#   "dot"    — render a small colored dot (left-side indicator)
+#   "badge"  — render a small text badge (only for the selected detail)
+
+_STATE_MAP: dict[str, dict[str, str]] = {
+    # packet states
+    "draft":              {"label": "Draft",                "severity": "muted",    "show": "none"},
+    "ready":              {"label": "Ready",                "severity": "muted",    "show": "none"},
+    "claimed":            {"label": "Running",              "severity": "ok",       "show": "dot"},
+    "running":            {"label": "Running",              "severity": "ok",       "show": "dot"},
+    "rejected":           {"label": "Reviewer rejected",    "severity": "attention", "show": "badge"},
+    "failed":             {"label": "Failed",               "severity": "critical", "show": "badge"},
+    "blocked":            {"label": "Blocked",              "severity": "attention", "show": "dot"},
+    "blocked_recoverable": {"label": "Blocked",             "severity": "attention", "show": "dot"},
+    "blocked_final":      {"label": "Blocked",              "severity": "critical", "show": "badge"},
+    "accepted":           {"label": "Done",                 "severity": "ok",       "show": "dot"},
+    "merged":             {"label": "Done",                 "severity": "ok",       "show": "dot"},
+    "cancelled":          {"label": "Cancelled",            "severity": "muted",    "show": "none"},
+    # wave / feature statuses (uppercase from DB)
+    "NOT_STARTED":        {"label": "Waiting",              "severity": "muted",    "show": "none"},
+    "DEGRADED":           {"label": "Has failed packets",   "severity": "attention", "show": "dot"},
+    "COMPLETED":          {"label": "Done",                 "severity": "ok",       "show": "dot"},
+    "ACTIVE":             {"label": "Running",              "severity": "ok",       "show": "dot"},
+    "DONE":               {"label": "Done",                 "severity": "ok",       "show": "dot"},
+    "FAILED":             {"label": "Failed",               "severity": "critical", "show": "badge"},
+    "BLOCKED":            {"label": "Blocked",              "severity": "attention", "show": "dot"},
+    "BLOCKED_FINAL":      {"label": "Blocked",              "severity": "critical", "show": "badge"},
+    "CANCELLED":          {"label": "Cancelled",            "severity": "muted",    "show": "none"},
+}
+
+
+def _state_lookup(state: str | None) -> dict[str, str]:
+    if not state:
+        return {"label": "—", "severity": "muted", "show": "none"}
+    entry = _STATE_MAP.get(state)
+    if entry is None:
+        # Unknown state — show raw value, treat as muted (not alarming)
+        return {"label": str(state), "severity": "muted", "show": "none",
+                "raw": str(state)}
+    out = dict(entry)
+    out["raw"] = str(state)
+    return out
+
+
+def ui_state(state: str | None) -> dict[str, str]:
+    """Jinja filter: raw backend state → {label, severity, show, raw}.
+
+    Usage in template:
+        {{ packet.state | ui_state }}
+    """
+    return _state_lookup(state)
+
+
+def state_label(state: str | None) -> str:
+    """Jinja filter: raw state → human label. e.g. 'rejected' → 'Reviewer rejected'."""
+    return _state_lookup(state)["label"]
+
+
+def state_severity(state: str | None) -> str:
+    """Jinja filter: raw state → severity class suffix ('ok' | 'muted' | 'attention' | 'critical')."""
+    return _state_lookup(state)["severity"]
+
+
+def is_attention(state: str | None) -> bool:
+    """Jinja filter: True if state is in the attention bucket (failed/rejected/blocked)."""
+    return _state_lookup(state)["severity"] in ("attention", "critical")
+
+
+def raw_state(state: str | None) -> str:
+    """Jinja filter: returns the raw backend state unchanged (for debug metadata)."""
+    return str(state) if state else "—"
+
+
 def sum_packet_count(waves: list[dict[str, Any]] | None) -> int:
     """Sum packet counts across all waves in a feature."""
     if not waves:
@@ -215,4 +301,9 @@ def register(env: Any) -> None:
     env.filters["state_machine_class"] = state_machine_class
     env.filters["next_action_text"] = next_action_text
     env.filters["next_action_class"] = next_action_class
+    env.filters["ui_state"] = ui_state
+    env.filters["state_label"] = state_label
+    env.filters["state_severity"] = state_severity
+    env.filters["is_attention"] = is_attention
+    env.filters["raw_state"] = raw_state
     env.globals["shell_url"] = shell_url

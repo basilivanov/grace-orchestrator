@@ -387,6 +387,58 @@ def test_features_tree_returns_features_with_waves_and_packets_with_slugs(
             assert "max_attempts" in pkt
 
 
+def test_features_tree_aggregates_attention_counts_per_feature_and_wave(
+    db_url, svc, session,
+):
+    """UI uses feature/wave attention_count to render the calm
+    "N needs attention" meta line. These counters must:
+      - count only failed/rejected/blocked (not draft/running)
+      - roll up to the parent feature
+      - be 0 for clean features."""
+    _seed_tree(session)
+    out = svc.get_features_tree(session)
+    feat = out["features"][0]
+    # Tree has 1 rejected packet (p_tree_svc_1) and 1 draft packet (p_tree_svc_2)
+    assert feat["total_packets"] == 2
+    assert feat["attention_count"] == 1, (
+        f"feature should aggregate 1 rejected packet, got "
+        f"{feat['attention_count']}"
+    )
+    assert feat["wave_count"] == 2
+
+    # Wave 1 (DEGRADED) has 1 rejected packet
+    w1 = feat["waves"][0]
+    assert w1["total_packets"] == 1
+    assert w1["attention_count"] == 1
+
+    # Wave 2 (NOT_STARTED) has 1 draft packet — no attention
+    w2 = feat["waves"][1]
+    assert w2["total_packets"] == 1
+    assert w2["attention_count"] == 0
+
+
+def test_features_tree_clean_feature_has_zero_attention(db_url, svc, session):
+    """A feature with no failed/rejected/blocked packets should have
+    attention_count = 0 — the UI then hides the 'needs attention' text."""
+    f = Feature(
+        id="F_CLEAN_SVC", slug="clean-feat", title="Clean Feature",
+        spec_json={}, status="IN_PROGRESS",
+    )
+    w = Wave(id="W_CLEAN_SVC", feature_id=f.id, slug="clean-wave",
+             title="Clean Wave", order=1, status="NOT_STARTED")
+    p = Packet(id="p_clean_svc", feature_id=f.id, wave_id=w.id,
+               slug="clean-pkt", title="Clean Packet",
+               spec_json={"role": "coder"},
+               state="draft", attempt_count=0, max_attempts=5)
+    session.add_all([f, w, p])
+    session.commit()
+
+    out = svc.get_features_tree(session)
+    feat = out["features"][0]
+    assert feat["attention_count"] == 0
+    assert feat["waves"][0]["attention_count"] == 0
+
+
 def _seed_tree(session):
     """Seed a 1-feature / 2-wave / 2-packet tree for /features endpoint tests."""
     f = Feature(

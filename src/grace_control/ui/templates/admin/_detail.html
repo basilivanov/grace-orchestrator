@@ -1,5 +1,12 @@
 {# Packet detail partial — self-wrapping: returns <div id="detail-pane">.
-   hx-swap="outerHTML" on #detail-pane replaces this whole element. #}
+   hx-swap="outerHTML" on #detail-pane replaces this whole element.
+
+   UI layer:
+   - Header: title + small severity badge (raw state as small meta)
+   - "Needs attention" panel (only for failing packets): calm, not loud red
+   - State machine: kept as visual progress
+   - Tabs: clean
+   - Raw state is still visible in metadata, not as primary UI language. #}
 <div class="console-detail" id="detail-pane">
   {% if not selected_packet_id %}
     <div class="detail-empty">
@@ -7,17 +14,26 @@
     </div>
   {% else %}
     {% if not packet %}
-      <div class="banner err">Packet not found: {{ selected_packet_id }}</div>
+      <div class="banner warn">Packet not found: {{ selected_packet_id }}</div>
     {% else %}
       {% set p = packet %}
+      {% set p_state = p.packet.state if p.packet else p.state %}
+      {% set p_ui = p_state | ui_state %}
+      {% set p_title = (p.packet.title if p.packet else None) or p.title or p.slug or p.id %}
+      {% set p_slug = (p.packet.slug if p.packet else None) or p.slug %}
       <a class="back-link" href="/admin" data-topnav="true">← back to overview</a>
-      <div class="pkt-head-bar">
-        <h1>{{ p.title or p.slug or p.id }}</h1>
-        <span class="badge {{ p.state }}">{{ p.state }}</span>
+      <div class="pkt-head-bar severity-{{ p_ui.severity }} {{ 'selected' if p_ui.severity == 'critical' else '' }}">
+        <h1>{{ p_title }}</h1>
+        {% if p_ui.show == 'badge' %}
+          <span class="badge severity-{{ p_ui.severity }}">{{ p_ui.label }}</span>
+        {% else %}
+          <span class="muted small">{{ p_ui.label }}</span>
+        {% endif %}
         <span class="id-slug">
           <span class="id-chip">{{ p.id }}</span>
-          {% if p.slug %}<span class="slug-chip">{{ p.slug }}</span>{% endif %}
+          {% if p_slug %}<span class="slug-chip">{{ p_slug }}</span>{% endif %}
         </span>
+        <span class="raw-state muted small" title="raw backend state">state: {{ p_state or '—' }}</span>
       </div>
 
       {# State machine #}
@@ -40,40 +56,42 @@
       </div>
       {% endif %}
 
-      {# Why it failed #}
+      {# Needs-attention panel (only for failing packets).
+         Replaces the old "WHY IT WAS REJECTED" header. Raw state remains
+         visible as small metadata inside the panel. #}
       {% set bd = p.blocking_decision or {} %}
       {% if bd.has_blocking %}
-        {% set is_warn = bd.state and bd.state.startswith('blocked') %}
-        <div class="why-failed {{ 'warn' if is_warn else '' }}">
-          <h2>Why it {{ 'was rejected' if bd.state == 'rejected' else 'failed' }}</h2>
-          <div class="reason-text"><strong>State: </strong>
-            <span class="badge {{ bd.state }}">{{ bd.state }}</span>
+        {% set bd_ui = bd.state | ui_state %}
+        <section class="needs-attention severity-{{ bd_ui.severity }}">
+          <h2 class="na-h">Needs attention</h2>
+          <div class="na-meta muted small">
+            <span class="badge severity-{{ bd_ui.severity }}">{{ bd_ui.label }}</span>
+            {% if bd.decided_by %}<span> · decided by {{ bd.decided_by }}</span>{% endif %}
+            {% if bd.at %}<span> · {{ bd.at }}</span>{% endif %}
           </div>
-          {% if bd.decided_by %}<div class="reason-text"><strong>Decision by: </strong>{{ bd.decided_by }}</div>{% endif %}
-          {% if bd.action %}<div class="reason-text"><strong>Action: </strong>{{ bd.action }}</div>{% endif %}
-          {% if bd.reason %}<div class="reason-text"><strong>Reason: </strong>{{ bd.reason }}</div>{% endif %}
-          {% if bd.at %}<div class="muted small">at {{ bd.at }}</div>{% endif %}
+          {% if bd.action %}<div class="na-row"><strong>What happened: </strong>{{ bd.action }}</div>{% endif %}
+          {% if bd.reason %}<div class="na-row"><strong>Why: </strong>{{ bd.reason }}</div>{% endif %}
           {% set lf = bd.last_failure or {} %}
-          {% if lf.summary %}<div class="reason-text" style="margin-top: 8px;"><strong>Summary: </strong>{{ lf.summary }}</div>{% endif %}
+          {% if lf.summary %}<div class="na-row"><strong>Summary: </strong>{{ lf.summary }}</div>{% endif %}
           {% if lf.stages %}
-            <ul>
+            <ul class="na-stages">
               {% for st in lf.stages %}
                 {% set marker = '✗' if st.status == 'failed' else ('✓' if st.status == 'passed' else '·') %}
                 <li>{{ marker }} {{ st.name }}: {{ st.status }}</li>
                 {% for iss in (st.blocking_issues or []) %}
-                  <li style="margin-left: 12px; color: var(--err);">  {{ iss }}</li>
+                  <li class="na-issue">  {{ iss }}</li>
                 {% endfor %}
               {% endfor %}
             </ul>
           {% endif %}
           {% if lf.command_preview %}
-            <div style="margin-top: 6px;">
+            <div class="na-cmd">
               <strong class="small">Last command:</strong>
               <pre class="command-preview">{{ lf.command_preview | join(' ') }}</pre>
             </div>
           {% endif %}
           {% if lf.stderr_tail %}
-            <div style="margin-top: 6px;">
+            <div class="na-cmd">
               <strong class="small">Stderr tail:</strong>
               <pre class="stderr-tail">{{ lf.stderr_tail }}</pre>
             </div>
@@ -85,7 +103,8 @@
               <span>{{ next_text }}</span>
             </div>
           {% endif %}
-        </div>
+          <div class="na-raw muted small" title="raw backend state">raw: {{ p_state or '—' }} / {{ bd.state or '—' }}</div>
+        </section>
       {% endif %}
 
       {# Tab bar — hx-get for each tab, swaps only #packet-tab-content #}

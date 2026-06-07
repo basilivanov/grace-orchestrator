@@ -684,19 +684,29 @@ class AdminAggregationService:
                 "id": p.id, "slug": p.slug, "title": p.title,
                 "state": p.state, "attempt_count": p.attempt_count,
             })
+        wave_rows: list[dict[str, Any]] = []
+        for w in waves:
+            wpackets = packets_by_wave.get(w.id, [])
+            w_attn = sum(
+                1 for p in wpackets
+                if p.get("state") in (
+                    "rejected", "failed", "blocked",
+                    "blocked_recoverable", "blocked_final",
+                )
+            )
+            wave_rows.append({
+                "id": w.id, "title": w.title, "order": w.order, "status": w.status,
+                "packets": wpackets,
+                "total_packets": len(wpackets),
+                "attention_count": w_attn,
+            })
         return {
             "feature": {
                 "id": f.id, "slug": f.slug, "title": f.title,
                 "status": f.status, "description": f.description or "",
                 "created_at": _iso(f.created_at), "updated_at": _iso(f.updated_at),
             },
-            "waves": [
-                {
-                    "id": w.id, "title": w.title, "order": w.order, "status": w.status,
-                    "packets": packets_by_wave.get(w.id, []),
-                }
-                for w in waves
-            ],
+            "waves": wave_rows,
         }
 
     def get_features_tree(self, db: Session) -> dict[str, Any]:
@@ -718,18 +728,41 @@ class AdminAggregationService:
                     "state": p.state, "attempt_count": p.attempt_count,
                     "max_attempts": p.max_attempts,
                 })
+            # Build wave rows with attention counters
+            wave_rows: list[dict[str, Any]] = []
+            for w in waves:
+                wpackets = packets_by_wave.get(w.id, [])
+                w_attn = sum(
+                    1 for p in wpackets
+                    if p.get("state") in (
+                        "rejected", "failed", "blocked",
+                        "blocked_recoverable", "blocked_final",
+                    )
+                )
+                wave_rows.append({
+                    "id": w.id, "slug": w.slug, "title": w.title,
+                    "order": w.order, "status": w.status,
+                    "packets": wpackets,
+                    "total_packets": len(wpackets),
+                    "attention_count": w_attn,
+                })
+            # Feature-level counters
+            all_packets = [pp for wpackets in packets_by_wave.values() for pp in wpackets]
+            f_attn = sum(
+                1 for p in all_packets
+                if p.get("state") in (
+                    "rejected", "failed", "blocked",
+                    "blocked_recoverable", "blocked_final",
+                )
+            )
             out.append({
                 "id": f.id, "slug": f.slug, "title": f.title,
                 "status": f.status, "description": f.description or "",
                 "created_at": _iso(f.created_at), "updated_at": _iso(f.updated_at),
-                "waves": [
-                    {
-                        "id": w.id, "slug": w.slug, "title": w.title,
-                        "order": w.order, "status": w.status,
-                        "packets": packets_by_wave.get(w.id, []),
-                    }
-                    for w in waves
-                ],
+                "wave_count": len(wave_rows),
+                "total_packets": len(all_packets),
+                "attention_count": f_attn,
+                "waves": wave_rows,
             })
         return {"features": out}
 

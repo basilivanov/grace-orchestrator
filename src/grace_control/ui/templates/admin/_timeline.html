@@ -1,5 +1,12 @@
 {# Feature timeline partial — self-wrapping: returns <div id="timeline-pane">.
-   hx-swap="outerHTML" on #timeline-pane replaces this whole element. #}
+   hx-swap="outerHTML" on #timeline-pane replaces this whole element.
+
+   UI layer:
+   - Top: filter chips (calm, with attention state color only on actual count)
+   - Selected feature: title, description, compact progress summary
+   - Each wave: title + packet count + attention count
+   - Packets inside a wave: smaller, muted, severity dot only
+   - Raw state NOT shown as primary UI language. #}
 {% set state_counts = features | sum_packets | state_count %}
 <div class="console-middle" id="timeline-pane">
   <div class="middle-filter" id="filter-chips">
@@ -31,28 +38,47 @@
 
   <div class="feature-timeline" id="feature-timeline">
     {% if not selected_feature_id %}
-      <h2>Feature timeline</h2>
-      <div class="empty">Click a feature on the left to see all its packets and their progress.</div>
+      <h2 class="ft-h">Pipeline</h2>
+      <div class="empty">Click a feature on the left to see its waves and packets.</div>
     {% else %}
       {% set f = features | selectattr('id', 'equalto', selected_feature_id) | first %}
       {% if not f %}
-        <h2>Feature timeline</h2>
+        <h2 class="ft-h">Feature timeline</h2>
         <div class="empty">Feature not found.</div>
       {% else %}
-        <h2>{{ f.title or f.slug }}</h2>
-        {% if f.description %}<div class="ft-desc">{{ f.description }}</div>{% endif %}
+        {% set f_ui = f.status | ui_state %}
+        {% set f_has_attn = f.attention_count > 0 %}
+        {% set f_sev = 'attention' if f_has_attn and f_ui.severity == 'muted' else f_ui.severity %}
+        <header class="ft-head severity-{{ f_sev }}">
+          <h2 class="ft-h">{{ f.title or f.slug }}</h2>
+          {% if f.description %}<div class="ft-desc muted">{{ f.description }}</div>{% endif %}
+          <div class="ft-summary muted small">
+            {{ f.wave_count }} wave{{ '' if f.wave_count == 1 else 's' }} ·
+            {{ f.total_packets }} packet{{ '' if f.total_packets == 1 else 's' }}{% if f.attention_count > 0 %} ·
+            <span class="attn-count">{{ f.attention_count }} needs attention</span>{% endif %}
+          </div>
+        </header>
+
         {% for w in (f.waves or []) %}
+          {% set w_ui = w.status | ui_state %}
+          {% set w_has_attn = w.attention_count > 0 %}
+          {% set w_sev = 'attention' if w_has_attn and w_ui.severity == 'muted' else w_ui.severity %}
           {% set wpackets = (w.packets or []) | filter_by_state(filter) %}
-          <div class="ft-wave">
+          <section class="ft-wave severity-{{ w_sev }}">
             <div class="ft-wave-head">
-              <span class="pill {{ w.status | status_class }}">{{ w.status }}</span>
-              <span>{{ w.title or w.slug }}</span>
-              <span class="muted mono small">#{{ w.order }}</span>
+              <span class="dot" aria-hidden="true"></span>
+              <span class="ft-wave-title">{{ w.title or w.slug }}</span>
+              <span class="ft-wave-meta muted small">
+                #{{ w.order }} ·
+                {{ w.total_packets }} packet{{ '' if w.total_packets == 1 else 's' }}{% if w.attention_count > 0 %} ·
+                <span class="attn-count">{{ w.attention_count }} needs attention</span>{% endif %}
+              </span>
             </div>
             <div class="ft-packets">
               {% if wpackets %}
                 {% for p in wpackets %}
-                  <div class="ft-packet {{ 'selected' if p.id == selected_packet_id else '' }}"
+                  {% set p_ui = p.state | ui_state %}
+                  <div class="ft-packet severity-{{ p_ui.severity }} {{ 'selected' if p.id == selected_packet_id else '' }}"
                        title="{{ p.title or p.slug }}
 {{ p.id }}
 state: {{ p.state }}
@@ -62,12 +88,9 @@ attempts: {{ p.attempt_count }}/{{ p.max_attempts }}"
                        hx-swap="outerHTML"
                        hx-push-url="{{ p.click_url }}"
                        style="cursor: pointer;">
-                    <span class="pill {{ p.state }} ft-state">{{ p.state }}</span>
+                    <span class="dot" aria-hidden="true"></span>
                     <span class="ft-title">{{ p.title or p.slug or p.id }}</span>
-                    <span class="ft-attempts">{{ p.attempt_count }}/{{ p.max_attempts }}</span>
-                    {% if p.state in ('rejected', 'failed') %}
-                      <span class="ft-fail" title="failed — needs attention">✗ failed</span>
-                    {% endif %}
+                    <span class="ft-attempts muted small">{{ p.attempt_count }}/{{ p.max_attempts }}</span>
                   </div>
                 {% endfor %}
               {% else %}
@@ -76,7 +99,7 @@ attempts: {{ p.attempt_count }}/{{ p.max_attempts }}"
                 </div>
               {% endif %}
             </div>
-          </div>
+          </section>
         {% endfor %}
       {% endif %}
     {% endif %}

@@ -28,7 +28,8 @@
         </tbody>
       </table>
     {% elif active_tab == 'spec' %}
-      <pre>{{ p.spec_json | tojson(indent=2) if p.spec_json is mapping else (p.spec_json or '{}') }}</pre>
+      {% set p_inner = p.packet or p %}
+      <pre>{{ p_inner.spec_json | tojson(indent=2) if p_inner.spec_json is mapping else (p_inner.spec_json or '{}') }}</pre>
     {% elif active_tab == 'runs' %}
       <table class="responsive-table">
         <thead><tr><th>Run</th><th>Status</th><th>Worker</th><th>Model</th><th>Duration</th></tr></thead>
