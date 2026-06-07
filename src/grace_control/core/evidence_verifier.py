@@ -154,15 +154,16 @@ async def run_evidence_verifier(
     full_prompt = f"{prompt_template}\n\n## Context\n\n" + "\n".join(prompt_parts)
 
     try:
-        from grace_control.core.executor_selector import resolve_model
-        executor = resolve_model("verifier")
-        is_multimodal = executor.get("multimodal", False)
+        from grace_control.config.agent_profiles import get_agent_profile
+        executor = get_agent_profile("verifier-cheap")
+        is_multimodal = executor.multimodal if executor else False
+        model = executor.model if executor else "deepseek/deepseek-v4-flash"
         # Collect multimodal evidence if available
         multimodal_ctx = ""
         if is_multimodal:
             multimodal_ctx = _build_multimodal_context(packet, acceptance_report, worktree_path, run_dir)
         full_prompt = prompt_template + "\n\n## Context\n\n" + "\n".join(prompt_parts) + multimodal_ctx
-        raw = await run_llm(full_prompt, role="verifier", model=executor["model"],
+        raw = await run_llm(full_prompt, role="verifier", model=model,
                             cli="verifier-cheap")
         return parse_evidence_verifier_json(raw)
     except Exception as e:

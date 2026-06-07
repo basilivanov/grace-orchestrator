@@ -211,7 +211,7 @@ agents:
       mode: file
     model: deepseek/deepseek-v4-flash
     timeout_seconds: 900
-   verifier-cheap:
+  verifier-cheap:
     backend: cli
     resume_mode: never
     multimodal: true  # TZ_FRONTEND_ACCEPTANCE P1 — can read screenshots

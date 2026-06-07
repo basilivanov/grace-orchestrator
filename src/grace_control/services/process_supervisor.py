@@ -15,7 +15,7 @@
 # END_MODULE_MAP
 
 from __future__ import annotations
-import asyncio, os, signal, time
+import asyncio, os, signal, subprocess, time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -23,6 +23,38 @@ from pathlib import Path
 @dataclass
 class ProcessResult:
     stdout: str = ""; stderr: str = ""; exit_code: int = -1; duration_ms: int = 0; timed_out: bool = False
+
+
+def playwright_install_browsers(cwd: Path | str | None = None) -> bool:
+    """Idempotent: install Playwright Chromium for headless tests.
+
+    TZ_FRONTEND_ACCEPTANCE P1/3.4 — called before browser stages.
+    Skips if already installed. Returns True if ready, False on failure.
+    """
+    import shutil
+    if shutil.which("npx") is None:
+        return False
+    try:
+        # Check if already installed
+        r = subprocess.run(
+            ["npx", "playwright", "chromium", "--version"],
+            capture_output=True, text=True, timeout=10,
+            cwd=str(cwd) if cwd else None,
+        )
+        if r.returncode == 0:
+            return True  # already installed
+    except Exception:
+        pass
+    # Install
+    try:
+        r = subprocess.run(
+            ["npx", "playwright", "install", "chromium"],
+            capture_output=True, text=True, timeout=120,
+            cwd=str(cwd) if cwd else None,
+        )
+        return r.returncode == 0
+    except Exception:
+        return False
 
 
 class ProcessSupervisor:

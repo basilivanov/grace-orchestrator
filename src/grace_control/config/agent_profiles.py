@@ -39,6 +39,7 @@ class AgentProfile:
         self.resume_flag = raw.get("resume_flag", "")
         self.fork_flag = raw.get("fork_flag", "")
         self.inject_dir = raw.get("inject_dir", False)
+        self.multimodal = raw.get("multimodal", False)
         self._validate()
 
     def _validate(self) -> None:
@@ -80,6 +81,7 @@ class AgentProfile:
             "resume_flag": self.resume_flag,
             "fork_flag": self.fork_flag,
             "inject_dir": self.inject_dir,
+            "multimodal": self.multimodal,
         }
 
 
