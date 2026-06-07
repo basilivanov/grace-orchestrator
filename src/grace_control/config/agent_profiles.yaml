@@ -1,298 +1,377 @@
-version: 2
-# W7 (revised): declarative agent profiles for UniversalCliAgentBackend.
-# The `agents:` section is used by UniversalCliAgentBackend.
-# The `codex:` section is kept for back-compat with executor_selector.
-default_provider: openai
-codex:
-  binary: agy
-  workdir: "."  # resolved at runtime from GRACE_PROJECT_ROOT / cwd
-  executors:
-  - executor_id: architect-premium
-    kind: opencode
-    command: opencode
-    model: deepseek/deepseek-v4-pro
-    roles:
-    - architect
-    - reviewer
-    priority: 10
-    reasoning: max
-    metadata:
-      complexity: complex
-      provider: deepseek
-  - executor_id: reviewer-premium
-    kind: opencode
-    command: opencode
-    model: deepseek/deepseek-v4-pro
-    roles:
-    - reviewer
-    priority: 5
-    reasoning: max
-    metadata:
-      complexity: complex
-      provider: deepseek
-  - executor_id: coder-deepseek-flash
-    kind: opencode
-    command: opencode
-    model: deepseek/deepseek-v4-flash
-    roles:
-    - coder
-    priority: 100
-    reasoning: medium
-    metadata:
-      complexity: simple
-      provider: deepseek
-  - executor_id: coder-gemini-flash
-    kind: opencode
-    command: opencode
-    model: opencode/gemini-3-flash-agent
-    roles:
-    - coder
-    priority: 110
-    reasoning: medium
-    metadata:
-      complexity: simple
-      provider: cliproxy
-  - executor_id: coder-agy-flash
-    kind: agy
-    command: agy
-    model: gemini-3.5-flash
-    roles:
-    - coder
-    priority: 50
-    metadata:
-      complexity: simple
-      provider: google
-  - executor_id: coder-sonnet
-    kind: opencode
-    command: opencode
-    model: opencode/claude-sonnet-4-6
-    roles:
-    - coder
-    priority: 90
-    reasoning: max
-    metadata:
-      complexity: medium
-      provider: anthropic
-  - executor_id: verifier-cheap
-    kind: agy
-    command: agy
-    model: gemini-3.5-flash
-    roles:
-    - verifier
-    priority: 100
-    metadata:
-      complexity: simple
-      provider: google
-  - executor_id: context-collector-flash
-    kind: opencode
-    command: opencode
-    model: deepseek/deepseek-v4-flash
-    roles:
-    - context_collector
-    priority: 100
-    metadata:
-      complexity: simple
-      provider: deepseek
-  roles:
-    architect:
-      reasoning: max
-      sandbox: danger-full-access
-      approval: never
-      stall_timeout_seconds: 300
-      hard_timeout_seconds: 1200
-      max_auto_resume_attempts: 1
-    coder:
-      reasoning: medium
-      sandbox: danger-full-access
-      approval: never
-      stall_timeout_seconds: 300
-      hard_timeout_seconds: 900
-      max_auto_resume_attempts: 2
-    verifier:
-      reasoning: medium
-      sandbox: danger-full-access
-      approval: never
-      stall_timeout_seconds: 300
-      hard_timeout_seconds: 300
-      max_auto_resume_attempts: 1
-    reviewer:
-      reasoning: max
-      sandbox: danger-full-access
-      approval: never
-      stall_timeout_seconds: 300
-      hard_timeout_seconds: 1200
-      max_auto_resume_attempts: 1
-    context_collector:
-      reasoning: low
-      sandbox: danger-full-access
-      approval: never
-      stall_timeout_seconds: 300
-      hard_timeout_seconds: 300
-      max_auto_resume_attempts: 1
-
-# W7 (revised): UniversalCliAgentBackend profiles — declarative, no CLI names in code.
 agents:
   architect-premium:
     backend: cli
-    inject_dir: true  # opencode server uses its own cwd — --dir forces the worktree
     command:
-      - opencode
-      - run
-      - "--model"
-      - "{model}"
-      - "--variant"
-      - "{effort}"
-      - "You are an architect. Read the spec from {packet_path} and output ONLY a valid JSON object with fields: title, description, waves. Each wave has packets. Each packet: title, scope, depends_on, acceptance. Do not write files, do not run tools. Output JSON only, no prose."
-    model: "deepseek/deepseek-v4-pro"
-    input:
-      mode: file
-  verifier-cheap:
-    backend: cli
+    - opencode
+    - run
+    - --model
+    - '{model}'
+    - --variant
+    - '{effort}'
+    - 'You are an architect. Read the spec from {packet_path} and output ONLY a valid JSON object with fields: title, description,
+      waves. Each wave has packets. Each packet: title, scope, depends_on, acceptance. Do not write files, do not run tools.
+      Output JSON only, no prose.'
     inject_dir: true
-    command:
-      - opencode
-      - run
-      - "--model"
-      - "{model}"
-      - "--variant"
-      - "{effort}"
-      - |
-        You are a verifier. Read the task and evidence from {packet_path}. Do NOT modify any files. Output ONLY a valid JSON object, no prose, no markdown fences. Use this exact format:
-        {"verdict": "PASS", "summary": "all checks passed", "missing_evidence": [], "failed_checks": [], "spec_conflicts": [], "coder_instructions": [], "architect_questions": [], "suggested_next_owner": "coder"}
-        verdict must be one of: PASS, REWORK_TO_CODER, RETURN_TO_ARCHITECT
-        No prose before or after the JSON.
-    model: "deepseek/deepseek-v4-flash"
-    effort: "medium"
-    cwd: "{worktree_path}"
-    timeout_seconds: 300
     input:
       mode: file
-  context-collector-flash:
-    backend: cli
-    inject_dir: true
-    command:
-      - opencode
-      - run
-      - "--model"
-      - "{model}"
-      - "--variant"
-      - "{effort}"
-      - "You are a context collector. Read the task from {packet_path}. Do NOT modify any files. Output ONLY a valid JSON object with fields: relevant_files (list), summary (string). No prose, no code edits."
-    model: "deepseek/deepseek-v4-flash"
-    effort: "low"
-    cwd: "{worktree_path}"
-    timeout_seconds: 300
-    input:
-      mode: file
+    model: deepseek/deepseek-v4-pro
   coder-deepseek-flash:
     backend: cli
-    inject_dir: true
     command:
-      - opencode
-      - run
-      - "--model"
-      - "{model}"
-      - "--variant"
-      - "{effort}"
-      - "Read the task from {packet_path} and execute it. Create or modify files in the current working directory using the file-editing tools available. Every new file MUST include GRACE canon headers: AI_HEADER, MODULE_CONTRACT, MODULE_MAP, FUNCTION_CONTRACT. Use GraceLogger for logging (never print). Follow the GRACE Canon section from the task. After finishing, briefly summarize what you changed."
-    model: "deepseek/deepseek-v4-flash"
-    effort: "medium"
-    cwd: "{worktree_path}"
-    timeout_seconds: 900
+    - opencode
+    - run
+    - --model
+    - '{model}'
+    - --variant
+    - '{effort}'
+    - |-
+      |
+              EVERY file you create MUST follow this EXACT GRACE canon template:
+
+              ```
+              # ############################################################################
+              # AI_HEADER: module_name — one-line description of what this module does
+              # ROLE: Detailed role. Who calls it, what it provides. One or two sentences.
+              # ############################################################################
+
+              # START_MODULE_CONTRACT
+              # purpose: What this module does. Who calls it, what it returns.
+              # inputs: List of inputs, parameters, or dependencies.
+              # returns: What this module returns or provides.
+              # side_effects: File writes, DB inserts, network calls, subprocess spawns.
+              # emitted_logs: List of GraceLogger msg= names this module emits.
+              # error_behavior: What exceptions this module may raise and when.
+              # END_MODULE_CONTRACT
+
+              # START_MODULE_MAP
+              # mapping:
+              #   - class: ClassName
+              #     methods:
+              #       - method_one
+              #       - method_two
+              #   - function: standalone_func
+              # END_MODULE_MAP
+
+              from __future__ import annotations
+              from grace_control.core.structured_logger import GraceLogger
+
+              _log = GraceLogger("component_name")
+
+
+              # START_BLOCK_CLASS
+              # START_FUNCTION_CONTRACT
+              # name: method_name
+              # purpose: What this method does.
+              # inputs: param_name — description.
+              # returns: What it returns (type and meaning).
+              # side_effects: File writes, DB inserts, etc.
+              # emitted_logs: my_func_start, my_func_done.
+              # error_behavior: Exceptions this method may raise and when.
+              # END_FUNCTION_CONTRACT
+              def method_name(self, param: str) -> str:
+                  _log.info("method_start", param=param)
+                  ...
+                  _log.info("method_done", result=result)
+                  return result
+              # END_BLOCK_CLASS
+
+
+              # START_BLOCK_MAIN
+              # START_FUNCTION_CONTRACT
+              # name: run
+              # purpose: Entry point.
+              # ...
+              # END_FUNCTION_CONTRACT
+              def run() -> dict:
+                  _log.info("run_start")
+                  ...
+                  return {}
+              # END_BLOCK_MAIN
+              ```
+
+              RULES:
+              — Use # ############################################################################ above and below AI_HEADER.
+              — Every public function/method MUST have START_FUNCTION_CONTRACT before it.
+              — Group related methods with START_BLOCK_name / END_BLOCK_name.
+              — Use GraceLogger, NEVER print() or logging.getLogger().
+              — _log = GraceLogger("name") ONCE at module level.
+              — Log msgs are static strings: _log.info("msg_name", ctx_key=value).
+              — Follow the GRACE Canon section in the task packet.
+    cwd: '{worktree_path}'
+    effort: medium
+    inject_dir: true
     input:
       mode: file
+    model: deepseek/deepseek-v4-flash
+    timeout_seconds: 900
   coder-sonnet:
     backend: cli
-    inject_dir: true
     command:
-      - opencode
-      - run
-      - "--model"
-      - "{model}"
-      - "--variant"
-      - "{effort}"
-      - "Read the task from {packet_path} and execute it. Create or modify files in the current working directory using the file-editing tools available. Every new file MUST include GRACE canon headers: AI_HEADER, MODULE_CONTRACT, MODULE_MAP, FUNCTION_CONTRACT. Use GraceLogger for logging (never print). Follow the GRACE Canon section from the task. After finishing, briefly summarize what you changed."
-    model: "opencode/claude-sonnet-4-6"
-    effort: "max"
-    cwd: "{worktree_path}"
-    timeout_seconds: 900
+    - opencode
+    - run
+    - --model
+    - '{model}'
+    - --variant
+    - '{effort}'
+    - 'Read the task from {packet_path} and execute it. Follow the EXACT GRACE canon template from the task packet: AI_HEADER
+      with #ROLE, MODULE_CONTRACT, MODULE_MAP, START_BLOCK/END_BLOCK, FUNCTION_CONTRACT. Use GraceLogger. After finishing,
+      briefly summarize what you changed.'
+    cwd: '{worktree_path}'
+    effort: max
+    inject_dir: true
     input:
       mode: file
-  opencode:
-    backend: cli
-    inject_dir: true
-    command:
-      - opencode
-      - run
-      - "--model"
-      - "{model}"
-      - "Read the task from {packet_path} and execute it. Create or modify files in the current working directory using the file-editing tools available. Every new file MUST include GRACE canon headers: AI_HEADER, MODULE_CONTRACT, MODULE_MAP, FUNCTION_CONTRACT. Use GraceLogger for logging (never print). Follow the GRACE Canon section from the task. After finishing, briefly summarize what you changed."
-    model: "deepseek/deepseek-v4-flash"
-    effort: "high"
-    cwd: "{worktree_path}"
+    model: opencode/claude-sonnet-4-6
     timeout_seconds: 900
-    input:
-      mode: file
-  coder_opencode:
-    backend: cli
-    inject_dir: true
-    command:
-      - opencode
-      - run
-      - "--model"
-      - "{model}"
-      - "--variant"
-      - "{effort}"
-    model: "deepseek/deepseek-v4-flash"
-    effort: "high"
-    cwd: "{worktree_path}"
-    timeout_seconds: 900
-    env:
-      OPENAI_API_KEY: "${OPENAI_API_KEY}"
-      OPENAI_BASE_URL: "${OPENAI_BASE_URL}"
-    input:
-      mode: stdin
-      template: "{packet_markdown}"
-    output:
-      collect_stdout: true
-      collect_stderr: true
-      artifacts:
-        - "."
   coder_agy:
     backend: cli
     command:
-      - agy
-      - run
-      - "--model"
-      - "{model}"
-      - "--effort"
-      - "{effort}"
-    model: "gemini-3.5-flash"
-    effort: "medium"
-    cwd: "{worktree_path}"
+    - agy
+    - run
+    - --model
+    - '{model}'
+    - --effort
+    - '{effort}'
+    cwd: '{worktree_path}'
+    effort: medium
+    model: gemini-3.5-flash
     timeout_seconds: 900
+  coder_opencode:
+    backend: cli
+    command:
+    - opencode
+    - run
+    - --model
+    - '{model}'
+    - --variant
+    - '{effort}'
+    cwd: '{worktree_path}'
+    effort: high
+    env:
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL}
+    inject_dir: true
+    input:
+      mode: stdin
+      template: '{packet_markdown}'
+    model: deepseek/deepseek-v4-flash
+    output:
+      artifacts:
+      - .
+      collect_stderr: true
+      collect_stdout: true
+    timeout_seconds: 900
+  context-collector-flash:
+    backend: cli
+    command:
+    - opencode
+    - run
+    - --model
+    - '{model}'
+    - --variant
+    - '{effort}'
+    - 'You are a context collector. Read the task from {packet_path}. Do NOT modify any files. Output ONLY a valid JSON object
+      with fields: relevant_files (list), summary (string). No prose, no code edits.'
+    cwd: '{worktree_path}'
+    effort: low
+    inject_dir: true
+    input:
+      mode: file
+    model: deepseek/deepseek-v4-flash
+    timeout_seconds: 300
+  opencode:
+    backend: cli
+    command:
+    - opencode
+    - run
+    - --model
+    - '{model}'
+    - 'Read the task from {packet_path} and execute it. Follow the EXACT GRACE canon template from the task packet: AI_HEADER
+      with #ROLE, MODULE_CONTRACT, MODULE_MAP, START_BLOCK/END_BLOCK, FUNCTION_CONTRACT. Use GraceLogger. After finishing,
+      briefly summarize what you changed.'
+    cwd: '{worktree_path}'
+    effort: high
+    inject_dir: true
+    input:
+      mode: file
+    model: deepseek/deepseek-v4-flash
+    timeout_seconds: 900
+  verifier-cheap:
+    backend: cli
+    command:
+    - opencode
+    - run
+    - --model
+    - '{model}'
+    - --variant
+    - '{effort}'
+    - 'You are a verifier. Read the task and evidence from {packet_path}. Do NOT modify any files. Output ONLY a valid JSON
+      object, no prose, no markdown fences. Use this exact format:
 
+      {"verdict": "PASS", "summary": "all checks passed", "missing_evidence": [], "failed_checks": [], "spec_conflicts": [],
+      "coder_instructions": [], "architect_questions": [], "suggested_next_owner": "coder"}
+
+      verdict must be one of: PASS, REWORK_TO_CODER, RETURN_TO_ARCHITECT
+
+      No prose before or after the JSON.
+
+      '
+    cwd: '{worktree_path}'
+    effort: medium
+    inject_dir: true
+    input:
+      mode: file
+    model: deepseek/deepseek-v4-flash
+    timeout_seconds: 300
+codex:
+  binary: agy
+  executors:
+  - command: opencode
+    executor_id: architect-premium
+    kind: opencode
+    metadata:
+      complexity: complex
+      provider: deepseek
+    model: deepseek/deepseek-v4-pro
+    priority: 10
+    reasoning: max
+    roles:
+    - architect
+    - reviewer
+  - command: opencode
+    executor_id: reviewer-premium
+    kind: opencode
+    metadata:
+      complexity: complex
+      provider: deepseek
+    model: deepseek/deepseek-v4-pro
+    priority: 5
+    reasoning: max
+    roles:
+    - reviewer
+  - command: opencode
+    executor_id: coder-deepseek-flash
+    kind: opencode
+    metadata:
+      complexity: simple
+      provider: deepseek
+    model: deepseek/deepseek-v4-flash
+    priority: 100
+    reasoning: medium
+    roles:
+    - coder
+  - command: opencode
+    executor_id: coder-gemini-flash
+    kind: opencode
+    metadata:
+      complexity: simple
+      provider: cliproxy
+    model: opencode/gemini-3-flash-agent
+    priority: 110
+    reasoning: medium
+    roles:
+    - coder
+  - command: agy
+    executor_id: coder-agy-flash
+    kind: agy
+    metadata:
+      complexity: simple
+      provider: google
+    model: gemini-3.5-flash
+    priority: 50
+    roles:
+    - coder
+  - command: opencode
+    executor_id: coder-sonnet
+    kind: opencode
+    metadata:
+      complexity: medium
+      provider: anthropic
+    model: opencode/claude-sonnet-4-6
+    priority: 90
+    reasoning: max
+    roles:
+    - coder
+  - command: agy
+    executor_id: verifier-cheap
+    kind: agy
+    metadata:
+      complexity: simple
+      provider: google
+    model: gemini-3.5-flash
+    priority: 100
+    roles:
+    - verifier
+  - command: opencode
+    executor_id: context-collector-flash
+    kind: opencode
+    metadata:
+      complexity: simple
+      provider: deepseek
+    model: deepseek/deepseek-v4-flash
+    priority: 100
+    roles:
+    - context_collector
+  roles:
+    architect:
+      approval: never
+      hard_timeout_seconds: 1200
+      max_auto_resume_attempts: 1
+      reasoning: max
+      sandbox: danger-full-access
+      stall_timeout_seconds: 300
+    coder:
+      approval: never
+      hard_timeout_seconds: 900
+      max_auto_resume_attempts: 2
+      reasoning: medium
+      sandbox: danger-full-access
+      stall_timeout_seconds: 300
+    context_collector:
+      approval: never
+      hard_timeout_seconds: 300
+      max_auto_resume_attempts: 1
+      reasoning: low
+      sandbox: danger-full-access
+      stall_timeout_seconds: 300
+    reviewer:
+      approval: never
+      hard_timeout_seconds: 1200
+      max_auto_resume_attempts: 1
+      reasoning: max
+      sandbox: danger-full-access
+      stall_timeout_seconds: 300
+    verifier:
+      approval: never
+      hard_timeout_seconds: 300
+      max_auto_resume_attempts: 1
+      reasoning: medium
+      sandbox: danger-full-access
+      stall_timeout_seconds: 300
+  workdir: .
+default_provider: openai
 verification:
   backend_profiles:
     backend_quick: pytest tests/ -q --tb=short
     grace_smoke: python3 -m py_compile src/grace_control/**/*.py
-  frontend_profiles:
-    frontend_quick: npm test
-  observability_profiles:
-    grace_smoke: python3 scripts/verify_all.sh
+  coder-shell:
+    backend: cli
+    command:
+    - /bin/bash
+    - -c
+    - cat "{packet_path}" | while read line; do eval "$line"; done
+    cwd: '{worktree_path}'
+    effort: high
+    input:
+      mode: file
+    model: shell
+    timeout_seconds: 30
   default_artifact_globs:
   - test-results/**/*
   - artifacts/**/*
   - EVIDENCE/**/*
-  coder-shell:
-    backend: cli
-    command:
-      - /bin/bash
-      - -c
-      - cat "{packet_path}" | while read line; do eval "$line"; done
-    model: "shell"
-    effort: "high"
-    cwd: "{worktree_path}"
-    timeout_seconds: 30
-    input:
-      mode: file
+  frontend_profiles:
+    frontend_quick: npm test
+  observability_profiles:
+    grace_smoke: python3 scripts/verify_all.sh
+version: 2

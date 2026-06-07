@@ -75,14 +75,62 @@ class PacketMaterializer:
 {pd.get('objective') or pd.get('title') or pd['id']}
 
 ## GRACE Canon (MANDATORY)
-Every new file must include:
-1. `# AI_HEADER: module_name — short description` at the top
-2. `# START_MODULE_CONTRACT` / `# END_MODULE_CONTRACT` block
-3. `# START_MODULE_MAP` / `# END_MODULE_MAP` block
-4. `# START_FUNCTION_CONTRACT` / `# END_FUNCTION_CONTRACT` for every public function
-5. Structured logging: `from grace_control.core.structured_logger import GraceLogger`
-   and `_log = GraceLogger("name")`. Use `_log.info("msg", ctx_key=value)`.
-   NEVER use `print()`, `logging`, or `loguru`.
+Every new file must follow this EXACT template:
+
+```
+# ############################################################################
+# AI_HEADER: module_name — one-line description
+# ROLE: Detailed role. Who calls it, what it provides.
+# ############################################################################
+
+# START_MODULE_CONTRACT
+# purpose: What this module does.
+# inputs: Parameters, dependencies.
+# returns: What it returns.
+# side_effects: File writes, DB inserts, network, subprocess.
+# emitted_logs: GraceLogger msg= names this module emits.
+# error_behavior: Exceptions raised and when.
+# END_MODULE_CONTRACT
+
+# START_MODULE_MAP
+# mapping:
+#   - class: ClassName
+#     methods:
+#       - method_one
+#   - function: standalone_func
+# END_MODULE_MAP
+
+from __future__ import annotations
+from grace_control.core.structured_logger import GraceLogger
+
+_log = GraceLogger("component_name")
+
+
+# START_BLOCK_METHODS
+# START_FUNCTION_CONTRACT
+# name: my_func
+# purpose: What it does.
+# inputs: param — description.
+# returns: return_type — meaning.
+# side_effects: ...
+# emitted_logs: my_func_start, my_func_done.
+# error_behavior: ...
+# END_FUNCTION_CONTRACT
+def my_func(param: str) -> str:
+    _log.info("my_func_start", param=param)
+    ...
+    _log.info("my_func_done", result=result)
+    return result
+# END_BLOCK_METHODS
+```
+
+RULES:
+— # ############################################################################ above AND below AI_HEADER+ROLE.
+— Every public function/method: START_FUNCTION_CONTRACT before it.
+— Group related methods: START_BLOCK_name / END_BLOCK_name.
+— GraceLogger only, NEVER print() or logging.getLogger().
+— _log = GraceLogger("name") ONCE at module level.
+— Log msgs: _log.info("msg_name", ctx_key=value).
 
 ## Scope
 {scope_lines}
