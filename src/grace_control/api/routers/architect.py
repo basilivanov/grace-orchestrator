@@ -62,7 +62,9 @@ async def create_plan(request: dict) -> dict:
     architect_generated = False
 
     # ── Context pre-warming ──────────────────────────────────────────────
-    context = await _warm_context(spec, "planning")
+    # Skip expensive context collection when explicit waves are provided;
+    # the caller already knows the scope and architecture.
+    context = {} if has_waves else await _warm_context(spec, "planning")
 
     # ── LLM path: business-TZ → generate waves/packets ───────────────────
     if not has_waves and not os.environ.get("GRACE_CONTEXT_DISABLED"):

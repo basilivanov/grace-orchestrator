@@ -158,8 +158,8 @@ agents:
       - "{effort}"
       - |
         You are a verifier. Read the task and evidence from {packet_path}. Do NOT modify any files. Output ONLY a valid JSON object, no prose, no markdown fences. Use this exact format:
-        {"verdict": "pass", "summary": "all checks passed", "missing_evidence": [], "failed_checks": [], "spec_conflicts": [], "coder_instructions": [], "architect_questions": [], "suggested_next_owner": "coder"}
-        verdict must be one of: pass, fail, rework_to_coder, rework_to_architect
+        {"verdict": "PASS", "summary": "all checks passed", "missing_evidence": [], "failed_checks": [], "spec_conflicts": [], "coder_instructions": [], "architect_questions": [], "suggested_next_owner": "coder"}
+        verdict must be one of: PASS, REWORK_TO_CODER, RETURN_TO_ARCHITECT
         No prose before or after the JSON.
     model: "deepseek/deepseek-v4-flash"
     effort: "medium"

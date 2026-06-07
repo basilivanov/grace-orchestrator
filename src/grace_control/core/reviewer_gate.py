@@ -134,7 +134,8 @@ async def run_reviewer_gate(
     try:
         from grace_control.core.executor_selector import resolve_model
         executor = resolve_model("reviewer")
-        raw = await run_llm(full_prompt, role="reviewer", model=executor["model"], cli=executor["command"])
+        raw = await run_llm(full_prompt, role="reviewer", model=executor["model"],
+                            cli="reviewer-premium")
         return parse_reviewer_json(raw)
     except Exception as e:
         return skipped_reviewer_report(f"reviewer gate error: {e}")

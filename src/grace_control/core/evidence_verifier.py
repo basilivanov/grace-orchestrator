@@ -96,7 +96,7 @@ def parse_evidence_verifier_json(raw: str) -> EvidenceVerifierReport:
 
 
 def _build_report_from_json(data: dict) -> EvidenceVerifierReport:
-    verdict_str = data.get("verdict", "")
+    verdict_str = data.get("verdict", "").upper()
     try:
         verdict = EvidenceVerifierVerdict(verdict_str)
     except ValueError:
@@ -116,11 +116,6 @@ def _build_report_from_json(data: dict) -> EvidenceVerifierReport:
         suggested_next_owner=data.get("suggested_next_owner", "coder"),
         skipped=False,
     )
-        return EvidenceVerifierReport(
-            verdict=EvidenceVerifierVerdict.REWORK_TO_CODER,
-            summary=f"invalid verifier JSON: {e}",
-            failed_checks=[f"JSON parse error: {e}"],
-        )
 
 
 async def run_evidence_verifier(
@@ -161,7 +156,8 @@ async def run_evidence_verifier(
     try:
         from grace_control.core.executor_selector import resolve_model
         executor = resolve_model("verifier")
-        raw = await run_llm(full_prompt, role="verifier", model=executor["model"], cli=executor["command"])
+        raw = await run_llm(full_prompt, role="verifier", model=executor["model"],
+                            cli="verifier-cheap")
         return parse_evidence_verifier_json(raw)
     except Exception as e:
         return skipped_evidence_report(f"evidence verifier error: {e}")
