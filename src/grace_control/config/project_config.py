@@ -87,6 +87,37 @@ class OpencodeSection(BaseModel):
     server_password: str = ""
 
 
+class FrontendE2ESpec(BaseModel):
+    """Browser E2E test configuration (TZ_FRONTEND_ACCEPTANCE P0)."""
+    required: bool = True
+
+
+class FrontendVisualSpec(BaseModel):
+    """Visual regression configuration (TZ_FRONTEND_ACCEPTANCE P0)."""
+    required: bool = False
+    max_diff_pct: float = 0.001
+
+
+class FrontendSpec(BaseModel):
+    """Frontend acceptance spec (TZ_FRONTEND_ACCEPTANCE P0).
+
+    When `enabled=True`, the orchestrator runs browser E2E (T2_BROWSER)
+    and/or visual regression (T3_VISUAL) stages in addition to T0/T1/T2.
+
+    architect decides `enabled` and per-stage requirements.
+    orchestrator enforces profile constraints (FAST skips browser).
+    """
+    enabled: bool = False
+    dev_command: str = "npm run dev"
+    base_url: str = "http://localhost:3000"
+    viewports: list[str] = Field(default_factory=lambda: ["android", "iphone"])
+    telegram_mode: str = "mock"  # "mock" | "real"
+    telegram_user: dict[str, Any] = Field(default_factory=dict)
+    telegram_bot_token_env: str = ""
+    e2e: FrontendE2ESpec = Field(default_factory=FrontendE2ESpec)
+    visual: FrontendVisualSpec = Field(default_factory=FrontendVisualSpec)
+
+
 class ProjectConfig(BaseModel):
     """Typed mirror of `.grace/config.yaml`.
 

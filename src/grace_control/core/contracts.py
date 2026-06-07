@@ -17,7 +17,7 @@
 # START_MODULE_MAP
 # mapping:
 #   - enum: AcceptanceProfile
-#   - enum: StageName
+#   - enum: StageName (T0, T1, T2, T2_BROWSER, T3_VISUAL)
 #   - enum: StageStatus
 #   - enum: PacketVerdict
 #   - enum: FinalVerdict
@@ -51,6 +51,8 @@ class StageName(str, Enum):
     T0_SCOPE_AND_LINT = "T0_SCOPE_AND_LINT"
     T1_TARGETED_TESTS = "T1_TARGETED_TESTS"
     T2_FULL_TESTS = "T2_FULL_TESTS"
+    T2_BROWSER_E2E = "T2_BROWSER_E2E"              # TZ_FRONTEND_ACCEPTANCE P0
+    T3_VISUAL_REGRESSION = "T3_VISUAL_REGRESSION"  # TZ_FRONTEND_ACCEPTANCE P0
 
 
 class StageStatus(str, Enum):
@@ -117,7 +119,7 @@ class VerificationSpec:
 @dataclass(frozen=True)
 class EvidenceRequirement:
     id: str
-    kind: str  # command | file | diff | log
+    kind: str  # command | file | diff | log | screenshot | dom_snapshot | console_log | network_log | visual_diff
     required: bool = True
     pattern: str | None = None
 
@@ -282,5 +284,6 @@ def build_packet_contract(packet_data: dict) -> ExecutionPacketContract:
         metadata={
             "origin": spec.get("origin", ""),
             "session_id": spec.get("session_id", ""),
+            "frontend": spec.get("frontend"),  # TZ_FRONTEND_ACCEPTANCE P0
         },
     )

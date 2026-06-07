@@ -226,12 +226,75 @@ class AcceptancePipeline:
                 summary=t2_result.summary or "T2 failed",
             )
 
+        # ── T2_BROWSER + T3_VISUAL: frontend acceptance (TZ_FRONTEND_ACCEPTANCE P0) ──
+        browser_routing = _run_frontend_stages(
+            packet, worktree_root=worktree_root, run_dir=Path(run_dir) if run_dir else worktree_root,
+        )
+        t2_browser_stage = browser_routing.get("t2_browser")
+        t3_visual_stage = browser_routing.get("t3_visual")
+        if t2_browser_stage:
+            if t2_browser_stage.status == StageStatus.FAILED:
+                return AcceptanceReport(
+                    packet_id=packet.packet_id,
+                    final_verdict=FinalVerdict.REWORK_REQUIRED,
+                    profile=packet.acceptance_profile,
+                    stages=[t0_result.stage, t1_result, t2_result, t2_browser_stage],
+                    scope_violations=scope_violations_raw,
+                    summary=t2_browser_stage.summary or "T2_BROWSER failed",
+                )
+            ep += self._evidence.collect_from_stage(t2_browser_stage)
+        if t3_visual_stage:
+            if t3_visual_stage.status == StageStatus.FAILED:
+                stages = [t0_result.stage, t1_result, t2_result]
+                if t2_browser_stage: stages.append(t2_browser_stage)
+                stages.append(t3_visual_stage)
+                return AcceptanceReport(
+                    packet_id=packet.packet_id,
+                    final_verdict=FinalVerdict.REWORK_REQUIRED,
+                    profile=packet.acceptance_profile,
+                    stages=stages,
+                    scope_violations=scope_violations_raw,
+                    summary=t3_visual_stage.summary or "T3_VISUAL failed",
+                )
+            ep += self._evidence.collect_from_stage(t3_visual_stage)
+
+        # Collect all stages for final report
+        final_stages = [t0_result.stage, t1_result, t2_result]
+        if t2_browser_stage: final_stages.append(t2_browser_stage)
+        if t3_visual_stage: final_stages.append(t3_visual_stage)
+
         evidence_issues = check_expected_evidence(
             expected=packet.expected_evidence,
-            stage_results=[t0_result.stage, t1_result, t2_result],
+            stage_results=final_stages,
             worktree_path=worktree_root,
             changed_files=changed_files or [],
             profile=packet.acceptance_profile,
+        )
+        if evidence_issues:
+            return AcceptanceReport(
+                packet_id=packet.packet_id,
+                final_verdict=FinalVerdict.BLOCKED if packet.acceptance_profile == AcceptanceProfile.STRICT else FinalVerdict.REWORK_REQUIRED,
+                profile=packet.acceptance_profile,
+                stages=final_stages,
+                scope_violations=scope_violations_raw,
+                evidence_issues=evidence_issues,
+                summary=evidence_issues[0] if evidence_issues else "missing required evidence",
+            )
+
+        # ── Legacy result is informational when T0/T1/T2 pass ─────────────────
+        legacy_ok = legacy_result.get("ok", True) if legacy_result else True
+        legacy_domain_status = legacy_result.get("domain_status", "") if legacy_result else ""
+
+        # ── All passed → ACCEPTED ────────────────────────────────────────────
+        return AcceptanceReport(
+            packet_id=packet.packet_id,
+            final_verdict=FinalVerdict.ACCEPTED,
+            profile=packet.acceptance_profile,
+            stages=final_stages,
+            scope_violations=scope_violations_raw,
+            legacy_domain_status=legacy_domain_status,
+            legacy_ok=legacy_ok,
+            summary="all deterministic gates passed",
         )
         if evidence_issues:
             return AcceptanceReport(
@@ -391,3 +454,80 @@ class AcceptancePipeline:
                               blocking_issues=[f"full check failed: {c.command} (exit={c.exit_code}) stderr={c.stderr[:200]} stdout={c.stdout[:200]}" for c in failed])
         return StageResult(name=StageName.T2_FULL_TESTS, status=StageStatus.PASSED,
                           summary=f"T2 passed: {len(commands)} commands ok", commands=commands)
+
+
+def _run_frontend_stages(
+    packet: "ExecutionPacketContract",
+    *,
+    worktree_root: Path,
+    run_dir: Path,
+) -> dict[str, "StageResult"]:
+    """Run T2_BROWSER_E2E and T3_VISUAL_REGRESSION if frontend is enabled.
+
+    TZ_FRONTEND_ACCEPTANCE P0 — routing via resolve_browser_routing().
+    Skips FAST profile entirely. Runs per-viewport in parallel.
+    """
+    from grace_control.core.frontend_stages import (
+        BrowserStageResult,
+        resolve_browser_routing,
+        run_t2_browser_e2e,
+        run_t3_visual_regression,
+    )
+
+    frontend_spec = packet.metadata.get("frontend") if hasattr(packet, "metadata") else {}
+    routing = resolve_browser_routing(
+        frontend_spec,
+        acceptance_profile=packet.acceptance_profile.value,
+    )
+
+    result: dict[str, StageResult] = {}
+
+    # T2_BROWSER_E2E
+    if routing.run_t2_browser:
+        browser_results: list[BrowserStageResult] = run_t2_browser_e2e(
+            worktree_root, run_dir, routing,
+            telegram_mode=routing.telegram_mode,
+        )
+        passed = all(r.passed for r in browser_results)
+        screenshots = sum((r.screenshots for r in browser_results), [])
+        errors = sum((r.errors for r in browser_results), [])
+        result["t2_browser"] = StageResult(
+            name=StageName.T2_BROWSER_E2E,
+            status=StageStatus.PASSED if passed else StageStatus.FAILED,
+            summary=f"T2_BROWSER: {len(browser_results)} viewports, {len(screenshots)} screenshots",
+            commands=[],
+            blocking_issues=errors if not passed else [],
+        )
+    else:
+        result["t2_browser"] = StageResult(
+            name=StageName.T2_BROWSER_E2E,
+            status=StageStatus.SKIPPED,
+            summary=f"T2_BROWSER skipped: {routing.reason}",
+            commands=[],
+        )
+
+    # T3_VISUAL_REGRESSION
+    if routing.run_t3_visual:
+        visual_results: list[BrowserStageResult] = run_t3_visual_regression(
+            worktree_root, run_dir, routing,
+            telegram_mode=routing.telegram_mode,
+        )
+        passed = all(r.passed for r in visual_results)
+        screenshots = sum((r.screenshots for r in visual_results), [])
+        errors = sum((r.errors for r in visual_results), [])
+        result["t3_visual"] = StageResult(
+            name=StageName.T3_VISUAL_REGRESSION,
+            status=StageStatus.PASSED if passed else StageStatus.FAILED,
+            summary=f"T3_VISUAL: {len(visual_results)} viewports, {len(screenshots)} screenshots",
+            commands=[],
+            blocking_issues=errors if not passed else [],
+        )
+    else:
+        result["t3_visual"] = StageResult(
+            name=StageName.T3_VISUAL_REGRESSION,
+            status=StageStatus.SKIPPED,
+            summary=f"T3_VISUAL skipped: {routing.reason}",
+            commands=[],
+        )
+
+    return result
