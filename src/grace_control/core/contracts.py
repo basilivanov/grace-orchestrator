@@ -318,6 +318,7 @@ def build_packet_contract(packet_data: dict) -> ExecutionPacketContract:
         verification={
             "t0": t0, "t1": t1, "t2": t2,
             "t2_browser": verification_raw.get("t2_browser", []) if isinstance(verification_raw, dict) else [],
+            "t2_a11y": verification_raw.get("t2_a11y", []) if isinstance(verification_raw, dict) else [],
             "t3_visual": verification_raw.get("t3_visual", []) if isinstance(verification_raw, dict) else [],
         },
         expected_evidence=expected_evidence,

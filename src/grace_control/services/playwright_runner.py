@@ -108,7 +108,8 @@ class PlaywrightRunner:
 
         # Check for test files (before dev-server/bridge to fail early)
         test_pattern = (
-            f"tests/e2e/**/*.spec.ts" if mode in ("e2e", "a11y")
+            f"tests/e2e/**/*.a11y.spec.ts" if mode == "a11y"
+            else f"tests/e2e/**/*.spec.ts" if mode == "e2e"
             else f"tests/e2e/**/*.visual.spec.ts"
         )
         test_files = list(self._worktree.glob(test_pattern))

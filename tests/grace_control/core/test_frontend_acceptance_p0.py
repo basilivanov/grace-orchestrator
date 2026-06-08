@@ -696,7 +696,7 @@ class TestA11yRouting:
                                   viewport="android", dev_command="echo test")
         runner._has_playwright = lambda: True
         (tmp_path / "tests" / "e2e").mkdir(parents=True)
-        (tmp_path / "tests" / "e2e" / "test.spec.ts").write_text("// a11y test")
+        (tmp_path / "tests" / "e2e" / "test.a11y.spec.ts").write_text("// a11y test")
         runner._start_dev_server = lambda: True
         runner._stop_dev_server = lambda: None
         from unittest.mock import patch
@@ -711,7 +711,7 @@ class TestA11yRouting:
                                   viewport="android", dev_command="echo test")
         runner._has_playwright = lambda: True
         (tmp_path / "tests" / "e2e").mkdir(parents=True)
-        (tmp_path / "tests" / "e2e" / "test.spec.ts").write_text("// a11y")
+        (tmp_path / "tests" / "e2e" / "test.a11y.spec.ts").write_text("// a11y")
         runner._start_dev_server = lambda: True
         runner._stop_dev_server = lambda: None
         from unittest.mock import patch
@@ -754,7 +754,7 @@ class TestA11yRouting:
                                   viewport="android", dev_command="echo test")
         runner._has_playwright = lambda: True
         (tmp_path / "tests" / "e2e").mkdir(parents=True)
-        (tmp_path / "tests" / "e2e" / "test.spec.ts").write_text("// a11y test")
+        (tmp_path / "tests" / "e2e" / "test.a11y.spec.ts").write_text("// a11y test")
         runner._start_dev_server = lambda: True
         runner._stop_dev_server = lambda: None
         from unittest.mock import patch
@@ -763,7 +763,7 @@ class TestA11yRouting:
         with patch("subprocess.run", return_value=mock):
             r = runner.run_a11y()
             assert r.passed is False
-            assert "violations" in str(r.errors).lower() or "critical" in str(r.errors).lower()
+            assert "color-contrast" in str(r.errors)
 
 
 class TestDesktopViewport:
@@ -825,3 +825,21 @@ class TestStorybookVideoAbsent:
         # No 'video' evidence kind should exist
         valid = {"command", "file", "diff", "log", "screenshot", "dom_snapshot", "console_log", "network_log", "visual_diff"}
         assert "video" not in valid
+
+
+class TestA11yRequiredCommandGate:
+    """P2: a11y.required=true without verification.t2_a11y must fail."""
+
+    def test_a11y_required_without_commands_fails(self):
+        """frontend.a11y.required=true without verification.t2_a11y must fail."""
+        from grace_control.core.acceptance_pipeline import _run_frontend_stages
+        from grace_control.core.contracts import ExecutionPacketContract, AcceptanceProfile
+        pkt = ExecutionPacketContract(
+            packet_id="t", title="t", allowed_write_scope=[], frozen_scope=[],
+            acceptance_profile=AcceptanceProfile.NORMAL,
+            verification={},  # no t2_a11y!
+            metadata={"frontend": {"enabled": True, "a11y": {"required": True}}},
+        )
+        r = _run_frontend_stages(pkt, worktree_root="/tmp", run_dir="/tmp")
+        assert r["t2_browser_a11y"].status.value == "failed"
+        assert "t2_a11y is required" in r["t2_browser_a11y"].summary

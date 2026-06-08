@@ -484,6 +484,7 @@ def _run_frontend_stages(
     result: dict[str, StageResult] = {}
     t2b_commands = packet.verification.get("t2_browser", [])
     t3v_commands = packet.verification.get("t3_visual", [])
+    t2a_commands = packet.verification.get("t2_a11y", [])
 
     # T2_BROWSER_E2E
     if routing.run_t2_browser:
@@ -564,31 +565,41 @@ def _run_frontend_stages(
 
     # T2_BROWSER_A11Y — axe-core accessibility check (P2)
     if routing.run_a11y:
-        from grace_control.core.frontend_stages import run_a11y_check
-        a11y_results = run_a11y_check(
-            worktree_root, run_dir, routing,
-            telegram_mode=routing.telegram_mode,
-            telegram_bot_token_env=routing.telegram_bot_token_env,
-        )
-        a11y_passed = all(r.passed for r in a11y_results)
-        a11y_errors = sum((r.errors for r in a11y_results), [])
-        violations_count = sum(len(r.screenshots) for r in a11y_results)
-        result["t2_browser_a11y"] = StageResult(
-            name=StageName.T2_BROWSER_A11Y,
-            status=StageStatus.PASSED if a11y_passed else StageStatus.FAILED,
-            summary=f"T2_BROWSER_A11Y: {len(a11y_results)} viewports, {violations_count} violations",
-            commands=[
-                CommandResult(
-                    command=f"npx playwright a11y --viewport={r.viewport}",
-                    cwd=str(worktree_root),
-                    exit_code=0 if r.passed else 1,
-                    stdout=r.stdout_snippet,
-                    stderr=r.stderr_snippet,
-                )
-                for r in a11y_results
-            ],
-            blocking_issues=a11y_errors if not a11y_passed else [],
-        )
+        if not t2a_commands:
+            # A11y required but no custom command specified — cannot run without axe.
+            result["t2_browser_a11y"] = StageResult(
+                name=StageName.T2_BROWSER_A11Y,
+                status=StageStatus.FAILED,
+                summary="T2_BROWSER_A11Y failed: verification.t2_a11y is required but empty",
+                commands=[],
+                blocking_issues=["verification.t2_a11y is required for a11y gate — no axe-core command specified"],
+            )
+        else:
+            from grace_control.core.frontend_stages import run_a11y_check
+            a11y_results = run_a11y_check(
+                worktree_root, run_dir, routing,
+                telegram_mode=routing.telegram_mode,
+                telegram_bot_token_env=routing.telegram_bot_token_env,
+            )
+            a11y_passed = all(r.passed for r in a11y_results)
+            a11y_errors = sum((r.errors for r in a11y_results), [])
+            violations_count = sum(len(r.screenshots) for r in a11y_results)
+            result["t2_browser_a11y"] = StageResult(
+                name=StageName.T2_BROWSER_A11Y,
+                status=StageStatus.PASSED if a11y_passed else StageStatus.FAILED,
+                summary=f"T2_BROWSER_A11Y: {len(a11y_results)} viewports, {violations_count} violations",
+                commands=[
+                    CommandResult(
+                        command=r.command or " ".join(t2a_commands[0]) if t2a_commands else f"npx playwright a11y --viewport={r.viewport}",
+                        cwd=str(worktree_root),
+                        exit_code=0 if r.passed else 1,
+                        stdout=r.stdout_snippet,
+                        stderr=r.stderr_snippet,
+                    )
+                    for r in a11y_results
+                ],
+                blocking_issues=a11y_errors if not a11y_passed else [],
+            )
     else:
         result["t2_browser_a11y"] = StageResult(
             name=StageName.T2_BROWSER_A11Y,
