@@ -961,6 +961,33 @@ class TestArtifactManifest:
         kinds = {e["kind"] for e in data["entries"]}
         assert "a11y_report" in kinds
 
+    def test_pipeline_level_manifest_created(self, tmp_path: Path):
+        """_run_frontend_stages with frontend.enabled=true creates manifest."""
+        from unittest.mock import patch
+        from grace_control.core.acceptance_pipeline import _run_frontend_stages
+        from grace_control.core.contracts import ExecutionPacketContract, AcceptanceProfile
+        pkt = ExecutionPacketContract(
+            packet_id="pkt_manifest", title="manifest test",
+            allowed_write_scope=[], frozen_scope=[],
+            acceptance_profile=AcceptanceProfile.NORMAL,
+            verification={"t2_browser": [["npx", "pw", "test"]]},
+            metadata={"frontend": {"enabled": True}},
+        )
+        (tmp_path / "tests" / "e2e").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "tests" / "e2e" / "test.spec.ts").write_text("// test")
+        mock = type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+        with patch("subprocess.run", return_value=mock), \
+             patch("grace_control.services.playwright_runner.PlaywrightRunner._start_dev_server", return_value=True), \
+             patch("grace_control.services.playwright_runner.PlaywrightRunner._stop_dev_server", return_value=None):
+            r = _run_frontend_stages(pkt, worktree_root=tmp_path, run_dir=tmp_path / "runs")
+            browser_dir_for_manifest = tmp_path / "runs" / "browser"
+            # The runner creates run_dir/browser/<viewport>/ dirs
+            assert browser_dir_for_manifest.exists(), (
+                f"browser dir should exist, contents: {list(tmp_path.rglob('*'))}"
+            )
+        manifest_path = tmp_path / "runs" / "browser" / "artifacts-manifest.json"
+        assert manifest_path.exists(), f"manifest not found at {manifest_path}, browser contents: {list((tmp_path/'runs').rglob('*')) if (tmp_path/'runs').exists() else 'no runs dir'}"
+
 
 class TestCommandExecutionTruth:
     """All verification commands must be actually executed via subprocess."""

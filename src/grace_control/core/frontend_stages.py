@@ -144,6 +144,8 @@ def run_t2_browser_e2e(
     telegram_mode: str = "mock",
     custom_cmds: list[list[str]] | None = None,
     telegram_bot_token_env: str = "",
+    packet_id: str = "",
+    run_id: str = "",
 ) -> list[BrowserStageResult]:
     """Run T2_BROWSER_E2E — Playwright E2E tests per viewport.
 
@@ -162,6 +164,8 @@ def run_t2_browser_e2e(
                 dev_command=routing.dev_command,
                 telegram_mode=telegram_mode,
                 telegram_bot_token_env=telegram_bot_token_env,
+                packet_id=packet_id,
+                run_id=run_id,
             )
             result = runner.run_e2e(custom_cmds=custom_cmds)
             results.append(result)
@@ -187,6 +191,8 @@ def run_t3_visual_regression(
     telegram_mode: str = "mock",
     custom_cmds: list[list[str]] | None = None,
     telegram_bot_token_env: str = "",
+    packet_id: str = "",
+    run_id: str = "",
 ) -> list[BrowserStageResult]:
     """Run T3_VISUAL_REGRESSION — Playwright visual diff per viewport.
 
@@ -205,6 +211,8 @@ def run_t3_visual_regression(
                 dev_command=routing.dev_command,
                 telegram_mode=telegram_mode,
                 telegram_bot_token_env=telegram_bot_token_env,
+                packet_id=packet_id,
+                run_id=run_id,
             )
             result = runner.run_visual(max_diff_pct=routing.max_diff_pct,
                                        custom_cmds=custom_cmds)
@@ -249,6 +257,8 @@ def run_a11y_check(
                 dev_command=routing.dev_command,
                 telegram_mode=telegram_mode,
                 telegram_bot_token_env=telegram_bot_token_env,
+                packet_id=packet_id,
+                run_id=run_id,
             )
             r = runner.run_a11y(custom_cmds=custom_cmds)
             results.append(r)

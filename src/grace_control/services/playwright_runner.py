@@ -58,6 +58,8 @@ class PlaywrightRunner:
         dev_command: str = "npm run dev",
         telegram_mode: str = "mock",
         telegram_bot_token_env: str = "",
+        packet_id: str = "",
+        run_id: str = "",
     ) -> None:
         self._worktree = Path(worktree_path)
         self._run_dir = Path(run_dir)
@@ -66,6 +68,8 @@ class PlaywrightRunner:
         self._dev_command = dev_command
         self._telegram_mode = telegram_mode
         self._telegram_bot_token_env = telegram_bot_token_env
+        self._packet_id = packet_id
+        self._run_id = run_id
         self._dev_proc: subprocess.Popen | None = None
         self._bridge: "TelegramBridgeService | None" = None
 
@@ -232,6 +236,13 @@ class PlaywrightRunner:
             if self._bridge:
                 self._bridge.stop()
                 self._bridge = None
+
+        # TZ_FRONTEND_ACCEPTANCE P3 — artifact manifest
+        if self._packet_id:
+            from grace_control.services.artifact_manifest import write_artifact_manifest
+            write_artifact_manifest(
+                self._run_dir, packet_id=self._packet_id, run_id=self._run_id or self._packet_id,
+            )
 
         return result
 

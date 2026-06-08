@@ -86,7 +86,6 @@ def write_artifact_manifest(
         "packet_id": packet_id,
         "run_id": run_id,
         "generated_at": time.time(),
-        "browser_dir": str(browser_dir),
         "total_artifacts": len(entries),
         "entries": [_entry_to_dict(e) for e in entries],
     }

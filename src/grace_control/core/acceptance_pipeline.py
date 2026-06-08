@@ -493,6 +493,7 @@ def _run_frontend_stages(
             telegram_mode=routing.telegram_mode,
             custom_cmds=t2b_commands if t2b_commands else None,
             telegram_bot_token_env=routing.telegram_bot_token_env,
+            packet_id=packet.packet_id,
         )
         passed = all(r.passed for r in browser_results)
         screenshots = sum((r.screenshots for r in browser_results), [])
@@ -532,6 +533,7 @@ def _run_frontend_stages(
             telegram_mode=routing.telegram_mode,
             custom_cmds=t3v_commands if t3v_commands else None,
             telegram_bot_token_env=routing.telegram_bot_token_env,
+            packet_id=packet.packet_id,
         )
         passed = all(r.passed for r in visual_results)
         screenshots = sum((r.screenshots for r in visual_results), [])
@@ -581,6 +583,7 @@ def _run_frontend_stages(
                 telegram_mode=routing.telegram_mode,
                 telegram_bot_token_env=routing.telegram_bot_token_env,
                 custom_cmds=t2a_commands if t2a_commands else None,
+                packet_id=packet.packet_id,
             )
             a11y_passed = all(r.passed for r in a11y_results)
             a11y_errors = sum((r.errors for r in a11y_results), [])
