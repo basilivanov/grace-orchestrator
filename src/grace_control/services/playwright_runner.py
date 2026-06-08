@@ -81,9 +81,9 @@ class PlaywrightRunner:
         return self._run_playwright("visual", extra_env={"MAX_DIFF_PCT": str(max_diff_pct)},
                                     custom_cmds=custom_cmds)
 
-    def run_a11y(self) -> BrowserStageResult:
+    def run_a11y(self, custom_cmds: list[list[str]] | None = None) -> BrowserStageResult:
         """Run axe-core accessibility check. TZ_FRONTEND_ACCEPTANCE P2."""
-        return self._run_playwright("a11y")
+        return self._run_playwright("a11y", custom_cmds=custom_cmds)
 
     # ── internals ───────────────────────────────────────────────────────
 

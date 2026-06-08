@@ -580,6 +580,7 @@ def _run_frontend_stages(
                 worktree_root, run_dir, routing,
                 telegram_mode=routing.telegram_mode,
                 telegram_bot_token_env=routing.telegram_bot_token_env,
+                custom_cmds=t2a_commands if t2a_commands else None,
             )
             a11y_passed = all(r.passed for r in a11y_results)
             a11y_errors = sum((r.errors for r in a11y_results), [])

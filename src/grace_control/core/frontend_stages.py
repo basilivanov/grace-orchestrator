@@ -230,6 +230,7 @@ def run_a11y_check(
     *,
     telegram_mode: str = "mock",
     telegram_bot_token_env: str = "",
+    custom_cmds: list[list[str]] | None = None,
 ) -> list[BrowserStageResult]:
     """Run T2_BROWSER_A11Y — axe-core per viewport (P2).
 
@@ -249,7 +250,7 @@ def run_a11y_check(
                 telegram_mode=telegram_mode,
                 telegram_bot_token_env=telegram_bot_token_env,
             )
-            r = runner.run_a11y()
+            r = runner.run_a11y(custom_cmds=custom_cmds)
             results.append(r)
         except Exception as e:
             _log.error("a11y_failed", viewport=vp, error=str(e)[:200])

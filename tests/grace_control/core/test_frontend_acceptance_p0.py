@@ -843,3 +843,23 @@ class TestA11yRequiredCommandGate:
         r = _run_frontend_stages(pkt, worktree_root="/tmp", run_dir="/tmp")
         assert r["t2_browser_a11y"].status.value == "failed"
         assert "t2_a11y is required" in r["t2_browser_a11y"].summary
+
+    def test_a11y_custom_commands_actually_executed(self, tmp_path: Path):
+        """verification.t2_a11y custom command is passed to subprocess.run."""
+        from grace_control.services.playwright_runner import PlaywrightRunner
+        from unittest.mock import patch
+        custom = [["npx", "playwright", "test", "tests/e2e/a11y.axe.spec.ts"]]
+        runner = PlaywrightRunner(worktree_path=tmp_path, run_dir=tmp_path / "r",
+                                  viewport="android", dev_command="echo test")
+        runner._has_playwright = lambda: True
+        (tmp_path / "tests" / "e2e").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "tests" / "e2e" / "test.a11y.spec.ts").write_text("// a11y")
+        runner._start_dev_server = lambda: True
+        runner._stop_dev_server = lambda: None
+        mock_run = type("R", (), {"returncode": 0, "stdout": "[]", "stderr": ""})()
+        with patch("subprocess.run", return_value=mock_run) as mock_subprocess:
+            r = runner.run_a11y(custom_cmds=custom)
+            called_cmd = mock_subprocess.call_args[0][0]
+            assert "a11y.axe.spec.ts" in " ".join(called_cmd), (
+                f"Expected a11y.axe.spec.ts in subprocess call, got: {called_cmd}"
+            )
