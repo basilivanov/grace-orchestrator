@@ -1,7 +1,6 @@
 # ТЗ: Frontend Acceptance — Browser E2E + Visual Regression для React/Telegram Mini App
 
-**Статус:** pending (готов к реализации)
-**Приоритет:** P0 — без этого React-пакеты принимаются только по линту
+**Статус:** P0/P1/P2 implemented, P3 — stabilization (in progress)
 **Дата:** 2026-06-07
 
 ---

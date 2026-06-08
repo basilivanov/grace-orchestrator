@@ -863,3 +863,148 @@ class TestA11yRequiredCommandGate:
             assert "a11y.axe.spec.ts" in " ".join(called_cmd), (
                 f"Expected a11y.axe.spec.ts in subprocess call, got: {called_cmd}"
             )
+
+
+# ── P3 tests: fail-closed gates, artifact manifest, command execution truth ──
+
+
+class TestFailClosedGates:
+    """All negative gates must fail, not pass/skip silently."""
+
+    def test_frontend_enabled_playwright_missing_fails(self, tmp_path: Path):
+        from grace_control.services.playwright_runner import PlaywrightRunner
+        runner = PlaywrightRunner(worktree_path=tmp_path, run_dir=tmp_path / "r",
+                                  viewport="android", dev_command="echo test")
+        runner._has_playwright = lambda: False
+        r = runner.run_e2e()
+        assert r.passed is False
+
+    def test_visual_required_no_diff_report_fails(self, tmp_path: Path):
+        from grace_control.core.evidence import _check_evidence_kind
+        from grace_control.core.contracts import EvidenceRequirement
+        req = EvidenceRequirement(id="v1", kind="visual_diff")
+        assert not _check_evidence_kind(req, [], tmp_path, [])
+
+    def test_a11y_required_no_command_fails_in_pipeline(self):
+        from grace_control.core.acceptance_pipeline import _run_frontend_stages
+        from grace_control.core.contracts import ExecutionPacketContract, AcceptanceProfile
+        pkt = ExecutionPacketContract(packet_id="t", title="t", allowed_write_scope=[],
+                                      frozen_scope=[], acceptance_profile=AcceptanceProfile.NORMAL,
+                                      verification={}, metadata={"frontend": {"enabled": True, "a11y": {"required": True}}})
+        r = _run_frontend_stages(pkt, worktree_root="/tmp", run_dir="/tmp")
+        assert r["t2_browser_a11y"].status.value == "failed"
+
+    def test_a11y_required_no_report_file_fails_evidence(self, tmp_path: Path):
+        from grace_control.core.evidence import _check_evidence_kind
+        from grace_control.core.contracts import EvidenceRequirement
+        req = EvidenceRequirement(id="a1", kind="a11y_report")
+        assert not _check_evidence_kind(req, [], tmp_path, [])
+
+    def test_backend_only_does_not_fail(self):
+        """Backend-only packet must not be broken by frontend changes."""
+        from grace_control.core.acceptance_pipeline import _run_frontend_stages
+        from grace_control.core.contracts import ExecutionPacketContract, AcceptanceProfile
+        pkt = ExecutionPacketContract(packet_id="t", title="t", allowed_write_scope=[],
+                                      frozen_scope=[], acceptance_profile=AcceptanceProfile.NORMAL,
+                                      verification={"t1": [["echo", "ok"]]}, metadata={})
+        r = _run_frontend_stages(pkt, worktree_root="/tmp", run_dir="/tmp")
+        assert r["t2_browser"].skipped_reason == "frontend not enabled"
+        assert r["t3_visual"].skipped_reason == "frontend not enabled"
+        assert r["t2_browser_a11y"].skipped_reason == "a11y not required"
+
+
+class TestArtifactManifest:
+    """Artifacts-manifest.json generation and validation."""
+
+    def test_manifest_written_for_browser_dir(self, tmp_path: Path):
+        from grace_control.services.artifact_manifest import write_artifact_manifest
+        browser = tmp_path / "browser" / "android"
+        browser.mkdir(parents=True)
+        (browser / "screen.png").write_text("pngdata")
+        path = write_artifact_manifest(tmp_path, packet_id="p1", run_id="r1")
+        assert path is not None
+        manifest = browser.parent / "artifacts-manifest.json"
+        assert manifest.exists()
+        import json
+        data = json.loads(manifest.read_text())
+        assert data["packet_id"] == "p1"
+        assert data["total_artifacts"] >= 1
+
+    def test_manifest_validates_existing_files(self, tmp_path: Path):
+        from grace_control.services.artifact_manifest import write_artifact_manifest, validate_artifact_manifest
+        browser = tmp_path / "browser" / "android"
+        browser.mkdir(parents=True)
+        (browser / "screen.png").write_text("ok")
+        write_artifact_manifest(tmp_path, packet_id="p1", run_id="r1")
+        errors = validate_artifact_manifest(tmp_path)
+        assert len(errors) == 0, f"Expected no errors, got: {errors}"
+
+    def test_manifest_reports_missing_file(self, tmp_path: Path):
+        from grace_control.services.artifact_manifest import write_artifact_manifest, validate_artifact_manifest
+        browser = tmp_path / "browser" / "android"
+        browser.mkdir(parents=True)
+        (browser / "screen.png").write_text("ok")
+        write_artifact_manifest(tmp_path, packet_id="p1", run_id="r1")
+        # Delete the file after manifest written
+        (browser / "screen.png").unlink()
+        errors = validate_artifact_manifest(tmp_path)
+        assert len(errors) > 0
+
+    def test_manifest_includes_a11y_report(self, tmp_path: Path):
+        from grace_control.services.artifact_manifest import write_artifact_manifest
+        browser = tmp_path / "browser" / "android"
+        browser.mkdir(parents=True)
+        (browser / "a11y-report.json").write_text('{"violations": []}')
+        write_artifact_manifest(tmp_path, packet_id="p1", run_id="r1")
+        import json
+        data = json.loads((tmp_path / "browser" / "artifacts-manifest.json").read_text())
+        kinds = {e["kind"] for e in data["entries"]}
+        assert "a11y_report" in kinds
+
+
+class TestCommandExecutionTruth:
+    """All verification commands must be actually executed via subprocess."""
+
+    def test_t2_browser_command_reaches_subprocess(self, tmp_path: Path):
+        from grace_control.services.playwright_runner import PlaywrightRunner
+        from unittest.mock import patch
+        runner = PlaywrightRunner(worktree_path=tmp_path, run_dir=tmp_path / "r",
+                                  viewport="android", dev_command="echo test")
+        runner._has_playwright = lambda: True
+        (tmp_path / "tests" / "e2e").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "tests" / "e2e" / "test.spec.ts").write_text("// test")
+        runner._start_dev_server = lambda: True
+        runner._stop_dev_server = lambda: None
+        custom = [["npx", "playwright", "test", "tests/e2e/login.spec.ts"]]
+        with patch("subprocess.run", return_value=type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()) as m:
+            runner.run_e2e(custom_cmds=custom)
+            assert m.call_count >= 1
+
+    def test_t2_a11y_command_reaches_subprocess(self, tmp_path: Path):
+        from grace_control.services.playwright_runner import PlaywrightRunner
+        from unittest.mock import patch
+        runner = PlaywrightRunner(worktree_path=tmp_path, run_dir=tmp_path / "r",
+                                  viewport="android", dev_command="echo test")
+        runner._has_playwright = lambda: True
+        (tmp_path / "tests" / "e2e").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "tests" / "e2e" / "test.a11y.spec.ts").write_text("// a11y")
+        runner._start_dev_server = lambda: True
+        runner._stop_dev_server = lambda: None
+        with patch("subprocess.run", return_value=type("R", (), {"returncode": 0, "stdout": "[]", "stderr": ""})()) as m:
+            runner.run_a11y(custom_cmds=[["npx", "axe", "test"]])
+            assert m.call_count >= 1
+
+    def test_multi_command_all_executed(self, tmp_path: Path):
+        from grace_control.services.playwright_runner import PlaywrightRunner
+        from unittest.mock import patch
+        runner = PlaywrightRunner(worktree_path=tmp_path, run_dir=tmp_path / "r",
+                                  viewport="android", dev_command="echo test")
+        runner._has_playwright = lambda: True
+        (tmp_path / "tests" / "e2e").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "tests" / "e2e" / "test.spec.ts").write_text("// test")
+        runner._start_dev_server = lambda: True
+        runner._stop_dev_server = lambda: None
+        custom = [["cmd1", "a"], ["cmd2", "b"]]
+        with patch("subprocess.run", return_value=type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()) as m:
+            runner.run_e2e(custom_cmds=custom)
+            assert m.call_count == 2

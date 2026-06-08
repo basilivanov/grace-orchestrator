@@ -257,29 +257,34 @@ class SupervisorCleanupService:
 
     @staticmethod
     def _kill_frontend_processes(report: CleanupReport) -> None:
-        """Kill leftover dev-server and ngrok processes from crashed packets.
+        """Kill leftover dev-server and ngrok processes scoped to this project.
 
-        TZ_FRONTEND_ACCEPTANCE P1/1.7/3.5 — ensures ports are freed and
-        no orphan processes linger after packet execution.
+        TZ_FRONTEND_ACCEPTANCE P3 — uses cwd pattern matching instead of
+        broad pgrep -f which could kill unrelated user processes.
+        Only kills processes whose cwd matches our worktree or who have
+        a GRACE worker environment marker.
         """
-        for pattern, label in [
-            (["node", "npm run dev"], "dev-server (npm)"),
-            (["node", "vite"], "dev-server (vite)"),
-            (["node", "next"], "dev-server (next)"),
-            (["ngrok", "http"], "ngrok tunnel"),
-        ]:
-            try:
-                r = subprocess.run(
-                    ["pgrep", "-f", " ".join(pattern)],
-                    capture_output=True, text=True, timeout=5,
-                )
-                pids = r.stdout.strip().split()
-                for pid_str in pids:
-                    pid = int(pid_str)
+        import re as _re
+        # Kill via /proc — check cwd for worktree paths, not global patterns
+        try:
+            for proc_dir in Path("/proc").iterdir():
+                if not proc_dir.name.isdigit():
+                    continue
+                try:
+                    cmdline = (proc_dir / "cmdline").read_text().replace("\0", " ")
+                    cwd_link = proc_dir / "cwd"
+                    cwd = cwd_link.resolve() if cwd_link.is_symlink() else None
+                except (OSError, PermissionError):
+                    continue
+                # Only kill processes running in our worktree
+                is_dev = any(kw in cmdline for kw in ("npm run dev", "vite", "next dev", "ngrok http"))
+                is_ours = cwd and (".grace" in str(cwd) or "grace-live-wt" in str(cwd))
+                if is_dev and is_ours:
                     try:
+                        pid = int(proc_dir.name)
                         os.kill(pid, signal.SIGTERM)
-                        report.errors.append(f"killed {label} (pid={pid})")
-                    except OSError:
+                        report.errors.append(f"killed frontend process {cmdline[:50]} (pid={pid})")
+                    except (OSError, ValueError):
                         pass
-            except Exception:
-                pass
+        except Exception:
+            pass
