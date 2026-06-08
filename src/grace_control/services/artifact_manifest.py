@@ -80,6 +80,7 @@ def write_artifact_manifest(
             entries.append(ManifestEntry(
                 kind=kind, path=rel, size=f.stat().st_size,
                 viewport=vp, stage=_infer_stage(rel),
+                metadata=_extract_metadata(f, kind),
             ))
 
     manifest = {
@@ -171,3 +172,24 @@ def _find_missing_artifacts(browser_dir: Path, entries: list[dict]) -> list[str]
         if rel not in manifest_paths:
             missing.append(f"file not in manifest: {rel}")
     return missing
+
+
+def _extract_metadata(f: Path, kind: str) -> dict:
+    """Parse report files for metadata included in manifest."""
+    if kind in ("visual_diff",) and f.name.endswith(".json"):
+        try:
+            data = json.loads(f.read_text())
+            return {"diff_pct": data.get("diff_pct", 0), "max_diff_pct": data.get("max_diff_pct", 0.001)}
+        except Exception:
+            pass
+    if kind == "a11y_report":
+        try:
+            data = json.loads(f.read_text())
+            return {
+                "violations_count": data.get("violations_count", 0),
+                "critical_count": data.get("critical_count", 0),
+                "passed": data.get("passed", False),
+            }
+        except Exception:
+            pass
+    return {}

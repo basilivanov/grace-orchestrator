@@ -462,6 +462,7 @@ def _run_frontend_stages(
     *,
     worktree_root: Path,
     run_dir: Path,
+    run_id: str = "",
 ) -> dict[str, "StageResult"]:
     """Run T2_BROWSER_E2E and T3_VISUAL_REGRESSION if frontend is enabled.
 
@@ -494,6 +495,7 @@ def _run_frontend_stages(
             custom_cmds=t2b_commands if t2b_commands else None,
             telegram_bot_token_env=routing.telegram_bot_token_env,
             packet_id=packet.packet_id,
+            run_id=run_id,
         )
         passed = all(r.passed for r in browser_results)
         screenshots = sum((r.screenshots for r in browser_results), [])
@@ -534,6 +536,7 @@ def _run_frontend_stages(
             custom_cmds=t3v_commands if t3v_commands else None,
             telegram_bot_token_env=routing.telegram_bot_token_env,
             packet_id=packet.packet_id,
+            run_id=run_id,
         )
         passed = all(r.passed for r in visual_results)
         screenshots = sum((r.screenshots for r in visual_results), [])
@@ -584,6 +587,7 @@ def _run_frontend_stages(
                 telegram_bot_token_env=routing.telegram_bot_token_env,
                 custom_cmds=t2a_commands if t2a_commands else None,
                 packet_id=packet.packet_id,
+                run_id=run_id,
             )
             a11y_passed = all(r.passed for r in a11y_results)
             a11y_errors = sum((r.errors for r in a11y_results), [])

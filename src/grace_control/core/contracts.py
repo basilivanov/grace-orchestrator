@@ -120,7 +120,7 @@ class VerificationSpec:
 @dataclass(frozen=True)
 class EvidenceRequirement:
     id: str
-    kind: str  # command | file | diff | log | screenshot | dom_snapshot | console_log | network_log | visual_diff | a11y_report
+    kind: str  # command | file | diff | log | screenshot | dom_snapshot | console_log | network_log | visual_diff | a11y_report | artifact_manifest
     required: bool = True
     pattern: str | None = None
 

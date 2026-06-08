@@ -823,7 +823,7 @@ class TestStorybookVideoAbsent:
         req = EvidenceRequirement(id="v1", kind="screenshot")  # valid kind
         assert req.kind == "screenshot"
         # No 'video' evidence kind should exist
-        valid = {"command", "file", "diff", "log", "screenshot", "dom_snapshot", "console_log", "network_log", "visual_diff"}
+        valid = {"command", "file", "diff", "log", "screenshot", "dom_snapshot", "console_log", "network_log", "visual_diff", "a11y_report", "artifact_manifest"}
         assert "video" not in valid
 
 
@@ -987,6 +987,48 @@ class TestArtifactManifest:
             )
         manifest_path = tmp_path / "runs" / "browser" / "artifacts-manifest.json"
         assert manifest_path.exists(), f"manifest not found at {manifest_path}, browser contents: {list((tmp_path/'runs').rglob('*')) if (tmp_path/'runs').exists() else 'no runs dir'}"
+
+    def test_artifact_manifest_evidence_kind_validation(self, tmp_path: Path):
+        """artifact_manifest evidence kind validates the manifest."""
+        from grace_control.core.evidence import _check_evidence_kind
+        from grace_control.core.contracts import EvidenceRequirement
+        from grace_control.services.artifact_manifest import write_artifact_manifest
+        browser = tmp_path / "browser" / "android"
+        browser.mkdir(parents=True)
+        (browser / "screen.png").write_text("ok")
+        write_artifact_manifest(tmp_path, packet_id="p1", run_id="r1")
+        req = EvidenceRequirement(id="m1", kind="artifact_manifest")
+        assert _check_evidence_kind(req, [], tmp_path, [], run_dir=tmp_path)
+
+    def test_manifest_metadata_diff_report(self, tmp_path: Path):
+        """diff-report.json metadata is extracted into manifest."""
+        from grace_control.services.artifact_manifest import write_artifact_manifest, _extract_metadata
+        browser = tmp_path / "browser" / "android"
+        browser.mkdir(parents=True)
+        (browser / "diff-report.json").write_text('{"diff_pct": 0.05, "max_diff_pct": 0.01}')
+        write_artifact_manifest(tmp_path, packet_id="p1", run_id="r1")
+        import json
+        data = json.loads((tmp_path / "browser" / "artifacts-manifest.json").read_text())
+        for e in data["entries"]:
+            if e["kind"] == "visual_diff" and "diff_pct" in e.get("metadata", {}):
+                assert e["metadata"]["diff_pct"] == 0.05
+                return
+        assert False, "diff_pct metadata not found in manifest entries"
+
+    def test_manifest_metadata_a11y_report(self, tmp_path: Path):
+        """a11y-report.json metadata is extracted into manifest."""
+        from grace_control.services.artifact_manifest import write_artifact_manifest
+        browser = tmp_path / "browser" / "android"
+        browser.mkdir(parents=True)
+        (browser / "a11y-report.json").write_text('{"violations_count": 3, "critical_count": 1, "passed": false}')
+        write_artifact_manifest(tmp_path, packet_id="p1", run_id="r1")
+        import json
+        data = json.loads((tmp_path / "browser" / "artifacts-manifest.json").read_text())
+        for e in data["entries"]:
+            if e["kind"] == "a11y_report" and "critical_count" in e.get("metadata", {}):
+                assert e["metadata"]["critical_count"] == 1
+                return
+        assert False, "a11y metadata not found in manifest entries"
 
 
 class TestCommandExecutionTruth:

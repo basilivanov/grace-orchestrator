@@ -186,6 +186,12 @@ def _check_evidence_kind(
         except Exception:
             return False
 
+    # TZ_FRONTEND_ACCEPTANCE P3 — artifact manifest validation
+    if req.kind == "artifact_manifest":
+        from grace_control.services.artifact_manifest import validate_artifact_manifest
+        errors = validate_artifact_manifest(run_dir) if run_dir else validate_artifact_manifest(worktree_path)
+        return len(errors) == 0
+
     return False
 
 
