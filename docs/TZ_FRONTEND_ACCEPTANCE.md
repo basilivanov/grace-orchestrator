@@ -1,6 +1,6 @@
 # ТЗ: Frontend Acceptance — Browser E2E + Visual Regression для React/Telegram Mini App
 
-**Статус:** P0/P1/P2 implemented, P3 — stabilization (in progress)
+**Статус:** P0/P1/P2/P3 — implemented and accepted.
 **Дата:** 2026-06-07
 
 ---
