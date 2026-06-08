@@ -1000,6 +1000,32 @@ class TestArtifactManifest:
         req = EvidenceRequirement(id="m1", kind="artifact_manifest")
         assert _check_evidence_kind(req, [], tmp_path, [], run_dir=tmp_path)
 
+    def test_manifest_run_id_derived_from_run_dir(self, tmp_path: Path):
+        """AcceptancePipeline.run() derives run_id from run_dir path (e.g. .../R01 → pkt_xxx-R01)."""
+        from unittest.mock import patch
+        from grace_control.core.acceptance_pipeline import _run_frontend_stages
+        from grace_control.core.contracts import ExecutionPacketContract, AcceptanceProfile
+        pkt = ExecutionPacketContract(
+            packet_id="pkt_xyz", title="run_id test",
+            allowed_write_scope=[], frozen_scope=[],
+            acceptance_profile=AcceptanceProfile.NORMAL,
+            verification={"t2_browser": [["echo", "ok"]]},
+            metadata={"frontend": {"enabled": True}},
+        )
+        (tmp_path / "tests" / "e2e").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "tests" / "e2e" / "test.spec.ts").write_text("// test")
+        mock = type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+        with patch("subprocess.run", return_value=mock), \
+             patch("grace_control.services.playwright_runner.PlaywrightRunner._start_dev_server", return_value=True), \
+             patch("grace_control.services.playwright_runner.PlaywrightRunner._stop_dev_server", return_value=None):
+            _run_frontend_stages(pkt, worktree_root=tmp_path, run_dir=tmp_path / "runs",
+                                 run_id="pkt_xyz-R02")
+        import json
+        mp = tmp_path / "runs" / "browser" / "artifacts-manifest.json"
+        assert mp.exists()
+        data = json.loads(mp.read_text())
+        assert data["run_id"] == "pkt_xyz-R02", f"Expected pkt_xyz-R02, got {data['run_id']}"
+
     def test_manifest_metadata_diff_report(self, tmp_path: Path):
         """diff-report.json metadata is extracted into manifest."""
         from grace_control.services.artifact_manifest import write_artifact_manifest, _extract_metadata

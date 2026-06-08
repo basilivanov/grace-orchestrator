@@ -227,8 +227,10 @@ class AcceptancePipeline:
             )
 
         # ── T2_BROWSER + T3_VISUAL: frontend acceptance (TZ_FRONTEND_ACCEPTANCE P0) ──
+        _rd = Path(run_dir) if run_dir else worktree_root
+        _derived_run_id = f"{packet.packet_id}-{_rd.name}" if _rd.name.startswith("R") else packet.packet_id
         browser_routing = _run_frontend_stages(
-            packet, worktree_root=worktree_root, run_dir=Path(run_dir) if run_dir else worktree_root,
+            packet, worktree_root=worktree_root, run_dir=_rd, run_id=_derived_run_id,
         )
         t2_browser_stage = browser_routing.get("t2_browser")
         t3_visual_stage = browser_routing.get("t3_visual")
@@ -269,7 +271,7 @@ class AcceptancePipeline:
             worktree_path=worktree_root,
             changed_files=changed_files or [],
             profile=packet.acceptance_profile,
-            run_dir=Path(run_dir) if run_dir else None,
+            run_dir=_rd,
         )
         if evidence_issues:
             return AcceptanceReport(
