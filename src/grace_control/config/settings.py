@@ -111,6 +111,10 @@ class GraceSettings(BaseSettings):
     opencode_server_url: str = ""
     opencode_server_password: str = ""
 
+    # ── Dev tools / replay ──
+    dev_tools_enabled: bool = False
+    dev_keep_failed_worktrees: bool = False
+
 
 # Class-level defaults, captured AFTER the class is defined and BEFORE
 # pydantic-settings ever resolves env vars. We use this to decide whether
@@ -122,7 +126,7 @@ _BASE_DEFAULTS: dict[str, object] = {
 }
 
 
-def _apply_project_fallbacks(target: "GraceSettings", project: ProjectConfig) -> None:
+def _apply_project_fallbacks(target: GraceSettings, project: ProjectConfig) -> None:
     """Copy project-config values into `target` only when env did not touch them.
 
     Precedence is env > .grace/config.yaml > safe_local_defaults. Pydantic-

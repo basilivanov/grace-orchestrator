@@ -107,6 +107,7 @@ class EvidenceService:
         model: str = "",
         command_preview: list | None = None,
         prompt: str = "",
+        dev_replay: dict | None = None,
     ) -> None:
         try:
             with self._db() as db:
@@ -118,19 +119,24 @@ class EvidenceService:
                         if acceptance_report
                         else {"error": "acceptance pipeline failed"}
                     )
-                    existing.result_json = {
+                    res_json = {
                         "legacy_result": legacy_result,
                         "acceptance_report": accept_dict,
                         "evidence_verifier_report": (
                             evidence_verifier_report.model_dump()
-                            if evidence_verifier_report
-                            else {}
+                            if hasattr(evidence_verifier_report, "model_dump")
+                            else (evidence_verifier_report if isinstance(evidence_verifier_report, dict) else {})
                         ),
                         "reviewer_report": (
-                            reviewer_report.model_dump() if reviewer_report else {}
+                            reviewer_report.model_dump()
+                            if hasattr(reviewer_report, "model_dump")
+                            else (reviewer_report if isinstance(reviewer_report, dict) else {})
                         ),
                         "agent_commit_sha": commit_sha,
                     }
+                    if dev_replay:
+                        res_json["dev_replay"] = dev_replay
+                    existing.result_json = res_json
                     existing.evidence_path = evidence_path
                     existing.finished_at = datetime.now(timezone.utc)
                     existing.duration_ms = duration_ms

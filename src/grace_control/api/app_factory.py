@@ -26,6 +26,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from grace_control.api.auth import AuthMiddleware
 from grace_control.api.lifespan import lifespan
 from grace_control.api.routers import (
     admin,
@@ -33,6 +34,7 @@ from grace_control.api.routers import (
     agents,
     architect,
     artifacts,
+    dev_replay,
     diagnostics,
     events,
     features,
@@ -46,9 +48,9 @@ from grace_control.api.routers import (
     workers,
     ws,
 )
-from grace_control.config.settings import GraceSettings, settings as _default_settings
+from grace_control.config.settings import GraceSettings
+from grace_control.config.settings import settings as _default_settings
 from grace_control.core.structured_logger import GraceLogger
-from grace_control.api.auth import AuthMiddleware
 
 _log = GraceLogger("app_factory")
 
@@ -112,12 +114,14 @@ def create_app(settings: GraceSettings | None = None) -> FastAPI:
     app.include_router(diagnostics.router, prefix="/api/diagnostics", tags=["diagnostics"])
     app.include_router(agents.router, prefix="/api/agents", tags=["agents"])
     app.include_router(tools.router, prefix="/api/tools", tags=["tools"])
+    app.include_router(dev_replay.router, tags=["dev_replay"])
     app.include_router(lifecycle.router, tags=["lifecycle"])
 
     # Admin UI — static assets for /static/* (HTMX is loaded from CDN in the template).
     from pathlib import Path as _P
-    from fastapi.staticfiles import StaticFiles as _SF
+
     from fastapi.responses import RedirectResponse
+    from fastapi.staticfiles import StaticFiles as _SF
 
     _ui_dir = _P(__file__).resolve().parents[1] / "ui"
     _admin_static = _ui_dir / "static"

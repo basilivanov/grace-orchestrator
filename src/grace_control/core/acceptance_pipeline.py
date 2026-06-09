@@ -21,11 +21,14 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from grace_control.core.structured_logger import GraceLogger
 
 _log = GraceLogger("acceptance")
 
 import os
+from dataclasses import dataclass
 from pathlib import Path
 
 from grace_control.core.command_runner import CommandRunner
@@ -35,20 +38,14 @@ from grace_control.core.contracts import (
     CommandResult,
     ExecutionPacketContract,
     FinalVerdict,
-    PacketVerdict,
-    ReviewerVerdict,
     ScopeViolation,
     StageName,
     StageResult,
     StageStatus,
-    VerifierReport,
     validate_packet_contract,
 )
 from grace_control.core.evidence import EvidenceCollector, check_expected_evidence
 from grace_control.core.scope_guard import ScopeGuard, get_changed_files
-
-
-from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
@@ -81,11 +78,105 @@ def run_acceptance_pipeline(
     return pipe.run(
         packet=packet,
         changed_files=changed_files,
-        legacy_result={"ok": getattr(legacy_result, "ok", True), "domain_status": getattr(legacy_result, "domain_status", "")},
+        legacy_result={"ok": getattr(legacy_result, "ok", True) if not isinstance(legacy_result, dict) else legacy_result.get("ok", True),
+                       "domain_status": getattr(legacy_result, "domain_status", "") if not isinstance(legacy_result, dict) else legacy_result.get("domain_status", "")},
         worktree_path=str(worktree_path),
         branch_name=branch_name,
         run_dir=str(run_dir),
     )
+
+
+def run_acceptance_stage_replay(
+    *,
+    packet: ExecutionPacketContract,
+    legacy_result: Any,
+    project_root: Path,
+    worktree_path: Path,
+    branch_name: str,
+    run_dir: Path,
+    stage: str,
+    base_ref: str | None = None,
+    base_sha: str | None = None,
+) -> AcceptanceReport:
+    pipe = AcceptancePipeline(
+        repo_root=project_root,
+        command_runner=CommandRunner(worktree_path),
+        scope_guard=ScopeGuard(worktree_path),
+    )
+    changed_files: list[str] = []
+    try:
+        changed_base = base_sha or base_ref or os.environ.get("GRACE_BASE_REF", "HEAD")
+        changed_files = get_changed_files(worktree_path, base_ref=changed_base)
+    except Exception:
+        pass
+
+    if stage == "full_acceptance":
+        return run_acceptance_pipeline(
+            packet=packet,
+            legacy_result=legacy_result,
+            project_root=project_root,
+            worktree_path=worktree_path,
+            branch_name=branch_name,
+            run_dir=run_dir,
+            base_ref=base_ref,
+            base_sha=base_sha,
+        )
+    elif stage == "t0":
+        run_dir_t0 = Path(run_dir) / "t0" if run_dir else worktree_path
+        t0_result = pipe._run_t0(packet, changed_files, base_ref, base_sha, output_dir=run_dir_t0, cwd=worktree_path)
+        passed = t0_result.stage.status == StageStatus.PASSED
+        return AcceptanceReport(
+            packet_id=packet.packet_id,
+            final_verdict=FinalVerdict.ACCEPTED if passed else FinalVerdict.REWORK_REQUIRED,
+            profile=packet.acceptance_profile,
+            stages=[t0_result.stage],
+            scope_violations=[f"{v.path}: {v.reason}" for v in t0_result.scope_violations],
+            summary=t0_result.stage.summary,
+        )
+    elif stage == "t1":
+        run_dir_t1 = Path(run_dir) / "t1" if run_dir else worktree_path
+        t1_result = pipe._run_t1(packet, run_dir=run_dir_t1, cwd=worktree_path)
+        passed = t1_result.status == StageStatus.PASSED
+        return AcceptanceReport(
+            packet_id=packet.packet_id,
+            final_verdict=FinalVerdict.ACCEPTED if passed else FinalVerdict.REWORK_REQUIRED,
+            profile=packet.acceptance_profile,
+            stages=[t1_result],
+            summary=t1_result.summary or "T1 completed",
+        )
+    elif stage == "t2":
+        run_dir_t2 = Path(run_dir) / "t2" if run_dir else worktree_path
+        t2_result = pipe._run_t2(packet, run_dir=run_dir_t2, cwd=worktree_path)
+        passed = t2_result.status == StageStatus.PASSED
+        return AcceptanceReport(
+            packet_id=packet.packet_id,
+            final_verdict=FinalVerdict.ACCEPTED if passed else FinalVerdict.REWORK_REQUIRED,
+            profile=packet.acceptance_profile,
+            stages=[t2_result],
+            summary=t2_result.summary or "T2 completed",
+        )
+    elif stage in ("t2_browser", "t3_visual"):
+        stages_dict = _run_frontend_stages(
+            packet, worktree_root=worktree_path, run_dir=run_dir, run_id=packet.packet_id
+        )
+        target_stage = stages_dict.get(stage)
+        if not target_stage:
+            target_stage = StageResult(
+                name=StageName.T2_BROWSER_E2E if stage == "t2_browser" else StageName.T3_VISUAL_REGRESSION,
+                status=StageStatus.SKIPPED,
+                summary=f"{stage} skipped",
+                skipped_reason="not enabled in packet metadata",
+            )
+        passed = target_stage.status != StageStatus.FAILED
+        return AcceptanceReport(
+            packet_id=packet.packet_id,
+            final_verdict=FinalVerdict.ACCEPTED if passed else FinalVerdict.REWORK_REQUIRED,
+            profile=packet.acceptance_profile,
+            stages=[target_stage],
+            summary=target_stage.summary or f"{stage} completed",
+        )
+    else:
+        raise ValueError(f"UNSUPPORTED_REPLAY_STAGE: {stage}")
 
 
 class AcceptancePipeline:
@@ -460,12 +551,12 @@ class AcceptancePipeline:
 
 
 def _run_frontend_stages(
-    packet: "ExecutionPacketContract",
+    packet: ExecutionPacketContract,
     *,
     worktree_root: Path,
     run_dir: Path,
     run_id: str = "",
-) -> dict[str, "StageResult"]:
+) -> dict[str, StageResult]:
     """Run T2_BROWSER_E2E and T3_VISUAL_REGRESSION if frontend is enabled.
 
     TZ_FRONTEND_ACCEPTANCE P0 — routing via resolve_browser_routing().
@@ -506,7 +597,7 @@ def _run_frontend_stages(
         # Build CommandResults from actual browser execution
         cmd_results = [
             CommandResult(
-                command=r.command or " ".join(t2b_commands[i]) if i < len(t2b_commands) else f"npx playwright test",
+                command=r.command or " ".join(t2b_commands[i]) if i < len(t2b_commands) else "npx playwright test",
                 cwd=str(worktree_root),
                 exit_code=r.exit_code if r.exit_code >= 0 else (0 if r.passed else 1),
                 stdout=r.stdout_snippet,
@@ -546,7 +637,7 @@ def _run_frontend_stages(
 
         cmd_results = [
             CommandResult(
-                command=r.command or " ".join(t3v_commands[i]) if i < len(t3v_commands) else f"npx playwright test --visual",
+                command=r.command or " ".join(t3v_commands[i]) if i < len(t3v_commands) else "npx playwright test --visual",
                 cwd=str(worktree_root),
                 exit_code=r.exit_code if r.exit_code >= 0 else (0 if r.passed else 1),
                 stdout=r.stdout_snippet,
@@ -624,7 +715,7 @@ def _run_frontend_stages(
 
 def _commands_to_results(
     commands: list[list[str]], *, worktree_path: str, run_dir: str
-) -> list["CommandResult"]:
+) -> list[CommandResult]:
     """Convert verification command lists to CommandResult objects.
 
     When commands haven't actually been executed yet (pre-run),

@@ -31,78 +31,79 @@ agents:
     - --variant
     - '{effort}'
     - |-
-      |
-              EVERY file you create MUST follow this EXACT GRACE canon template:
+      Read the task from {packet_path} and execute it. Create or modify files in the current working directory using the file-editing tools available.
 
-              ```
-              # ############################################################################
-              # AI_HEADER: module_name — one-line description of what this module does
-              # ROLE: Detailed role. Who calls it, what it provides. One or two sentences.
-              # ############################################################################
+      EVERY file you create MUST follow this EXACT GRACE canon template:
 
-              # START_MODULE_CONTRACT
-              # purpose: What this module does. Who calls it, what it returns.
-              # inputs: List of inputs, parameters, or dependencies.
-              # returns: What this module returns or provides.
-              # side_effects: File writes, DB inserts, network calls, subprocess spawns.
-              # emitted_logs: List of GraceLogger msg= names this module emits.
-              # error_behavior: What exceptions this module may raise and when.
-              # END_MODULE_CONTRACT
+      ```
+      # ############################################################################
+      # AI_HEADER: module_name — one-line description of what this module does
+      # ROLE: Detailed role. Who calls it, what it provides. One or two sentences.
+      # ############################################################################
 
-              # START_MODULE_MAP
-              # mapping:
-              #   - class: ClassName
-              #     methods:
-              #       - method_one
-              #       - method_two
-              #   - function: standalone_func
-              # END_MODULE_MAP
+      # START_MODULE_CONTRACT
+      # purpose: What this module does. Who calls it, what it returns.
+      # inputs: List of inputs, parameters, or dependencies.
+      # returns: What this module returns or provides.
+      # side_effects: File writes, DB inserts, network calls, subprocess spawns.
+      # emitted_logs: List of GraceLogger msg= names this module emits.
+      # error_behavior: What exceptions this module may raise and when.
+      # END_MODULE_CONTRACT
 
-              from __future__ import annotations
-              from grace_control.core.structured_logger import GraceLogger
+      # START_MODULE_MAP
+      # mapping:
+      #   - class: ClassName
+      #     methods:
+      #       - method_one
+      #       - method_two
+      #   - function: standalone_func
+      # END_MODULE_MAP
 
-              _log = GraceLogger("component_name")
+      from __future__ import annotations
+      from grace_control.core.structured_logger import GraceLogger
 
-
-              # START_BLOCK_CLASS
-              # START_FUNCTION_CONTRACT
-              # name: method_name
-              # purpose: What this method does.
-              # inputs: param_name — description.
-              # returns: What it returns (type and meaning).
-              # side_effects: File writes, DB inserts, etc.
-              # emitted_logs: my_func_start, my_func_done.
-              # error_behavior: Exceptions this method may raise and when.
-              # END_FUNCTION_CONTRACT
-              def method_name(self, param: str) -> str:
-                  _log.info("method_start", param=param)
-                  ...
-                  _log.info("method_done", result=result)
-                  return result
-              # END_BLOCK_CLASS
+      _log = GraceLogger("component_name")
 
 
-              # START_BLOCK_MAIN
-              # START_FUNCTION_CONTRACT
-              # name: run
-              # purpose: Entry point.
-              # ...
-              # END_FUNCTION_CONTRACT
-              def run() -> dict:
-                  _log.info("run_start")
-                  ...
-                  return {}
-              # END_BLOCK_MAIN
-              ```
+      # START_BLOCK_CLASS
+      # START_FUNCTION_CONTRACT
+      # name: method_name
+      # purpose: What this method does.
+      # inputs: param_name — description.
+      # returns: What it returns (type and meaning).
+      # side_effects: File writes, DB inserts, etc.
+      # emitted_logs: my_func_start, my_func_done.
+      # error_behavior: Exceptions this method may raise and when.
+      # END_FUNCTION_CONTRACT
+      def method_name(self, param: str) -> str:
+          _log.info("method_start", param=param)
+          ...
+          _log.info("method_done", result=result)
+          return result
+      # END_BLOCK_CLASS
 
-              RULES:
-              — Use # ############################################################################ above and below AI_HEADER.
-              — Every public function/method MUST have START_FUNCTION_CONTRACT before it.
-              — Group related methods with START_BLOCK_name / END_BLOCK_name.
-              — Use GraceLogger, NEVER print() or logging.getLogger().
-              — _log = GraceLogger("name") ONCE at module level.
-              — Log msgs are static strings: _log.info("msg_name", ctx_key=value).
-              — Follow the GRACE Canon section in the task packet.
+
+      # START_BLOCK_MAIN
+      # START_FUNCTION_CONTRACT
+      # name: run
+      # purpose: Entry point.
+      # ...
+      # END_FUNCTION_CONTRACT
+      def run() -> dict:
+          _log.info("run_start")
+          ...
+          return {}
+      # END_BLOCK_MAIN
+      ```
+
+      RULES:
+      — Use # ############################################################################ above and below AI_HEADER.
+      — Every public function/method MUST have START_FUNCTION_CONTRACT before it.
+      — Group related methods with START_BLOCK_name / END_BLOCK_name.
+      — Use GraceLogger, NEVER print() or logging.getLogger().
+      — _log = GraceLogger("name") ONCE at module level.
+      — Log msgs are static strings: _log.info("msg_name", ctx_key=value).
+      — Follow the GRACE Canon section in the task packet.
     cwd: '{worktree_path}'
     effort: medium
     inject_dir: true
