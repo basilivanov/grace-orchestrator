@@ -271,6 +271,22 @@ class AdminAggregationService:
         # TZ_RETENTION_POLICY Phase 2: include run sizes in packet detail.
         runs_breakdown = self._size_calc.packet_runs_breakdown(packet_id)
 
+        dev_replay = None
+        if last_run and last_run.result_json:
+            dr = last_run.result_json.get("dev_replay", {})
+            if dr:
+                dev_replays_list = last_run.result_json.get("dev_replays", [])
+                dev_replay = {
+                    "run_id": last_run.id,
+                    "run_number": last_run.run_number,
+                    **dr,
+                    "replays": dev_replays_list,
+                }
+                if "worktree_path" in dev_replay:
+                    dev_replay["worktree_path"] = str(dev_replay["worktree_path"])
+                if "run_dir" in dev_replay:
+                    dev_replay["run_dir"] = str(dev_replay["run_dir"])
+
         return {
             "packet": {
                 "id": p.id,
@@ -299,6 +315,7 @@ class AdminAggregationService:
             "blocking_decision": self.get_packet_blocking_decision(db, packet_id),
             "state_machine": self._derive_state_machine(db, p, runs),
             "pipeline": self._derive_pipeline(db, p, runs),
+            "dev_replay": dev_replay,
         }
 
     def _derive_pipeline(

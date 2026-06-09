@@ -37,6 +37,7 @@ _CONTENT_PREVIEW_LINES = 100
 _CONTENT_PREVIEW_CHARS = 2500
 _MAX_RELEVANT_FILES = 15
 
+#START_BLOCK_DATACLASSES
 
 @dataclass
 class FileContext:
@@ -57,6 +58,9 @@ class CodebaseContext:
     complexity_score: int = 0
     canon_violations: list[str] = field(default_factory=list)
 
+#END_BLOCK_DATACLASSES
+
+#START_BLOCK_COLLECTOR
 
 class ContextCollector:
 
@@ -66,6 +70,16 @@ class ContextCollector:
         self._model = model or os.environ.get("GRACE_CONTEXT_MODEL", "deepseek/deepseek-v4-flash")
         self._cli = cli
 
+    #START_FUNCTION_CONTRACT
+    # name: collect
+    # purpose: Collect structured codebase context by scanning files, filtering relevant ones via LLM,
+    #          reading their content, and returning a CodebaseContext with analysis.
+    # inputs: task_description — task string; target_scope — optional list of path scopes; project_root — optional Path override.
+    # returns: CodebaseContext with files, summary, estimated_scope, complexity, relevant content.
+    # side_effects: Calls cheap LLM twice (relevance filter + summary).
+    # emitted_logs: context_collected on success; context_relevance_failed / context_summarize_failed on errors.
+    # error_behavior: Falls back to full-scope without content on LLM failure.
+    #END_FUNCTION_CONTRACT
     async def collect(
         self,
         task_description: str,
@@ -177,6 +191,9 @@ Complexity: 0-50 (config), 51-150 (single module), 151-250 (multi-module), 251-3
             complexity_score=200,
         )
 
+#END_BLOCK_COLLECTOR
+
+#START_BLOCK_HELPERS
 
 _CODE_EXTS = {".py", ".html", ".js", ".css", ".json", ".yaml", ".yml", ".md"}
 _MAX_CONTENT_LINES = 120
@@ -250,3 +267,5 @@ def _extract_exports(text: str) -> list[str]:
 def _extract_json_block(text: str) -> str:
     m = re.search(r"\{[\s\S]*\}", text)
     return m.group(0) if m else text
+
+#END_BLOCK_HELPERS

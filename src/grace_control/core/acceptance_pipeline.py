@@ -54,6 +54,16 @@ class _T0Result:
     scope_violations: list[ScopeViolation]
 
 
+# START_BLOCK_FREE_FUNCTIONS
+# START_FUNCTION_CONTRACT
+# name: run_acceptance_pipeline
+# purpose: Run full T0/T1/T2 acceptance pipeline and produce AcceptanceReport.
+# inputs: packet, legacy_result, project_root, worktree_path, branch_name, run_dir, base_ref, base_sha.
+# returns: AcceptanceReport.
+# side_effects: Runs subprocess commands via CommandRunner.
+# emitted_logs: None.
+# error_behavior: Never raises — returns non-accepted report on any failure.
+# END_FUNCTION_CONTRACT
 def run_acceptance_pipeline(
     packet: ExecutionPacketContract,
     legacy_result,
@@ -86,6 +96,15 @@ def run_acceptance_pipeline(
     )
 
 
+# START_FUNCTION_CONTRACT
+# name: run_acceptance_stage_replay
+# purpose: Run a single acceptance stage (t0, t1, t2, t2_browser, t3_visual, full_acceptance) as a replay.
+# inputs: packet, legacy_result, project_root, worktree_path, branch_name, run_dir, stage, base_ref, base_sha.
+# returns: AcceptanceReport for the single stage.
+# side_effects: Runs subprocess commands for the selected stage.
+# emitted_logs: None.
+# error_behavior: Raises ValueError for unsupported stage.
+# END_FUNCTION_CONTRACT
 def run_acceptance_stage_replay(
     *,
     packet: ExecutionPacketContract,
@@ -178,7 +197,18 @@ def run_acceptance_stage_replay(
     else:
         raise ValueError(f"UNSUPPORTED_REPLAY_STAGE: {stage}")
 
+# END_BLOCK_FREE_FUNCTIONS
 
+# START_BLOCK_PIPELINE_CLASS
+# START_FUNCTION_CONTRACT
+# name: AcceptancePipeline.__init__
+# purpose: Initialize the pipeline with repo root, command runner, scope guard, and evidence collector.
+# inputs: repo_root — project root Path; command_runner — optional CommandRunner; scope_guard — optional ScopeGuard; evidence_collector — optional EvidenceCollector.
+# returns: None.
+# side_effects: None.
+# emitted_logs: None.
+# error_behavior: None.
+# END_FUNCTION_CONTRACT
 class AcceptancePipeline:
 
     def __init__(
@@ -257,6 +287,15 @@ class AcceptancePipeline:
 
         return existing
 
+    # START_FUNCTION_CONTRACT
+    # name: AcceptancePipeline.run
+    # purpose: Execute T0 → T1 → T2 → T2_BROWSER → T3_VISUAL pipeline and produce AcceptanceReport.
+    # inputs: packet, changed_files, base_ref, head_ref, legacy_result, worktree_path, branch_name, run_dir.
+    # returns: AcceptanceReport with final_verdict, stages, scope_violations, evidence_issues.
+    # side_effects: Runs subprocess commands via CommandRunner; collects evidence.
+    # emitted_logs: None.
+    # error_behavior: Never raises — returns non-accepted report on failure at any stage.
+    # END_FUNCTION_CONTRACT
     def run(
         self,
         *,
@@ -549,7 +588,9 @@ class AcceptancePipeline:
         return StageResult(name=StageName.T2_FULL_TESTS, status=StageStatus.PASSED,
                           summary=f"T2 passed: {len(commands)} commands ok", commands=commands)
 
+# END_BLOCK_PIPELINE_CLASS
 
+# START_BLOCK_FRONTEND_STAGES
 def _run_frontend_stages(
     packet: ExecutionPacketContract,
     *,
@@ -732,3 +773,5 @@ def _commands_to_results(
         )
         for cmd in commands
     ]
+
+# END_BLOCK_FRONTEND_STAGES

@@ -1498,6 +1498,108 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   white-space: nowrap;
 }
 
+/* ── Dev Replay block ───────────────────────────────────────────────── */
+.dev-replay {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  padding: 10px 14px;
+}
+.dev-replay-meta {
+  margin-bottom: 8px;
+  font-size: 11px;
+  line-height: 1.6;
+}
+.dev-replay-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.dev-replay-btn {
+  font-size: 11px;
+  padding: 4px 10px;
+  background: var(--bg-3);
+  border: 1px solid var(--border-2);
+  border-radius: 4px;
+  color: var(--fg);
+  cursor: pointer;
+  font-family: var(--mono);
+}
+.dev-replay-btn:hover {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+.dev-replay-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.dev-replay-result {
+  margin-bottom: 8px;
+}
+.dev-replay-entry {
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  margin-bottom: 4px;
+  border-left: 3px solid var(--border);
+  background: var(--bg-3);
+}
+.dev-replay-entry.dev-replay-ok {
+  border-left-color: var(--sev-ok-soft);
+}
+.dev-replay-entry.dev-replay-fail {
+  border-left-color: var(--sev-crit-soft);
+}
+.dev-replay-status {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+}
+.dev-replay-ok .dev-replay-status { color: var(--sev-ok); }
+.dev-replay-fail .dev-replay-status { color: var(--sev-crit); }
+.dev-replay-summary {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--fg-2);
+}
+.dev-replay-issues {
+  margin-top: 4px;
+  font-size: 11px;
+}
+.dev-replay-issues ul {
+  margin: 2px 0 0 16px;
+  padding: 0;
+}
+.dev-replay-meta-line {
+  margin-top: 4px;
+  font-size: 10px;
+}
+.dev-replay-history-h {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-2);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  margin: 0 0 4px 0;
+}
+.dev-replay-history-entry {
+  padding: 4px 8px;
+  font-size: 11px;
+  border-left: 2px solid var(--border);
+  margin-bottom: 2px;
+}
+.dev-replay-history-entry.dev-replay-ok { border-left-color: var(--sev-ok-soft); }
+.dev-replay-history-entry.dev-replay-fail { border-left-color: var(--sev-crit-soft); }
+.dev-replay-history-summary {
+  font-size: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* Tab body: human-readable labels + attempt cards */
 .tab-h {
   font-size: 12px;

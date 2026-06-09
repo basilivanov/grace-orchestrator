@@ -29,10 +29,23 @@ import time
 from pathlib import Path
 
 from grace_control.core.contracts import CommandResult
+from grace_control.core.structured_logger import GraceLogger
+
+_log = GraceLogger("command_runner")
 
 _SHELL_OPS = re.compile(r'(&&|\|\||[|<>])')
 
 
+# START_BLOCK_FREE_FUNCTION
+# START_FUNCTION_CONTRACT
+# name: run_command
+# purpose: Run a CLI command string safely (no shell=True), capture stdout/stderr/exit_code.
+# inputs: command (str), cwd (Path), output_dir (Path), timeout_seconds (int), env (optional dict).
+# returns: CommandResult with exit_code, stdout, stderr, duration_ms.
+# side_effects: Spawns subprocess; writes stdout/stderr to output_dir files.
+# emitted_logs: None.
+# error_behavior: Never raises; returns CommandResult with non-zero exit_code + stderr on failure.
+# END_FUNCTION_CONTRACT
 def run_command(
     command: str,
     cwd: Path,
@@ -112,13 +125,33 @@ def run_command(
             timed_out=False, duration_ms=int((time.time() - started) * 1000),
         )
 
+# END_BLOCK_FREE_FUNCTION
 
+# START_BLOCK_CLASS
+# START_FUNCTION_CONTRACT
+# name: CommandRunner.__init__
+# purpose: Initialize command runner with repo root and default timeout.
+# inputs: repo_root — project root Path; default_timeout_s — timeout in seconds (default 300).
+# returns: None.
+# side_effects: None.
+# emitted_logs: None.
+# error_behavior: None.
+# END_FUNCTION_CONTRACT
 class CommandRunner:
 
     def __init__(self, repo_root: Path, default_timeout_s: int = 300) -> None:
         self._root = repo_root.resolve()
         self._default_timeout = default_timeout_s
 
+    # START_FUNCTION_CONTRACT
+    # name: CommandRunner.run
+    # purpose: Run a command (list or str) safely inside the repo root.
+    # inputs: command (list[str] | str), cwd (optional Path), timeout_s (optional int), output_dir (optional Path).
+    # returns: CommandResult with exit_code, stdout, stderr, duration_ms.
+    # side_effects: Spawns subprocess; writes stdout/stderr to output_dir files.
+    # emitted_logs: None.
+    # error_behavior: Never raises; returns CommandResult with non-zero exit_code on failure.
+    # END_FUNCTION_CONTRACT
     def run(
         self,
         command: list[str] | str,
@@ -211,3 +244,5 @@ class CommandRunner:
                 stdout_path=stdout_path, stderr_path=stderr_path,
                 timed_out=False, duration_ms=int((time.time() - started) * 1000),
             )
+
+# END_BLOCK_CLASS

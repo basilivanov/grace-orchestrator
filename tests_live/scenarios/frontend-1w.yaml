@@ -1,0 +1,24 @@
+id: frontend-1w
+fixture_app: frontend_static_counter
+waves:
+  - id: W1
+    title: Add reset button
+    packets:
+      - id: P1
+        role: coder
+        prompt: Add a reset button that sets the count back to 0. Add JS syntax check.
+        verification:
+          t0:
+            commands:
+              - node --check app.js
+          t1:
+            commands:
+              - pytest -q
+          t2:
+            commands: []
+        scope:
+          - frontend_static_counter/index.html
+          - frontend_static_counter/app.js
+expected:
+  final_state: accepted
+  min_real_agent_runs: 1

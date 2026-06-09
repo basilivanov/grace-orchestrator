@@ -360,6 +360,53 @@ attempts: {{ p.attempt_count }}/{{ p.max_attempts }}"
         </section>
       {% endif %}
 
+      {# ── Dev Replay (only when dev tools enabled + replayable) ───── #}
+      {% if dev_tools_enabled and packet.dev_replay %}
+      {% set dr = packet.dev_replay %}
+      {% set dr_run_id = dr.run_id %}
+      <section class="dev-replay">
+        <h2 class="pipeline-h">Dev Replay</h2>
+        <div class="dev-replay-meta muted small">
+          worktree: <span class="mono">{{ dr.worktree_path or '—' }}</span>
+          &middot; branch: <span class="mono">{{ dr.branch_name or '—' }}</span>
+          &middot; run: <span class="mono">{{ dr_run_id }}</span>
+        </div>
+        <div class="dev-replay-buttons">
+          <button class="dev-replay-btn" data-run-id="{{ dr_run_id }}" data-action="acceptance" data-stage="t0"
+                  onclick="replayStage(this)">Replay T0</button>
+          <button class="dev-replay-btn" data-run-id="{{ dr_run_id }}" data-action="acceptance" data-stage="t1"
+                  onclick="replayStage(this)">Replay T1</button>
+          <button class="dev-replay-btn" data-run-id="{{ dr_run_id }}" data-action="acceptance" data-stage="t2"
+                  onclick="replayStage(this)">Replay T2</button>
+          <button class="dev-replay-btn" data-run-id="{{ dr_run_id }}" data-action="acceptance" data-stage="full_acceptance"
+                  onclick="replayStage(this)">Replay Full Acceptance</button>
+          <button class="dev-replay-btn" data-run-id="{{ dr_run_id }}" data-action="verifier"
+                  onclick="replayStage(this)">Replay Verifier</button>
+          <button class="dev-replay-btn" data-run-id="{{ dr_run_id }}" data-action="reviewer"
+                  onclick="replayStage(this)">Replay Reviewer</button>
+        </div>
+        <div id="replay-result" class="dev-replay-result"></div>
+        {# ── Replay History panel ─────────────────────────────────── #}
+        {% set replay_history = dr.replays or [] %}
+        {% if replay_history %}
+        <div class="dev-replay-history" id="replay-history">
+          <h3 class="dev-replay-history-h">Replay History</h3>
+          {% for entry in replay_history | reverse %}
+            {% set ec = 'dev-replay-ok' if entry.passed else 'dev-replay-fail' %}
+            <div class="dev-replay-history-entry {{ ec }}">
+              <span class="muted small">{{ entry.timestamp | fmt_time_short }}</span>
+              <strong>{{ entry.type }}{% if entry.stage %} {{ entry.stage }}{% endif %}</strong>:
+              <span class="dev-replay-status">{{ 'passed' if entry.passed else 'failed' }}</span>
+              <div class="dev-replay-history-summary muted small">{{ entry.summary or '' }}</div>
+            </div>
+          {% endfor %}
+        </div>
+        {% else %}
+        <div class="dev-replay-history" id="replay-history"></div>
+        {% endif %}
+      </section>
+      {% endif %}
+
       {# ── Tab bar (fixes the "Packet not found" tab bug) ───────────── #}
       <nav class="tabs" id="packet-tabs">
         {% set tab_labels = {

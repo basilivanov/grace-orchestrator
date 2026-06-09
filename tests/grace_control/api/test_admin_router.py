@@ -443,9 +443,9 @@ def test_admin_static_assets_served(client):
     r = client.get("/static/admin.js")
     assert r.status_code == 200
     body = r.text
-    assert "function fmtSize" in body
-    assert "function fmtTime" in body
-    assert "function fmtElapsed" in body
+    assert "window.setHealth" in body
+    assert "window.api" in body
+    assert "window.replayStage" in body
 
 
 # ── 21. OpenAPI contains admin endpoints ──────────────────────────────────

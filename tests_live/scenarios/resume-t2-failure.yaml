@@ -1,0 +1,25 @@
+id: resume-t2-failure
+fixture_app: backend_fastapi_todo
+waves:
+  - id: W1
+    title: Add validation
+    packets:
+      - id: P1
+        role: coder
+        prompt: Add validation that item title must be non-empty and less than 100 chars. Add tests.
+        verification:
+          t0:
+            commands:
+              - ruff check .
+          t1:
+            commands:
+              - pytest -q
+          t2:
+            commands:
+              - python tests_live/helpers/fail_once.py --key t2-validation
+        scope:
+          - backend_fastapi_todo/main.py
+          - backend_fastapi_todo/tests/test_api.py
+expected:
+  final_state: accepted
+  min_real_agent_runs: 1

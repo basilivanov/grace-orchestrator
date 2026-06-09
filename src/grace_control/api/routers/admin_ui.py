@@ -60,6 +60,8 @@ _maint_svc = MaintenanceService(
 _TEMPLATES_DIR = Path(__file__).parent.parent.parent / "ui" / "templates"
 _templates = Jinja2Templates(directory=str(_TEMPLATES_DIR / "admin"))
 _register_filters(_templates.env)
+_templates.env.globals["dev_tools_enabled"] = _settings.dev_tools_enabled
+_templates.env.globals["dev_keep_failed_worktrees"] = _settings.dev_keep_failed_worktrees
 
 # Tabs that can be swapped via HTMX (each one is a single hx-get endpoint)
 _TABS = ("timeline", "spec", "runs", "sessions", "evidence", "logs", "artifacts")

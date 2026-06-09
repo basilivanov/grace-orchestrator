@@ -1,0 +1,24 @@
+id: resume-coder-fix
+fixture_app: backend_fastapi_todo
+waves:
+  - id: W1
+    title: Add search endpoint
+    packets:
+      - id: P1
+        role: coder
+        prompt: Add GET /items/search?q= endpoint that filters items by title (case-insensitive). Add tests.
+        verification:
+          t0:
+            commands:
+              - ruff check .
+          t1:
+            commands:
+              - pytest -q
+          t2:
+            commands: []
+        scope:
+          - backend_fastapi_todo/main.py
+          - backend_fastapi_todo/tests/test_api.py
+expected:
+  final_state: accepted
+  min_real_agent_runs: 2

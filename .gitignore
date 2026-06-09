@@ -71,7 +71,6 @@ grace/features/
 # Sandbox golden test output is NOT ignored — agents write here
 grace.db*
 plan.json
-sandbox/
 llm_prompts/
 agents/
 *.db
@@ -79,3 +78,4 @@ agents/
 *.db-wal
 %2Ftmp%2F*
 test_grace.db
+.grace/

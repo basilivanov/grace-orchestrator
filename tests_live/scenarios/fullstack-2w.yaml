@@ -1,0 +1,41 @@
+id: fullstack-2w
+fixture_app: fullstack_todo_admin
+waves:
+  - id: W1
+    title: Backend
+    packets:
+      - id: P1
+        role: coder
+        prompt: "Add GET /api/health endpoint returning JSON {status: ok}"
+        verification:
+          t0:
+            commands:
+              - ruff check .
+          t1:
+            commands:
+              - pytest -q
+          t2:
+            commands: []
+        scope:
+          - fullstack_todo_admin/backend/main.py
+  - id: W2
+    title: Frontend
+    packets:
+      - id: P1
+        role: coder
+        prompt: Add frontend code that calls GET /api/health and displays the status.
+        verification:
+          t0:
+            commands:
+              - node --check app.js
+          t1:
+            commands:
+              - pytest -q
+          t2:
+            commands: []
+        scope:
+          - fullstack_todo_admin/frontend/index.html
+          - fullstack_todo_admin/frontend/app.js
+expected:
+  final_state: accepted
+  min_real_agent_runs: 2

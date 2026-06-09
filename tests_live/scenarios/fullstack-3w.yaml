@@ -1,0 +1,59 @@
+id: fullstack-3w
+fixture_app: fullstack_todo_admin
+waves:
+  - id: W1
+    title: Backend model
+    packets:
+      - id: P1
+        role: coder
+        prompt: Add todo model and GET/POST /api/items
+        verification:
+          t0:
+            commands:
+              - ruff check .
+          t1:
+            commands:
+              - pytest -q
+          t2:
+            commands: []
+        scope:
+          - fullstack_todo_admin/backend/main.py
+  - id: W2
+    title: Frontend list
+    packets:
+      - id: P1
+        role: coder
+        prompt: Add frontend to fetch and display items
+        verification:
+          t0:
+            commands:
+              - node --check app.js
+          t1:
+            commands:
+              - pytest -q
+          t2:
+            commands: []
+        scope:
+          - fullstack_todo_admin/frontend/index.html
+          - fullstack_todo_admin/frontend/app.js
+  - id: W3
+    title: Integration
+    packets:
+      - id: P1
+        role: coder
+        prompt: Add a /api/items/report endpoint and display its output in the frontend
+        verification:
+          t0:
+            commands:
+              - ruff check .
+          t1:
+            commands:
+              - pytest -q
+          t2:
+            commands: []
+        scope:
+          - fullstack_todo_admin/backend/main.py
+          - fullstack_todo_admin/frontend/index.html
+expected:
+  final_state: accepted
+  min_real_agent_runs: 3

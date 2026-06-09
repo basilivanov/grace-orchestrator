@@ -28,7 +28,10 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
+from grace_control.core.structured_logger import GraceLogger
 from grace_control.services.dev_run_replay_service import DevReplayException, DevRunReplayService
+
+_log = GraceLogger("dev_replay_router")
 
 router = APIRouter(prefix="/api/dev/runs", tags=["dev_replay"])
 _service = DevRunReplayService()
@@ -51,6 +54,16 @@ class RerunReviewerRequest(BaseModel):
     verifier_report_path: str | None = Field(default=None, description="Optional verifier report override")
 
 
+# START_BLOCK_EXCEPTION_HANDLER
+# START_FUNCTION_CONTRACT
+# name: handle_replay_exception
+# purpose: Map DevReplayException codes to HTTP error responses.
+# inputs: e — DevReplayException with code, message, extra.
+# returns: Never returns (always raises HTTPException).
+# side_effects: Raises HTTP 404 or 400.
+# emitted_logs: None.
+# error_behavior: All paths raise HTTPException.
+# END_FUNCTION_CONTRACT
 def handle_replay_exception(e: DevReplayException):
     if e.code in ("DEV_TOOLS_DISABLED", "RUN_NOT_FOUND", "PACKET_NOT_FOUND"):
         raise HTTPException(
@@ -75,7 +88,18 @@ def handle_replay_exception(e: DevReplayException):
             detail={"error": e.code, "message": e.message}
         )
 
+# END_BLOCK_EXCEPTION_HANDLER
 
+# START_BLOCK_ROUTES
+# START_FUNCTION_CONTRACT
+# name: replay_acceptance
+# purpose: Rerun a specific acceptance stage (t0, t1, t2, t2_browser, t3_visual, full_acceptance) on an existing run.
+# inputs: run_id (path), req — ReplayAcceptanceRequest body.
+# returns: dict with data from the replay service.
+# side_effects: Runs acceptance stage commands on the worktree.
+# emitted_logs: None.
+# error_behavior: Delegates to handle_replay_exception on DevReplayException.
+# END_FUNCTION_CONTRACT
 @router.post("/{run_id}/replay-acceptance")
 async def replay_acceptance(run_id: str, req: ReplayAcceptanceRequest):
     try:
@@ -92,6 +116,15 @@ async def replay_acceptance(run_id: str, req: ReplayAcceptanceRequest):
         handle_replay_exception(e)
 
 
+# START_FUNCTION_CONTRACT
+# name: rerun_verifier
+# purpose: Rerun the verifier stage on an existing run's worktree.
+# inputs: run_id (path), req — RerunVerifierRequest body.
+# returns: dict with data from the verifier service.
+# side_effects: Runs verifier commands; may update DB.
+# emitted_logs: None.
+# error_behavior: Delegates to handle_replay_exception on DevReplayException.
+# END_FUNCTION_CONTRACT
 @router.post("/{run_id}/rerun-verifier")
 async def rerun_verifier(run_id: str, req: RerunVerifierRequest):
     try:
@@ -107,6 +140,15 @@ async def rerun_verifier(run_id: str, req: RerunVerifierRequest):
         handle_replay_exception(e)
 
 
+# START_FUNCTION_CONTRACT
+# name: rerun_reviewer
+# purpose: Rerun the reviewer stage on an existing run's worktree.
+# inputs: run_id (path), req — RerunReviewerRequest body.
+# returns: dict with data from the reviewer service.
+# side_effects: Runs reviewer commands; may update DB.
+# emitted_logs: None.
+# error_behavior: Delegates to handle_replay_exception on DevReplayException.
+# END_FUNCTION_CONTRACT
 @router.post("/{run_id}/rerun-reviewer")
 async def rerun_reviewer(run_id: str, req: RerunReviewerRequest):
     try:
@@ -120,3 +162,5 @@ async def rerun_reviewer(run_id: str, req: RerunReviewerRequest):
         }
     except DevReplayException as e:
         handle_replay_exception(e)
+
+# END_BLOCK_ROUTES
