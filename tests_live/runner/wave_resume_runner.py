@@ -165,8 +165,14 @@ class WaveResumeRunner:
 
     # ---- API management ----
     def _check_api(self) -> bool:
-        resp = _api_call(self.api_url, "GET", "/api/admin/system/health", timeout=5)
-        return "_error" not in resp and resp.get("data", {}).get("api_alive", False)
+        for attempt in range(6):
+            resp = _api_call(self.api_url, "GET", "/api/admin/system/health", timeout=5)
+            if "_error" not in resp and resp.get("data", {}).get("api_alive", False):
+                return True
+            if attempt < 5:
+                print(f"[runner] API not ready, retrying in 5s ({attempt+1}/5)")
+                time.sleep(5)
+        return False
 
     def _start_api(self) -> None:
         # Start via run_api script
@@ -174,7 +180,9 @@ class WaveResumeRunner:
         if not api_script.exists():
             print(f"[runner] API script not found: {api_script}")
             return
+        db_url = os.environ.get("GRACE_DATABASE_URL", "sqlite:////tmp/grace-live-test.db")
         env = os.environ.copy()
+        env["GRACE_DATABASE_URL"] = db_url
         env.setdefault("GRACE_DEV_TOOLS_ENABLED", "1")
         env.setdefault("GRACE_DEV_KEEP_FAILED_WORKTREES", "1")
         subprocess.Popen(
@@ -196,7 +204,9 @@ class WaveResumeRunner:
         if not worker_script.exists():
             print(f"[runner] Worker script not found: {worker_script}")
             return
+        db_url = os.environ.get("GRACE_DATABASE_URL", "sqlite:////tmp/grace-live-test.db")
         env = os.environ.copy()
+        env["GRACE_DATABASE_URL"] = db_url
         env.setdefault("GRACE_API_URL", self.api_url)
         env.setdefault("GRACE_WORKER_ID", f"live-wr-{os.getpid()}")
         env.setdefault("GRACE_DEV_TOOLS_ENABLED", "1")
@@ -327,18 +337,22 @@ class WaveResumeRunner:
 
         if state in ("failed", "rejected"):
             self.report["failures"].append(f"{pid}: {state}")
-            # Try replay if dev tools enabled
-            attempts = data.get("attempt_count", 0)
-            if attempts >= data.get("max_attempts", 3):
-                print(f"[runner] {pid}: max attempts reached, giving up")
-                return
 
+            # Always try replay first (for T0/T1/T2/verifier/reviewer failures)
             runs = data.get("runs", [])
+            replay_attempted = False
             if runs:
                 last_run = runs[-1]
                 run_id = last_run.get("id", last_run.get("run_id"))
                 if run_id:
-                    self._try_replay(pid, run_id)
+                    replay_attempted = self._try_replay(pid, run_id)
+
+            if not replay_attempted:
+                attempts = data.get("attempt_count", 0)
+                if attempts >= data.get("max_attempts", 3):
+                    print(f"[runner] {pid}: max attempts reached, giving up")
+                else:
+                    print(f"[runner] {pid}: waiting for retry attempt {attempts+1}")
 
     def _try_replay(self, pid: str, run_id: str) -> bool:
         """Try dev replay endpoints for a failed run."""

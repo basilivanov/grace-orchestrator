@@ -17,7 +17,7 @@ waves:
           t2:
             commands: []
         scope:
-          - fullstack_todo_admin/backend/main.py
+          - tests_live/fixtures/apps/fullstack_todo_admin/backend/main.py
   - id: W2
     title: Frontend list
     packets:
@@ -34,8 +34,8 @@ waves:
           t2:
             commands: []
         scope:
-          - fullstack_todo_admin/frontend/index.html
-          - fullstack_todo_admin/frontend/app.js
+          - tests_live/fixtures/apps/fullstack_todo_admin/frontend/index.html
+          - tests_live/fixtures/apps/fullstack_todo_admin/frontend/app.js
   - id: W3
     title: Integration
     packets:
@@ -52,8 +52,8 @@ waves:
           t2:
             commands: []
         scope:
-          - fullstack_todo_admin/backend/main.py
-          - fullstack_todo_admin/frontend/index.html
+          - tests_live/fixtures/apps/fullstack_todo_admin/backend/main.py
+          - tests_live/fixtures/apps/fullstack_todo_admin/frontend/index.html
 expected:
   final_state: accepted
   min_real_agent_runs: 3

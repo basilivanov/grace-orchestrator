@@ -17,8 +17,8 @@ waves:
           t2:
             commands: []
         scope:
-          - frontend_static_counter/index.html
-          - frontend_static_counter/app.js
+          - tests_live/fixtures/apps/frontend_static_counter/index.html
+          - tests_live/fixtures/apps/frontend_static_counter/app.js
 expected:
   final_state: accepted
   min_real_agent_runs: 1

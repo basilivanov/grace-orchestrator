@@ -18,8 +18,8 @@ waves:
             commands:
               - python tests_live/helpers/fail_once.py --key t2-validation
         scope:
-          - backend_fastapi_todo/main.py
-          - backend_fastapi_todo/tests/test_api.py
+          - tests_live/fixtures/apps/backend_fastapi_todo/main.py
+          - tests_live/fixtures/apps/backend_fastapi_todo/tests/test_api.py
 expected:
   final_state: accepted
   min_real_agent_runs: 1
