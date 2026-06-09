@@ -47,7 +47,7 @@ It does not by itself rerun only T1/T2/verifier. That part is handled by dev rep
 
 ### 2.2 Dev run replay / checkpoints
 
-The recently implemented dev replay feature stores failed run metadata:
+The dev replay feature stores failed run metadata:
 
 ```text
 worktree_path
@@ -180,7 +180,7 @@ Rules:
 
 - If `GRACE_LIVE_AGENT_TESTS` is not enabled, live tests must skip with a clear message.
 - Dev replay flags must be required for resume/replay scenarios.
-- Do not read env directly outside the existing config/settings boundary if this is implemented inside app code.
+- Do not read env directly outside the existing config/settings boundary if implemented inside app code.
 
 ## 7. Fixture applications
 
@@ -194,7 +194,7 @@ tests_live/fixtures/apps/frontend_static_counter/
 tests_live/fixtures/apps/fullstack_todo_admin/
 ```
 
-These fixture apps must be tiny but realistic.
+Fixture apps must be tiny but realistic.
 
 ### 7.1 Backend fixture
 
@@ -286,6 +286,7 @@ Example:
 ```yaml
 id: backend-1w
 fixture_app: backend_fastapi_todo
+real_agent_required: true
 waves:
   - id: W1
     title: Add done endpoint
@@ -420,8 +421,6 @@ Optional separate scenario may test real architect generation, but that is not p
 ## 12. Failure injection
 
 Add controlled failure injection so resume/replay can be tested reliably.
-
-Examples:
 
 ### 12.1 T2 failure once
 
@@ -579,7 +578,186 @@ GRACE_DEV_KEEP_FAILED_WORKTREES=1 \
 pytest tests_live -q -m live_agent
 ```
 
-## 17. Success criteria for each live scenario
+## 17. Post-implementation verification ladder
+
+After the coder implements this TZ, do not start with all live tests. The verifier must run checks in the following order.
+
+### 17.1 Fast harness tests without agents
+
+Run:
+
+```bash
+pytest tests/grace_control/live_tests -q
+pytest tests_live --collect-only -q
+```
+
+Expected:
+
+```text
+harness unit tests pass
+all live tests are importable/collectable
+no real agent is called
+```
+
+### 17.2 Verify live tests skip without env
+
+Run:
+
+```bash
+pytest tests_live -q
+```
+
+Expected:
+
+```text
+all live-agent tests are skipped
+no API key is required
+no real agent process starts
+```
+
+If any live test runs without `GRACE_LIVE_AGENT_TESTS=1`, this is a blocker.
+
+### 17.3 JavaScript and frontend fixture checks
+
+Run:
+
+```bash
+find tests_live/fixtures/apps -name "*.js" -print -exec node --check {} \;
+```
+
+Expected:
+
+```text
+all JS syntax checks pass
+```
+
+If `node` is not available, the report must say that JS syntax check was not executed and why. Do not silently skip it.
+
+### 17.4 First live smoke: controlled T2 replay
+
+Run this first, before backend/frontend/fullstack scenarios:
+
+```bash
+GRACE_LIVE_AGENT_TESTS=1 \
+GRACE_DEV_TOOLS_ENABLED=1 \
+GRACE_DEV_KEEP_FAILED_WORKTREES=1 \
+pytest tests_live/test_resume_t2_failure_real_agent.py -q -m live_agent
+```
+
+Expected:
+
+```text
+real coder run happens once
+T2 fails through controlled fail-once injection
+runner calls replay-acceptance {stage: t2}
+T2 replay passes
+coder is not called again during replay
+architect/context are not called during replay
+summary.json shows acceptance_replays=1 and coder_runs=1
+```
+
+This is the most important live smoke. If it fails, do not continue to fullstack live tests.
+
+### 17.5 Backend 1-wave live test
+
+Run:
+
+```bash
+GRACE_LIVE_AGENT_TESTS=1 \
+GRACE_DEV_TOOLS_ENABLED=1 \
+GRACE_DEV_KEEP_FAILED_WORKTREES=1 \
+pytest tests_live/test_backend_1w_real_agent.py -q -m live_agent
+```
+
+Expected:
+
+```text
+backend fixture change is implemented by real coder
+T0/T1 pass
+summary.json proves real_agent_runs >= 1
+```
+
+### 17.6 Frontend 1-wave live test
+
+Run:
+
+```bash
+GRACE_LIVE_AGENT_TESTS=1 \
+GRACE_DEV_TOOLS_ENABLED=1 \
+GRACE_DEV_KEEP_FAILED_WORKTREES=1 \
+pytest tests_live/test_frontend_1w_real_agent.py -q -m live_agent
+```
+
+Expected:
+
+```text
+frontend fixture change is implemented by real coder
+JS syntax check passes
+summary.json proves real_agent_runs >= 1
+```
+
+### 17.7 Fullstack 2-wave live test
+
+Run only after previous live tests pass:
+
+```bash
+GRACE_LIVE_AGENT_TESTS=1 \
+GRACE_DEV_TOOLS_ENABLED=1 \
+GRACE_DEV_KEEP_FAILED_WORKTREES=1 \
+pytest tests_live/test_fullstack_2w_real_agent.py -q -m live_agent
+```
+
+Expected:
+
+```text
+backend wave passes
+frontend wave passes
+integration smoke passes
+summary.json includes all run IDs and sessions
+```
+
+### 17.8 Fullstack 3-wave live test
+
+Run last because it is the most expensive/noisy scenario:
+
+```bash
+GRACE_LIVE_AGENT_TESTS=1 \
+GRACE_DEV_TOOLS_ENABLED=1 \
+GRACE_DEV_KEEP_FAILED_WORKTREES=1 \
+pytest tests_live/test_fullstack_3w_real_agent.py -q -m live_agent
+```
+
+Expected:
+
+```text
+all three waves accepted
+summary.json includes all run IDs, sessions, replay attempts, and counters
+```
+
+### 17.9 Report requirement after every live run
+
+After every live run, the coder/verifier must show the generated `summary.json`.
+
+Acceptance must not rely on the phrase `test passed` alone.
+
+Required report fields to show:
+
+```text
+scenario_id
+status
+real_agent_runs
+context_runs
+architect_runs
+coder_runs
+acceptance_replays
+verifier_replays
+reviewer_replays
+agent_session_resumes
+packet_state_changed_by_replay
+artifacts_dir
+```
+
+## 18. Success criteria for each live scenario
 
 ### backend-1w
 
@@ -632,7 +810,7 @@ pytest tests_live -q -m live_agent
 - Second run accepts.
 - Report proves session resume happened.
 
-## 18. Acceptance criteria
+## 19. Acceptance criteria
 
 Implementation is accepted only if all are true:
 
@@ -651,32 +829,29 @@ Implementation is accepted only if all are true:
 13. Normal CI/default `pytest` does not call real agents.
 14. Harness logic has regular fake-client tests.
 15. At least one live scenario is documented with exact command to run locally.
+16. The verification ladder in section 17 is followed before accepting implementation.
+17. Every live run includes displayed `summary.json` evidence.
 
-## 19. Manual smoke command
+## 20. Gitignore and repository hygiene
 
-Example local smoke:
+The implementation report mentioned removing `sandbox/` from `.gitignore` so coder can commit files further.
 
-```bash
-export GRACE_LIVE_AGENT_TESTS=1
-export GRACE_DEV_TOOLS_ENABLED=1
-export GRACE_DEV_KEEP_FAILED_WORKTREES=1
-export GRACE_LIVE_TEST_AGENT_PROFILE=coder_opencode
+This must be reviewed carefully.
 
-pytest tests_live/test_resume_t2_failure_real_agent.py -q -m live_agent
-```
+Rules:
 
-Expected:
+- Do not commit runtime sandboxes, generated worktrees, `.grace/live-tests` artifacts, caches, logs, or temporary state.
+- Do not commit API keys, env files, local config, browser profiles, screenshots with secrets, or agent stdout/stderr that may contain secrets.
+- If `.gitignore` was changed, reviewer must inspect the diff and confirm the change is intentional and safe.
+- If the project needs a commit-friendly fixture sandbox, create a narrowly scoped path such as `tests_live/fixtures/...`, not a broad runtime `sandbox/` exception.
+
+Acceptance blocker:
 
 ```text
-first run: real coder executes
-T2 fails by controlled fail-once injection
-runner calls replay-acceptance {stage: t2}
-T2 replay passes
-no coder rerun after T2 failure
-summary.json shows acceptance_replays=1 and coder_runs=1
+Any accidental runtime artifact committed to the repository blocks acceptance.
 ```
 
-## 20. Notes for coder model
+## 21. Notes for coder model
 
 This is not another mock suite.
 
