@@ -316,7 +316,7 @@ attempts: {{ p.attempt_count }}/{{ p.max_attempts }}"
                 {% endif %}
                 {% if row.meta %}
                 <div class="pipeline-fact">
-                  <span class="pipeline-fact-label">{{ 'Worker' if row.status in ('running', 'done', 'failed') else 'Meta' }}</span>
+                  <span class="pipeline-fact-label">{{ row.meta_label or 'Meta' }}</span>
                   <span class="pipeline-fact-value mono">{{ row.meta }}</span>
                 </div>
                 {% endif %}

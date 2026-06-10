@@ -230,6 +230,7 @@ def pipeline_visible_rows(
 
     out: list[dict] = []
     skipped_normal: list[str] = []
+    not_reached: list[str] = []
     terminal_shown = False
 
     for s in stages:
@@ -244,24 +245,26 @@ def pipeline_visible_rows(
                 skipped_normal.append(label)
                 continue
 
+        # Hide unreached pending reviewer/merge (they are not the current stage)
+        if status == "pending" and key in ("reviewer", "merge"):
+            not_reached.append(label)
+            continue
+
         row = {
-            "label": s.get("label", ""),
+            "label": label,
             "status": status,
             "started_at": s.get("started_at"),
             "finished_at": s.get("finished_at"),
             "duration_ms": s.get("duration_ms", 0),
             "meta": meta,
+            "meta_label": _pipeline_meta_label(key),
             "target_tab": s.get("target_tab", "events"),
             "icon": _pipeline_icon(status),
         }
 
-        # Derive display fields
         row["status_label"] = _pipeline_status_label(status)
         row["time_range"] = _pipeline_time_range(
             s.get("started_at"), s.get("finished_at"), status
-        )
-        row["duration_label"] = _pipeline_duration(
-            s.get("duration_ms", 0), s.get("started_at"), s.get("finished_at"), status
         )
         row["duration_label"] = _pipeline_duration(
             s.get("duration_ms", 0), s.get("started_at"), s.get("finished_at"), status
@@ -276,12 +279,13 @@ def pipeline_visible_rows(
     # Add collapsed NORMAL skipped row
     if skipped_normal:
         out.append({
-            "label": "Skipped stages",
+            "label": "Skipped by NORMAL profile",
             "status": "skipped",
             "started_at": None,
             "finished_at": None,
             "duration_ms": 0,
-            "meta": ", ".join(skipped_normal),
+            "meta": " · ".join(skipped_normal),
+            "meta_label": "Stages",
             "target_tab": "evidence",
             "status_label": "Skipped",
             "time_range": "—",
@@ -291,8 +295,7 @@ def pipeline_visible_rows(
 
     # Add terminal state row if needed
     if packet_state in ("cancelled", "rejected", "failed", "accepted", "merged", "blocked", "blocked_final"):
-        if not terminal_shown and packet_state != "accepted":
-            packets_in_state = ("cancelled", "rejected", "failed")
+        if not terminal_shown:
             out.append({
                 "label": "Final state",
                 "status": "done" if packet_state in ("accepted", "merged") else "failed",
@@ -300,14 +303,32 @@ def pipeline_visible_rows(
                 "finished_at": None,
                 "duration_ms": 0,
                 "meta": packet_state,
+                "meta_label": "State",
                 "target_tab": "events",
                 "status_label": _pipeline_status_label(packet_state),
                 "time_range": "—",
                 "duration_label": "—",
-                "icon": _pipeline_icon(packet_state if packet_state in packets_in_state else "done"),
+                "icon": _pipeline_icon(packet_state),
             })
 
     return out
+
+
+_META_LABEL_MAP = {
+    "materialized": "Meta",
+    "executor": "Meta",
+    "coder_run": "Worker",
+    "t0": "Stage",
+    "t1": "Stage",
+    "t2": "Stage",
+    "verifier": "Stage",
+    "reviewer": "Review",
+    "merge": "Merge",
+}
+
+
+def _pipeline_meta_label(key: str) -> str:
+    return _META_LABEL_MAP.get(key, "Meta")
 
 
 _STAGE_STATUS_LABELS = {

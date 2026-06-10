@@ -493,11 +493,50 @@ def test_pipeline_visible_rows_collapses_normal_skipped():
     ]
     rows = pipeline_visible_rows(stages, packet_state="rejected", acceptance_profile="NORMAL")
     labels = [r["label"] for r in rows]
-    assert "Skipped stages" in labels
+    assert "Skipped by NORMAL profile" in labels
     assert "T0 scope/lint" not in labels  # collapsed
     assert "T1 tests" not in labels
     assert "Materialized" in labels
     assert "Coder run" in labels
+    # Verify meta_label
+    for r in rows:
+        if r["label"] == "Skipped by NORMAL profile":
+            assert r["meta_label"] == "Stages"
+        if r["label"] == "Materialized":
+            assert r["meta_label"] == "Meta"
+
+
+def test_pipeline_visible_rows_hides_pending_reviewer_merge():
+    """pipeline_visible_rows hides pending unreached reviewer/merge stages."""
+    from grace_control.ui.admin_template_filters import pipeline_visible_rows
+    stages = [
+        {"key": "materialized", "label": "Materialized", "status": "done", "meta": "p1"},
+        {"key": "executor", "label": "Executor selected", "status": "done", "meta": "executor"},
+        {"key": "coder_run", "label": "Coder run", "status": "running", "meta": "w-1"},
+        {"key": "reviewer", "label": "Reviewer gate", "status": "pending", "meta": ""},
+        {"key": "merge", "label": "Merge", "status": "pending", "meta": ""},
+    ]
+    rows = pipeline_visible_rows(stages, packet_state="running", acceptance_profile="NORMAL")
+    labels = [r["label"] for r in rows]
+    assert "Reviewer gate" not in labels
+    assert "Merge" not in labels
+    assert "Coder run" in labels
+    assert "Materialized" in labels
+
+
+def test_pipeline_visible_rows_meta_label():
+    """pipeline_visible_rows sets correct meta_label per key."""
+    from grace_control.ui.admin_template_filters import pipeline_visible_rows
+    stages = [
+        {"key": "materialized", "label": "Materialized", "status": "done", "meta": "p1"},
+        {"key": "executor", "label": "Executor selected", "status": "done", "meta": "executor"},
+        {"key": "coder_run", "label": "Coder run", "status": "done", "meta": "w-1"},
+    ]
+    rows = pipeline_visible_rows(stages, packet_state="accepted", acceptance_profile="NORMAL")
+    labels = {r["label"]: r["meta_label"] for r in rows}
+    assert labels.get("Materialized") == "Meta"
+    assert labels.get("Executor selected") == "Meta"
+    assert labels.get("Coder run") == "Worker"
 
 
 def test_pipeline_visible_rows_adds_terminal_for_cancelled():
