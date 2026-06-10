@@ -378,3 +378,19 @@ class TestGitServicePreflight:
         res = git.run_preflight(Path("/nonexistent/path"))
         assert res.success is False
         assert "does not exist" in res.error
+
+    def test_preflight_conflict_detection(self, fake_git: Path, tmp_path: Path):
+        from grace_control.services.git_service import GitService
+        import subprocess
+        git = GitService()
+        
+        # Preflight without conflict
+        res = git.run_preflight(fake_git, branch="agent/test-branch", worktree_path=tmp_path / "wt1")
+        assert res.success is True
+        assert res.worktree_conflict is False
+
+        # Create branch to create conflict
+        subprocess.run(["git", "branch", "agent/test-branch"], cwd=str(fake_git), check=True, capture_output=True)
+        res_conflict = git.run_preflight(fake_git, branch="agent/test-branch")
+        assert res_conflict.success is True
+        assert res_conflict.worktree_conflict is True

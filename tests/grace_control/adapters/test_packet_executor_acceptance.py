@@ -700,9 +700,15 @@ class TestCallExecutorTargetRepoWorktree:
 
         # Set target_repo_root in settings override
         from grace_control.config.settings import settings
-        with patch("grace_control.core.cleanup_on_state.TerminalStateCleanup.run") as mock_cleanup_run, \
+        with patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._resolve_executor") as mock_resolve, \
+             patch("grace_control.core.cleanup_on_state.TerminalStateCleanup.run") as mock_cleanup_run, \
              patch.object(settings, "workspace_mode", "target_repo_worktree"), \
              patch.object(settings, "target_repo_root", str(target_dir)):
+             
+            mock_resolve.return_value = {
+                "executor_id": "coder-opencode",
+                "backend": "cli",
+            }
             
             mock_legacy.return_value = _FakeLegacyResult(
                 ok=True, domain_status="rework_required",

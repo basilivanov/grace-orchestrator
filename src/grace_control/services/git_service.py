@@ -125,6 +125,8 @@ class GitService:
         require_sync: bool = False,
         base_branch: str = "main",
         remote: str = "origin",
+        branch: str | None = None,
+        worktree_path: Path | None = None,
     ) -> PreflightResult:
         root_str = str(target_root.resolve())
         if not target_root.exists() or not target_root.is_dir():
@@ -213,6 +215,19 @@ class GitService:
                     remote_sync=False,
                 )
 
+        # 4. Check branch / worktree conflict
+        worktree_conflict = False
+        if branch:
+            branch_check = self._run(["branch", "--list", branch], target_root)
+            if branch_check.success and branch_check.stdout.strip():
+                worktree_conflict = True
+        if worktree_path:
+            wt_list_res = self._run(["worktree", "list", "--porcelain"], target_root)
+            if wt_list_res.success:
+                wt_out = wt_list_res.stdout
+                if str(worktree_path) in wt_out or (branch and f"refs/heads/{branch}" in wt_out):
+                    worktree_conflict = True
+
         return PreflightResult(
             success=True,
             target_repo_root=root_str,
@@ -222,6 +237,7 @@ class GitService:
             local_head=local_head,
             remote_head=remote_head,
             remote_sync=remote_sync,
+            worktree_conflict=worktree_conflict,
         )
 
     def is_clean(self, path: Path) -> bool:

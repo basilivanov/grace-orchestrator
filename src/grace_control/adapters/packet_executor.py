@@ -287,7 +287,8 @@ class PacketExecutionAdapter:
             from grace_control.config.settings import settings
             if not settings.dev_keep_failed_worktrees:
                 try:
-                    self._terminal_cleanup.run(packet_id=packet_id, attempt=rn)
+                    effective_target_root = self._effective_cleanup_root(executor)
+                    self._terminal_cleanup.run(packet_id=packet_id, attempt=rn, project_root=effective_target_root)
                 except Exception as e:
                     _log.warn("terminal_cleanup_exception",
                         packet_id=packet_id, state=domain, error=str(e)[:200])
@@ -348,18 +349,22 @@ class PacketExecutionAdapter:
                     except ValueError:
                         rn = None
 
-                workspace_mode = executor.get("workspace_mode") or settings.workspace_mode or "full_git_worktree"
-                if executor.get("minimal_repo"):
-                    workspace_mode = "scoped_copy"
-
-                effective_target_root = Path(settings.target_repo_root or self.project_root) if workspace_mode == "target_repo_worktree" else self.project_root
-
+                effective_target_root = self._effective_cleanup_root(executor)
                 self._terminal_cleanup.run(packet_id=packet_id, attempt=rn, project_root=effective_target_root)
             except Exception as e:
                 _log.warn("terminal_cleanup_exception",
                     packet_id=packet_id, state=status, error=str(e)[:200])
         _log.info("adapter_execute_done", packet_id=packet_id, accepted=(status=="accepted"), duration_ms=dur)
         return er
+
+    def _effective_cleanup_root(self, executor: dict) -> Path:
+        from grace_control.config.settings import settings
+        workspace_mode = executor.get("workspace_mode") or settings.workspace_mode or "full_git_worktree"
+        if executor.get("minimal_repo"):
+            workspace_mode = "scoped_copy"
+        if workspace_mode == "target_repo_worktree":
+            return Path(settings.target_repo_root or self.project_root)
+        return self.project_root
 
     def _fast_reject(self, reason, executor_id, run_id, start):
         er = ExecutionResult(accepted=False, domain_status="rejected", reason=reason, evidence_path="", duration_ms=int((time.time()-start)*1000))
@@ -375,7 +380,10 @@ class PacketExecutionAdapter:
                 parts = run_id.rsplit("-R", 1)
                 if len(parts) == 2:
                     pkt, rn = parts[0], int(parts[1])
-                    effective_target_root = Path(settings.target_repo_root or self.project_root) if settings.workspace_mode == "target_repo_worktree" else self.project_root
+                    from grace_control.config.agent_profiles import get_agent_profile
+                    prof = get_agent_profile(executor_id)
+                    executor_dict = prof.to_dict() if prof else {}
+                    effective_target_root = self._effective_cleanup_root(executor_dict)
                     self._terminal_cleanup.run(pkt, attempt=rn, project_root=effective_target_root)
             except Exception:
                 pass
@@ -400,11 +408,26 @@ class PacketExecutionAdapter:
         wt_root = Path(_s.worktree_root or self.worktree_root)
         wt_path = wt_root / slug
 
-        # Warn if worktree path is inside GRACE repo for real-project mode
+        # Fail if worktree path is inside GRACE repo for real-project mode
         if workspace_mode == "target_repo_worktree":
             try:
                 wt_path.resolve().relative_to(self.project_root.resolve())
-                _log.warn("worktree_inside_grace_repo", worktree=str(wt_path))
+                import os
+                if os.environ.get("GRACE_ALLOW_WORKTREE_INSIDE_GRACE") != "1":
+                    error_msg = f"worktree_root is inside GRACE project root: {wt_path}. Set GRACE_ALLOW_WORKTREE_INSIDE_GRACE=1 to override."
+                    _log.warn("worktree_inside_grace_repo_failed", error=error_msg)
+                    from grace_control.agent.backend import ExecutionResult as _ER
+                    return _ER(
+                        accepted=False,
+                        domain_status="failed",
+                        worktree_path=wt_path,
+                        branch_name=branch,
+                        commit_sha="",
+                        stdout="",
+                        stderr=error_msg,
+                        duration_ms=0,
+                        errors=[error_msg],
+                    )
             except ValueError:
                 pass
 
@@ -432,6 +455,8 @@ class PacketExecutionAdapter:
                 require_sync=_s.require_remote_sync,
                 base_branch=base_ref,
                 remote=_s.git_remote,
+                branch=branch,
+                worktree_path=wt_path,
             )
             _preflight_result = preflight
             if not preflight.success:
