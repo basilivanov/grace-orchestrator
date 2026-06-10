@@ -304,6 +304,7 @@ class AdminAggregationService:
             "worker_id": (last_run.worker_id if last_run else "") or "",
             "model": (last_run.model if last_run else "") or "",
             "started_at": _iso(last_run.started_at) if last_run else None,
+            "finished_at": _iso(last_run.finished_at) if last_run else None,
             "elapsed_seconds": _elapsed_seconds(last_run.started_at, last_run.finished_at) if last_run else None,
             "is_running": _is_running(last_run.status if last_run else None, last_run.started_at if last_run else None, last_run.finished_at if last_run else None) if last_run else False,
             "recovery": self._recovery_dict(last_run),

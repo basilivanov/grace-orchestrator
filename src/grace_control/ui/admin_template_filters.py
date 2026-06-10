@@ -183,10 +183,11 @@ def fmt_elapsed_since(iso: str | None) -> str:
         return "—"
 
 
-def last_skippable_stage(stages: list[dict] | None) -> dict | None:
-    """Jinja filter: return the last non-skipped stage, or the first stage.
+def last_active_stage(stages: list[dict] | None) -> dict | None:
+    """Jinja filter: return the last non-skipped/non-pending stage.
 
-    Usage: {{ pipeline.stages | last_skippable_stage }}
+    Usage: {{ pipeline.stages | last_active_stage }}
+    Returns the last stage that reached done/failed/running status.
     Returns None if stages list is empty/missing.
     """
     if not stages:
@@ -194,7 +195,7 @@ def last_skippable_stage(stages: list[dict] | None) -> dict | None:
     for s in reversed(stages):
         if s.get("status") not in ("skipped", "pending"):
             return s
-    return stages[-1] if stages else None
+    return None
 
 
 def display_title(title: str | None, kind: str = "feature") -> dict[str, str]:
@@ -541,7 +542,7 @@ def register(env: Any) -> None:
     env.filters["fmt_size"] = fmt_size
     env.filters["fmt_time_short"] = fmt_time_short
     env.filters["fmt_elapsed_since"] = fmt_elapsed_since
-    env.filters["last_skippable_stage"] = last_skippable_stage
+    env.filters["last_active_stage"] = last_active_stage
     env.filters["safe_str"] = safe_str
     env.filters["display_title"] = display_title
     env.globals["shell_url"] = shell_url

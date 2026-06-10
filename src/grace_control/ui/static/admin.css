@@ -1688,50 +1688,67 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   min-width: 64px;
 }
 
-/* Left-pane packet cards: more fields in a compact row */
+/* Left-pane packet cards: readable, not muted, visible status */
 .tn-packet {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 8px;
+  padding: 5px 8px;
   cursor: pointer;
-  font-size: 11px;
+  font-size: 12px;
   border-left: 2px solid transparent;
   margin-left: -1px;
   color: var(--fg-2);
   flex-wrap: wrap;
 }
+.tn-packet:hover { background: var(--bg-3); }
+.tn-packet.selected {
+  background: var(--bg-3);
+  border-left-color: var(--accent);
+  color: var(--fg);
+}
+.tn-packet.selected .pkt-title { color: var(--fg); font-weight: 600; }
+.tn-packet.running .pkt-title { color: var(--running); }
+.tn-packet.failed .pkt-title { color: var(--err); }
+.tn-packet .dot { display: none; }
 .tn-packet .pkt-title {
   flex: 1 1 auto;
   min-width: 60px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  font-size: 12px;
+  color: var(--fg);
 }
 .tn-packet .pkt-stage {
-  font-size: 10px;
+  font-size: 11px;
   white-space: nowrap;
   flex-shrink: 0;
   order: 2;
+  color: var(--fg-2);
 }
 .tn-packet .pkt-attempts {
-  font-size: 10px;
+  font-size: 11px;
   flex-shrink: 0;
+  color: var(--fg-2);
 }
 .tn-packet .pkt-time {
-  font-size: 10px;
+  font-size: 11px;
   flex-shrink: 0;
   white-space: nowrap;
+  color: var(--fg-2);
 }
 .tn-packet .pkt-duration {
-  font-size: 10px;
+  font-size: 11px;
   flex-shrink: 0;
   white-space: nowrap;
+  color: var(--fg-2);
 }
 .tn-packet .pkt-size {
   font-size: 10px;
   flex-shrink: 0;
   margin-left: auto;
+  color: var(--fg-3);
 }
 
 /* ── Wave details mode (right pane when only wave_id is selected) ──── */

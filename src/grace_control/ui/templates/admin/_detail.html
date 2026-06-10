@@ -202,7 +202,7 @@ attempts: {{ p.attempt_count }}/{{ p.max_attempts }}"
       {% set p_attempt = (p.packet.attempt_count if p.packet else None) or 0 %}
       {% set p_max_attempts = (p.packet.max_attempts if p.packet else None) or 0 %}
       {% set p_started = p.started_at %}
-      {% set p_finished = p.packet.updated_at if p.packet else None %}
+      {% set p_finished = p.finished_at %}
       {% set p_duration = p.elapsed_seconds %}
       {% set p_worker = p.worker_id %}
       {% set p_total_size_bytes = p.total_size_bytes or 0 %}
@@ -256,7 +256,9 @@ attempts: {{ p.attempt_count }}/{{ p.max_attempts }}"
         <div class="pkt-meta-row">
           <span class="pkt-meta-label">duration</span>
           <span class="pkt-meta-value mono">
-            {% if p_duration %}{{ p_duration | fmt_duration }}{% elif p_started and p_state == 'running' %}running…{% else %}—{% endif %}
+            {%- if p.is_running and p_started %}{{ p_started | fmt_elapsed_since }}
+            {%- elif p_duration %}{{ p_duration | fmt_duration }}
+            {%- else %}—{% endif -%}
           </span>
         </div>
         <div class="pkt-meta-row">
@@ -297,11 +299,21 @@ attempts: {{ p.attempt_count }}/{{ p.max_attempts }}"
               <div class="stage-body">
                 <div class="stage-label">{{ s.label }}</div>
                 <div class="stage-meta">
-                  {% if s.meta %}<span>{{ s.meta }}</span>{% endif %}
+                  {% if s.meta and s.status != 'running' %}<span>{{ s.meta }}</span>{% endif %}
                   {% if s.started_at and s.status != 'skipped' and s.status != 'pending' %}
-                    <span class="muted small"> · {{ s.started_at | fmt_time_short }}</span>
+                    <span class="stage-timing">
+                      {% if s.finished_at %}
+                        {{ s.started_at | fmt_time_short }} → {{ s.finished_at | fmt_time_short }}
+                      {% elif s.status == 'running' %}
+                        {{ s.started_at | fmt_time_short }} → now
+                      {% else %}
+                        {{ s.started_at | fmt_time_short }}
+                      {% endif %}
+                    </span>
                   {% endif %}
-                  {% if s.duration_ms and s.duration_ms > 0 %}
+                  {% if s.status == 'running' and s.started_at %}
+                    <span class="stage-elapsed">{{ s.started_at | fmt_elapsed_since }}</span>
+                  {% elif s.duration_ms and s.duration_ms > 0 %}
                     <span class="muted small"> · {{ s.duration_ms | fmt_duration_ms }}</span>
                   {% endif %}
                 </div>
@@ -312,7 +324,7 @@ attempts: {{ p.attempt_count }}/{{ p.max_attempts }}"
       </section>
 
       {# ── Current Run block ───────────────────────────────────────────── #}
-      {% set last_stage = stages | last_skippable_stage %}
+      {% set last_stage = stages | last_active_stage %}
       <section class="current-run">
         <h2 class="pipeline-h">CURRENT RUN</h2>
         <div class="pkt-meta-block">

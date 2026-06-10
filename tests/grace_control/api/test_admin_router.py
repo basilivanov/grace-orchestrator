@@ -448,6 +448,30 @@ def test_admin_static_assets_served(client):
     assert "window.replayStage" in body
 
 
+def test_packet_detail_template_smoke(client):
+    """Template smoke: /admin with packet_id shows CURRENT RUN block with timing fields."""
+    _seed_rejected(client)
+    r = client.get("/admin?packet_id=p1")
+    assert r.status_code == 200
+    html = r.text
+    assert "CURRENT RUN" in html
+    assert "Started" in html or "started" in html
+    assert "Elapsed" in html or "Duration" in html or "duration" in html
+    assert "Attempt" in html or "attempt" in html
+    assert "Worker" in html or "worker" in html
+
+
+def test_packet_detail_aggregation_finished_at(client):
+    """Aggregation DTO exposes finished_at from last run."""
+    _seed_rejected(client)
+    r = client.get("/api/admin/packet/p1/detail")
+    assert r.status_code == 200
+    body = r.json()
+    assert "finished_at" in body
+    assert body["finished_at"] is not None
+    assert body["is_running"] is False
+
+
 # ── 21. OpenAPI contains admin endpoints ──────────────────────────────────
 
 
