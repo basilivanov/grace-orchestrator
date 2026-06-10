@@ -39,7 +39,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         self._public_openapi = public_openapi
 
     def _is_public(self, path: str) -> bool:
-        if path in ("/health", "/health/liveness", "/health/readiness"):
+        if path in ("/health", "/health/liveness", "/health/readiness", "/health/diagnostic"):
             return True
         if path == "/openapi.json" and self._public_openapi:
             return True

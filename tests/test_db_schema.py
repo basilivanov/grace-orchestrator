@@ -146,7 +146,7 @@ def test_lease_mechanism(test_db):
         found = db.query(Lease).filter_by(packet_id="PKT-001").first()
         assert found is not None
         assert found.worker_id == "w1"
-        assert found.expires_at > datetime.now(UTC)
+        assert found.expires_at > datetime.now(UTC).replace(tzinfo=None)
 
 
 def test_lease_unique_constraint(test_db):
