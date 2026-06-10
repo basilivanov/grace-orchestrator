@@ -15,7 +15,6 @@
 from __future__ import annotations
 
 import time
-import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -374,26 +373,19 @@ class PacketExecutionAdapter:
         is_minimal = executor.get("minimal_repo", False)
 
         if is_minimal:
-            # Minimal repo: create an isolated git repo with only the scope files.
-            # This avoids loading the entire project into opencode run memory.
-            wt_path.mkdir(parents=True, exist_ok=True)
-            git._run(["init", "-q"], wt_path)
-            git._run(["config", "user.email", "agent@grace"], wt_path)
-            git._run(["config", "user.name", "Grace Agent"], wt_path)
-            for scope_path in eff:
-                src = Path(scope_path)
-                if src.exists():
-                    dst = wt_path / src.name
-                    shutil.copy2(src, dst)
-            # Also copy the fixture tests directory if scope references it
-            for scope_path in eff:
-                p = Path(scope_path)
-                parent = p.parent
-                if parent.exists() and parent.name == "tests":
-                    for f in parent.glob("test_*.py"):
-                        shutil.copy2(f, wt_path / f.name)
-            git._run(["add", "."], wt_path)
-            git._run(["commit", "-q", "-m", "init"], wt_path)
+            from grace_control.config.settings import settings as _s
+            from grace_control.services.agent_workspace_builder import AgentWorkspaceBuilder
+            target_root = Path(_s.target_repo_root or self.project_root)
+            builder = AgentWorkspaceBuilder(target_root=target_root)
+            ws = builder.build_scoped_copy(
+                scope_paths=list(eff or []),
+                workspace_root=self.worktree_root,
+                slug=slug,
+                config_allowlist=["pyproject.toml"],
+            )
+            wt_path = ws.workspace_path
+            base_sha = ws.base_sha
+            branch = f"minimal-{slug}"
             add_result = type("Result", (), {"success": True, "stderr": ""})()
         else:
             # 2.3: if the branch still exists after cleanup, force-delete it

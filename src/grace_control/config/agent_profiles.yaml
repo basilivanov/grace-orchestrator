@@ -169,6 +169,28 @@ agents:
     input:
       mode: stdin
       template: '{packet_markdown}'
+
+  coder-opencode-fixture:
+    backend: cli
+    resume_mode: on_retry
+    resume_flag: "--session"
+    fork_flag: "--fork"
+    command:
+    - opencode
+    - run
+    - --model
+    - '{model}'
+    - --variant
+    - '{effort}'
+    cwd: '{worktree_path}'
+    effort: high
+    env:
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL}
+    inject_dir: true
+    input:
+      mode: stdin
+      template: '{packet_markdown}'
     minimal_repo: true
     skip_context_builder: true
     model: cliproxy/gemini-3-flash-agent
