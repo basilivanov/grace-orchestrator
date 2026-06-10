@@ -287,8 +287,14 @@ def build_packet_contract(packet_data: dict) -> ExecutionPacketContract:
                 t1.append(list(cmd))
     elif isinstance(verification_raw, dict):
         t0 = verification_raw.get("t0", [])
+        if isinstance(t0, dict) and "commands" in t0:
+            t0 = t0["commands"]
         t1 = verification_raw.get("t1", []) or spec.get("verification_commands", [])
+        if isinstance(t1, dict) and "commands" in t1:
+            t1 = t1["commands"]
         t2 = verification_raw.get("t2", [])
+        if isinstance(t2, dict) and "commands" in t2:
+            t2 = t2["commands"]
     else:
         t0 = []
         t1 = spec.get("verification_commands", [])

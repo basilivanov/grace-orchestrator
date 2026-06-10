@@ -216,11 +216,12 @@ class WaveResumeRunner:
         env.setdefault("GRACE_WORKER_ID", f"live-wr-{os.getpid()}")
         env.setdefault("GRACE_DEV_TOOLS_ENABLED", "1")
         env.setdefault("GRACE_DEV_KEEP_FAILED_WORKTREES", "1")
+        log_file = open("/tmp/runner_worker.log", "a")
         self.worker_proc = subprocess.Popen(
             [sys.executable, str(worker_script)],
             env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=log_file,
+            stderr=log_file,
         )
         print(f"[runner] Worker started, PID: {self.worker_proc.pid}")
 

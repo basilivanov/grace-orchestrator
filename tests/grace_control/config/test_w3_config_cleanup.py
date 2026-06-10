@@ -163,3 +163,21 @@ def test_no_direct_env_reads_outside_allowlist():
     # Still, no NEW offenders should appear outside the allowlist, so the count
     # is bounded by what existed at the start of W3.
     assert isinstance(offenders, list)  # just exercise the path; see coverage report.
+
+
+def test_agent_profile_minimal_repo_fields():
+    from grace_control.config.agent_profiles import load_agent_profiles
+    profiles = load_agent_profiles()
+    # If coder-opencode-fixture is in profiles, check its fields
+    if "coder-opencode-fixture" in profiles:
+        prof = profiles["coder-opencode-fixture"]
+        assert prof.minimal_repo is True
+        assert prof.skip_context_builder is True
+        d = prof.to_dict()
+        assert d["minimal_repo"] is True
+        assert d["skip_context_builder"] is True
+
+    if "coder-opencode" in profiles:
+        prof = profiles["coder-opencode"]
+        assert prof.minimal_repo is False
+        assert prof.skip_context_builder is False

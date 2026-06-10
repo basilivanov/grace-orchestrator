@@ -32,6 +32,8 @@ class AgentProfile:
         self.effort = raw.get("effort", "medium")
         self.cwd_template = str(raw.get("cwd", "{worktree_path}"))
         self.timeout_seconds = int(raw.get("timeout_seconds", 600))
+        self.minimal_repo = bool(raw.get("minimal_repo", False))
+        self.skip_context_builder = bool(raw.get("skip_context_builder", False))
         self.env = dict(raw.get("env", {}))
         self.input_mode = raw.get("input", {}).get("mode", "none") if isinstance(raw.get("input"), dict) else "none"
         self.input_template = raw.get("input", {}).get("template", "") if isinstance(raw.get("input"), dict) else ""
@@ -82,6 +84,8 @@ class AgentProfile:
             "fork_flag": self.fork_flag,
             "inject_dir": self.inject_dir,
             "multimodal": self.multimodal,
+            "minimal_repo": self.minimal_repo,
+            "skip_context_builder": self.skip_context_builder,
         }
 
 

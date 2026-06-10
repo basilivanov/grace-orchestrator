@@ -25,11 +25,12 @@ def _start() -> subprocess.Popen | None:
     if not SCRIPT.exists():
         return None
     env = os.environ.copy()
+    log_file = open("/tmp/api.log", "a")
     return subprocess.Popen(
         [sys.executable, str(SCRIPT)],
         env=env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=log_file,
+        stderr=log_file,
     )
 
 def _cleanup_stale_packets():
