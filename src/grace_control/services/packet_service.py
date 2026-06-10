@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any, Optional
 
 from grace_control.core.state_machine import PacketStateMachine, StateTransitionError
@@ -90,7 +90,7 @@ def _record_event(db, event_type: str, entity_id: str, payload: dict) -> None:
         entity_type="packet",
         entity_id=entity_id,
         payload_json=payload,
-        timestamp=datetime.utcnow(),
+        timestamp=datetime.now(UTC),
     ))
 
 
@@ -188,11 +188,11 @@ class PacketService:
 
             existing = db.query(Lease).filter_by(packet_id=packet_id).first()
             if existing:
-                if existing.expires_at > datetime.utcnow():
+                if existing.expires_at > datetime.now(UTC):
                     raise StateTransitionError(f"Packet {packet_id} already leased to {existing.worker_id}")
                 db.delete(existing)
 
-            expires_at = datetime.utcnow() + timedelta(minutes=15)
+            expires_at = datetime.now(UTC) + timedelta(minutes=15)
             lease = Lease(
                 packet_id=packet_id,
                 worker_id=worker_id,

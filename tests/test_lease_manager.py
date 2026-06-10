@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -31,7 +31,7 @@ def test_expired_lease_returns_packet(test_db):
                        state=PacketState.RUNNING.value))
         db.add(Worker(id="w1", current_packet_id="PKT-001"))
         db.add(Lease(packet_id="PKT-001", worker_id="w1",
-                      expires_at=datetime.utcnow() - timedelta(minutes=5)))
+                      expires_at=datetime.now(UTC) - timedelta(minutes=5)))
 
     count = check_expired_leases()
     assert count == 1
@@ -52,7 +52,7 @@ def test_active_lease_not_touched(test_db):
                        state=PacketState.RUNNING.value))
         db.add(Worker(id="w1"))
         db.add(Lease(packet_id="PKT-001", worker_id="w1",
-                      expires_at=datetime.utcnow() + timedelta(minutes=25)))
+                      expires_at=datetime.now(UTC) + timedelta(minutes=25)))
 
     assert check_expired_leases() == 0
 
@@ -71,7 +71,7 @@ def test_multiple_expired_leases(test_db):
                            state=PacketState.RUNNING.value))
             db.add(Worker(id=f"w{i}"))
             db.add(Lease(packet_id=f"PKT-{i}", worker_id=f"w{i}",
-                          expires_at=datetime.utcnow() - timedelta(minutes=10 + i)))
+                          expires_at=datetime.now(UTC) - timedelta(minutes=10 + i)))
 
     assert check_expired_leases() == 3
 

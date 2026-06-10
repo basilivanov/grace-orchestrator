@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import pytest
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from grace_control.db import get_db, init_db
 from grace_control.db.schema import (
@@ -126,7 +126,7 @@ def test_worker_heartbeat(test_db):
         db.add(Worker(id="worker-1"))
     with get_db() as db:
         w = db.query(Worker).filter_by(id="worker-1").first()
-        w.last_heartbeat = datetime.utcnow()
+        w.last_heartbeat = datetime.now(UTC)
     with get_db() as db:
         w = db.query(Worker).filter_by(id="worker-1").first()
         assert w.last_heartbeat is not None
@@ -139,14 +139,14 @@ def test_lease_mechanism(test_db):
     with get_db() as db:
         lease = Lease(
             packet_id="PKT-001", worker_id="w1",
-            expires_at=datetime.utcnow() + timedelta(minutes=30),
+            expires_at=datetime.now(UTC) + timedelta(minutes=30),
         )
         db.add(lease)
     with get_db() as db:
         found = db.query(Lease).filter_by(packet_id="PKT-001").first()
         assert found is not None
         assert found.worker_id == "w1"
-        assert found.expires_at > datetime.utcnow()
+        assert found.expires_at > datetime.now(UTC)
 
 
 def test_lease_unique_constraint(test_db):
@@ -156,10 +156,10 @@ def test_lease_unique_constraint(test_db):
         db.add(Worker(id="w1"))
         db.add(Worker(id="w2"))
     with get_db() as db:
-        db.add(Lease(packet_id="PKT-001", worker_id="w1", expires_at=datetime.utcnow() + timedelta(minutes=30)))
+        db.add(Lease(packet_id="PKT-001", worker_id="w1", expires_at=datetime.now(UTC) + timedelta(minutes=30)))
     with pytest.raises(IntegrityError):
         with get_db() as db:
-            db.add(Lease(packet_id="PKT-001", worker_id="w2", expires_at=datetime.utcnow() + timedelta(minutes=30)))
+            db.add(Lease(packet_id="PKT-001", worker_id="w2", expires_at=datetime.now(UTC) + timedelta(minutes=30)))
 
 
 def test_event_log(test_db):

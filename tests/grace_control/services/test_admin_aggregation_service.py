@@ -24,7 +24,7 @@ Asserts:
 """
 import os
 import re
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -145,7 +145,7 @@ def test_overview_blocked_lists_blocked_packets(db_url, svc, session):
 
 def test_overview_workers_include_current_packet(db_url, svc, session):
     session.add(Worker(id="w-1", status="active", current_packet_id="p-1",
-                       last_heartbeat=datetime.utcnow(), started_at=datetime.utcnow()))
+                       last_heartbeat=datetime.now(UTC), started_at=datetime.now(UTC)))
     session.commit()
     out = svc.get_overview(session)
     assert any(w["id"] == "w-1" and w["current_packet_id"] == "p-1" for w in out["workers"])
@@ -707,8 +707,8 @@ def test_system_health_shape(db_url, svc, monkeypatch):
 
 def test_workers_listing(db_url, svc, session):
     session.add(Worker(id="w-A", status="active", current_packet_id="p-1",
-                       last_heartbeat=datetime.utcnow(),
-                       started_at=datetime.utcnow()))
+                       last_heartbeat=datetime.now(UTC),
+                       started_at=datetime.now(UTC)))
     session.commit()
     out = svc.get_workers(session)
     assert any(w["id"] == "w-A" and w["current_packet_id"] == "p-1"
@@ -729,9 +729,9 @@ def test_elapsed_seconds_none_when_no_started():
 
 
 def test_is_running_with_active_status():
-    started = datetime.utcnow()
+    started = datetime.now(UTC)
     assert _is_running(None, started, None) is True
-    assert _is_running("rejected", started, datetime.utcnow()) is False
+    assert _is_running("rejected", started, datetime.now(UTC)) is False
 
 
 def test_classify_artifact():
@@ -761,7 +761,7 @@ def test_decision_component_recovery_controller(db_url, svc, session):
     session.add(PacketRun(
         id="p_rej-1", packet_id="p_rej", run_number=1, status="rejected",
         duration_ms=10, result_json={},
-        started_at=datetime.utcnow(), finished_at=datetime.utcnow(),
+        started_at=datetime.now(UTC), finished_at=datetime.now(UTC),
     ))
     session.commit()
     out = svc.get_packet_blocking_decision(session, "p_rej")

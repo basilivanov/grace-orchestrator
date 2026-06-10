@@ -69,7 +69,7 @@ def test_artifact_path_traversal_blocked(tmp_path, monkeypatch):
     from grace_control.db.schema import (
         Feature, Packet, PacketRun, PacketState, Wave,
     )
-    from datetime import datetime
+    from datetime import UTC, datetime
 
     db_url = f"sqlite:///{tmp_path}/w5_traversal.db"
     os.environ["GRACE_DB_URL"] = db_url
@@ -90,7 +90,7 @@ def test_artifact_path_traversal_blocked(tmp_path, monkeypatch):
         db.add(PacketRun(
             id="p1-1", packet_id="p1", run_number=1, status="accepted",
             evidence_path=str(evidence),
-            started_at=datetime.utcnow(), finished_at=datetime.utcnow(),
+            started_at=datetime.now(UTC), finished_at=datetime.now(UTC),
             duration_ms=10,
         ))
         db.commit()

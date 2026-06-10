@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from grace_control.db import get_db
 from grace_control.db.schema import Lease, Packet, PacketState, Worker
@@ -22,7 +22,7 @@ async def check_health() -> dict:
         active = [w for w in worker_data if w["status"] == "active"]
         dead = [w for w in worker_data
                 if w["heartbeat"] and w["status"] == "active"
-                and (datetime.utcnow() - datetime.fromisoformat(w["heartbeat"].rstrip("Z")) > timedelta(minutes=1))]
+                and (datetime.now(UTC) - datetime.fromisoformat(w["heartbeat"].rstrip("Z")) > timedelta(minutes=1))]
 
         # Clean up dead workers: release their packets back to READY
         for dw in dead:
@@ -55,5 +55,5 @@ async def check_health() -> dict:
         "workers": {"active": len(active), "idle": len([w for w in active if not w["packet"]]), "dead": len(dead)},
         "queue_depth": ready,
         "running": running,
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": datetime.now(UTC).isoformat() + "Z",
     }

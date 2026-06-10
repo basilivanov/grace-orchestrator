@@ -21,7 +21,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from grace_control.core.structured_logger import GraceLogger
 from grace_control.db import get_db
@@ -37,7 +37,7 @@ def check_expired_leases() -> int:
     count = 0
     with get_db() as db:
         expired = db.query(Lease).filter(
-            Lease.expires_at < datetime.utcnow()
+            Lease.expires_at < datetime.now(UTC)
         ).all()
 
         for lease in expired:

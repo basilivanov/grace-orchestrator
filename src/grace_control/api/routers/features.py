@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException
 
@@ -32,7 +32,7 @@ async def list_features() -> dict:
                 }
                 for f in features
             ],
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(UTC).isoformat() + "Z",
         }
 
 
@@ -53,5 +53,5 @@ async def get_feature(feature_id: str) -> dict:
                 "created_at": f.created_at.isoformat() + "Z",
                 "updated_at": f.updated_at.isoformat() + "Z",
             },
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(UTC).isoformat() + "Z",
         }

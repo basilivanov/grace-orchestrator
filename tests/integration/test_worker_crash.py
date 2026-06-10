@@ -1,6 +1,6 @@
 """Block O: Worker Crash integration tests — 3 tests."""
 import pytest
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from grace_control.db import get_db
 from grace_control.db.schema import Lease, PacketState
@@ -18,7 +18,7 @@ async def test_expired_lease_requeued(api):
     # Simulate crash: expire lease
     with get_db() as db:
         lease = db.query(Lease).filter_by(packet_id=pid).first()
-        lease.expires_at = datetime.utcnow() - timedelta(minutes=1)
+        lease.expires_at = datetime.now(UTC) - timedelta(minutes=1)
 
     from grace_control.core.lease_manager import check_expired_leases
     expired = check_expired_leases()
@@ -39,7 +39,7 @@ async def test_second_worker_takes_expired_packet(api):
 
     with get_db() as db:
         lease = db.query(Lease).filter_by(packet_id=pid).first()
-        lease.expires_at = datetime.utcnow() - timedelta(minutes=1)
+        lease.expires_at = datetime.now(UTC) - timedelta(minutes=1)
 
     from grace_control.core.lease_manager import check_expired_leases
     check_expired_leases()

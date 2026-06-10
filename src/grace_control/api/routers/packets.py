@@ -25,7 +25,7 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
@@ -62,7 +62,7 @@ async def list_packets(state: str | None = None, feature_id: str | None = None) 
                 }
                 for p in packets
             ],
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(UTC).isoformat() + "Z",
         }
 
 
@@ -109,7 +109,7 @@ async def get_packet(packet_id: str) -> dict:
                 "created_at": p.created_at.isoformat() + "Z",
                 "updated_at": p.updated_at.isoformat() + "Z",
             },
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(UTC).isoformat() + "Z",
         }
 
 
@@ -153,7 +153,7 @@ async def claim_packet(request: dict) -> dict:
                 "acceptance_profile": result.acceptance_profile,
                 "max_attempts": result.max_attempts,
             },
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(UTC).isoformat() + "Z",
         }
 
     from grace_control.core.wave_gate import check_wave_gates
@@ -191,7 +191,7 @@ async def release_packet(packet_id: str, request: dict) -> dict:
     _log.info("packet_released", packet_id=packet_id, state=new_state, worker_id=worker_id)
     return {
         "data": {"packet_id": packet_id, "state": new_state, "released": True},
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": datetime.now(UTC).isoformat() + "Z",
     }
 
 
@@ -235,7 +235,7 @@ async def cancel_packet(packet_id: str, request: dict) -> dict:
 
     return {
         "data": {"packet_id": result.packet_id, "state": result.state, "reason": reason},
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": datetime.now(UTC).isoformat() + "Z",
     }
 
 @router.post("/{packet_id}/retry")
@@ -251,7 +251,7 @@ async def retry_packet(packet_id: str, request: dict) -> dict:
         raise HTTPException(status_code=400, detail=str(e))
     return {
         "data": {"packet_id": packet_id, "state": "ready"},
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": datetime.now(UTC).isoformat() + "Z",
     }
 
 
@@ -331,5 +331,5 @@ async def merge_packet(packet_id: str, request: dict) -> dict:
         commit_sha=result.commit_sha, target_repo=result.target_repo)
     return {
         "data": {"packet_id": packet_id, "state": "merged", "commit_sha": result.commit_sha},
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": datetime.now(UTC).isoformat() + "Z",
     }

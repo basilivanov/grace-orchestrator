@@ -59,6 +59,6 @@ def make_wave(db, *, wid, fid, order=1, status="NOT_STARTED"):
 
 
 def make_lease(db, packet_id, worker_id, expires_delta=30):
-    from datetime import datetime, timedelta
+    from datetime import UTC, datetime, timedelta
     db.add(Lease(packet_id=packet_id, worker_id=worker_id,
-                 expires_at=datetime.utcnow() + timedelta(minutes=expires_delta)))
+                 expires_at=datetime.now(UTC) + timedelta(minutes=expires_delta)))

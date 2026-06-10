@@ -166,11 +166,8 @@ class WaveResumeRunner:
     # ---- API management ----
     def _check_api(self) -> bool:
         for attempt in range(6):
-            resp = _api_call(self.api_url, "GET", "/health", timeout=5)
-            if "_error" not in resp and resp.get("status") == "unhealthy":
-                # "unhealthy" is OK — means API is alive but no workers registered yet
-                return True
-            if "_error" not in resp and resp.get("api_alive"):
+            resp = _api_call(self.api_url, "GET", "/health/liveness", timeout=5)
+            if "_error" not in resp and resp.get("status") == "ok":
                 return True
             if attempt < 5:
                 print(f"[runner] API not ready, retrying in 5s ({attempt+1}/5)")

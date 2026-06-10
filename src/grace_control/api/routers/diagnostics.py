@@ -21,7 +21,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 from fastapi import APIRouter
 
@@ -45,4 +45,4 @@ _svc = DiagnosticsService()
 def get_state() -> dict:
     with get_db() as db:
         state = _svc.get_state(db)
-    return {"data": state, "timestamp": datetime.utcnow().isoformat() + "Z"}
+    return {"data": state, "timestamp": datetime.now(UTC).isoformat() + "Z"}

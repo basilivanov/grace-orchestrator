@@ -28,7 +28,7 @@ import asyncio
 import json
 import os
 import re as _re
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import APIRouter
@@ -204,7 +204,7 @@ async def create_plan(request: dict) -> dict:
             "context": context,
             "generated": architect_generated,
         },
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": datetime.now(UTC).isoformat() + "Z",
     }
 
 

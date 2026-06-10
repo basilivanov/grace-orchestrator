@@ -2,7 +2,7 @@
 
 import asyncio
 import os
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -194,7 +194,7 @@ def _make_running_packet(db, pid="p-cancel-1", worker_id="w-1"):
     ))
     db.add(Worker(id=worker_id, status="active", current_packet_id=pid))
     db.add(Lease(packet_id=pid, worker_id=worker_id,
-                 expires_at=datetime.utcnow() + timedelta(minutes=15)))
+                 expires_at=datetime.now(UTC) + timedelta(minutes=15)))
 
 
 def test_p1_4_cancel_running_releases_lease(db):

@@ -10,7 +10,7 @@ API env vars (GRACE_DATABASE_URL etc.) must be set before starting.
 import os, subprocess, sys, time
 from pathlib import Path
 
-API_URL = "http://127.0.0.1:8042/health"
+API_URL = "http://127.0.0.1:8042/health/liveness"
 SCRIPT = Path(__file__).resolve().parent / "run_api.py"
 
 def _alive() -> bool:
@@ -33,22 +33,28 @@ def _start() -> subprocess.Popen | None:
     )
 
 def _cleanup_stale_packets():
-    """Mark stale 'running' packets as 'failed' so the runner can retry."""
-    import sqlite3, os
-    db_url = os.environ.get("GRACE_DATABASE_URL", "sqlite:////tmp/grace-live-test.db")
-    db_path = db_url.replace("sqlite:///", "", 1) if "sqlite:///" in db_url else "/tmp/grace-live-test.db"
-    if not os.path.exists(db_path):
-        return
+    """Cancel stale 'running' packets via the API so the runner can retry."""
+    import urllib.request, json
     try:
-        conn = sqlite3.connect(db_path)
-        cur = conn.execute("UPDATE packets SET state='failed' WHERE state='running'")
-        updated = cur.rowcount
-        conn.commit()
-        if updated:
-            print(f"[watchdog] Stale packets cleaned: {updated}", flush=True)
-        conn.close()
+        req = urllib.request.Request(
+            "http://127.0.0.1:8042/api/packets/",
+            method="GET",
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read())
+        for pkt in data.get("data", []):
+            if pkt.get("state") == "running":
+                pid = pkt["id"]
+                cancel_req = urllib.request.Request(
+                    f"http://127.0.0.1:8042/api/packets/{pid}/cancel",
+                    data=json.dumps({"reason": "watchdog restart"}).encode(),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(cancel_req, timeout=10) as cresp:
+                    print(f"[watchdog] Cancelled stale packet {pid}: {cresp.status}", flush=True)
     except Exception as e:
-        print(f"[watchdog] Cleanup error: {e}", flush=True)
+        print(f"[watchdog] Cleanup warning: {e}", flush=True)
 
 proc: subprocess.Popen | None = None
 while True:

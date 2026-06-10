@@ -28,7 +28,7 @@ def test_two_workers_claim_different_packets(test_db):
 
     from grace_control.db import SessionLocal
     from grace_control.db.schema import Lease
-    from datetime import datetime, timedelta
+    from datetime import UTC, datetime, timedelta
 
     def claim(worker_id):
         db = SessionLocal()
@@ -36,12 +36,12 @@ def test_two_workers_claim_different_packets(test_db):
             ready = db.query(Packet).filter_by(state=PacketState.READY.value).all()
             for pkt in ready:
                 existing = db.query(Lease).filter_by(packet_id=pkt.id).first()
-                if existing and existing.expires_at > datetime.utcnow():
+                if existing and existing.expires_at > datetime.now(UTC):
                     continue
                 if existing:
                     db.delete(existing)
                 db.add(Lease(packet_id=pkt.id, worker_id=worker_id,
-                             expires_at=datetime.utcnow() + timedelta(minutes=30)))
+                             expires_at=datetime.now(UTC) + timedelta(minutes=30)))
                 pkt.state = PacketState.RUNNING.value
                 pkt.attempt_count += 1
                 db.commit()

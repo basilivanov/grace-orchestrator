@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException
 
@@ -30,7 +30,7 @@ async def list_workers() -> dict:
                 }
                 for w in workers
             ],
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(UTC).isoformat() + "Z",
         }
 
 
@@ -41,10 +41,10 @@ async def register_worker(request: dict) -> dict:
         existing = db.query(Worker).filter_by(id=worker_id).first()
         if existing:
             existing.status = "active"
-            existing.last_heartbeat = datetime.utcnow()
+            existing.last_heartbeat = datetime.now(UTC)
         else:
-            db.add(Worker(id=worker_id, status="active", last_heartbeat=datetime.utcnow()))
-        return {"data": {"worker_id": worker_id, "status": "registered"}, "timestamp": datetime.utcnow().isoformat() + "Z"}
+            db.add(Worker(id=worker_id, status="active", last_heartbeat=datetime.now(UTC)))
+        return {"data": {"worker_id": worker_id, "status": "registered"}, "timestamp": datetime.now(UTC).isoformat() + "Z"}
 
 
 @router.post("/heartbeat")
@@ -54,6 +54,6 @@ async def worker_heartbeat(request: dict) -> dict:
         w = db.query(Worker).filter_by(id=worker_id).first()
         if not w:
             raise HTTPException(status_code=404, detail="Worker not found")
-        w.last_heartbeat = datetime.utcnow()
+        w.last_heartbeat = datetime.now(UTC)
         w.status = "active"
-        return {"data": {"worker_id": worker_id, "status": "ok", "timestamp": datetime.utcnow().isoformat() + "Z"}}
+        return {"data": {"worker_id": worker_id, "status": "ok", "timestamp": datetime.now(UTC).isoformat() + "Z"}}

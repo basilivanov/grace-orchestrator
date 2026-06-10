@@ -23,7 +23,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -67,7 +67,7 @@ class DiagnosticsService:
         # all rows here are by definition active.
         active_leases = (
             db.query(Lease)
-            .filter(Lease.expires_at > datetime.utcnow())
+            .filter(Lease.expires_at > datetime.now(UTC))
             .count()
         )
         workers_total = db.query(Worker).count()

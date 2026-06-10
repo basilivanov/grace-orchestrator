@@ -22,7 +22,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Query
 
@@ -66,4 +66,4 @@ def list_events(
             limit=limit,
             offset=offset,
         )
-    return {"data": page, "timestamp": datetime.utcnow().isoformat() + "Z"}
+    return {"data": page, "timestamp": datetime.now(UTC).isoformat() + "Z"}
