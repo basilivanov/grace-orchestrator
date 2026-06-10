@@ -73,6 +73,8 @@ class WaveResumeRunner:
         self.source_dir = Path(args.source_dir)
         self.agent_profile = args.agent_profile
         self.architect_profile = args.architect_profile
+        self.workspace_mode = args.workspace_mode
+        self.target_repo_root = args.target_repo_root
         self.max_waves = args.max_waves
         self.timeout_s = args.timeout
         self.keep_artifacts = args.keep_artifacts
@@ -161,6 +163,13 @@ class WaveResumeRunner:
             shutil.rmtree(dst)
         shutil.copytree(src, dst)
         print(f"[runner] Fixture copied: {src} -> {dst}")
+        # Initialize target repo as a clean git repository
+        import subprocess
+        subprocess.run(["git", "init", "-b", "main"], cwd=str(dst), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["git", "config", "user.email", "test@grace"], cwd=str(dst), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["git", "config", "user.name", "Test Agent"], cwd=str(dst), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["git", "add", "-A"], cwd=str(dst), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["git", "commit", "-q", "-m", "initial commit"], cwd=str(dst), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return True
 
     # ---- API management ----
@@ -190,6 +199,12 @@ class WaveResumeRunner:
         env["GRACE_DATABASE_URL"] = db_url
         env.setdefault("GRACE_DEV_TOOLS_ENABLED", "1")
         env.setdefault("GRACE_DEV_KEEP_FAILED_WORKTREES", "1")
+        if self.workspace_mode:
+            env["GRACE_WORKSPACE_MODE"] = self.workspace_mode
+        if self.target_repo_root:
+            env["GRACE_TARGET_REPO_ROOT"] = self.target_repo_root
+        if self.agent_profile:
+            env["GRACE_LIVE_EXECUTOR_PROFILE"] = self.agent_profile
         subprocess.Popen(
             [sys.executable, str(api_script)],
             env=env,
@@ -216,6 +231,12 @@ class WaveResumeRunner:
         env.setdefault("GRACE_WORKER_ID", f"live-wr-{os.getpid()}")
         env.setdefault("GRACE_DEV_TOOLS_ENABLED", "1")
         env.setdefault("GRACE_DEV_KEEP_FAILED_WORKTREES", "1")
+        if self.workspace_mode:
+            env["GRACE_WORKSPACE_MODE"] = self.workspace_mode
+        if self.target_repo_root:
+            env["GRACE_TARGET_REPO_ROOT"] = self.target_repo_root
+        if self.agent_profile:
+            env["GRACE_LIVE_EXECUTOR_PROFILE"] = self.agent_profile
         log_file = open("/tmp/runner_worker.log", "a")
         self.worker_proc = subprocess.Popen(
             [sys.executable, str(worker_script)],
@@ -458,6 +479,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--max-waves", type=int, default=0, help="Limit number of waves")
     p.add_argument("--timeout", type=int, default=600, help="Max run time in seconds")
     p.add_argument("--keep-artifacts", action="store_true", help="Preserve artifacts")
+    p.add_argument("--workspace-mode", default=None, help="Workspace mode override")
+    p.add_argument("--target-repo-root", default=None, help="Target repo root override")
     return p.parse_args(argv)
 
 

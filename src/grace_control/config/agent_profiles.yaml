@@ -169,6 +169,7 @@ agents:
     input:
       mode: stdin
       template: '{packet_markdown}'
+    model: cliproxy/gemini-3-flash-agent
 
   coder-opencode-fixture:
     backend: cli

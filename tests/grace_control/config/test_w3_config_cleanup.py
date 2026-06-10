@@ -128,7 +128,7 @@ def test_settings_has_new_w3_fields():
         "api_url", "api_port", "api_host",
         "base_branch", "target_branch", "git_remote",
         "agent_timeout_seconds", "architect_timeout_seconds", "context_timeout_seconds",
-        "state_root", "worktree_root", "sandbox_mode", "allow_sandbox_bypass",
+        "state_root", "worktree_root", "workspace_mode", "require_clean_target_repo", "require_remote_sync", "sandbox_mode", "allow_sandbox_bypass",
         "execution_backend",
         "database_url",
         "self_evolution_max_sessions",

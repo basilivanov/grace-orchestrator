@@ -20,6 +20,13 @@ def target_root(tmp_path: Path) -> Path:
     (root / "tests").mkdir()
     (root / "tests" / "test_main.py").write_text("def test_main(): pass")
     (root / "pyproject.toml").write_text("[project]\nname = 'test'")
+    from grace_control.services.git_service import GitService
+    git = GitService()
+    git._run(["init", "-q"], root)
+    git._run(["config", "user.email", "test@grace"], root)
+    git._run(["config", "user.name", "Test Agent"], root)
+    git._run(["add", "."], root)
+    git._run(["commit", "-q", "-m", "initial commit"], root)
     return root
 
 
@@ -147,3 +154,28 @@ class TestWorkspaceBuilder:
             config_allowlist=["pyproject.toml"],
         )
         assert ws.omitted_files == []
+
+    def test_build_target_repo_worktree(self, target_root: Path, tmp_path: Path):
+        """Should create a git worktree from target repo."""
+        builder = AgentWorkspaceBuilder(target_root=target_root)
+        ws_root = tmp_path / "worktrees"
+        ws_root.mkdir()
+        ws = builder.build_target_repo_worktree(
+            workspace_root=ws_root,
+            slug="test-wt-slug",
+            branch="agent/test-wt-branch",
+            base_ref="HEAD",
+        )
+        assert ws.workspace_path.exists()
+        assert (ws.workspace_path / "main.py").exists()
+        assert ws.workspace_mode == "target_repo_worktree"
+        assert ws.target_repo_root == target_root
+        assert ws.base_sha != ""
+        assert ws.copied_files == []
+        assert ws.omitted_files == []
+        assert ws.commit_semantics == "target_repo_commit"
+
+        d = ws.to_dict()
+        assert d["workspace_mode"] == "target_repo_worktree"
+        assert d["commit_semantics"] == "target_repo_commit"
+        assert d["target_repo_root"] == str(target_root)

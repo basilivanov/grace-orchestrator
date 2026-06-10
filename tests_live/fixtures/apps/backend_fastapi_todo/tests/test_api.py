@@ -1,6 +1,9 @@
 from fastapi.testclient import TestClient
 
-from backend_fastapi_todo.main import app, items
+try:
+    from backend_fastapi_todo.main import app, items
+except ModuleNotFoundError:
+    from main import app, items
 
 client = TestClient(app)
 
@@ -8,7 +11,10 @@ client = TestClient(app)
 def setup_function() -> None:
     items.clear()
     app.dependency_overrides.clear()
-    import backend_fastapi_todo.main as main_module
+    try:
+        import backend_fastapi_todo.main as main_module
+    except ModuleNotFoundError:
+        import main as main_module
 
     main_module._next_id = 1
 

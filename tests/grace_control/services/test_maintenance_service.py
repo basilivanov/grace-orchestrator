@@ -332,3 +332,49 @@ class TestDataclasses:
         d = r.to_dict()
         assert d["ok"] is True
         assert d["bytes_freed_human"] == "1.0 KB"
+
+
+class TestGitServicePreflight:
+    def test_preflight_valid_clean_repo(self, fake_git: Path):
+        from grace_control.services.git_service import GitService
+        git = GitService()
+        res = git.run_preflight(fake_git, require_clean=True, require_sync=False)
+        assert res.success is True
+        assert res.is_git_repo is True
+        assert res.working_tree_clean is True
+        assert res.current_branch == "main"
+        assert res.local_head != ""
+
+    def test_preflight_dirty_repo(self, fake_git: Path):
+        from grace_control.services.git_service import GitService
+        git = GitService()
+        # Make target repo dirty by writing an untracked file
+        (fake_git / "dirty.txt").write_text("dirty content")
+        
+        # When require_clean=True, must fail
+        res = git.run_preflight(fake_git, require_clean=True, require_sync=False)
+        assert res.success is False
+        assert "uncommitted changes" in res.error
+        assert res.working_tree_clean is False
+
+        # When require_clean=False, must pass
+        res_no_clean = git.run_preflight(fake_git, require_clean=False, require_sync=False)
+        assert res_no_clean.success is True
+        assert res_no_clean.working_tree_clean is False
+
+    def test_preflight_non_git_dir(self, tmp_path: Path):
+        from grace_control.services.git_service import GitService
+        git = GitService()
+        non_git = tmp_path / "nongit"
+        non_git.mkdir()
+        res = git.run_preflight(non_git)
+        assert res.success is False
+        assert "requires execution.target_repo_root" in res.error
+        assert res.is_git_repo is False
+
+    def test_preflight_missing_dir(self):
+        from grace_control.services.git_service import GitService
+        git = GitService()
+        res = git.run_preflight(Path("/nonexistent/path"))
+        assert res.success is False
+        assert "does not exist" in res.error

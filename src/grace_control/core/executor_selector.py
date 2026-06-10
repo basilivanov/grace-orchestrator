@@ -18,6 +18,15 @@ from grace_control.config.agent_profiles import AgentProfile, load_agent_profile
 
 
 def select_executor(role: str, attempt: int = 1) -> dict[str, Any]:
+    import os
+    from grace_control.config.agent_profiles import get_agent_profile
+    if role == "coder":
+        live_profile = os.environ.get("GRACE_LIVE_EXECUTOR_PROFILE")
+        if live_profile:
+            match = get_agent_profile(live_profile)
+            if match:
+                return match.to_dict()
+
     profiles = list(load_agent_profiles().values())
     if not profiles:
         return {"executor_id": "default", "model": "gemini-3.5-flash",

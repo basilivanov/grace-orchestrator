@@ -347,7 +347,14 @@ class PacketExecutionAdapter:
                         rn = int(run_id.rsplit("-R", 1)[-1])
                     except ValueError:
                         rn = None
-                self._terminal_cleanup.run(packet_id=packet_id, attempt=rn)
+
+                workspace_mode = executor.get("workspace_mode") or settings.workspace_mode or "full_git_worktree"
+                if executor.get("minimal_repo"):
+                    workspace_mode = "scoped_copy"
+
+                effective_target_root = Path(settings.target_repo_root or self.project_root) if workspace_mode == "target_repo_worktree" else self.project_root
+
+                self._terminal_cleanup.run(packet_id=packet_id, attempt=rn, project_root=effective_target_root)
             except Exception as e:
                 _log.warn("terminal_cleanup_exception",
                     packet_id=packet_id, state=status, error=str(e)[:200])
@@ -368,35 +375,47 @@ class PacketExecutionAdapter:
                 parts = run_id.rsplit("-R", 1)
                 if len(parts) == 2:
                     pkt, rn = parts[0], int(parts[1])
-                    self._terminal_cleanup.run(pkt, attempt=rn)
+                    effective_target_root = Path(settings.target_repo_root or self.project_root) if settings.workspace_mode == "target_repo_worktree" else self.project_root
+                    self._terminal_cleanup.run(pkt, attempt=rn, project_root=effective_target_root)
             except Exception:
                 pass
         return er
 
     async def _call_executor(self, packet_path: Path, packet_contract, attempt: int,
                              base_ref: str, base_sha: str, executor: dict, evidence_dir: Path | None = None):
+        _preflight_result = None
         from grace_control.agent.backend import ExecutionRequest
         from grace_control.services.git_service import GitService
         pid = packet_path.parent.name
         eff = packet_contract.allowed_write_scope; slug = _attempt_slug(pid, attempt)
-        wt_path = self.worktree_root / slug
         branch = _attempt_branch(pid, attempt)
 
-        # Clean up any stale worktree/branch from a previous attempt.
-        self._worktree_cleanup.cleanup_attempt(
-            self.project_root, slug, worktree_root=self.worktree_root)
+        from grace_control.config.settings import settings as _s
+        workspace_mode = executor.get("workspace_mode") or _s.workspace_mode or "full_git_worktree"
+        is_minimal = executor.get("minimal_repo", False)
+        if is_minimal:
+            workspace_mode = "scoped_copy"
+
+        target_root = Path(_s.target_repo_root or self.project_root)
+        wt_root = Path(_s.worktree_root or self.worktree_root)
+        wt_path = wt_root / slug
+
+        # Warn if worktree path is inside GRACE repo for real-project mode
+        if workspace_mode == "target_repo_worktree":
+            try:
+                wt_path.resolve().relative_to(self.project_root.resolve())
+                _log.warn("worktree_inside_grace_repo", worktree=str(wt_path))
+            except ValueError:
+                pass
 
         git = GitService()
-        is_minimal = executor.get("minimal_repo", False)
 
-        if is_minimal:
-            from grace_control.config.settings import settings as _s
+        if workspace_mode == "scoped_copy":
             from grace_control.services.agent_workspace_builder import AgentWorkspaceBuilder
-            target_root = Path(_s.target_repo_root or self.project_root)
             builder = AgentWorkspaceBuilder(target_root=target_root)
             ws = builder.build_scoped_copy(
                 scope_paths=list(eff or []),
-                workspace_root=self.worktree_root,
+                workspace_root=wt_root,
                 slug=slug,
                 config_allowlist=["pyproject.toml"],
             )
@@ -405,8 +424,60 @@ class PacketExecutionAdapter:
             branch = f"minimal-{slug}"
             _workspace_result = ws
             add_result = type("Result", (), {"success": True, "stderr": ""})()
+        elif workspace_mode == "target_repo_worktree":
+            # Preflight checks
+            preflight = git.run_preflight(
+                target_root,
+                require_clean=_s.require_clean_target_repo,
+                require_sync=_s.require_remote_sync,
+                base_branch=base_ref,
+                remote=_s.git_remote,
+            )
+            _preflight_result = preflight
+            if not preflight.success:
+                _log.warn("target_repo_preflight_failed", error=preflight.error)
+                from grace_control.agent.backend import ExecutionResult as _ER
+                er = _ER(
+                    accepted=False,
+                    domain_status="failed",
+                    worktree_path=wt_path,
+                    branch_name=branch,
+                    commit_sha="",
+                    stdout="",
+                    stderr=preflight.error,
+                    duration_ms=0,
+                    errors=[preflight.error],
+                )
+                er.evidence["target_repo_preflight"] = preflight.to_dict()
+                return er
+
+            # Clean up target repo worktree/branch
+            self._worktree_cleanup.cleanup_attempt(
+                target_root, slug, worktree_root=wt_root)
+
+            # 2.3: if the branch still exists after cleanup, force-delete it in target repo
+            branch_check = git._run(["branch", "--list", branch], target_root)
+            if branch_check.stdout.strip():
+                git._run(["branch", "-D", branch], target_root)
+                _log.info("stale_branch_deleted", branch=branch, packet_id=pid)
+
+            from grace_control.services.agent_workspace_builder import AgentWorkspaceBuilder
+            builder = AgentWorkspaceBuilder(target_root=target_root)
+            ws = builder.build_target_repo_worktree(
+                workspace_root=wt_root,
+                slug=slug,
+                branch=branch,
+                base_ref=base_ref,
+            )
+            wt_path = ws.workspace_path
+            base_sha = ws.base_sha
+            _workspace_result = ws
+            add_result = type("Result", (), {"success": True, "stderr": ""})()
         else:
             _workspace_result = None
+            # Clean up GRACE repo worktree/branch
+            self._worktree_cleanup.cleanup_attempt(
+                self.project_root, slug, worktree_root=self.worktree_root)
             # 2.3: if the branch still exists after cleanup, force-delete it
             branch_check = git._run(["branch", "--list", branch], self.project_root)
             if branch_check.stdout.strip():
@@ -527,9 +598,14 @@ class PacketExecutionAdapter:
                 "fork": fork,
                 "prev_internal_id": prev_internal_id,
             }
-        # Persist workspace report in evidence when minimal mode was used
+        # Persist workspace report in evidence
         if _workspace_result is not None:
             result.evidence["workspace"] = _workspace_result.to_dict()
+        elif workspace_mode == "full_git_worktree":
+            result.evidence["workspace"] = {"workspace_mode": "full_git_worktree"}
+        # Persist preflight report if it exists
+        if _preflight_result is not None:
+            result.evidence["target_repo_preflight"] = _preflight_result.to_dict()
         return result
 
     def _build_dev_replay_metadata(

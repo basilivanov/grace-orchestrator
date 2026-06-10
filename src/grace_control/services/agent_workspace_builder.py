@@ -172,3 +172,47 @@ class AgentWorkspaceBuilder:
         # Get the initial commit SHA
         sha_result = git._run(["rev-parse", "HEAD"], repo_path)
         return sha_result.stdout.strip() or ""
+
+    def build_target_repo_worktree(
+        self,
+        workspace_root: Path,
+        slug: str,
+        branch: str,
+        base_ref: str,
+    ) -> WorkspaceResult:
+        """Create a git worktree from target repo root.
+
+        Args:
+            workspace_root: Root directory for workspaces.
+            slug: Unique directory name inside workspace_root.
+            branch: Branch name to create in target repo.
+            base_ref: Base ref (e.g. main/commit) to branch from in target repo.
+
+        Returns:
+            WorkspaceResult.
+        """
+        wt_path = (workspace_root / slug).resolve()
+        if wt_path.exists():
+            shutil.rmtree(wt_path)
+
+        from grace_control.services.git_service import GitService
+        git = GitService()
+
+        # Resolve target repo base SHA
+        base_sha_res = git._run(["rev-parse", base_ref], self._target_root)
+        base_sha = base_sha_res.stdout.strip() if base_sha_res.success else ""
+
+        # Create target repo worktree
+        res = git.worktree_add(self._target_root, wt_path, branch, base_ref=base_ref)
+        if not res.success:
+            raise RuntimeError(f"Failed to create target repo worktree: {res.stderr}")
+
+        return WorkspaceResult(
+            workspace_path=wt_path,
+            workspace_mode="target_repo_worktree",
+            target_repo_root=self._target_root,
+            base_sha=base_sha,
+            copied_files=[],
+            omitted_files=[],
+            commit_semantics="target_repo_commit",
+        )

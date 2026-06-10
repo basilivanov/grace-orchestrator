@@ -580,3 +580,158 @@ class TestEvidenceVerifierReviewerRouting:
             assert "evidence" in legacy
             assert "context_builder" in legacy["evidence"]
             assert legacy["evidence"]["context_builder"]["skipped"] is False
+
+
+class TestCallExecutorTargetRepoWorktree:
+    @pytest.mark.asyncio
+    @patch("grace_control.services.git_service.GitService.run_preflight")
+    @patch("grace_control.services.agent_workspace_builder.AgentWorkspaceBuilder.build_target_repo_worktree")
+    @patch("grace_control.services.worktree_cleanup_service.WorktreeCleanupService.cleanup_attempt")
+    @patch("grace_control.agent.backend.ExecutionBackend.run")
+    async def test_call_executor_target_repo_worktree(self, mock_backend_run, mock_cleanup, mock_build, mock_preflight, tmp_path):
+        from grace_control.adapters.packet_executor import PacketExecutionAdapter
+        from grace_control.core.contracts import build_packet_contract
+        from grace_control.services.git_service import PreflightResult
+        from grace_control.services.agent_workspace_builder import WorkspaceResult
+        from grace_control.agent.backend import ExecutionResult as BackendExecutionResult
+
+        # Mock preflight to pass
+        mock_preflight.return_value = PreflightResult(
+            success=True,
+            is_git_repo=True,
+            working_tree_clean=True,
+            current_branch="main",
+            local_head="123456",
+        )
+
+        # Mock workspace builder to return fake WorkspaceResult
+        wt_path = tmp_path / "worktree"
+        wt_path.mkdir()
+        mock_build.return_value = WorkspaceResult(
+            workspace_path=wt_path,
+            workspace_mode="target_repo_worktree",
+            target_repo_root=tmp_path / "target",
+            base_sha="123456",
+            commit_semantics="target_repo_commit",
+        )
+
+        # Mock backend run
+        mock_backend_run.return_value = BackendExecutionResult(
+            accepted=True,
+            domain_status="completed",
+            worktree_path=wt_path,
+            branch_name="agent/test",
+            commit_sha="abcdef",
+            stdout="run ok",
+            stderr="",
+            duration_ms=100,
+        )
+
+        # Initialize adapter
+        project_dir = tmp_path / "project"
+        project_dir.mkdir(parents=True, exist_ok=True)
+        from grace_control.services.git_service import GitService as _GS
+        git_init = _GS()
+        git_init._run(["init", "-q"], project_dir)
+        git_init._run(["config", "user.email", "test@grace"], project_dir)
+        git_init._run(["config", "user.name", "Test Agent"], project_dir)
+        (project_dir / "README.md").write_text("init")
+        git_init._run(["add", "."], project_dir)
+        git_init._run(["commit", "-q", "-m", "init"], project_dir)
+
+        adapter = PacketExecutionAdapter(
+            project_root=project_dir,
+            state_root=tmp_path / "state",
+            worktree_root=tmp_path / "worktrees",
+            backend=MagicMock(),
+        )
+        adapter._backend.run = mock_backend_run
+
+        packet_path = tmp_path / "pkt-001" / "EXECUTION_PACKET.md"
+        packet_path.parent.mkdir(parents=True, exist_ok=True)
+        packet_path.write_text("packet content")
+
+        pkt_contract = build_packet_contract({
+            "id": "pkt-001",
+            "spec_json": {"scope": ["src/"]},
+        })
+
+        executor = {
+            "executor_id": "coder-opencode",
+            "workspace_mode": "target_repo_worktree",
+        }
+
+        # Call _call_executor
+        result = await adapter._call_executor(
+            packet_path=packet_path,
+            packet_contract=pkt_contract,
+            attempt=1,
+            base_ref="main",
+            base_sha="123456",
+            executor=executor,
+            evidence_dir=tmp_path / "evidence",
+        )
+
+        # Assertions
+        assert result.accepted is True
+        assert "workspace" in result.evidence
+        assert result.evidence["workspace"]["workspace_mode"] == "target_repo_worktree"
+        assert result.evidence["workspace"]["commit_semantics"] == "target_repo_commit"
+        assert "target_repo_preflight" in result.evidence
+        assert result.evidence["target_repo_preflight"]["working_tree_clean"] is True
+
+        # Assert correct cleanup_attempt call
+        mock_cleanup.assert_called_once()
+        mock_build.assert_called_once()
+        mock_preflight.assert_called_once()
+
+    @patch("grace_control.adapters.packet_executor.run_reviewer_gate")
+    @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
+    @patch("grace_control.adapters.packet_executor.get_db")
+    @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
+    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_executor")
+    async def test_target_repo_worktree_cleanup_on_rework(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer, tmp_path):
+        """target_repo_worktree: rejected -> cleanup executes on target_repo_root."""
+        # Create temp dirs representing project and target repo roots
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        target_dir = tmp_path / "target"
+        target_dir.mkdir()
+
+        # Set target_repo_root in settings override
+        from grace_control.config.settings import settings
+        with patch("grace_control.core.cleanup_on_state.TerminalStateCleanup.run") as mock_cleanup_run, \
+             patch.object(settings, "workspace_mode", "target_repo_worktree"), \
+             patch.object(settings, "target_repo_root", str(target_dir)):
+            
+            mock_legacy.return_value = _FakeLegacyResult(
+                ok=True, domain_status="rework_required",
+                worktree_path=str(tmp_path / "wt"),
+            )
+            mock_pipeline.return_value = _make_rework_report()
+            mock_verifier.return_value = _make_verifier_rework()
+            
+            # Setup db mocks
+            mock_run = _make_mock_packet_run()
+            side_effect_values = [
+                _make_mock_packet(attempt_count=1, profile="NORMAL"),
+                None,
+                mock_run,
+            ]
+            mock_get_db.return_value.__enter__.return_value.query.return_value.filter_by.return_value.first.side_effect = side_effect_values
+
+            adapter = PacketExecutionAdapter(
+                project_root=project_dir,
+                state_root=tmp_path / "state",
+                worktree_root=tmp_path / "worktrees",
+                backend=MagicMock(),
+            )
+            
+            # We must pass the mock_resolve mock because resolve_executor is called
+            # and we want to ensure settings.workspace_mode is used, which is target_repo_worktree.
+            await adapter.execute("pkt-001", "w1")
+
+            # Check that TerminalStateCleanup.run was called with target_dir
+            mock_cleanup_run.assert_called_once()
+            _, kwargs = mock_cleanup_run.call_args
+            assert kwargs["project_root"] == target_dir

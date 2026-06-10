@@ -98,6 +98,7 @@ class TerminalStateCleanup:
         packet_id: str,
         attempt: int | None = None,
         max_attempts: int = 10,
+        project_root: Path | None = None,
     ) -> CleanupResult:
         """Run cleanup for a packet that has reached a terminal state.
 
@@ -108,6 +109,7 @@ class TerminalStateCleanup:
                          pattern + scans worktree dirs 1..max_attempts).
             max_attempts: When `attempt` is None, scan worktree dirs for
                           attempts 1..max_attempts. Default 10.
+            project_root: Optional target project root override.
 
         Returns:
             CleanupResult — never raises. Check `result.errors` to see if
@@ -115,10 +117,11 @@ class TerminalStateCleanup:
         """
         result = CleanupResult()
         pattern = self._branch_pattern(packet_id, attempt)
+        repo_root = Path(project_root).resolve() if project_root else self.project_root
 
         # Step 1: list branches matching the pattern.
         list_result = self._git._run(
-            ["branch", "--list", pattern], self.project_root
+            ["branch", "--list", pattern], repo_root
         )
         if not list_result.success:
             result.errors.append(
@@ -134,7 +137,7 @@ class TerminalStateCleanup:
             branches = self._parse_branch_list(list_result.stdout)
             for branch in branches:
                 del_result = self._git._run(
-                    ["branch", "-D", branch], self.project_root
+                    ["branch", "-D", branch], repo_root
                 )
                 if del_result.success:
                     result.branches_deleted.append(branch)
@@ -167,7 +170,7 @@ class TerminalStateCleanup:
             wt = self.worktree_root / slug
             if not wt.exists():
                 continue
-            removed = self._remove_worktree(wt, slug, packet_id, result)
+            removed = self._remove_worktree(wt, slug, packet_id, result, repo_root=repo_root)
             if removed:
                 result.worktree_removed = True
 
@@ -215,16 +218,18 @@ class TerminalStateCleanup:
         slug: str,
         packet_id: str,
         result: CleanupResult,
+        repo_root: Path | None = None,
     ) -> bool:
         """Best-effort: `git worktree remove` + `shutil.rmtree` fallback.
 
         Returns True if the worktree dir was actually removed.
         """
         removed = False
+        target_repo = repo_root or self.project_root
         # First try git worktree remove (unregisters from .git/worktrees/).
         try:
             remove_result = self._git.worktree_remove(
-                self.project_root, wt, force=True
+                target_repo, wt, force=True
             )
             if not remove_result.success:
                 # Not fatal — proceed with rmtree.

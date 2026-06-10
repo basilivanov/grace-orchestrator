@@ -65,6 +65,9 @@ class GraceSettings(BaseSettings):
     context_timeout_seconds: int = 60
     state_root: str = ".grace/state"
     worktree_root: str = ".grace/worktrees"
+    workspace_mode: str = "full_git_worktree"
+    require_clean_target_repo: bool = True
+    require_remote_sync: bool = False
     sandbox_mode: str = "danger-full-access"
     allow_sandbox_bypass: bool = False
     execution_backend: str = "cli"  # "cli" | "api" | "mock" — see grace_control.agent.select_backend
@@ -143,6 +146,9 @@ def _apply_project_fallbacks(target: GraceSettings, project: ProjectConfig) -> N
         "agent_timeout_seconds": project.execution.timeout_seconds,
         "state_root": project.execution.state_root,
         "worktree_root": project.execution.worktree_root,
+        "workspace_mode": project.execution.workspace_mode,
+        "require_clean_target_repo": project.execution.require_clean_target_repo,
+        "require_remote_sync": project.execution.require_remote_sync,
         "execution_backend": project.execution.backend,
         "sandbox_mode": project.safety.sandbox_mode,
         "opencode_server_url": project.opencode.server_url,

@@ -74,6 +74,9 @@ class ExecutionSection(BaseModel):
     # Leave empty to use GRACE_PROJECT_ROOT / cwd (self-hosted mode).
     # Set explicitly when grace-orchestrator runs on a *different* project.
     target_repo_root: str = ""
+    workspace_mode: str = "full_git_worktree"
+    require_clean_target_repo: bool = True
+    require_remote_sync: bool = False
 
 
 class SafetySection(BaseModel):
