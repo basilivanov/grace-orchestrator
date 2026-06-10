@@ -311,6 +311,60 @@ attempts: {{ p.attempt_count }}/{{ p.max_attempts }}"
         </div>
       </section>
 
+      {# ── Current Run block ───────────────────────────────────────────── #}
+      {% set last_stage = stages | last_skippable_stage %}
+      <section class="current-run">
+        <h2 class="pipeline-h">CURRENT RUN</h2>
+        <div class="pkt-meta-block">
+          <div class="pkt-meta-row">
+            <span class="pkt-meta-label">attempt</span>
+            <span class="pkt-meta-value mono">{{ p_attempt }}/{{ p_max_attempts }}</span>
+          </div>
+          <div class="pkt-meta-row">
+            <span class="pkt-meta-label">state</span>
+            <span class="pkt-meta-value">
+              {% if p_ui.show == 'badge' %}
+                <span class="badge severity-{{ p_ui.severity }}">{{ p_ui.label }}</span>
+              {% else %}
+                <span class="muted">{{ p_ui.label }}</span>
+              {% endif %}
+            </span>
+          </div>
+          <div class="pkt-meta-row">
+            <span class="pkt-meta-label">worker</span>
+            <span class="pkt-meta-value mono">{{ p_worker or '—' }}</span>
+          </div>
+          <div class="pkt-meta-row">
+            <span class="pkt-meta-label">model</span>
+            <span class="pkt-meta-value mono">{{ p.model or '—' }}</span>
+          </div>
+          <div class="pkt-meta-row">
+            <span class="pkt-meta-label">started</span>
+            <span class="pkt-meta-value mono">{% if p_started %}{{ p_started | fmt_time_short }}{% else %}—{% endif %}</span>
+          </div>
+          <div class="pkt-meta-row">
+            <span class="pkt-meta-label">elapsed</span>
+            <span class="pkt-meta-value mono">
+              {%- if p.is_running and p_started %}{{ p_started | fmt_elapsed_since }}
+              {%- elif p_duration %}{{ p_duration | fmt_duration }}
+              {%- else %}—{% endif -%}
+            </span>
+          </div>
+          <div class="pkt-meta-row">
+            <span class="pkt-meta-label">finished</span>
+            <span class="pkt-meta-value mono">
+              {%- if p_finished and not p.is_running %}{{ p_finished | fmt_time_short }}
+              {%- elif p.is_running %}—
+              {%- else %}—{% endif -%}
+            </span>
+          </div>
+          <div class="pkt-meta-row">
+            <span class="pkt-meta-label">stage</span>
+            <span class="pkt-meta-value">{{ last_stage.label if last_stage else '—' }}</span>
+          </div>
+        </div>
+      </section>
+
       {# ── Needs attention (calm, replaces "Why it failed") ──────────── #}
       {% set bd = p.blocking_decision or {} %}
       {% if bd.has_blocking %}

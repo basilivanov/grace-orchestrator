@@ -1671,6 +1671,69 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
    don't render the old transition timeline. */
 .state-machine { display: none; }
 
+/* ── Current Run block ────────────────────────────────────────────────── */
+.current-run {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  padding: 10px 14px;
+}
+.current-run .pkt-meta-block {
+  border: none;
+  padding: 0;
+  margin-top: 4px;
+}
+.current-run .pkt-meta-label {
+  min-width: 64px;
+}
+
+/* Left-pane packet cards: more fields in a compact row */
+.tn-packet {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  cursor: pointer;
+  font-size: 11px;
+  border-left: 2px solid transparent;
+  margin-left: -1px;
+  color: var(--fg-2);
+  flex-wrap: wrap;
+}
+.tn-packet .pkt-title {
+  flex: 1 1 auto;
+  min-width: 60px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tn-packet .pkt-stage {
+  font-size: 10px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  order: 2;
+}
+.tn-packet .pkt-attempts {
+  font-size: 10px;
+  flex-shrink: 0;
+}
+.tn-packet .pkt-time {
+  font-size: 10px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.tn-packet .pkt-duration {
+  font-size: 10px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.tn-packet .pkt-size {
+  font-size: 10px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
 /* ── Wave details mode (right pane when only wave_id is selected) ──── */
 .wave-head-bar {
   display: flex;

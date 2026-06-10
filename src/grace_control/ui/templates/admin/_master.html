@@ -73,7 +73,10 @@ attempts: {{ p.attempt_count }}/{{ p.max_attempts }}"
                    hx-on:click="event.stopPropagation()">
                 <span class="dot" aria-hidden="true"></span>
                 <span class="pkt-title">{{ p.title or p.slug or p.id }}</span>
+                <span class="pkt-stage muted">{{ p.stage.label or '—' }}</span>
                 <span class="pkt-attempts muted">{{ p.attempt_count }}/{{ p.max_attempts }}</span>
+                {% if p.started_at %}<span class="pkt-time muted">{{ p.started_at | fmt_time_short }}</span>{% endif %}
+                {% if p.duration_seconds %}<span class="pkt-duration muted">{{ p.duration_seconds | fmt_duration }}</span>{% endif %}
                 {% if p.size_bytes %}<span class="pkt-size muted" title="Run artifacts size">{{ p.size_bytes | fmt_size }}</span>{% endif %}
               </div>
               {% endif %}

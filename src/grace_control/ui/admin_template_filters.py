@@ -155,6 +155,48 @@ def _is_placeholder_title(title: str | None) -> bool:
     return False
 
 
+def fmt_elapsed_since(iso: str | None) -> str:
+    """Jinja filter: compute elapsed time from an ISO datetime to now.
+
+    Usage: {{ p.started_at | fmt_elapsed_since }}
+    Returns human-readable duration like "00:31:42" or "5m 12s".
+    """
+    if not iso:
+        return "—"
+    try:
+        s = iso.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        elapsed = datetime.now(timezone.utc) - dt
+        total = int(elapsed.total_seconds())
+        if total < 0:
+            return "0s"
+        h, m = divmod(total, 3600)
+        m, s = divmod(m, 60)
+        if h:
+            return f"{h}h {m}m"
+        if m:
+            return f"{m}m {s}s"
+        return f"{s}s"
+    except (ValueError, AttributeError):
+        return "—"
+
+
+def last_skippable_stage(stages: list[dict] | None) -> dict | None:
+    """Jinja filter: return the last non-skipped stage, or the first stage.
+
+    Usage: {{ pipeline.stages | last_skippable_stage }}
+    Returns None if stages list is empty/missing.
+    """
+    if not stages:
+        return None
+    for s in reversed(stages):
+        if s.get("status") not in ("skipped", "pending"):
+            return s
+    return stages[-1] if stages else None
+
+
 def display_title(title: str | None, kind: str = "feature") -> dict[str, str]:
     """Jinja filter: returns a dict suitable for rendering titles.
 
@@ -498,6 +540,8 @@ def register(env: Any) -> None:
     env.filters["fmt_duration_ms"] = fmt_duration_ms
     env.filters["fmt_size"] = fmt_size
     env.filters["fmt_time_short"] = fmt_time_short
+    env.filters["fmt_elapsed_since"] = fmt_elapsed_since
+    env.filters["last_skippable_stage"] = last_skippable_stage
     env.filters["safe_str"] = safe_str
     env.filters["display_title"] = display_title
     env.globals["shell_url"] = shell_url
