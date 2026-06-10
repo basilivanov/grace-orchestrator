@@ -90,6 +90,23 @@ class PacketExecutionAdapter:
             result = await self._call_executor(packet_path, pkt_contract, run_number, base_ref, base_sha, executor, evidence_dir)
             _log.debug("executor_run_completed", packet_id=packet_id, ok=result.ok, errors=result.errors[:2])
 
+            if not hasattr(result, "evidence") or result.evidence is None:
+                result.evidence = {}
+            skip_context = executor.get("skip_context_builder", False)
+            if skip_context:
+                _log.info("context_builder_skipped", packet_id=packet_id,
+                          executor_id=executor.get("executor_id", ""),
+                          reason="executor.skip_context_builder")
+                result.evidence["context_builder"] = {
+                    "skipped": True,
+                    "reason": "executor.skip_context_builder=true",
+                    "executor_id": executor.get("executor_id", ""),
+                }
+            else:
+                result.evidence["context_builder"] = {
+                    "skipped": False
+                }
+
             wt_ok, agent_commit_sha = self._inspected_worktree(result, pkt_contract, packet_id, packet_data["attempt_count"])
             if not wt_ok: return self._fast_reject("Worktree issue", executor.get("executor_id",""), run_id, start)
 

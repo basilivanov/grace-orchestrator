@@ -18,18 +18,20 @@ from grace_control.core.contracts import (
 
 
 class _FakeLegacyResult:
-    def __init__(self, ok=True, domain_status="accepted", worktree_path=None, branch_name="agent/test"):
+    def __init__(self, ok=True, domain_status="accepted", worktree_path=None, branch_name="agent/test", evidence=None):
         self.ok = ok
         self.domain_status = domain_status
         self.worktree_path = worktree_path
         self.branch_name = branch_name
+        self.evidence = evidence or {}
         self.errors = []
         self.registry_reason = ""
         self.managed_runner_result = {}
 
     def to_dict(self):
         return {"ok": self.ok, "domain_status": self.domain_status,
-                "worktree_path": self.worktree_path, "branch_name": self.branch_name}
+                "worktree_path": self.worktree_path, "branch_name": self.branch_name,
+                "evidence": self.evidence}
 
 
 class _FakeBackend:
@@ -522,3 +524,59 @@ class TestEvidenceVerifierReviewerRouting:
         mock_verifier.assert_not_called()
         mock_reviewer.assert_not_called()
         assert result.domain_status == "rework_required"
+
+    @patch("grace_control.adapters.packet_executor.run_reviewer_gate")
+    @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
+    @patch("grace_control.adapters.packet_executor.get_db")
+    @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
+    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_executor")
+    async def test_skip_context_builder_in_evidence(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
+        """skip_context_builder: true -> records skip in evidence."""
+        # Mock _resolve_executor to return skip_context_builder=True
+        with patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._resolve_executor") as mock_resolve:
+            mock_resolve.return_value = {
+                "executor_id": "coder-opencode-fixture",
+                "backend": "cli",
+                "skip_context_builder": True,
+            }
+            # Set up mock run
+            mock_run = _make_mock_packet_run()
+            result = await _run_adapter_test(
+                mock_legacy, mock_get_db, mock_pipeline,
+                pipeline_report=_make_accepted_report(),
+                expect_accepted=True,
+                existing_run=mock_run,
+                mock_verifier=mock_verifier, mock_reviewer=mock_reviewer,
+            )
+            # The session store save was called; result_json legacy_result has context_builder
+            legacy = mock_run.result_json.get("legacy_result", {})
+            assert "evidence" in legacy
+            assert "context_builder" in legacy["evidence"]
+            assert legacy["evidence"]["context_builder"]["skipped"] is True
+            assert legacy["evidence"]["context_builder"]["reason"] == "executor.skip_context_builder=true"
+            assert legacy["evidence"]["context_builder"]["executor_id"] == "coder-opencode-fixture"
+
+    @patch("grace_control.adapters.packet_executor.run_reviewer_gate")
+    @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
+    @patch("grace_control.adapters.packet_executor.get_db")
+    @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
+    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_executor")
+    async def test_no_skip_context_builder_in_evidence(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
+        """skip_context_builder: absent/false -> records skipped: false in evidence."""
+        with patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._resolve_executor") as mock_resolve:
+            mock_resolve.return_value = {
+                "executor_id": "coder-opencode",
+                "backend": "cli",
+            }
+            mock_run = _make_mock_packet_run()
+            result = await _run_adapter_test(
+                mock_legacy, mock_get_db, mock_pipeline,
+                pipeline_report=_make_accepted_report(),
+                expect_accepted=True,
+                existing_run=mock_run,
+                mock_verifier=mock_verifier, mock_reviewer=mock_reviewer,
+            )
+            legacy = mock_run.result_json.get("legacy_result", {})
+            assert "evidence" in legacy
+            assert "context_builder" in legacy["evidence"]
+            assert legacy["evidence"]["context_builder"]["skipped"] is False
