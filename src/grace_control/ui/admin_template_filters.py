@@ -243,7 +243,6 @@ def pipeline_visible_rows(
             if "NORMAL" in meta.upper():
                 skipped_normal.append(label)
                 continue
-            # non-NORMAL skipped: keep as-is
 
         row = {
             "label": s.get("label", ""),
@@ -253,12 +252,16 @@ def pipeline_visible_rows(
             "duration_ms": s.get("duration_ms", 0),
             "meta": meta,
             "target_tab": s.get("target_tab", "events"),
+            "icon": _pipeline_icon(status),
         }
 
         # Derive display fields
         row["status_label"] = _pipeline_status_label(status)
         row["time_range"] = _pipeline_time_range(
             s.get("started_at"), s.get("finished_at"), status
+        )
+        row["duration_label"] = _pipeline_duration(
+            s.get("duration_ms", 0), s.get("started_at"), s.get("finished_at"), status
         )
         row["duration_label"] = _pipeline_duration(
             s.get("duration_ms", 0), s.get("started_at"), s.get("finished_at"), status
@@ -283,11 +286,13 @@ def pipeline_visible_rows(
             "status_label": "Skipped",
             "time_range": "—",
             "duration_label": "—",
+            "icon": "—",
         })
 
     # Add terminal state row if needed
     if packet_state in ("cancelled", "rejected", "failed", "accepted", "merged", "blocked", "blocked_final"):
         if not terminal_shown and packet_state != "accepted":
+            packets_in_state = ("cancelled", "rejected", "failed")
             out.append({
                 "label": "Final state",
                 "status": "done" if packet_state in ("accepted", "merged") else "failed",
@@ -299,6 +304,7 @@ def pipeline_visible_rows(
                 "status_label": _pipeline_status_label(packet_state),
                 "time_range": "—",
                 "duration_label": "—",
+                "icon": _pipeline_icon(packet_state if packet_state in packets_in_state else "done"),
             })
 
     return out
@@ -314,6 +320,20 @@ _STAGE_STATUS_LABELS = {
 
 def _pipeline_status_label(status: str) -> str:
     return _STAGE_STATUS_LABELS.get(status, status.capitalize())
+
+
+def _pipeline_icon(status: str) -> str:
+    return {
+        "done": "✓",
+        "running": "●",
+        "failed": "✕",
+        "skipped": "—",
+        "pending": "○",
+        "cancelled": "✕",
+        "rejected": "✕",
+        "accepted": "✓",
+        "merged": "✓",
+    }.get(status, "○")
 
 
 def _pipeline_time_range(

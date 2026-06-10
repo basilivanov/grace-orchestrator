@@ -456,6 +456,7 @@ def test_packet_detail_template_smoke(client):
     html = r.text
     assert "Pipeline" in html
     assert "CURRENT RUN" in html
+    assert "pipeline-stage-card" in html
     assert "Materialized" in html
     assert "Executor selected" in html
     assert "Coder run" in html
