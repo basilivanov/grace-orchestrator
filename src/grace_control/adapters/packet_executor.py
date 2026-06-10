@@ -386,8 +386,10 @@ class PacketExecutionAdapter:
             wt_path = ws.workspace_path
             base_sha = ws.base_sha
             branch = f"minimal-{slug}"
+            _workspace_result = ws
             add_result = type("Result", (), {"success": True, "stderr": ""})()
         else:
+            _workspace_result = None
             # 2.3: if the branch still exists after cleanup, force-delete it
             branch_check = git._run(["branch", "--list", branch], self.project_root)
             if branch_check.stdout.strip():
@@ -508,6 +510,9 @@ class PacketExecutionAdapter:
                 "fork": fork,
                 "prev_internal_id": prev_internal_id,
             }
+        # Persist workspace report in evidence when minimal mode was used
+        if _workspace_result is not None:
+            result.evidence["workspace"] = _workspace_result.to_dict()
         return result
 
     def _build_dev_replay_metadata(

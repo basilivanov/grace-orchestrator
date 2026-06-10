@@ -55,7 +55,6 @@ class TestWorkspaceBuilder:
             workspace_root=tmp_path,
             slug="test-ws3",
         )
-        # The workspace is built from target_root, not from the orchestrator root
         files = [str(f.relative_to(ws.workspace_path)) for f in ws.workspace_path.rglob("*") if f.is_file()]
         assert all("grace_control" not in f for f in files)
         assert all("packet_executor" not in f for f in files)
@@ -71,6 +70,7 @@ class TestWorkspaceBuilder:
         assert d["workspace_mode"] == "scoped_copy"
         assert d["base_sha"] != ""
         assert len(d["copied_files"]) >= 1
+        assert d["commit_semantics"] == "workspace_only"
 
     def test_build_scoped_copy_has_base_sha(self, target_root: Path, tmp_path: Path):
         """Minimal repo must have its own base SHA (not from target repo)."""
@@ -86,3 +86,64 @@ class TestWorkspaceBuilder:
     def test_missing_target_root_raises(self):
         with pytest.raises(ValueError, match="does not exist"):
             AgentWorkspaceBuilder(target_root="/nonexistent/path")
+
+    def test_absolute_path_outside_target_omitted(self, target_root: Path, tmp_path: Path):
+        """Paths outside target_root must be omitted, not copied."""
+        outside = tmp_path / "outside.txt"
+        outside.write_text("should not be copied")
+        builder = AgentWorkspaceBuilder(target_root=target_root)
+        ws = builder.build_scoped_copy(
+            scope_paths=["main.py", str(outside)],
+            workspace_root=tmp_path,
+            slug="test-safe1",
+            config_allowlist=[],
+        )
+        # The outside file should NOT be in the workspace
+        workspace_files = [str(f.relative_to(ws.workspace_path)) for f in ws.workspace_path.rglob("*") if f.is_file()]
+        assert all("outside.txt" not in f for f in workspace_files)
+        # And should be in omitted_files
+        assert any("outside_target_root" in o for o in ws.omitted_files)
+
+    def test_traversal_path_omitted(self, target_root: Path, tmp_path: Path):
+        """Paths with .. traversal must be omitted."""
+        builder = AgentWorkspaceBuilder(target_root=target_root)
+        ws = builder.build_scoped_copy(
+            scope_paths=["main.py", "../outside.txt"],
+            workspace_root=tmp_path,
+            slug="test-safe2",
+            config_allowlist=[],
+        )
+        assert any("unsafe_relative_path" in o or "outside_target_root" in o for o in ws.omitted_files)
+
+    def test_empty_scope_raises_value_error(self, target_root: Path, tmp_path: Path):
+        """Empty workspace must raise ValueError."""
+        builder = AgentWorkspaceBuilder(target_root=target_root)
+        with pytest.raises(ValueError, match="no files copied"):
+            builder.build_scoped_copy(
+                scope_paths=[],  # no scope files
+                workspace_root=tmp_path,
+                slug="test-empty",
+                config_allowlist=[],  # no config files either
+            )
+
+    def test_all_missing_paths_raises(self, target_root: Path, tmp_path: Path):
+        """When all scope paths are missing, must raise ValueError."""
+        builder = AgentWorkspaceBuilder(target_root=target_root)
+        with pytest.raises(ValueError, match="no files copied"):
+            builder.build_scoped_copy(
+                scope_paths=["nonexistent.py", "missing/foo.py"],
+                workspace_root=tmp_path,
+                slug="test-missing",
+                config_allowlist=[],
+            )
+
+    def test_omitted_files_empty_when_all_valid(self, target_root: Path, tmp_path: Path):
+        """When all paths are valid, omitted_files should be empty."""
+        builder = AgentWorkspaceBuilder(target_root=target_root)
+        ws = builder.build_scoped_copy(
+            scope_paths=["main.py", "tests/test_main.py"],
+            workspace_root=tmp_path,
+            slug="test-omit-empty",
+            config_allowlist=["pyproject.toml"],
+        )
+        assert ws.omitted_files == []
