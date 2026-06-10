@@ -206,6 +206,7 @@ attempts: {{ p.attempt_count }}/{{ p.max_attempts }}"
       {% set p_duration = p.elapsed_seconds %}
       {% set p_worker = p.worker_id %}
       {% set p_total_size_bytes = p.total_size_bytes or 0 %}
+      {% set p_acceptance_profile = p.packet.acceptance_profile if p.packet else 'NORMAL' %}
       {% set pipeline = p.pipeline or {} %}
       {% set stages = pipeline.stages or [] %}
 
@@ -277,47 +278,24 @@ attempts: {{ p.attempt_count }}/{{ p.max_attempts }}"
         {% endif %}
       </div>
 
-      {# ── GRACE pipeline (replaces state-machine) ───────────────────── #}
+      {# ── GRACE pipeline (vertical timeline/table) ───────────────────── #}
+      {% set pipeline_rows = stages | pipeline_visible_rows(p_state, p_acceptance_profile) %}
       <section class="pipeline-view">
         <h2 class="pipeline-h">Pipeline</h2>
-        <div class="pipeline-stages">
-          {% for s in stages %}
-            <div class="stage stage-{{ s.status }}"
-                 title="click to inspect — opens {{ s.target_tab }} tab"
-                 hx-get="/admin/_partial/tab?packet_id={{ p_packet_id }}&feature_id={{ p_feature_id }}&tab={{ s.target_tab }}"
+        <div class="pipeline-timeline">
+          {% for row in pipeline_rows %}
+            {% set row_sev = row.status | pipeline_severity %}
+            <div class="pipeline-row severity-{{ row_sev }}"
+                 hx-get="/admin/_partial/tab?packet_id={{ p_packet_id }}&feature_id={{ p_feature_id }}&tab={{ row.target_tab }}"
                  hx-target="#packet-tab-content"
                  hx-swap="outerHTML"
-                 hx-push-url="{{ shell_url(feature_id=p_feature_id, packet_id=p_packet_id, tab=s.target_tab) }}"
+                 hx-push-url="{{ shell_url(feature_id=p_feature_id, packet_id=p_packet_id, tab=row.target_tab) }}"
                  style="cursor: pointer;">
-              <div class="stage-status">
-                {% if s.status == 'done' %}✓
-                {% elif s.status == 'failed' %}✕
-                {% elif s.status == 'running' %}●
-                {% elif s.status == 'skipped' %}—
-                {% else %}○{% endif %}
-              </div>
-              <div class="stage-body">
-                <div class="stage-label">{{ s.label }}</div>
-                <div class="stage-meta">
-                  {% if s.meta and s.status != 'running' %}<span>{{ s.meta }}</span>{% endif %}
-                  {% if s.started_at and s.status != 'skipped' and s.status != 'pending' %}
-                    <span class="stage-timing">
-                      {% if s.finished_at %}
-                        {{ s.started_at | fmt_time_short }} → {{ s.finished_at | fmt_time_short }}
-                      {% elif s.status == 'running' %}
-                        {{ s.started_at | fmt_time_short }} → now
-                      {% else %}
-                        {{ s.started_at | fmt_time_short }}
-                      {% endif %}
-                    </span>
-                  {% endif %}
-                  {% if s.status == 'running' and s.started_at %}
-                    <span class="stage-elapsed">{{ s.started_at | fmt_elapsed_since }}</span>
-                  {% elif s.duration_ms and s.duration_ms > 0 %}
-                    <span class="muted small"> · {{ s.duration_ms | fmt_duration_ms }}</span>
-                  {% endif %}
-                </div>
-              </div>
+              <div class="pipeline-row-status">{{ row.status_label }}</div>
+              <div class="pipeline-row-stage">{{ row.label }}</div>
+              <div class="pipeline-row-time mono">{{ row.time_range }}</div>
+              <div class="pipeline-row-duration mono">{{ row.duration_label }}</div>
+              <div class="pipeline-row-meta">{{ row.meta }}</div>
             </div>
           {% endfor %}
         </div>

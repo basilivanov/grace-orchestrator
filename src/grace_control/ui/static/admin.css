@@ -1417,12 +1417,92 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 }
 .mono { font-family: var(--mono); }
 
-/* Pipeline view: GRACE operator pipeline. Replaces state-machine. */
+/* Pipeline view: vertical timeline/table. Replaces old horizontal cards. */
 .pipeline-view {
   background: var(--bg-2);
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 10px 14px;
+}
+.pipeline-h {
+  margin: 0 0 8px 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-2);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.pipeline-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.pipeline-row {
+  display: grid;
+  grid-template-columns: 88px minmax(160px, 1.2fr) minmax(190px, 1fr) 100px minmax(180px, 1fr);
+  gap: 12px;
+  align-items: center;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-2);
+  border-radius: 6px;
+  background: var(--bg-2);
+  transition: background 0.1s, border-color 0.1s;
+  font-size: 12px;
+}
+.pipeline-row:hover { background: var(--bg-3); border-color: var(--border-2); }
+.pipeline-row.severity-ok { border-left-color: var(--sev-ok-soft); }
+.pipeline-row.severity-muted { border-left-color: var(--border-2); }
+.pipeline-row.severity-attention { border-left-color: var(--sev-attn); }
+.pipeline-row.severity-critical { border-left-color: var(--sev-crit); }
+.pipeline-row-status {
+  font-weight: 600;
+  font-size: 11px;
+  color: var(--fg-2);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+}
+.severity-ok .pipeline-row-status { color: var(--sev-ok); }
+.severity-critical .pipeline-row-status { color: var(--sev-crit); }
+.severity-attention .pipeline-row-status { color: var(--sev-attn); }
+.pipeline-row-stage {
+  color: var(--fg);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pipeline-row-time {
+  color: var(--fg-2);
+  white-space: nowrap;
+  overflow: visible;
+  text-overflow: clip;
+}
+.pipeline-row-duration {
+  color: var(--fg-2);
+  white-space: nowrap;
+  overflow: visible;
+  text-overflow: clip;
+}
+.pipeline-row-meta {
+  color: var(--fg-3);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (max-width: 1100px) {
+  .pipeline-row {
+    grid-template-columns: 80px 1fr;
+    gap: 6px;
+  }
+  .pipeline-row-time,
+  .pipeline-row-duration,
+  .pipeline-row-meta {
+    grid-column: 2;
+  }
 }
 .pipeline-h {
   margin: 0 0 8px 0;

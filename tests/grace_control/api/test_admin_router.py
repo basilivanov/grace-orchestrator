@@ -449,14 +449,18 @@ def test_admin_static_assets_served(client):
 
 
 def test_packet_detail_template_smoke(client):
-    """Template smoke: /admin with packet_id shows CURRENT RUN block with timing fields."""
+    """Template smoke: /admin with packet_id shows PIPELINE, CURRENT RUN, and stage rows."""
     _seed_rejected(client)
     r = client.get("/admin?packet_id=p1")
     assert r.status_code == 200
     html = r.text
+    assert "Pipeline" in html
     assert "CURRENT RUN" in html
+    assert "Materialized" in html
+    assert "Executor selected" in html
+    assert "Coder run" in html
     assert "Started" in html or "started" in html
-    assert "Elapsed" in html or "Duration" in html or "duration" in html
+    assert "Duration" in html or "duration" in html
     assert "Attempt" in html or "attempt" in html
     assert "Worker" in html or "worker" in html
 
@@ -470,6 +474,43 @@ def test_packet_detail_aggregation_finished_at(client):
     assert "finished_at" in body
     assert body["finished_at"] is not None
     assert body["is_running"] is False
+
+
+def test_pipeline_visible_rows_collapses_normal_skipped():
+    """pipeline_visible_rows collapses NORMAL skipped T0/T1/T2/verifier into one row."""
+    from grace_control.ui.admin_template_filters import pipeline_visible_rows
+    stages = [
+        {"key": "materialized", "label": "Materialized", "status": "done", "started_at": "2026-06-10T10:00:00Z", "finished_at": "2026-06-10T10:00:00Z", "duration_ms": 0, "meta": "p1"},
+        {"key": "executor", "label": "Executor selected", "status": "done", "started_at": "2026-06-10T10:00:01Z", "finished_at": "2026-06-10T10:00:01Z", "duration_ms": 0, "meta": "coder-x"},
+        {"key": "coder_run", "label": "Coder run", "status": "done", "started_at": "2026-06-10T10:00:02Z", "finished_at": "2026-06-10T10:00:30Z", "duration_ms": 28000, "meta": "w-1"},
+        {"key": "t0", "label": "T0 scope/lint", "status": "skipped", "meta": "no separate run (NORMAL profile)"},
+        {"key": "t1", "label": "T1 tests", "status": "skipped", "meta": "no separate run (NORMAL profile)"},
+        {"key": "t2", "label": "T2 smoke/e2e", "status": "skipped", "meta": "no separate run (NORMAL profile)"},
+        {"key": "verifier", "label": "Evidence verifier", "status": "skipped", "meta": "not in profile (NORMAL)"},
+        {"key": "reviewer", "label": "Reviewer gate", "status": "done", "meta": "REJECTED"},
+        {"key": "merge", "label": "Merge", "status": "skipped", "meta": "not reached"},
+    ]
+    rows = pipeline_visible_rows(stages, packet_state="rejected", acceptance_profile="NORMAL")
+    labels = [r["label"] for r in rows]
+    assert "Skipped stages" in labels
+    assert "T0 scope/lint" not in labels  # collapsed
+    assert "T1 tests" not in labels
+    assert "Materialized" in labels
+    assert "Coder run" in labels
+
+
+def test_pipeline_visible_rows_adds_terminal_for_cancelled():
+    """pipeline_visible_rows adds a Cancelled/Final state row for cancelled packets."""
+    from grace_control.ui.admin_template_filters import pipeline_visible_rows
+    stages = [
+        {"key": "materialized", "label": "Materialized", "status": "done", "meta": ""},
+        {"key": "executor", "label": "Executor selected", "status": "done", "meta": ""},
+        {"key": "coder_run", "label": "Coder run", "status": "done", "meta": ""},
+    ]
+    rows = pipeline_visible_rows(stages, packet_state="cancelled", acceptance_profile="NORMAL")
+    labels = [r["label"] for r in rows]
+    assert "Final state" in labels
+    assert any("cancelled" in (r.get("meta") or "").lower() for r in rows)
 
 
 # ── 21. OpenAPI contains admin endpoints ──────────────────────────────────

@@ -198,6 +198,196 @@ def last_active_stage(stages: list[dict] | None) -> dict | None:
     return None
 
 
+def pipeline_severity(status: str) -> str:
+    """Map pipeline row status to severity class."""
+    return {
+        "done": "ok",
+        "running": "ok",
+        "failed": "critical",
+        "skipped": "muted",
+        "pending": "muted",
+        "cancelled": "muted",
+        "rejected": "attention",
+        "accepted": "ok",
+        "merged": "ok",
+    }.get(status, "muted")
+
+
+def pipeline_visible_rows(
+    stages: list[dict] | None,
+    packet_state: str = "",
+    acceptance_profile: str = "NORMAL",
+) -> list[dict]:
+    """Jinja filter: transform pipeline stages into display rows.
+
+    Rules:
+    - Group NORMAL-profile skipped T0/T1/T2/verifier stages into one collapsed row.
+    - Keep real evidence/test stages separate when not skipped.
+    - Add terminal state row for cancelled/rejected/accepted/merged if not obvious.
+    """
+    if not stages:
+        return []
+
+    out: list[dict] = []
+    skipped_normal: list[str] = []
+    terminal_shown = False
+
+    for s in stages:
+        key = s.get("key", "")
+        status = s.get("status", "pending")
+        label = s.get("label", "")
+        meta = s.get("meta", "")
+
+        # Group NORMAL skipped stages
+        if status == "skipped" and key in ("t0", "t1", "t2", "verifier"):
+            if "NORMAL" in meta.upper():
+                skipped_normal.append(label)
+                continue
+            # non-NORMAL skipped: keep as-is
+
+        row = {
+            "label": s.get("label", ""),
+            "status": status,
+            "started_at": s.get("started_at"),
+            "finished_at": s.get("finished_at"),
+            "duration_ms": s.get("duration_ms", 0),
+            "meta": meta,
+            "target_tab": s.get("target_tab", "events"),
+        }
+
+        # Derive display fields
+        row["status_label"] = _pipeline_status_label(status)
+        row["time_range"] = _pipeline_time_range(
+            s.get("started_at"), s.get("finished_at"), status
+        )
+        row["duration_label"] = _pipeline_duration(
+            s.get("duration_ms", 0), s.get("started_at"), s.get("finished_at"), status
+        )
+
+        # Track if terminal already shown by reviewer/merge
+        if key in ("reviewer", "merge") and status in ("done", "failed", "skipped"):
+            terminal_shown = True
+
+        out.append(row)
+
+    # Add collapsed NORMAL skipped row
+    if skipped_normal:
+        out.append({
+            "label": "Skipped stages",
+            "status": "skipped",
+            "started_at": None,
+            "finished_at": None,
+            "duration_ms": 0,
+            "meta": ", ".join(skipped_normal),
+            "target_tab": "evidence",
+            "status_label": "Skipped",
+            "time_range": "—",
+            "duration_label": "—",
+        })
+
+    # Add terminal state row if needed
+    if packet_state in ("cancelled", "rejected", "failed", "accepted", "merged", "blocked", "blocked_final"):
+        if not terminal_shown and packet_state != "accepted":
+            out.append({
+                "label": "Final state",
+                "status": "done" if packet_state in ("accepted", "merged") else "failed",
+                "started_at": None,
+                "finished_at": None,
+                "duration_ms": 0,
+                "meta": packet_state,
+                "target_tab": "events",
+                "status_label": _pipeline_status_label(packet_state),
+                "time_range": "—",
+                "duration_label": "—",
+            })
+
+    return out
+
+
+_STAGE_STATUS_LABELS = {
+    "done": "Done", "running": "Running", "failed": "Failed",
+    "skipped": "Skipped", "pending": "Pending",
+    "cancelled": "Cancelled", "rejected": "Rejected",
+    "accepted": "Accepted", "merged": "Merged",
+}
+
+
+def _pipeline_status_label(status: str) -> str:
+    return _STAGE_STATUS_LABELS.get(status, status.capitalize())
+
+
+def _pipeline_time_range(
+    started: str | None, finished: str | None, status: str
+) -> str:
+    if status in ("skipped", "pending"):
+        return "—"
+    if not started:
+        return "—"
+    if status == "running":
+        return f"{_fmt_time_no_date(started)} → now"
+    if finished:
+        return f"{_fmt_time_no_date(started)} → {_fmt_time_no_date(finished)}"
+    return _fmt_time_no_date(started)
+
+
+def _pipeline_duration(
+    ms: int, started: str | None, finished: str | None, status: str
+) -> str:
+    if status in ("skipped", "pending"):
+        return "—"
+    if status == "running" and started:
+        return _fmt_elapsed_from_iso(started)
+    if ms > 0:
+        return _fmt_ms(ms)
+    if started and finished:
+        return _fmt_elapsed_from_iso(started)
+    return "—"
+
+
+def _fmt_time_no_date(iso: str) -> str:
+    """Extract HH:MM:SS from an ISO timestamp."""
+    try:
+        s = iso.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(s)
+        return dt.strftime("%H:%M:%S")
+    except (ValueError, AttributeError):
+        return iso[-8:] if iso and len(iso) >= 8 else iso or "—"
+
+
+def _fmt_elapsed_from_iso(iso: str) -> str:
+    """Compute elapsed from ISO datetime to now, compact format."""
+    try:
+        s = iso.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        total = int((datetime.now(timezone.utc) - dt).total_seconds())
+        if total < 0:
+            return "0s"
+        h, m = divmod(total, 3600)
+        m, s = divmod(m, 60)
+        if h:
+            return f"{h}h {m}m"
+        if m:
+            return f"{m}m {s}s"
+        return f"{s}s"
+    except (ValueError, AttributeError):
+        return "—"
+
+
+def _fmt_ms(ms: int) -> str:
+    total = ms // 1000
+    if total < 0:
+        return "0s"
+    h, m = divmod(total, 3600)
+    m, s = divmod(m, 60)
+    if h:
+        return f"{h}h {m}m"
+    if m:
+        return f"{m}m {s}s"
+    return f"{s}s"
+
+
 def display_title(title: str | None, kind: str = "feature") -> dict[str, str]:
     """Jinja filter: returns a dict suitable for rendering titles.
 
@@ -543,6 +733,8 @@ def register(env: Any) -> None:
     env.filters["fmt_time_short"] = fmt_time_short
     env.filters["fmt_elapsed_since"] = fmt_elapsed_since
     env.filters["last_active_stage"] = last_active_stage
+    env.filters["pipeline_visible_rows"] = pipeline_visible_rows
+    env.filters["pipeline_severity"] = pipeline_severity
     env.filters["safe_str"] = safe_str
     env.filters["display_title"] = display_title
     env.globals["shell_url"] = shell_url
