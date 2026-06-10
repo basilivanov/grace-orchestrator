@@ -169,6 +169,8 @@ agents:
     input:
       mode: stdin
       template: '{packet_markdown}'
+    minimal_repo: true
+    skip_context_builder: true
     model: cliproxy/gemini-3-flash-agent
     output:
       artifacts:

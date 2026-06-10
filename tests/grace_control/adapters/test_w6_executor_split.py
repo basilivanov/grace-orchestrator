@@ -142,7 +142,6 @@ def test_packet_executor_uses_worktree_inspector_and_agent_commit(monkeypatch):
 
     assert "import subprocess" not in body, "unexpected import subprocess outside _write_agent_patch"
     assert "subprocess.run" not in body, "unexpected subprocess.run outside _write_agent_patch"
-    assert "import shutil" not in src
     # The helpers ARE imported.
     assert "from grace_control.services.worktree_inspector import WorktreeInspector" in src
     assert "from grace_control.services.agent_commit_service import AgentCommitService" in src

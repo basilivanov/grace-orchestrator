@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import time
+import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -366,23 +367,41 @@ class PacketExecutionAdapter:
         branch = _attempt_branch(pid, attempt)
 
         # Clean up any stale worktree/branch from a previous attempt.
-        # Pass worktree_root so cleanup looks in the right place.
         self._worktree_cleanup.cleanup_attempt(
             self.project_root, slug, worktree_root=self.worktree_root)
 
         git = GitService()
+        is_minimal = executor.get("minimal_repo", False)
 
-        # 2.3: if the branch still exists after cleanup (e.g. cleanup_attempt
-        # couldn't delete it), force-delete it now so worktree_add can
-        # create a fresh branch from base_ref.
-        branch_check = git._run(["branch", "--list", branch], self.project_root)
-        if branch_check.stdout.strip():
-            git._run(["branch", "-D", branch], self.project_root)
-            _log.info("stale_branch_deleted", branch=branch, packet_id=pid)
-
-        # Create the worktree on a fresh branch from base_ref so the agent has
-        # a full checkout (scripts/, src/, tests/) to work in.
-        add_result = git.worktree_add(self.project_root, wt_path, branch, base_ref=base_ref)
+        if is_minimal:
+            # Minimal repo: create an isolated git repo with only the scope files.
+            # This avoids loading the entire project into opencode run memory.
+            wt_path.mkdir(parents=True, exist_ok=True)
+            git._run(["init", "-q"], wt_path)
+            git._run(["config", "user.email", "agent@grace"], wt_path)
+            git._run(["config", "user.name", "Grace Agent"], wt_path)
+            for scope_path in eff:
+                src = Path(scope_path)
+                if src.exists():
+                    dst = wt_path / src.name
+                    shutil.copy2(src, dst)
+            # Also copy the fixture tests directory if scope references it
+            for scope_path in eff:
+                p = Path(scope_path)
+                parent = p.parent
+                if parent.exists() and parent.name == "tests":
+                    for f in parent.glob("test_*.py"):
+                        shutil.copy2(f, wt_path / f.name)
+            git._run(["add", "."], wt_path)
+            git._run(["commit", "-q", "-m", "init"], wt_path)
+            add_result = type("Result", (), {"success": True, "stderr": ""})()
+        else:
+            # 2.3: if the branch still exists after cleanup, force-delete it
+            branch_check = git._run(["branch", "--list", branch], self.project_root)
+            if branch_check.stdout.strip():
+                git._run(["branch", "-D", branch], self.project_root)
+                _log.info("stale_branch_deleted", branch=branch, packet_id=pid)
+            add_result = git.worktree_add(self.project_root, wt_path, branch, base_ref=base_ref)
 
         # 2.1: FAIL FAST — if worktree_add failed for any reason other than
         # "already exists" (which means we reuse an existing one), stop here.
