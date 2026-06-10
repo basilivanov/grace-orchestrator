@@ -22,22 +22,26 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from grace_control.core.health import check_health
 
 router = APIRouter(tags=["health"])
 
 
-# START_FUNCTION_CONTRACT
-# name: health
-# purpose: HTTP wrapper around core.health.check_health.
-# inputs: none.
-# returns: dict — health snapshot.
-# side_effects: None.
-# emitted_logs: None.
-# error_behavior: Whatever check_health raises / returns.
-# END_FUNCTION_CONTRACT
+@router.get("/health/liveness", include_in_schema=False)
+async def liveness() -> dict:
+    return {"status": "ok"}
+
+
+@router.get("/health/readiness", include_in_schema=False)
+async def readiness() -> dict:
+    from grace_control.db import engine
+    if engine is None:
+        raise HTTPException(status_code=503, detail="not ready")
+    return {"status": "ready"}
+
+
 @router.get("/health", include_in_schema=False)
 async def health() -> dict:
     return await check_health()

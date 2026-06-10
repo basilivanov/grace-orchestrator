@@ -81,30 +81,11 @@ def run_command(
         )
 
     # Ensure .venv/bin is in PATH so ruff/pytest are found
-    proc_env = os.environ.copy()
-    venv_bin = cwd.resolve().parent / ".venv" / "bin"
-    if venv_bin.is_dir():
-        proc_env["PATH"] = f"{venv_bin}:{proc_env.get('PATH', '')}"
-    # Also check the project root for .venv (worktree may lack it)
-    for parent in [cwd, cwd.parent, cwd.parent.parent]:
+    proc_env = (env or os.environ).copy()
+    for parent in [cwd.resolve(), cwd.resolve().parent, cwd.resolve().parent.parent]:
         pv = parent / ".venv" / "bin"
-        if pv.is_dir() and str(pv) not in proc_env["PATH"]:
-            proc_env["PATH"] = f"{pv}:{proc_env['PATH']}"
-
-    started = time.time()
-    try:
-        res = subprocess.run(
-            cmd_list, cwd=str(cwd.resolve()), timeout=timeout_seconds,
-            capture_output=True, text=True, env=proc_env,
-        )
-
-    if not cmd_list:
-        return CommandResult(
-            command=command, cwd=str(cwd.resolve()), exit_code=1,
-            stderr="command is empty after shlex.split",
-            stdout_path="", stderr_path="",
-            timed_out=False, duration_ms=0,
-        )
+        if pv.is_dir() and str(pv) not in proc_env.get("PATH", ""):
+            proc_env["PATH"] = f"{pv}:{proc_env.get('PATH', '')}"
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -118,7 +99,7 @@ def run_command(
         with open(stdout_path, "w") as out_f, open(stderr_path, "w") as err_f:
             proc = subprocess.run(
                 cmd_list, cwd=str(cwd), timeout=timeout_seconds,
-                stdout=out_f, stderr=err_f, env=env,
+                stdout=out_f, stderr=err_f, env=proc_env,
             )
         stdout_text = stdout_path.read_text()
         stderr_text = stderr_path.read_text()
