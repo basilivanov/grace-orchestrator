@@ -166,8 +166,11 @@ class WaveResumeRunner:
     # ---- API management ----
     def _check_api(self) -> bool:
         for attempt in range(6):
-            resp = _api_call(self.api_url, "GET", "/api/admin/system/health", timeout=5)
-            if "_error" not in resp and resp.get("data", {}).get("api_alive", False):
+            resp = _api_call(self.api_url, "GET", "/health", timeout=5)
+            if "_error" not in resp and resp.get("status") == "unhealthy":
+                # "unhealthy" is OK — means API is alive but no workers registered yet
+                return True
+            if "_error" not in resp and resp.get("api_alive"):
                 return True
             if attempt < 5:
                 print(f"[runner] API not ready, retrying in 5s ({attempt+1}/5)")
@@ -175,11 +178,16 @@ class WaveResumeRunner:
         return False
 
     def _start_api(self) -> None:
-        # Start via run_api script
         api_script = self.source_dir / "scripts" / "run_api.py"
         if not api_script.exists():
             print(f"[runner] API script not found: {api_script}")
             return
+        # Clear any stale process on the API port
+        import socket
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            if s.connect_ex(("127.0.0.1", 8042)) == 0:
+                print("[runner] Port 8042 in use, waiting for release...")
+                time.sleep(3)
         db_url = os.environ.get("GRACE_DATABASE_URL", "sqlite:////tmp/grace-live-test.db")
         env = os.environ.copy()
         env["GRACE_DATABASE_URL"] = db_url
@@ -253,8 +261,8 @@ class WaveResumeRunner:
                     "acceptance_profile": "NORMAL",
                     "prompt": pkt.get("prompt", ""),
                 }
-                if "commands" in pkt:
-                    pkt_spec["verification"] = pkt["commands"]
+                if "verification" in pkt:
+                    pkt_spec["verification"] = pkt["verification"]
                 wave_spec["packets"].append(pkt_spec)
             feature_spec["waves"].append(wave_spec)
 
@@ -295,11 +303,14 @@ class WaveResumeRunner:
 
         while time.time() < deadline:
             remaining = []
+            api_dead = False
             for pid in self.report["packet_ids"]:
                 resp = _api_call(
                     self.api_url, "GET", f"/api/packets/{pid}", timeout=10
                 )
                 if "_error" in resp:
+                    api_dead = True
+                    remaining.append(pid)
                     continue
 
                 data = resp.get("data", {})
@@ -311,6 +322,18 @@ class WaveResumeRunner:
                         pass  # handled via retry/replay
                 else:
                     remaining.append(pid)
+
+            if api_dead:
+                # Try restarting the API if it went down
+                if self._check_api():
+                    print("[runner] API recovered")
+                else:
+                    print("[runner] API down, restarting...")
+                    self._start_api()
+                    # Worker may have died too — restart if needed
+                    if self.worker_proc and self.worker_proc.poll() is not None:
+                        print("[runner] Worker also died, restarting...")
+                        self._start_worker()
 
             if not remaining:
                 print("[runner] All packets in terminal state")

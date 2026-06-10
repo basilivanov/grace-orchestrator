@@ -21,6 +21,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import shlex
 import subprocess
@@ -69,6 +70,32 @@ def run_command(
             stderr=f"cannot parse command string: {command[:200]}",
             stdout_path="", stderr_path="",
             timed_out=False, duration_ms=0,
+        )
+
+    if not cmd_list:
+        return CommandResult(
+            command=command, cwd=str(cwd.resolve()), exit_code=1,
+            stderr="command is empty after shlex.split",
+            stdout_path="", stderr_path="",
+            timed_out=False, duration_ms=0,
+        )
+
+    # Ensure .venv/bin is in PATH so ruff/pytest are found
+    proc_env = os.environ.copy()
+    venv_bin = cwd.resolve().parent / ".venv" / "bin"
+    if venv_bin.is_dir():
+        proc_env["PATH"] = f"{venv_bin}:{proc_env.get('PATH', '')}"
+    # Also check the project root for .venv (worktree may lack it)
+    for parent in [cwd, cwd.parent, cwd.parent.parent]:
+        pv = parent / ".venv" / "bin"
+        if pv.is_dir() and str(pv) not in proc_env["PATH"]:
+            proc_env["PATH"] = f"{pv}:{proc_env['PATH']}"
+
+    started = time.time()
+    try:
+        res = subprocess.run(
+            cmd_list, cwd=str(cwd.resolve()), timeout=timeout_seconds,
+            capture_output=True, text=True, env=proc_env,
         )
 
     if not cmd_list:

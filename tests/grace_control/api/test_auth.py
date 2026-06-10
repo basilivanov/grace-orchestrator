@@ -20,11 +20,12 @@ def client(tmp_path, monkeypatch):
     return TestClient(app)
 
 
-def _make_auth_app(db_url: str, token: str = "test-token-42", allow_localhost: bool = True):
-    os.environ["GRACE_API_AUTH_ENABLED"] = "true"
-    os.environ["GRACE_API_AUTH_TOKEN"] = token
-    os.environ["GRACE_API_AUTH_ALLOW_UNAUTHENTICATED_LOCALHOST"] = str(allow_localhost).lower()
-    os.environ["GRACE_DB_URL"] = db_url
+def _make_auth_app(db_url: str, token: str = "test-token-42", allow_localhost: bool = True, _mp=None):
+    _set = _mp.setenv if _mp else os.environ.__setitem__
+    _set("GRACE_API_AUTH_ENABLED", "true")
+    _set("GRACE_API_AUTH_TOKEN", token)
+    _set("GRACE_API_AUTH_ALLOW_UNAUTHENTICATED_LOCALHOST", str(allow_localhost).lower())
+    _set("GRACE_DB_URL", db_url)
     init_db(db_url)
     from grace_control.config.settings import _build_settings
     from grace_control.api.app_factory import create_app
@@ -36,9 +37,9 @@ def test_auth_disabled_still_works(client):
     assert r.status_code == 200
 
 
-def test_auth_enabled_missing_token_returns_401(tmp_path):
+def test_auth_enabled_missing_token_returns_401(tmp_path, monkeypatch):
     db = f"sqlite:///{tmp_path}/noauth.db"
-    app = _make_auth_app(db, allow_localhost=False)
+    app = _make_auth_app(db, allow_localhost=False, _mp=monkeypatch)
     c = TestClient(app)
     r = c.get("/api/agents/profiles")
     assert r.status_code == 401
@@ -46,33 +47,33 @@ def test_auth_enabled_missing_token_returns_401(tmp_path):
     assert body["error"]["code"] == "UNAUTHORIZED"
 
 
-def test_auth_enabled_wrong_token_returns_401(tmp_path):
+def test_auth_enabled_wrong_token_returns_401(tmp_path, monkeypatch):
     db = f"sqlite:///{tmp_path}/wrong.db"
-    app = _make_auth_app(db, allow_localhost=False)
+    app = _make_auth_app(db, allow_localhost=False, _mp=monkeypatch)
     c = TestClient(app)
     r = c.get("/api/agents/profiles", headers={"authorization": "Bearer wrong-token"})
     assert r.status_code == 401
 
 
-def test_auth_enabled_correct_token_passes(tmp_path):
+def test_auth_enabled_correct_token_passes(tmp_path, monkeypatch):
     db = f"sqlite:///{tmp_path}/correct.db"
-    app = _make_auth_app(db, allow_localhost=False)
+    app = _make_auth_app(db, allow_localhost=False, _mp=monkeypatch)
     c = TestClient(app)
     r = c.get("/api/agents/profiles", headers={"authorization": "Bearer test-token-42"})
     assert r.status_code == 200, r.text
 
 
-def test_auth_enabled_health_is_public(tmp_path):
+def test_auth_enabled_health_is_public(tmp_path, monkeypatch):
     db = f"sqlite:///{tmp_path}/health.db"
-    app = _make_auth_app(db, allow_localhost=False)
+    app = _make_auth_app(db, allow_localhost=False, _mp=monkeypatch)
     c = TestClient(app)
     r = c.get("/health")
     assert r.status_code == 200
 
 
-def test_auth_enabled_x_grace_token_works(tmp_path):
+def test_auth_enabled_x_grace_token_works(tmp_path, monkeypatch):
     db = f"sqlite:///{tmp_path}/xgrace.db"
-    app = _make_auth_app(db, allow_localhost=False)
+    app = _make_auth_app(db, allow_localhost=False, _mp=monkeypatch)
     c = TestClient(app)
     r = c.get("/api/agents/profiles", headers={"x-grace-api-token": "test-token-42"})
     assert r.status_code == 200

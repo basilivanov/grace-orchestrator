@@ -177,6 +177,8 @@ async def release_packet(packet_id: str, request: dict) -> dict:
         await svc.release(packet_id, status, result)
     except PacketNotFoundError:
         raise HTTPException(status_code=404, detail="Packet not found")
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
 
     with get_db() as db:
         worker = db.query(Worker).filter_by(id=worker_id).first()

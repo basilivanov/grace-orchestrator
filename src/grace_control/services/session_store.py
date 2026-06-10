@@ -52,16 +52,13 @@ class SessionStore:
     """
 
     def _check_table(self, db: Session) -> bool:
-        """Return True if the agent_sessions table exists in the DB."""
-        # Try generic SQLAlchemy detection first (works for all backends)
-        try:
-            from sqlalchemy import inspect as _inspect
-            engine = db.get_bind()
-            if engine and _inspect(engine).has_table("agent_sessions"):
-                return True
-        except Exception:
-            pass
-        # Fallback: direct query (works for SQLite, needed for test flush-only sessions)
+        """Return True if the agent_sessions table exists in the DB.
+
+        Uses a direct query on the current session's connection so it never
+        interferes with pending session state (inspect/engine.connect can
+        steal the connection from SingletonThreadPool and corrupt the
+        session's implicit transaction on in-memory SQLite).
+        """
         try:
             from sqlalchemy import text as _text
             db.execute(_text("SELECT 1 FROM agent_sessions LIMIT 0"))

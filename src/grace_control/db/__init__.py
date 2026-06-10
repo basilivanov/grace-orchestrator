@@ -25,7 +25,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from sqlalchemy import create_engine, inspect, text
-from sqlalchemy.pool import NullPool
+from sqlalchemy.pool import NullPool, StaticPool
 from sqlalchemy.orm import Session, sessionmaker
 
 from .schema import Base
@@ -59,7 +59,7 @@ def init_db(db_url: str | None = None) -> None:
         db_url,
         echo=False,
         connect_args={"check_same_thread": False} if "sqlite" in db_url else {},
-        poolclass=NullPool if "sqlite" in db_url else None,
+        poolclass=StaticPool if "sqlite" in db_url and ":memory:" in str(db_url) else (NullPool if "sqlite" in db_url else None),
     )
     if "sqlite" in db_url:
         from sqlalchemy import event

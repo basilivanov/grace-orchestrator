@@ -66,21 +66,25 @@ class ProcessSupervisor:
         _effective_timeout = timeout_seconds
         if os.environ.get("GRACE_FAST_FAIL"):
             _effective_timeout = min(timeout_seconds, 60)
-        # Override PWD so the child process sees the requested cwd as its
-        # working directory. Without this, many CLIs (e.g. `opencode run`)
-        # use $PWD from the inherited parent env instead of getcwd() and
-        # end up writing files to the project root instead of the per-packet
-        # worktree. Setting PWD explicitly fixes the cwd/agent-mismatch bug.
-        # We always pass an explicit env (copy of os.environ when env=None)
-        # so the override is always applied.
         proc_env = dict(os.environ) if env is None else dict(env)
         proc_env["PWD"] = str(cwd)
+
+                # preexec: new session + high oom_score_adj so the OOM killer
+        # targets this subprocess, not the API/worker.
+        def _preexec():
+            os.setsid()
+            try:
+                with open("/proc/self/oom_score_adj", "w") as f:
+                    f.write("1000\n")
+            except OSError:
+                pass
+
         try:
             stdin_pipe = asyncio.subprocess.PIPE if stdin_text is not None else None
             proc = await asyncio.create_subprocess_exec(
                 *command, cwd=str(cwd), env=proc_env,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-                stdin=stdin_pipe, preexec_fn=os.setsid,
+                stdin=stdin_pipe, preexec_fn=_preexec,
             )
             try:
                 in_data = stdin_text.encode("utf-8", "ignore") if stdin_text else None

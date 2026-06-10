@@ -38,3 +38,13 @@ def test_list_items() -> None:
         {"id": 1, "title": "Buy milk", "done": False},
         {"id": 2, "title": "Walk dog", "done": False},
     ]
+
+
+def test_create_item_empty_title() -> None:
+    response = client.post("/items", json={"title": ""})
+    assert response.status_code == 422
+
+
+def test_create_item_too_long_title() -> None:
+    response = client.post("/items", json={"title": "a" * 100})
+    assert response.status_code == 422

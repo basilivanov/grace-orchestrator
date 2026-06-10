@@ -1,16 +1,18 @@
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import FastAPI
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 app = FastAPI(title="Todo Backend")
 
-items: list[dict[str, object]] = []
+items: list[dict[str, Any]] = []
 _next_id = 1
 
 
 class ItemCreate(BaseModel):
-    title: str
+    title: str = Field(min_length=1, max_length=99)
 
 
 class ItemOut(BaseModel):
@@ -26,7 +28,7 @@ def health() -> dict[str, str]:
 
 @app.get("/items", response_model=list[ItemOut])
 def list_items() -> list[ItemOut]:
-    return [ItemOut(**item) for item in items]
+    return [ItemOut.model_validate(item) for item in items]
 
 
 @app.post("/items", response_model=ItemOut, status_code=201)

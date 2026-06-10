@@ -110,13 +110,14 @@ async def test_release_rejected(api):
 
 @pytest.mark.asyncio
 async def test_release_unknown_status_is_failed(api):
+    """API rejects unknown release status with 422."""
     r = await _plan(api)
     pid = r.json()["data"]["packets"][0]
     await api.post("/api/workers/register", json={"worker_id": "w1"})
     await api.post("/api/packets/claim", json={"worker_id": "w1"})
     r = await api.post(f"/api/packets/{pid}/release", json={
         "worker_id": "w1", "status": "garbage", "result": {}})
-    assert r.json()["data"]["state"] == "failed"
+    assert r.status_code == 422
 
 
 @pytest.mark.asyncio
@@ -130,7 +131,7 @@ async def test_cancel_ready(api):
 
 @pytest.mark.asyncio
 async def test_release_blocked(api):
-    """API release with status=blocked moves packet to BLOCKED state."""
+    """API release with status=blocked moves packet to blocked_final state."""
     r = await _plan(api)
     pid = r.json()["data"]["packets"][0]
     await api.post("/api/workers/register", json={"worker_id": "w1"})
@@ -139,9 +140,9 @@ async def test_release_blocked(api):
         "worker_id": "w1", "status": "blocked",
         "result": {"accepted": False, "domain_status": "blocked", "reason": "scope impossible"}})
     assert r.status_code == 200
-    assert r.json()["data"]["state"] == "blocked"
+    assert r.json()["data"]["state"] == "blocked_final"
     r2 = await api.get(f"/api/packets/{pid}")
-    assert r2.json()["data"]["state"] == "blocked"
+    assert r2.json()["data"]["state"] == "blocked_final"
 
 
 @pytest.mark.asyncio
