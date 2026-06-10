@@ -1417,7 +1417,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 }
 .mono { font-family: var(--mono); }
 
-/* Pipeline view: vertical stage cards. Replaces old grid/table. */
+/* Pipeline view: wide stacked cards with labelled facts. */
 .pipeline-view {
   background: var(--bg-2);
   border: 1px solid var(--border);
@@ -1432,31 +1432,39 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
-.pipeline-stage-list {
+.pipeline-card-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
-.pipeline-stage-card {
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--border-2);
-  border-radius: 8px;
+.pipeline-card {
+  width: 100%;
+  box-sizing: border-box;
   background: var(--bg-2);
-  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--border-2);
+  border-radius: 8px;
+  padding: 10px 12px;
   transition: background 0.1s, border-color 0.1s;
 }
-.pipeline-stage-card:hover { background: var(--bg-3); border-color: var(--border-2); }
-.pipeline-stage-card.severity-ok { border-left-color: var(--sev-ok-soft); }
-.pipeline-stage-card.severity-muted { border-left-color: var(--border-2); }
-.pipeline-stage-card.severity-attention { border-left-color: var(--sev-attn); }
-.pipeline-stage-card.severity-critical { border-left-color: var(--sev-crit); }
-.pipeline-stage-main {
+.pipeline-card:hover { background: var(--bg-3); border-color: var(--border-2); }
+.pipeline-card.severity-ok { border-left-color: var(--sev-ok-soft); }
+.pipeline-card.severity-muted { border-left-color: var(--border-2); }
+.pipeline-card.severity-attention { border-left-color: var(--sev-attn); }
+.pipeline-card.severity-critical { border-left-color: var(--sev-crit); }
+.pipeline-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.pipeline-card-title {
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
 }
-.pipeline-stage-icon {
+.pipeline-card-icon {
   width: 18px;
   flex: 0 0 18px;
   text-align: center;
@@ -1464,31 +1472,42 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   font-size: 14px;
   color: var(--fg-3);
 }
-.pipeline-stage-icon.severity-ok { color: var(--sev-ok); }
-.pipeline-stage-icon.severity-critical { color: var(--sev-crit); }
-.pipeline-stage-icon.severity-attention { color: var(--sev-attn); }
-.pipeline-stage-label {
-  font-weight: 600;
-  font-size: 13px;
+.pipeline-card-icon.severity-ok { color: var(--sev-ok); }
+.pipeline-card-icon.severity-critical { color: var(--sev-crit); }
+.pipeline-card-icon.severity-attention { color: var(--sev-attn); }
+.pipeline-card-name {
   color: var(--fg);
-  min-width: 0;
-  flex: 1;
+  font-size: 13px;
+  font-weight: 650;
 }
-.pipeline-stage-status {
-  margin-left: auto;
+.pipeline-card-status {
   flex: 0 0 auto;
 }
-.pipeline-stage-sub {
-  margin-top: 4px;
+.pipeline-card-body {
+  margin-top: 8px;
   padding-left: 26px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 8px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px 16px;
+}
+.pipeline-fact {
+  min-width: 0;
+}
+.pipeline-fact-label {
+  display: block;
+  color: var(--fg-3);
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  margin-bottom: 2px;
+}
+.pipeline-fact-value {
   color: var(--fg-2);
   font-size: 12px;
+  white-space: nowrap;
+  overflow: visible;
+  text-overflow: clip;
 }
-.pipeline-stage-sub .pulse { color: var(--fg-3); }
-.pipeline-stage-meta-text { color: var(--fg-3); }
 .pipeline-h {
   margin: 0 0 8px 0;
   font-size: 12px;

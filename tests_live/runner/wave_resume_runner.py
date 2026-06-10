@@ -381,7 +381,7 @@ class WaveResumeRunner:
             f"/api/dev/runs/{run_id}/rerun-verifier",
             f"/api/dev/runs/{run_id}/rerun-reviewer",
         ]:
-            resp = _api_call(self.api_url, "POST", endpoint, timeout=60)
+            resp = _api_call(self.api_url, "POST", endpoint, body={}, timeout=60)
             if "_error" not in resp:
                 status = resp.get("data", {}).get("status", resp.get("status", ""))
                 print(f"[runner] Replay {endpoint}: {status}")

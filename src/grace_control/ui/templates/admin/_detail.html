@@ -278,14 +278,14 @@ attempts: {{ p.attempt_count }}/{{ p.max_attempts }}"
         {% endif %}
       </div>
 
-      {# ── GRACE pipeline (vertical stage cards) ─────────────────────── #}
+      {# ── GRACE pipeline (wide stacked cards with labelled facts) ───── #}
       {% set pipeline_rows = stages | pipeline_visible_rows(p_state, p_acceptance_profile) %}
       <section class="pipeline-view">
         <h2 class="pipeline-h">Pipeline</h2>
-        <div class="pipeline-stage-list">
+        <div class="pipeline-card-list">
           {% for row in pipeline_rows %}
             {% set row_sev = row.status | pipeline_severity %}
-            <div class="pipeline-stage-card is-{{ row.status }} severity-{{ row_sev }}"
+            <div class="pipeline-card is-{{ row.status }} severity-{{ row_sev }}"
                  {% if row.target_tab %}
                  hx-get="/admin/_partial/tab?packet_id={{ p_packet_id }}&feature_id={{ p_feature_id }}&tab={{ row.target_tab }}"
                  hx-target="#packet-tab-content"
@@ -293,20 +293,33 @@ attempts: {{ p.attempt_count }}/{{ p.max_attempts }}"
                  hx-push-url="{{ shell_url(feature_id=p_feature_id, packet_id=p_packet_id, tab=row.target_tab) }}"
                  style="cursor: pointer;"
                  {% endif %}>
-              <div class="pipeline-stage-main">
-                <span class="pipeline-stage-icon severity-{{ row_sev }}">{{ row.icon }}</span>
-                <span class="pipeline-stage-label">{{ row.label }}</span>
-                <span class="pipeline-stage-status badge severity-{{ row_sev }}">{{ row.status_label }}</span>
+              <div class="pipeline-card-head">
+                <div class="pipeline-card-title">
+                  <span class="pipeline-card-icon severity-{{ row_sev }}">{{ row.icon }}</span>
+                  <span class="pipeline-card-name">{{ row.label }}</span>
+                </div>
+                <span class="pipeline-card-status badge severity-{{ row_sev }}">{{ row.status_label }}</span>
               </div>
               {% if row.time_range != '—' or row.duration_label != '—' or row.meta %}
-              <div class="pipeline-stage-sub mono">
-                {% if row.time_range and row.time_range != '—' %}<span>{{ row.time_range }}</span>{% endif %}
-                {% if row.duration_label and row.duration_label != '—' %}<span class="pulse">·</span><span>{{ row.duration_label }}</span>{% endif %}
-                {% if row.meta %}<span class="pulse">·</span><span class="pipeline-stage-meta-text">{{ row.meta }}</span>{% endif %}
-              </div>
-              {% else %}
-              <div class="pipeline-stage-sub mono">
-                <span>—</span>
+              <div class="pipeline-card-body">
+                {% if row.time_range and row.time_range != '—' %}
+                <div class="pipeline-fact">
+                  <span class="pipeline-fact-label">Time</span>
+                  <span class="pipeline-fact-value mono">{{ row.time_range }}</span>
+                </div>
+                {% endif %}
+                {% if row.duration_label and row.duration_label != '—' %}
+                <div class="pipeline-fact">
+                  <span class="pipeline-fact-label">{{ 'Elapsed' if row.status == 'running' else 'Duration' }}</span>
+                  <span class="pipeline-fact-value mono">{{ row.duration_label }}</span>
+                </div>
+                {% endif %}
+                {% if row.meta %}
+                <div class="pipeline-fact">
+                  <span class="pipeline-fact-label">{{ 'Worker' if row.status in ('running', 'done', 'failed') else 'Meta' }}</span>
+                  <span class="pipeline-fact-value mono">{{ row.meta }}</span>
+                </div>
+                {% endif %}
               </div>
               {% endif %}
             </div>

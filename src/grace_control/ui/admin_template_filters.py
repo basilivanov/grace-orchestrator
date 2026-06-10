@@ -360,7 +360,7 @@ def _pipeline_duration(
     if ms > 0:
         return _fmt_ms(ms)
     if started and finished:
-        return _fmt_elapsed_from_iso(started)
+        return _fmt_elapsed_between(started, finished)
     return "—"
 
 
@@ -383,6 +383,31 @@ def _fmt_elapsed_from_iso(iso: str) -> str:
             dt = dt.replace(tzinfo=timezone.utc)
         total = int((datetime.now(timezone.utc) - dt).total_seconds())
         if total < 0:
+            return "0s"
+        h, m = divmod(total, 3600)
+        m, s = divmod(m, 60)
+        if h:
+            return f"{h}h {m}m"
+        if m:
+            return f"{m}m {s}s"
+        return f"{s}s"
+    except (ValueError, AttributeError):
+        return "—"
+
+
+def _fmt_elapsed_between(start_iso: str, end_iso: str) -> str:
+    """Compute elapsed between two ISO datetimes, compact format."""
+    try:
+        s = start_iso.replace("Z", "+00:00")
+        e = end_iso.replace("Z", "+00:00")
+        dt_s = datetime.fromisoformat(s)
+        dt_e = datetime.fromisoformat(e)
+        if dt_s.tzinfo is None:
+            dt_s = dt_s.replace(tzinfo=timezone.utc)
+        if dt_e.tzinfo is None:
+            dt_e = dt_e.replace(tzinfo=timezone.utc)
+        total = max(0, int((dt_e - dt_s).total_seconds()))
+        if total == 0:
             return "0s"
         h, m = divmod(total, 3600)
         m, s = divmod(m, 60)

@@ -70,7 +70,6 @@ while True:
         if proc:
             print(f"[watchdog] Restarted PID {proc.pid}", flush=True)
             time.sleep(3)
-            _cleanup_stale_packets()
         else:
             print("[watchdog] Cannot start API, retrying...", flush=True)
     time.sleep(5)
