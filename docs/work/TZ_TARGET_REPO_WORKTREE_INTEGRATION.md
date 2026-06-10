@@ -3,7 +3,7 @@
 Date: 2026-06-10
 Status: ready for architect/coder
 Priority: P0 bridge from fixture smoke to real project pilot
-Scope: GRACE ↔ target repository integration, workspace mode, config/YAML, runner, evidence
+Scope: GRACE ↔ target repository integration, workspace mode, config/YAML, runner, preflight, evidence
 
 Related:
 - `docs/work/TZ_MINIMAL_WORKTREE_AND_CONTEXT_BUILDER.md`
@@ -66,8 +66,8 @@ The first real-project pilot should be able to run with:
 ```text
 GRACE_PROJECT_ROOT=/opt/grace-orchestrator or /tmp/grace-orchestrator-export
 GRACE_TARGET_REPO_ROOT=/opt/solarsage-astro
+GRACE_WORKSPACE_MODE=target_repo_worktree
 GRACE_WORKTREE_ROOT=/tmp/grace-agent-worktrees
-execution.workspace_mode=target_repo_worktree
 ```
 
 The agent must receive:
@@ -181,7 +181,13 @@ env GRACE_* > .grace/config.yaml > defaults
 
 Do not silently ignore env overrides.
 
-### 5.4 Validation
+## 6. Required preflight gates
+
+Before creating a `target_repo_worktree`, GRACE must run target repo preflight.
+
+This is mandatory because agent execution from a dirty source repo is ambiguous and unsafe.
+
+### 6.1 Validate target repo root
 
 If:
 
@@ -197,6 +203,14 @@ git repository
 not equal to GRACE project root, unless explicitly self-evolution override is enabled
 ```
 
+Required checks:
+
+```bash
+test -d "$GRACE_TARGET_REPO_ROOT"
+git -C "$GRACE_TARGET_REPO_ROOT" rev-parse --is-inside-work-tree
+git -C "$GRACE_TARGET_REPO_ROOT" rev-parse --show-toplevel
+```
+
 If validation fails, fail fast before starting agent.
 
 Error should be clear:
@@ -205,9 +219,110 @@ Error should be clear:
 target_repo_worktree requires execution.target_repo_root / GRACE_TARGET_REPO_ROOT to point to a git repo
 ```
 
-## 6. Required workspace builder changes
+### 6.2 Target repo working tree must be clean
 
-### 6.1 Extend AgentWorkspaceBuilder
+Before target-worktree run, target repo must have no uncommitted changes.
+
+Required check:
+
+```bash
+git -C "$GRACE_TARGET_REPO_ROOT" status --porcelain
+```
+
+Acceptance:
+
+```text
+empty output => pass
+non-empty output => fail fast
+```
+
+Error must be clear:
+
+```text
+target repo has uncommitted changes; commit or stash before running target_repo_worktree
+```
+
+Do not auto-stash and do not auto-commit.
+
+Reason:
+
+```text
+A git worktree is created from committed refs.
+Dirty files in the source checkout may not be present in the agent worktree.
+Running agent while source repo is dirty creates misleading evidence and confusing diffs.
+```
+
+### 6.3 Branch and remote sync preflight
+
+Before Solar Sage / real target pilot, check that local base branch matches remote.
+
+Required checks when `require_remote_sync=true` or for real-project smoke:
+
+```bash
+git -C "$GRACE_TARGET_REPO_ROOT" branch --show-current
+git -C "$GRACE_TARGET_REPO_ROOT" rev-parse HEAD
+git -C "$GRACE_TARGET_REPO_ROOT" rev-parse origin/main
+```
+
+Expected for initial pilot:
+
+```text
+current branch: main or configured base_branch
+local HEAD == origin/main
+```
+
+If local differs from remote, fail fast unless an explicit override is provided.
+
+Error:
+
+```text
+target repo local HEAD differs from origin/main; sync or set explicit override before running
+```
+
+Do not silently run from a stale or ahead/behind branch.
+
+### 6.4 Existing worktrees / stale branches
+
+Multiple branches are fine.
+
+Existing worktrees are fine only if they do not conflict with the new attempt branch/worktree path.
+
+Required check:
+
+```bash
+git -C "$GRACE_TARGET_REPO_ROOT" worktree list --porcelain
+```
+
+If an old GRACE worktree or attempt branch conflicts with the intended branch/path:
+
+```text
+clean up that exact stale worktree/branch from target repo only
+```
+
+Do not delete branches from GRACE repo while operating in `target_repo_worktree` mode.
+
+### 6.5 Preflight evidence
+
+Persist preflight result in run evidence / result JSON:
+
+```json
+"target_repo_preflight": {
+  "target_repo_root": "/opt/solarsage-astro",
+  "is_git_repo": true,
+  "working_tree_clean": true,
+  "current_branch": "main",
+  "local_head": "5fcc2c9...",
+  "remote_head": "5fcc2c9...",
+  "remote_sync": true,
+  "worktree_conflict": false
+}
+```
+
+If preflight fails, record enough metadata in the failed result/error for operator diagnosis.
+
+## 7. Required workspace builder changes
+
+### 7.1 Extend AgentWorkspaceBuilder
 
 `AgentWorkspaceBuilder` currently supports `build_scoped_copy`.
 
@@ -243,7 +358,7 @@ omitted_files=[]
 commit_semantics="target_repo_commit"
 ```
 
-### 6.2 Do not use minimal repo semantics
+### 7.2 Do not use minimal repo semantics
 
 In `target_repo_worktree` mode:
 
@@ -259,7 +374,7 @@ commit_semantics=target_repo_commit
 
 or equivalent.
 
-### 6.3 Branch cleanup
+### 7.3 Branch cleanup
 
 Cleanup must target the same repo that created the worktree.
 
@@ -286,7 +401,7 @@ effective_repo_root = target_repo_root for target_repo_worktree
                  = project_root for full_git_worktree
 ```
 
-### 6.4 Worktree path isolation
+### 7.4 Worktree path isolation
 
 `worktree_root` should be outside the GRACE repo by default for real-project runs.
 
@@ -298,7 +413,7 @@ Recommended:
 
 Reject or warn if target worktree path is inside GRACE repo for real-project mode.
 
-## 7. Packet executor integration
+## 8. Packet executor integration
 
 In `PacketExecutionAdapter._call_executor`, resolve effective workspace mode before creating workspace.
 
@@ -312,6 +427,7 @@ if executor.get("minimal_repo"):
 if workspace_mode == "scoped_copy":
     ws = builder.build_scoped_copy(...)
 elif workspace_mode == "target_repo_worktree":
+    preflight = run_target_repo_preflight(target_repo_root)
     ws = builder.build_target_repo_worktree(...)
 else:
     legacy full_git_worktree path
@@ -321,9 +437,12 @@ Required evidence:
 
 ```python
 result.evidence["workspace"] = ws.to_dict()
+result.evidence["target_repo_preflight"] = preflight.to_dict()
 ```
 
-for both `scoped_copy` and `target_repo_worktree`.
+for `target_repo_worktree`.
+
+For both `scoped_copy` and `target_repo_worktree`, `workspace` evidence is mandatory.
 
 For legacy full mode, if easy, record:
 
@@ -331,13 +450,13 @@ For legacy full mode, if easy, record:
 {"workspace_mode":"full_git_worktree"}
 ```
 
-### 7.1 Base SHA semantics
+### 8.1 Base SHA semantics
 
 For `target_repo_worktree`, `base_sha` must be resolved from target repo root, not GRACE repo root.
 
 Acceptance/scope checks must use target repo base SHA.
 
-### 7.2 Commit SHA semantics
+### 8.2 Commit SHA semantics
 
 Agent commit generated in target repo worktree is a real target repo commit.
 
@@ -347,9 +466,9 @@ Evidence should contain:
 "commit_semantics": "target_repo_commit"
 ```
 
-## 8. Runner / scenario integration
+## 9. Runner / scenario integration
 
-### 8.1 CLI/env support
+### 9.1 CLI/env support
 
 The live runner must be able to set:
 
@@ -372,9 +491,10 @@ Add clearly named option if needed:
 ```text
 --target-repo-root
 --workspace-mode
+--require-remote-sync / --no-require-remote-sync
 ```
 
-### 8.2 Scenario profile
+### 9.2 Scenario profile
 
 Add a real-project pilot scenario/profile config, not hardcoded in core.
 
@@ -394,7 +514,7 @@ context builder: existing behavior or skip only if explicitly configured
 
 For first pilot, prefer a small safe packet that changes one low-risk file.
 
-### 8.3 Do not use fixture profile for real repo
+### 9.3 Do not use fixture profile for real repo
 
 Do not use:
 
@@ -412,11 +532,11 @@ minimal_repo=true / scoped_copy
 
 Real project profile should not use `minimal_repo`.
 
-## 9. YAML examples required
+## 10. YAML examples required
 
 Add documentation examples.
 
-### 9.1 GRACE orchestrator `.grace/config.yaml`
+### 10.1 GRACE orchestrator `.grace/config.yaml`
 
 Example:
 
@@ -431,13 +551,15 @@ execution:
   target_repo_root: /opt/solarsage-astro
   worktree_root: /tmp/grace-agent-worktrees
   timeout_seconds: 900
+  require_clean_target_repo: true
+  require_remote_sync: true
 
 git:
   base_branch: main
   target_branch: main
 ```
 
-### 9.2 Env-only startup
+### 10.2 Env-only startup
 
 Example:
 
@@ -446,11 +568,13 @@ GRACE_PROJECT_ROOT=/opt/grace-orchestrator \
 GRACE_TARGET_REPO_ROOT=/opt/solarsage-astro \
 GRACE_WORKSPACE_MODE=target_repo_worktree \
 GRACE_WORKTREE_ROOT=/tmp/grace-agent-worktrees \
+GRACE_REQUIRE_CLEAN_TARGET_REPO=1 \
+GRACE_REQUIRE_REMOTE_SYNC=1 \
 GRACE_DATABASE_URL=sqlite:////tmp/grace-solarsage-pilot.db \
 python3 scripts/api_watchdog.py
 ```
 
-### 9.3 Agent evidence expected
+### 10.3 Agent evidence expected
 
 Example:
 
@@ -461,10 +585,14 @@ Example:
   "target_repo_root": "/opt/solarsage-astro",
   "base_sha": "...",
   "commit_semantics": "target_repo_commit"
+},
+"target_repo_preflight": {
+  "working_tree_clean": true,
+  "remote_sync": true
 }
 ```
 
-## 10. Acceptance pipeline behavior
+## 11. Acceptance pipeline behavior
 
 For `target_repo_worktree`, acceptance should run in the target worktree:
 
@@ -480,7 +608,7 @@ Do not run Solar Sage tests from GRACE repo cwd.
 
 Acceptance commands must execute in target worktree.
 
-## 11. Solar Sage pilot constraints
+## 12. Solar Sage pilot constraints
 
 The first Solar Sage pilot should be deliberately tiny.
 
@@ -516,9 +644,9 @@ pnpm test:e2e:today
 
 But this TZ only needs to make the worktree mode possible and do a tiny smoke.
 
-## 12. Tests required
+## 13. Tests required
 
-### 12.1 Config tests
+### 13.1 Config tests
 
 Add tests for:
 
@@ -526,9 +654,24 @@ Add tests for:
 ProjectConfig.execution.workspace_mode parses target_repo_worktree
 settings/env GRACE_WORKSPACE_MODE works
 invalid workspace_mode fails or is rejected clearly
+require_clean_target_repo parses from YAML/env
+require_remote_sync parses from YAML/env
 ```
 
-### 12.2 Workspace builder tests
+### 13.2 Target repo preflight tests
+
+Add tests for:
+
+```text
+valid clean git repo passes
+dirty working tree fails
+local HEAD equal origin/main passes when require_remote_sync=true
+local HEAD differs from origin/main fails when require_remote_sync=true
+missing target repo fails
+non-git target repo fails
+```
+
+### 13.3 Workspace builder tests
 
 Add tests for `build_target_repo_worktree`:
 
@@ -541,7 +684,7 @@ commit_semantics=target_repo_commit
 workspace report to_dict contains target_repo_root
 ```
 
-### 12.3 Packet executor tests
+### 13.4 Packet executor tests
 
 Add tests that mock executor run and verify:
 
@@ -550,9 +693,10 @@ workspace_mode=target_repo_worktree calls GitService.worktree_add with target_re
 not self.project_root
 ExecutionRequest.worktree_path points to target worktree
 result.evidence.workspace.workspace_mode=target_repo_worktree
+result.evidence.target_repo_preflight.working_tree_clean=true
 ```
 
-### 12.4 Cleanup tests
+### 13.5 Cleanup tests
 
 Verify cleanup does not delete branches from the wrong repo.
 
@@ -561,7 +705,7 @@ full_git_worktree cleanup -> GRACE repo
 target_repo_worktree cleanup -> target repo
 ```
 
-### 12.5 Live smoke test
+### 13.6 Live smoke test
 
 Create/update report:
 
@@ -577,6 +721,8 @@ command used
 target_repo_root
 workspace_mode
 workspace_path
+whether target repo was clean
+local HEAD / remote HEAD
 whether workspace contains target project files
 whether workspace contains GRACE files
 base_sha repo check
@@ -586,9 +732,32 @@ memory/OOM/API/watchdog observations
 pass/fail verdict
 ```
 
-## 13. Manual smoke commands
+## 14. Manual smoke commands
 
-### 13.1 Fixture target_repo_worktree smoke first
+### 14.1 Preflight manual check
+
+Before target-worktree smoke:
+
+```bash
+cd /opt/solarsage-astro
+
+git status --short
+git branch --show-current
+git rev-parse HEAD
+git rev-parse origin/main
+git worktree list
+```
+
+Required for first pilot:
+
+```text
+git status --short is empty
+current branch is main or configured base_branch
+HEAD == origin/main
+no conflicting GRACE attempt worktree exists
+```
+
+### 14.2 Fixture target_repo_worktree smoke first
 
 Before Solar Sage, test with a local fixture git repo:
 
@@ -600,6 +769,7 @@ GRACE_DATABASE_URL="sqlite:////tmp/grace-target-worktree-test.db" \
 GRACE_TARGET_REPO_ROOT="/tmp/grace-live-test/backend_fastapi_todo" \
 GRACE_WORKSPACE_MODE="target_repo_worktree" \
 GRACE_WORKTREE_ROOT="/tmp/grace-agent-worktrees" \
+GRACE_REQUIRE_CLEAN_TARGET_REPO=1 \
 python3 -u tests_live/runner/wave_resume_runner.py \
   --scenario backend-1w \
   --workspace-mode target_repo_worktree \
@@ -607,7 +777,7 @@ python3 -u tests_live/runner/wave_resume_runner.py \
   --timeout 240
 ```
 
-### 13.2 Solar Sage dry pilot after fixture pass
+### 14.3 Solar Sage dry pilot after fixture pass
 
 Only after fixture target-worktree smoke passes:
 
@@ -615,6 +785,8 @@ Only after fixture target-worktree smoke passes:
 GRACE_TARGET_REPO_ROOT="/opt/solarsage-astro" \
 GRACE_WORKSPACE_MODE="target_repo_worktree" \
 GRACE_WORKTREE_ROOT="/tmp/grace-agent-worktrees" \
+GRACE_REQUIRE_CLEAN_TARGET_REPO=1 \
+GRACE_REQUIRE_REMOTE_SYNC=1 \
 GRACE_DATABASE_URL="sqlite:////tmp/grace-solarsage-pilot.db" \
 python3 -u tests_live/runner/wave_resume_runner.py \
   --scenario solarsage-target-worktree-smoke \
@@ -624,24 +796,27 @@ python3 -u tests_live/runner/wave_resume_runner.py \
   --keep-artifacts
 ```
 
-## 14. Pass criteria
+## 15. Pass criteria
 
 This TZ passes only if:
 
 1. `workspace_mode=target_repo_worktree` is configurable from YAML/env/runner.
 2. Target repo root is validated as a git repo.
-3. Agent worktree is created from target repo, not GRACE repo.
-4. Agent `cwd` and `--dir` point to target repo worktree.
-5. Evidence records `workspace_mode=target_repo_worktree`.
-6. Evidence records `commit_semantics=target_repo_commit`.
-7. Changed files and commits are target repo artifacts.
-8. Cleanup uses target repo root for target worktree mode.
-9. Fixture target-worktree smoke passes.
-10. Solar Sage dry pilot can be run without agent seeing GRACE repo.
-11. Existing fixture `scoped_copy` smoke still passes.
-12. Full tests pass.
+3. Target repo dirty working tree fails fast.
+4. Target repo local/remote mismatch fails fast when `require_remote_sync=true`.
+5. Agent worktree is created from target repo, not GRACE repo.
+6. Agent `cwd` and `--dir` point to target repo worktree.
+7. Evidence records `workspace_mode=target_repo_worktree`.
+8. Evidence records `commit_semantics=target_repo_commit`.
+9. Evidence records `target_repo_preflight`.
+10. Changed files and commits are target repo artifacts.
+11. Cleanup uses target repo root for target worktree mode.
+12. Fixture target-worktree smoke passes.
+13. Solar Sage dry pilot can be run without agent seeing GRACE repo.
+14. Existing fixture `scoped_copy` smoke still passes.
+15. Full tests pass.
 
-## 15. Fail criteria
+## 16. Fail criteria
 
 Fail if:
 
@@ -650,13 +825,15 @@ agent --dir points to GRACE repo during target_repo_worktree mode
 target_repo_root is ignored
 workspace path contains GRACE repo source files
 base_sha belongs to GRACE repo instead of target repo
+dirty target repo is allowed without explicit override
+local/remote mismatch is allowed while require_remote_sync=true
 cleanup deletes branch from wrong repo
 normal coder profile is made minimal by accident
 scoped_copy behavior regresses
 context_builder skip evidence regresses
 ```
 
-## 16. What remains after this TZ
+## 17. What remains after this TZ
 
 After `target_repo_worktree` works, next work items are:
 
