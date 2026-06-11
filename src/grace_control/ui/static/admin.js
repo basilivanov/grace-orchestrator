@@ -215,7 +215,7 @@ async function submitBiz(){
   const controller=new AbortController();
   const timeout=setTimeout(()=>controller.abort(),120000);
   try{
-    const r=await fetch(apiUrl('/api/architect/plan'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({feature_spec:{title:text.slice(0,80),description:text}}),signal:controller.signal});
+    const r=await fetch(apiUrl('/api/architect/plan'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({feature_spec:{title:text.slice(0,80),description:text,origin:'business'}}),signal:controller.signal});
     clearInterval(dotInt);clearTimeout(timeout);
     if(!r.ok){const e=await r.json();if(status)status.textContent='Error: '+(e.detail||e.message||r.status);btn.disabled=false;btn.textContent='Submit Feature';toast('Architect error','err');return;}
     ta.value='';btn.disabled=false;btn.textContent='Submit Feature';if(status)status.textContent='Feature submitted!';toast('Feature planned successfully!','ok');
