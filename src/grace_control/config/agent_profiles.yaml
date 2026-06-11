@@ -4,6 +4,7 @@ agents:
     resume_mode: always
     resume_flag: "--session"
     fork_flag: "--fork"
+    timeout_seconds: 1200
     command:
     - opencode
     - run
