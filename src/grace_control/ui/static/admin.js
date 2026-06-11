@@ -146,7 +146,7 @@ async function runExpand(id,num,suffix){
           const os=await fetch(apiUrl(`/api/admin/packet/${id}/runs/${suffix}/logs?stream=stdout&tail=200`));
           const od=await os.json();if(state.liveLogs)state.liveLogs[key]={stderr:state.liveLogs[key]?.stderr||'',stdout:(od.lines||[]).join('\\n')};
           const p2=getPkt(id);if(p2)updateCont(id);
-        }catch(e){/* ignore */}
+  }catch(e){if(state.view==='logs')$('#board').innerHTML=`<div style="padding:20px;text-align:center;color:var(--t3);font-size:11px">Failed to load logs: ${esc(e.message||'unknown')}</div>`;}
       },2000);
     }
   }catch{state.tabData[key]=null;}if(p)updateCont(id);
@@ -311,6 +311,7 @@ async function loadData(){
 let logState={lines:[],source:'',paused:false};
 function initLogViewer(){
   logState={lines:[],source:'',paused:false};
+  $('#board').innerHTML='<div class="loading">Loading server logs...</div>';
   fetchLogs();
   if(window.logInt)clearInterval(window.logInt);
   window.logInt=setInterval(fetchLogs,2000);
