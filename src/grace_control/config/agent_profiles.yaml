@@ -282,7 +282,7 @@ agents:
     inject_dir: true
     input:
       mode: file
-    model: deepseek/deepseek-v4-pro
+    model: deepseek/deepseek-v4-flash
     timeout_seconds: 300
 codex:
   binary: agy
@@ -359,7 +359,7 @@ codex:
     metadata:
       complexity: simple
       provider: deepseek
-    model: deepseek/deepseek-v4-pro
+    model: deepseek/deepseek-v4-flash
     priority: 5
     reasoning: medium
     roles:
