@@ -306,7 +306,33 @@ changed files limited to packet allowed scope during each wave
 final changed files limited to the two allowed files
 ```
 
-## 11. Required reviewer/evidence checks
+## 11. Live test execution and log visibility
+
+The agent that prepares and starts this pilot must run the full live test flow with visible, continuously updated logs.
+
+The run must not be a silent blocking command where the operator only sees output after a long global timeout. The agent must start the live/full test in a process-managed way, write stdout and stderr to a stable log file, and keep the log visible in the operator session while the test is running.
+
+Required behavior:
+
+```text
+full live test starts in a process-managed/background-capable mode
+stdout/stderr are written to a stable log file
+operator can see log updates immediately
+agent watches the log for early failures
+agent stops and reports as soon as a clear failure appears
+agent must not wait 10 minutes for timeout if the test already failed quickly
+```
+
+The final report must include:
+
+```text
+live log path
+process exit status
+earliest failure snippet if the run failed
+whether logs were visible during execution
+```
+
+## 12. Required reviewer/evidence checks
 
 For W1 reviewer must verify:
 
@@ -334,12 +360,14 @@ architect used context bundle
 two coder waves ran in order
 W1 was accepted before W2 started
 real_agent_runs >= 3 total if counting context-builder + two coder packets
+live log path recorded
+early failure snippet recorded if failed
 watchdog_restarts = 0
 failures = 0
 final_state = accepted
 ```
 
-## 12. Output report
+## 13. Output report
 
 Create final GRACE report:
 
@@ -365,11 +393,12 @@ workspace mode
 target repo root
 changed files by wave
 T0/T1/T2 command outputs by wave
+live log path and exit status
 reviewer verdict by wave
 final pass/fail verdict
 ```
 
-## 13. Pass criteria
+## 14. Pass criteria
 
 Pilot 004 passes only if:
 
@@ -384,9 +413,10 @@ Pilot 004 passes only if:
 9. W2 T0/T1/T2 and reviewer pass.
 10. Final changed files are limited to the two allowed files.
 11. No package/lock/env/auth/payment/subscription/schema/deployment files change.
-12. Final report exists in GRACE `docs/work`.
+12. Live/full test logs were visible during execution and log path is recorded.
+13. Final report exists in GRACE `docs/work`.
 
-## 14. Fail criteria
+## 15. Fail criteria
 
 Fail immediately if:
 
@@ -401,11 +431,13 @@ labels/hrefs/icons/classes/routing/active matching changed
 business/auth/payment/subscription/schema/deployment files touched
 new eslint-disable or broad ignore added
 any required T0/T1/T2 gate fails
+live/full test runs silently without visible logs
+agent waits for global timeout despite an obvious early failure in logs
 reviewer rejects either wave
 API/watchdog restarts unexpectedly
 OOM occurs
 ```
 
-## 15. Next step after pass
+## 16. Next step after pass
 
 If this passes, the next pilot can safely move from TabBar-only micro-polish to a tiny Today-screen content component change with the same two-wave production/test split.
