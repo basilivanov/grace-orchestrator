@@ -216,6 +216,25 @@ def test_t0_changed_files_excludes_noise(tmp_path):
     assert "alembic/versions/" not in call_args, f"alembic should be excluded: {call_args}"
 
 
+def test_t0_changed_files_all_excluded_no_commands(tmp_path):
+    """When ALL changed files are excluded, no GRACE lint commands or origins are added."""
+    wt = _make_worktree(tmp_path, scripts={
+        "grace_front_lint.py": "print('ok')",
+    })
+    canon_dir = tmp_path / "grace"
+    canon_dir.mkdir()
+    (canon_dir / "canon.yaml").write_text("gate_mode: changed-files\n")
+    cmds, origins = resolve_default_t0([
+        "components/ui/Button.tsx",  # excluded (vendor)
+        "alembic/versions/001.py",   # excluded (generated)
+    ], wt)
+    grace_cmds = [c for c in cmds if "grace_front_lint.py" in " ".join(c) or "grace_lint.py" in " ".join(c)]
+    assert not grace_cmds, f"no lint commands expected when all excluded, got: {grace_cmds}"
+    grace_origins = [o for o in origins if "grace" in o]
+    assert not grace_origins, f"no lint origins expected when all excluded, got: {grace_origins}"
+    assert any("ruff" in " ".join(c) for c in cmds), "ruff should still run"
+
+
 def test_t0_frontend_missing_lint_fails_normal(tmp_path):
     """NORMAL with frontend changed but no frontend GRACE lint → fail (for orchestrator repos)."""
     wt = _make_worktree(tmp_path)

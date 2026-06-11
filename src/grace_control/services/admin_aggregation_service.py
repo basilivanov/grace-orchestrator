@@ -1200,7 +1200,10 @@ class AdminAggregationService:
     def _derive_simple_pipeline(
         self, p: Packet, last_run: PacketRun | None
     ) -> dict[str, Any]:
-        """Derive a full 9-stage pipeline preview from packet + last_run alone.
+        """Derive an 11-stage pipeline preview from packet + last_run alone.
+
+        Stages: Architect → Context Builder → Materialize → Executor →
+        Coder → T0 → T1 → T2 → Verifier → Reviewer → Merge.
 
         Cheap — no events/evidence queries. Used by get_features_tree so the
         SPA can render pipeline blocks immediately. The full pipeline (with
@@ -1210,28 +1213,48 @@ class AdminAggregationService:
         state = (p.state or "draft").lower()
         profile = p.acceptance_profile or "NORMAL"
         created_iso = _iso(p.created_at)
+        updated_iso = _iso(p.updated_at)
         run_started = _iso(last_run.started_at) if last_run else None
         run_finished = _iso(last_run.finished_at) if last_run else None
         run_duration = last_run.duration_ms if last_run else 0
         run_status = (last_run.status or "").lower() if last_run else ""
+        executor = (last_run.executor_id or "") if last_run else ""
+        has_run = last_run is not None
 
         stages: list[dict[str, Any]] = []
 
-        # 1. Materialized — always done
+        # 1. Architect — planned the feature; always done if packet exists
         stages.append({
-            "key": "materialized", "label": "Materialized",
+            "key": "architect", "label": "Architect",
             "status": "done",
             "started_at": created_iso, "finished_at": created_iso,
-            "duration_ms": 0, "meta": p.slug or "", "target_tab": "spec",
+            "duration_ms": 0, "meta": "", "target_tab": "spec",
         })
 
-        # 2. Executor selected
-        executor = (last_run.executor_id or "") if last_run else ""
+        # 2. Context Builder — collected project context
         stages.append({
-            "key": "executor", "label": "Executor selected",
-            "status": "done" if executor else ("running" if state == "running" else "skipped"),
+            "key": "context_builder", "label": "Context Builder",
+            "status": "done" if has_run else "pending",
+            "started_at": created_iso, "finished_at": run_started or created_iso,
+            "duration_ms": 0, "meta": "", "target_tab": "spec",
+        })
+
+        # 3. Materialize — packet created in DB
+        stages.append({
+            "key": "materialized", "label": "Materialize",
+            "status": "done",
+            "started_at": created_iso, "finished_at": created_iso,
+            "duration_ms": 0, "meta": p.slug or "",
+            "target_tab": "spec",
+        })
+
+        # 4. Executor selected
+        stages.append({
+            "key": "executor", "label": "Executor",
+            "status": "done" if executor else "skipped",
             "started_at": run_started, "finished_at": run_started,
-            "duration_ms": 0, "meta": executor or "", "target_tab": "attempts",
+            "duration_ms": 0, "meta": executor or "",
+            "target_tab": "attempts",
         })
 
         # 3. Coder run

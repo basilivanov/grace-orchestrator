@@ -16,15 +16,12 @@
 .bar-end{flex:1}.bar-search input{background:var(--bg2);border:1px solid var(--bd);border-radius:6px;padding:5px 10px 5px 28px;color:var(--t1);font-size:12px;width:200px;outline:none;font-family:inherit}.bar-search input:focus{border-color:var(--blue)}.bar-search{position:relative}.bar-search::before{content:'⌕';position:absolute;left:8px;top:50%;transform:translateY(-50%);color:var(--t3);font-size:13px}
 .board{height:calc(100vh - 48px);overflow-y:auto;padding:10px 14px;display:flex;flex-direction:column;gap:6px}
 .card{background:var(--bg1);border:1px solid var(--bd);border-radius:var(--r);transition:border-color .15s;cursor:pointer}.card:hover{border-color:var(--bd2)}.card.sel{border-color:var(--blue);box-shadow:0 0 0 1px #3a5a9e,0 3px 16px rgba(0,0,0,.3)}
-.card-h{display:flex;align-items:center;gap:8px;padding:8px 12px}
+.card-h{display:flex;align-items:center;gap:8px;padding:8px 12px;flex-shrink:0}
 .strip{width:3px;height:28px;border-radius:2px;flex-shrink:0}.s-run{background:var(--blue);box-shadow:0 0 7px var(--blue)}.s-done{background:var(--green)}.s-fail{background:var(--red)}.s-block{background:var(--yellow)}.s-queue{background:var(--t3)}.s-merged{background:var(--purple)}.s-accepted{background:var(--green)}
 .info{flex:1;min-width:0}.info-top{display:flex;align-items:center;gap:5px;margin-bottom:1px}.pkt-id{font-size:9px;font-weight:700;font-family:var(--mono);color:var(--t3);letter-spacing:.4px}.pkt-name{font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.info-sub{font-size:10px;color:var(--t2);display:flex;gap:6px;align-items:center;flex-wrap:wrap}.info-sub span{white-space:nowrap}
 .badge{font-size:9px;font-weight:700;letter-spacing:.3px;padding:1px 6px;border-radius:3px;text-transform:uppercase;flex-shrink:0}.b-run{background:rgba(91,141,239,.14);color:var(--blue)}.b-done{background:rgba(74,222,128,.1);color:var(--green)}.b-fail{background:rgba(248,113,113,.1);color:var(--red)}.b-block{background:rgba(251,191,36,.1);color:var(--yellow)}.b-merged{background:rgba(167,139,250,.1);color:var(--purple)}.b-queue{background:rgba(92,99,128,.15);color:var(--t3)}.b-accepted{background:rgba(74,222,128,.1);color:var(--green)}.b-rejected{background:rgba(248,113,113,.1);color:var(--red)}
-.pipe{display:flex;align-items:center;gap:0;flex-shrink:0;margin-left:4px;overflow-x:auto;max-width:400px}.ps{display:flex;flex-direction:column;align-items:center;min-width:36px}.ps-l{font-size:7px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:.3px;margin-bottom:1px;white-space:nowrap}.ps-l.done{color:var(--green)}.ps-l.running{color:var(--blue)}.ps-l.failed{color:var(--red)}.ps-d{width:7px;height:7px;border-radius:50%;border:2px solid var(--bd);background:var(--bg2);margin-bottom:1px;flex-shrink:0}.ps-d.done{background:var(--green);border-color:var(--green)}.ps-d.running{background:var(--blue);border-color:var(--blue);box-shadow:0 0 6px var(--blue);animation:pulse 2s ease-in-out infinite}.ps-d.failed{background:var(--red);border-color:var(--red)}.ps-d.skipped{background:var(--t3);border-color:var(--t3);opacity:.4}.ps-d.pending{border-color:var(--bd);background:var(--bg2)}
-@keyframes pulse{0%,100%{box-shadow:0 0 3px var(--blue)}50%{box-shadow:0 0 10px var(--blue)}}
-.ps-t{font-size:8px;font-family:var(--mono);color:var(--t3)}.ps-t.done{color:var(--t2)}.ps-t.running{color:var(--blue)}.ps-t.failed{color:var(--red)}
-.ps-c{width:10px;height:2px;background:var(--bd);flex-shrink:0;margin-top:-8px}.ps-c.done{background:var(--green);opacity:.4}.ps-c.active{background:linear-gradient(90deg,var(--green),var(--blue))}
 .mets{display:flex;gap:8px;flex-shrink:0;margin-left:4px}.met{display:flex;flex-direction:column;align-items:flex-end;gap:0}.met-l{font-size:7px;color:var(--t3);text-transform:uppercase;letter-spacing:.3px;font-weight:600}.met-v{font-size:10px;font-weight:600;font-family:var(--mono);color:var(--t2)}
+.pblocks{display:flex;gap:4px;flex-wrap:wrap;padding:6px 10px 4px;border-bottom:1px solid var(--bd)}.pblock{display:flex;flex-direction:column;align-items:center;min-width:58px;padding:4px 6px;border-radius:5px;background:var(--bg2);border:1px solid var(--bd);cursor:pointer;flex-shrink:0;transition:all .12s;user-select:none}.pblock:hover{border-color:var(--bd2);transform:translateY(-1px)}.pblock.done{background:rgba(74,222,128,.04);border-color:rgba(74,222,128,.15)}.pblock.running{background:rgba(91,141,239,.06);border-color:rgba(91,141,239,.2)}.pblock.failed{background:rgba(248,113,113,.06);border-color:rgba(248,113,113,.2)}.pblock.skipped{opacity:.45}.pbl-i{font-size:10px;font-weight:700;line-height:1;margin-bottom:2px}.pbl-i.done{color:var(--green)}.pbl-i.running{color:var(--blue)}.pbl-i.failed{color:var(--red)}.pbl-i.skipped{color:var(--t3)}.pbl-l{font-size:7px;font-weight:600;color:var(--t2);text-transform:uppercase;letter-spacing:.2px;white-space:nowrap;margin-bottom:1px}.pbl-t{font-size:7px;font-family:var(--mono);color:var(--t3);white-space:nowrap}.pbl-t.done{color:var(--green)}.pbl-t.running{color:var(--blue)}.pbl-t.failed{color:var(--red)}
 .detail{display:none;border-top:1px solid var(--bd);background:var(--bg0)}.detail.open{display:block}
 .dtabs{display:flex;border-bottom:1px solid var(--bd);padding:0 10px;background:var(--bg1);position:sticky;top:0;z-index:5;overflow-x:auto}.dtab{padding:5px 10px;font-size:10px;font-weight:600;color:var(--t3);cursor:pointer;border-bottom:2px solid transparent;transition:all .12s;user-select:none;white-space:nowrap}.dtab:hover{color:var(--t2)}.dtab.on{color:var(--blue);border-bottom-color:var(--blue)}
 .dcont{padding:8px 12px;max-height:400px;overflow-y:auto}
@@ -34,8 +31,8 @@
 .etbl{width:100%;border-collapse:collapse}.etbl th{text-align:left;font-size:8px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.3px;padding:3px 6px;border-bottom:1px solid var(--bd)}.etbl td{font-size:10px;padding:3px 6px;border-bottom:1px solid var(--bd);color:var(--t2)}.etbl tr:hover td{background:var(--bg3)}.ev-t{font-family:var(--mono);font-size:9px;white-space:nowrap}.ev-e{font-weight:600;color:var(--t1);font-size:10px}.ev-d{color:var(--t3);font-size:9px}
 .slist{display:flex;flex-direction:column;gap:3px}.sitem{display:flex;align-items:center;gap:8px;padding:4px 8px;background:var(--bg1);border:1px solid var(--bd);border-radius:5px;font-size:10px}.sitem .sid{font-family:var(--mono);color:var(--purple);font-weight:600;font-size:9px}.sitem .sst{font-weight:700;text-transform:uppercase;color:var(--t2);font-size:9px}.sitem .sst-active{color:var(--blue)}.sitem .sst-completed{color:var(--green)}.sitem .sst-failed{color:var(--red)}.sitem .smd{color:var(--t3);font-family:var(--mono);font-size:9px}.sitem .stk{color:var(--t3);font-family:var(--mono);margin-left:auto;font-size:9px}
 .empty{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:30px;color:var(--t3);font-size:12px}
-.loading{display:flex;align-items:center;justify-content:center;padding:30px;color:var(--t3);font-size:12px}
-.loading::after{content:'';width:16px;height:16px;border:2px solid var(--bd);border-top-color:var(--blue);border-radius:50%;animation:spin .8s linear infinite;margin-left:6px}
+.loading{display:flex;align-items:center;justify-content:center;padding:30px;color:var(--t3);font-size:12px;gap:6px}
+.loading::after{content:'';width:14px;height:14px;border:2px solid var(--bd);border-top-color:var(--blue);border-radius:50%;animation:spin .8s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 .spec-grid{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:10px}.spec-grid .sk{color:var(--t3);font-weight:600;white-space:nowrap}.spec-grid .sv{color:var(--t2);font-family:var(--mono);word-break:break-all}
 .atree{font-family:var(--mono);font-size:10px}.atree .af{display:flex;align-items:center;gap:4px;padding:2px 0;color:var(--t2)}.atree .af .an{color:var(--blue)}.atree .af .as{color:var(--t3);font-size:8px}
@@ -54,13 +51,14 @@
 <script>
 let state={sel:null,filter:'all',q:'',tab:{},tabData:{},data:null};
 const $=s=>document.querySelector(s);
-const $$=s=>document.querySelectorAll(s);
 const SC={running:'run',merged:'done',done:'done',failed:'fail',rejected:'fail',blocked:'block',blocked_recoverable:'block',blocked_final:'block',ready:'queue',draft:'queue',queued:'queue',accepted:'done',cancelled:'queue'};
 const SL={running:'Running',merged:'Merged',done:'Done',failed:'Failed',rejected:'Rejected',blocked:'Blocked',blocked_recoverable:'Blocked (recov.)',blocked_final:'Blocked (final)',ready:'Ready',draft:'Draft',queued:'Queued',accepted:'Accepted',cancelled:'Cancelled'};
-const TABS=['spec','sessions','runs','logs','artifacts','evidence','events'];
-const fmtDur=ms=>{if(!ms)return'—';if(ms<1000)return ms+'ms';if(ms<60000)return(ms/1000).toFixed(0)+'s';const m=Math.floor(ms/60000),s=Math.floor((ms%60000)/1000);return m+'m'+(s?' '+s+'s':'')};
-const fmtTime=iso=>{if(!iso)return'—';const d=new Date(iso);return d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit',second:'2-digit'})};
-const fmtDate=iso=>{if(!iso)return'—';const d=new Date(iso);return d.toLocaleDateString('en-GB',{month:'short',day:'numeric'})+' '+fmtTime(iso)};
+const TABS=['events','spec','sessions','runs','logs','artifacts','evidence'];
+const TLAB={events:'Events',spec:'Spec',sessions:'Sessions',runs:'Runs',logs:'Logs',artifacts:'Artifacts',evidence:'Evidence'};
+const fmtDur=ms=>{if(ms==null)return'—';if(ms<0)ms=0;if(ms<1000)return ms+'ms';if(ms<60000)return(ms/1000).toFixed(0)+'s';const m=Math.floor(ms/60000),s=Math.floor((ms%60000)/1000);return m+'m'+(s?' '+s+'s':'')};
+const fmtTime=iso=>{if(!iso)return'—';try{return new Date(iso).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}catch{return'—'}};
+const fmtDate=iso=>{if(!iso)return'—';try{const d=new Date(iso);return d.toLocaleDateString('en-GB',{month:'short',day:'numeric'})+' '+fmtTime(iso)}catch{return'—'}};
+const esc=s=>{if(!s)return'';const d=document.createElement('div');d.appendChild(document.createTextNode(String(s)));return d.innerHTML};
 
 function getAllPackets(data){
   if(!data||!data.features)return[];
@@ -68,7 +66,6 @@ function getAllPackets(data){
   data.features.forEach(f=>{(f.waves||[]).forEach(w=>{(w.packets||[]).forEach(p=>{pkts.push({...p,feature:f,wave:w})})})});
   return pkts;
 }
-
 function filtered(pkts){
   let list=pkts;
   if(state.filter!=='all'){
@@ -78,353 +75,280 @@ function filtered(pkts){
   if(state.q){const q=state.q.toLowerCase();list=list.filter(p=>(p.id+p.title+p.feature.title+p.slug).toLowerCase().includes(q));}
   return list;
 }
-
 function renderChips(pkts){
   const c={all:pkts.length,run:0,done:0,fail:0,block:0,queue:0};
-  pkts.forEach(p=>{const s=SC[p.state]||'queue';if(s==='run')c.run++;else if(s==='done')c.done++;else if(s==='fail')c.fail++;else if(s==='block')c.block++;else c.queue++;});
+  pkts.forEach(p=>{const s=SC[p.state]||'queue';if(s==='run')c.run++;else if(s==='done')c.done++;else if(s==='fail')c.fail++;else if(s==='block')c.block++;else c.queue++});
   const chips=[{k:'all',l:'All',n:c.all,d:'d-all'},{k:'run',l:'Running',n:c.run,d:'d-run'},{k:'done',l:'Done',n:c.done,d:'d-done'},{k:'fail',l:'Failed',n:c.fail,d:'d-fail'},{k:'block',l:'Blocked',n:c.block,d:'d-block'},{k:'attention',l:'Attention',n:c.fail+c.block,d:'d-fail'}];
   $('#chips').innerHTML=chips.map(c=>`<div class="chip ${state.filter===c.k?'on':''}" data-f="${c.k}"><span class="d ${c.d}"></span>${c.l} <b>${c.n}</b></div>`).join('');
 }
 
+// ── Card ──
 function renderBoard(pkts){
   const list=filtered(pkts);
   if(!list.length){$('#board').innerHTML='<div class="empty">No packets match your filter</div>';return;}
   $('#board').innerHTML=list.map(p=>renderCard(p)).join('');
 }
-
 function renderCard(p){
-  const sc=SC[p.state]||'queue';
-  const sel=state.sel===p.id;
-  const pipe=p.pipeline?p.pipeline.stages:[];
-  const cur=pipe.find(s=>s.status==='running')||pipe.find(s=>s.status==='failed');
-  let pipeHtml='';
-  if(pipe.length){
-    pipeHtml='<div class="pipe">'+pipe.map((s,i)=>{
-      const cls=s.status==='done'?'done':s.status==='running'?'running':s.status==='failed'?'failed':s.status==='skipped'?'skipped':'pending';
-      const lbl=s.label?s.label.split(' ').slice(0,2).join(' '):s.key;
-      const dur=s.duration_ms?fmtDur(s.duration_ms):'—';
-      let h=`<div class="ps"><div class="ps-l ${cls}">${lbl}</div><div class="ps-d ${cls}"></div><div class="ps-t ${cls}">${dur}</div></div>`;
-      if(i<pipe.length-1){
-        let cc='';if(s.status==='done'&&pipe[i+1].status==='done')cc='done';else if(s.status==='done'&&pipe[i+1].status==='running')cc='active';
-        h+=`<div class="ps-c ${cc}"></div>`;
-      }
-      return h;
-    }).join('')+'</div>';
-  }
-  const att=p.attempt_count>1?`<span style="color:var(--orange)">attempt ${p.attempt_count}/${p.max_attempts}</span>`:'';
-  const sub=`<span>${p.feature?.title||''}</span><span>·</span><span>${p.wave?.title||''}</span>${cur?`<span>·</span><span style="color:var(--blue)">at ${cur.key}</span>`:''}${att?`<span>·</span>${att}`:''}`;
+  const sc=SC[p.state]||'queue',sel=state.sel===p.id;
+  const cur=p.pipeline?.stages?.find(s=>s.status==='running')||p.pipeline?.stages?.find(s=>s.status==='failed');
+  const sub=`<span>${p.feature?.title||''}</span><span>·</span><span>${p.wave?.title||''}</span>${cur?`<span>·</span><span style="color:var(--blue)">at ${cur.key}</span>`:''}${p.attempt_count>1?`<span>·</span><span style="color:var(--orange)">attempt ${p.attempt_count}/${p.max_attempts}</span>`:''}`;
   const dur=p.duration_seconds?fmtDur(p.duration_seconds*1000):'—';
   const mets=`<div class="met"><span class="met-l">Duration</span><span class="met-v">${dur}</span></div>${p.model?`<div class="met"><span class="met-l">Model</span><span class="met-v">${p.model}</span></div>`:''}`;
   const detHtml=sel?renderDetail(p):'';
-  return`<div class="card ${sel?'sel':''}" data-p="${p.id}"><div class="card-h" onclick="toggle('${p.id}')"><div class="strip s-${sc}"></div><div class="info"><div class="info-top"><span class="pkt-id">${p.id}</span><span class="pkt-name">${p.title}</span><span class="badge b-${sc}">${SL[p.state]||p.state}</span></div><div class="info-sub">${sub}</div></div>${pipeHtml}<div class="mets">${mets}</div></div><div class="detail ${sel?'open':''}">${detHtml}</div></div>`;
+  return`<div class="card ${sel?'sel':''}" data-p="${p.id}"><div class="card-h" onclick="toggle('${p.id}')"><div class="strip s-${sc}"></div><div class="info"><div class="info-top"><span class="pkt-id">${p.id}</span><span class="pkt-name">${p.title}</span><span class="badge b-${sc}">${SL[p.state]||p.state}</span></div><div class="info-sub">${sub}</div></div><div class="mets">${mets}</div></div><div class="detail ${sel?'open':''}">${detHtml}</div></div>`;
 }
 
+// ── Detail ──
 function renderDetail(p){
-  const t=state.tab[p.id]||'spec';
-  const tabsH=TABS.map(x=>`<div class="dtab ${t===x?'on':''}" onclick="stab('${p.id}','${x}')">${x[0].toUpperCase()+x.slice(1)}</div>`).join('');
+  // hierarchy
+  let hier='';
+  const items=[];if(p.feature)items.push(['F',p.feature.title]);if(p.wave)items.push(['W',p.wave.title]);items.push(['P',p.title]);
+  if(items.length>1){
+    hier='<div style="display:flex;gap:4px;align-items:center;padding:6px 10px 0;font-size:9px;flex-wrap:wrap">';
+    items.forEach((h,i)=>{if(i>0)hier+='<span style="color:var(--t3)">›</span>';hier+=`<span style="color:${i===items.length-1?'var(--blue)':'var(--t2)'};font-weight:${i===items.length-1?'700':'500'}"><span style="color:var(--t3);font-weight:400;margin-right:2px">${h[0]}:</span>${esc(h[1])}</span>`;});
+    hier+='</div>';
+  }
+  // pipeline blocks
+  const pipe=p.pipeline?.stages||[],icons={done:'✓',running:'⟳',failed:'✗',skipped:'—',pending:'○'};
+  let pb='';
+  if(pipe.length){
+    pb='<div class="pblocks">'+pipe.map(s=>{
+      const cls=s.status==='done'?'done':s.status==='running'?'running':s.status==='failed'?'failed':s.status==='skipped'?'skipped':'pending';
+      const lbl=s.label?esc(s.label.split(' ').slice(0,2).join(' ')):s.key;
+      const dur=fmtDur(Math.max(s.duration_ms||0,0));
+      const tab=s.target_tab||'events';
+      return`<div class="pblock ${cls}" onclick="event.stopPropagation();stab('${p.id}','${tab}')" title="${esc(s.label)} · click for ${tab}"><span class="pbl-i ${cls}">${icons[cls]||'○'}</span><span class="pbl-l">${lbl}</span><span class="pbl-t ${cls}">${dur}</span></div>`;
+    }).join('')+'</div>';
+  }
+  // tabs
+  const t=state.tab[p.id]||'events';
+  const tabsH=TABS.map(x=>`<div class="dtab ${t===x?'on':''}" onclick="stab('${p.id}','${x}')">${TLAB[x]||x}</div>`).join('');
   const cont=renderTabContent(p,t);
-  return`<div class="dtabs">${tabsH}</div><div class="dcont" id="dcont-${p.id}">${cont}</div>`;
+  return hier+pb+`<div class="dtabs">${tabsH}</div><div class="dcont" id="dcont-${p.id}">${cont}</div>`;
 }
 
 function renderTabContent(p,tab){
+  if(tab==='events')return renderEventsTab(p);
   if(tab==='spec')return renderSpecTab(p);
   if(tab==='sessions')return renderSessionsTab(p);
   if(tab==='runs')return renderRunsTab(p);
   if(tab==='logs')return renderLogsTab(p);
   if(tab==='artifacts')return renderArtifactsTab(p);
   if(tab==='evidence')return renderEvidenceTab(p);
-  if(tab==='events')return renderEventsTab(p);
   return'<div class="empty">Unknown tab</div>';
 }
 
+// ── Events tab ──
+function renderEventsTab(p){
+  const ev=state.tabData[p.id]?.events;
+  if(ev===null)return'<div class="empty">No events</div>';
+  if(ev===undefined){loadTabData(p.id,'events');return'<div class="loading">Loading events</div>';}
+  const events=ev.events||[];
+  if(!events.length)return'<div class="empty">No events</div>';
+  return'<table class="etbl"><thead><tr><th>Time</th><th>Event</th><th>Detail</th></tr></thead><tbody>'+events.map(e=>{
+    const p=e.payload||{},extra=p.from?`${p.from}→${p.to}`:e.reason||'';
+    return`<tr><td class="ev-t">${fmtTime(e.timestamp)}</td><td class="ev-e">${esc(e.event_type)}</td><td class="ev-d">${esc(extra)}</td></tr>`;
+  }).join('')+'</tbody></table>';
+}
+
+// ── Spec tab ──
 function renderSpecTab(p){
-  const pk=p.packet||{};
-  const sm=p.state_machine||{};
-  const steps=sm.steps||[];
+  const pk=p.packet||{},sm=p.state_machine||{},steps=sm.steps||[];
   const rows=[
-    ['ID',p.id],
-    ['Title',p.title],
-    ['Slug',p.slug],
-    ['State',p.state],
+    ['ID',p.id],['Title',p.title],['Slug',p.slug],['State',p.state],
     ['Profile',pk.acceptance_profile||p.acceptance_profile||'—'],
     ['Attempts',`${p.attempt_count||0} / ${p.max_attempts||0}`],
-    ['Feature',p.feature?.title||pk.feature_id||'—'],
-    ['Wave',p.wave?.title||pk.wave_id||'—'],
-    ['Created',fmtDate(pk.created_at)],
-    ['Updated',fmtDate(pk.updated_at)],
+    ['Created',fmtDate(pk.created_at||p.created_at)],
+    ['Updated',fmtDate(pk.updated_at||p.updated_at)],
   ];
   let html='<div class="spec-grid">'+rows.map(r=>`<span class="sk">${r[0]}</span><span class="sv">${r[1]}</span>`).join('')+'</div>';
   if(steps.length){
-    html+='<div style="margin-top:8px;font-size:10px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.3px;margin-bottom:4px">State Machine</div>';
-    html+='<div style="display:flex;gap:6px;flex-wrap:wrap">'+steps.map(s=>{
+    html+='<div style="margin-top:8px;font-size:10px;font-weight:700;color:var(--t3);margin-bottom:4px">State Machine</div>';
+    html+='<div style="display:flex;gap:5px;flex-wrap:wrap">'+steps.map(s=>{
       const c=s.state==='done'?'var(--green)':s.state==='running'?'var(--blue)':'var(--t3)';
-      return`<div style="background:var(--bg1);border:1px solid var(--bd);border-radius:4px;padding:5px 8px;min-width:80px"><div style="font-size:9px;font-weight:700;color:${c};text-transform:uppercase">${s.label}</div><div style="font-size:8px;color:var(--t3);font-family:var(--mono)">${fmtTime(s.time)}</div>${s.meta?`<div style="font-size:8px;color:var(--t2)">${s.meta}</div>`:''}</div>`;
+      return`<div style="background:var(--bg1);border:1px solid var(--bd);border-radius:4px;padding:4px 7px;min-width:70px"><div style="font-size:9px;font-weight:700;color:${c};text-transform:uppercase">${esc(s.label)}</div><div style="font-size:8px;color:var(--t3)">${fmtTime(s.time)}</div>${s.meta?`<div style="font-size:8px;color:var(--t2)">${esc(s.meta)}</div>`:''}</div>`;
     }).join('')+'</div>';
   }
   return html;
 }
 
+// ── Sessions tab ──
 function renderSessionsTab(p){
-  const ss=state.tabData[p.id]?.sessions||p.sessions||[];
-  if(!ss.length)return'<div class="empty">No sessions</div>';
-  return'<div class="slist">'+ss.map(s=>`<div class="sitem"><span class="sid">${s.id||s.session_id||'—'}</span><span class="sst sst-${s.status||''}">${s.status||'—'}</span><span class="smd">${s.model||''}</span><span class="stk">${s.tokens_in||s.tokensUsed||0}→${s.tokens_out||0}</span></div>`).join('')+'</div>';
+  const ss=state.tabData[p.id]?.sessions;
+  if(ss===null)return'<div class="empty">No sessions</div>';
+  if(ss===undefined){loadTabData(p.id,'sessions');return'<div class="loading">Loading sessions</div>';}
+  const list=ss.sessions||ss||[];
+  if(!list.length)return'<div class="empty">No sessions</div>';
+  return'<div class="slist">'+list.map(s=>{
+    const sid=s.id||s.session_id||'—',status=s.status||'—',model=s.model||s.agent||'—';
+    const ti=s.tokens_in||s.tokensUsed||s.input_tokens||0,to=s.tokens_out||s.output_tokens||0;
+    return`<div class="sitem"><span class="sid">${esc(sid)}</span><span class="sst sst-${status}">${status}</span><span class="smd">${esc(model)}</span><span class="stk">${ti}→${to}</span></div>`;
+  }).join('')+'</div>';
 }
 
+// ── Runs tab ──
 function renderRunsTab(p){
   const rs=p.runs_summary||[];
   if(!rs.length)return'<div class="empty">No runs</div>';
-  return'<table class="etbl"><thead><tr><th>Run</th><th>Status</th><th>Worker</th><th>Executor</th><th>Model</th><th>Duration</th><th>Started</th></tr></thead><tbody>'+rs.map(r=>`<tr><td class="ev-t">#${r.run_number}</td><td><span class="badge b-${SC[r.status]||'queue'}">${r.status||'?'}</span></td><td class="ev-d">${r.worker_id||'—'}</td><td class="ev-d">${r.executor_id||'—'}</td><td class="ev-d" style="font-family:var(--mono);font-size:9px">${r.model||'—'}</td><td class="ev-t">${fmtDur(r.duration_ms)}</td><td class="ev-t">${fmtTime(r.started_at)}</td></tr>`).join('')+'</tbody></table>';
+  return'<table class="etbl"><thead><tr><th>Run</th><th>Status</th><th>Worker</th><th>Executor</th><th>Model</th><th>Duration</th></tr></thead><tbody>'+rs.map(r=>`<tr style="cursor:pointer" onclick="runExpand('${p.id}',${r.run_number},'${esc(r.run_id.replace(p.id+'-',''))}')"><td class="ev-t" style="font-family:var(--mono);color:var(--purple);font-weight:600">#${r.run_number}</td><td><span class="badge b-${SC[r.status]||'queue'}">${r.status||'?'}</span></td><td class="ev-d">${r.worker_id||'—'}</td><td class="ev-d">${r.executor_id||'—'}</td><td class="ev-d" style="font-size:9px">${r.model||'—'}</td><td class="ev-t">${fmtDur(r.duration_ms)}</td></tr>`+renderRunDetailRow(p,r)).join('')+'</tbody></table>';
+}
+function renderRunDetailRow(p,r){
+  const key=p.id+'.r'+r.run_number;
+  if(state.tabData[key]===undefined)return'';
+  const data=state.tabData[key];
+  if(!data)return'<tr><td colspan="6"><div class="empty">No data</div></td></tr>';
+  const rj=data.result_json||{},leg=rj.legacy_result||{};
+  const prompt=data.prompt||rj.prompt||leg.prompt||'';
+  const cmd=data.command_preview||rj.command_preview||leg.command_preview||[];
+  const stderr=leg.stderr||'',stdout=leg.stdout||'';
+  let h='<td colspan="6"><div style="padding:4px;display:flex;flex-direction:column;gap:3px">';
+  if(cmd.length){const c=Array.isArray(cmd)?cmd.join(' '):String(cmd);h+=`<div style="font-size:9px;color:var(--t3)">Command: <span style="color:var(--green);font-family:var(--mono)">${esc(c)}</span></div>`;}
+  if(prompt)h+=`<details><summary style="font-size:9px;color:var(--blue);cursor:pointer">Prompt (${prompt.length} chars)</summary><div style="background:var(--bg1);border:1px solid var(--bd);border-radius:4px;padding:4px;margin-top:2px;font-family:var(--mono);font-size:9px;color:var(--t2);white-space:pre-wrap;max-height:200px;overflow-y:auto;word-break:break-all">${esc(prompt)}</div></details>`;
+  if(stderr)h+=`<details><summary style="font-size:9px;color:var(--red);cursor:pointer">Stderr (${stderr.split('\\n').length||0} lines)</summary><div style="background:var(--bg1);border:1px solid var(--bd);border-radius:4px;padding:4px;margin-top:2px;font-family:var(--mono);font-size:9px;color:var(--red);white-space:pre-wrap;max-height:200px;overflow-y:auto">${esc(stderr.slice(0,3000))}</div></details>`;
+  if(stdout)h+=`<details><summary style="font-size:9px;color:var(--green);cursor:pointer">Stdout</summary><div style="background:var(--bg1);border:1px solid var(--bd);border-radius:4px;padding:4px;margin-top:2px;font-family:var(--mono);font-size:9px;color:var(--t2);white-space:pre-wrap;max-height:200px;overflow-y:auto">${esc(stdout.slice(0,3000))}</div></details>`;
+  if(!h.includes('details'))h+='<div class="empty" style="padding:10px">No run data available</div>';
+  h+='</div></td>';return'<tr>'+h+'</tr>';
+}
+async function runExpand(id,num,suffix){
+  const key=id+'.r'+num;
+  if(state.tabData[key]){
+    delete state.tabData[key];
+    const p=getAllPackets(state.data).find(x=>x.id===id);
+    if(p)updateTabContent(id);
+    return;
+  }
+  state.tabData[key]=undefined;
+  const p=getAllPackets(state.data).find(x=>x.id===id);
+  if(p)updateTabContent(id);
+  try{
+    const r=await fetch(apiUrl(`/api/admin/packet/${id}/runs/${suffix}`));
+    state.tabData[key]=await r.json();
+  }catch{state.tabData[key]=null;}
+  if(p)updateTabContent(id);
 }
 
+// ── Logs tab ──
 function renderLogsTab(p){
   const ld=state.tabData[p.id]?.logs;
   if(ld===null)return'<div class="empty">No logs available</div>';
-  if(ld===undefined){
-    loadTabData(p.id,'logs');
-    return'<div class="loading">Loading logs...</div>';
-  }
+  if(ld===undefined){loadTabData(p.id,'logs');return'<div class="loading">Loading logs</div>';}
   const lines=ld.lines||[];
-  if(!lines.length)return'<div class="empty">No logs</div>';
+  if(!lines.length)return'<div class="empty">No log lines</div>';
   return'<div class="logs">'+lines.map(l=>{
     if(typeof l==='string')return`<div class="ll"><span class="lm">${esc(l)}</span></div>`;
     return`<div class="ll"><span class="lt">${l.timestamp||''}</span><span class="lv ${l.level||''}">${l.level||''}</span><span class="lm">${esc(l.message||l.text||'')}</span></div>`;
   }).join('')+'</div>';
 }
 
+// ── Artifacts tab ──
 function renderArtifactsTab(p){
   const ad=state.tabData[p.id]?.artifacts;
   if(ad===null)return'<div class="empty">No artifacts</div>';
-  if(ad===undefined){
-    loadTabData(p.id,'artifacts');
-    return'<div class="loading">Loading artifacts...</div>';
-  }
+  if(ad===undefined){loadTabData(p.id,'artifacts');return'<div class="loading">Loading artifacts</div>';}
   const tree=ad.tree||[];
   if(!tree.length)return'<div class="empty">No artifacts</div>';
-  function renderTree(nodes,depth){
-    let h='';
-    nodes.forEach(n=>{
-      const indent='padding-left:'+(depth*16)+'px';
-      if(n.type==='dir'){
-        h+=`<div class="af" style="${indent}"><span style="color:var(--yellow)">▸</span><span class="an">${n.name}/</span></div>`;
-        if(n.children)h+=renderTree(n.children,depth+1);
-      }else{
-        h+=`<div class="af" style="${indent}"><span style="color:var(--t3)">·</span><span>${n.name}</span><span class="as">${n.size?fmtSize(n.size):''}</span></div>`;
-      }
-    });
-    return h;
+  function rt(nodes,d){
+    let h='';nodes.forEach(n=>{
+      const pad='padding-left:'+(d*16)+'px';
+      if(n.type==='dir'){h+=`<div class="af" style="${pad}"><span style="color:var(--yellow)">▸</span><span class="an">${esc(n.name)}/</span></div>`;if(n.children)h+=rt(n.children,d+1);}
+      else{h+=`<div class="af" style="${pad}"><span style="color:var(--t3)">·</span><span>${esc(n.name)}</span><span class="as">${fmtSize(n.size)}</span></div>`;}
+    });return h;
   }
-  return'<div class="atree">'+renderTree(tree,0)+'</div>';
+  return'<div class="atree">'+rt(tree,0)+'</div>';
 }
 
+// ── Evidence tab ──
 function renderEvidenceTab(p){
   const ed=state.tabData[p.id]?.evidence;
   if(ed===null)return'<div class="empty">No evidence</div>';
-  if(ed===undefined){
-    loadTabData(p.id,'evidence');
-    return'<div class="loading">Loading evidence...</div>';
-  }
+  if(ed===undefined){loadTabData(p.id,'evidence');return'<div class="loading">Loading evidence</div>';}
   const stages=ed.stages||[];
-  if(!stages.length&&!ed.summary)return'<div class="empty">No evidence data</div>';
   let html='';
-  if(ed.verdict)html+=`<div style="font-size:11px;margin-bottom:6px"><span style="color:var(--t3);font-weight:600">Verdict:</span> <span style="color:${ed.verdict==='pass'?'var(--green)':'var(--red)'}">${ed.verdict}</span></div>`;
+  if(ed.verdict)html+=`<div style="font-size:11px;margin-bottom:6px"><span style="color:var(--t3);font-weight:600">Verdict:</span> <span style="color:${ed.verdict==='pass'||ed.verdict==='passed'?'var(--green)':'var(--red)'}">${esc(ed.verdict)}</span></div>`;
   if(ed.summary)html+=`<div style="font-size:10px;color:var(--t2);margin-bottom:6px">${esc(ed.summary)}</div>`;
   if(stages.length){
     html+='<div class="scards">'+stages.map(s=>{
       const cls=s.status==='passed'?'done':s.status==='failed'?'failed':'pending';
       const icon=s.status==='passed'?'✓':s.status==='failed'?'✗':'—';
-      return`<div class="sc ${cls}"><div class="sc-h"><span class="sc-n ${cls}">${s.name||s.stage||'?'}</span><span class="sc-si">${icon}</span></div><div class="sc-rs">${s.summary?`<div class="sc-r"><span class="sc-rk">Summary</span><span class="sc-rv">${esc(s.summary).slice(0,60)}</span></div>`:''}${s.blocking_issues?.length?`<div class="sc-r"><span class="sc-rk">Blocking</span><span class="sc-rv err">${s.blocking_issues.length}</span></div>`:''}</div></div>`;
+      let r='';if(s.summary)r+=`<div class="sc-r"><span class="sc-rk">Summary</span><span class="sc-rv">${esc(s.summary).slice(0,60)}</span></div>`;
+      if(s.commands_summary)r+=`<div class="sc-r"><span class="sc-rk">Cmds</span><span class="sc-rv">${s.commands_summary.passed||0}✓ ${s.commands_summary.failed||0}✗</span></div>`;
+      if(s.blocking_issues?.length)r+=`<div class="sc-r"><span class="sc-rk">Blocking</span><span class="sc-rv err">${s.blocking_issues.length}</span></div>`;
+      return`<div class="sc ${cls}"><div class="sc-h"><span class="sc-n ${cls}">${esc(s.name||s.stage||'?')}</span><span class="sc-si">${icon}</span></div><div class="sc-rs">${r}</div></div>`;
     }).join('')+'</div>';
   }
+  if(!html)html='<div class="empty">No evidence data</div>';
   return html;
 }
 
-function renderEventsTab(p){
-  const ev=state.tabData[p.id]?.events;
-  if(ev===null)return'<div class="empty">No events</div>';
-  if(ev===undefined){
-    loadTabData(p.id,'events');
-    return'<div class="loading">Loading events...</div>';
-  }
-  const events=ev.events||[];
-  if(!events.length)return'<div class="empty">No events</div>';
-  return'<table class="etbl"><thead><tr><th>Time</th><th>Event</th><th>Component</th><th>Detail</th></tr></thead><tbody>'+events.map(e=>{
-    const reason=e.reason||'';
-    const payload=e.payload||{};
-    const extra=payload.from?`${payload.from}→${payload.to}`:'';
-    return`<tr><td class="ev-t">${fmtTime(e.timestamp)}</td><td class="ev-e">${e.event_type}</td><td class="ev-d" style="font-family:var(--mono);font-size:9px">${e.component||'—'}</td><td class="ev-d">${esc(reason||extra||'')}</td></tr>`;
-  }).join('')+'</tbody></table>';
-}
-
 function fmtSize(bytes){
-  if(!bytes)return'';
-  if(bytes<1024)return bytes+'B';
-  if(bytes<1048576)return(bytes/1024).toFixed(0)+'KB';
+  if(!bytes)return'';if(bytes<1024)return bytes+'B';if(bytes<1048576)return(bytes/1024).toFixed(0)+'KB';
   return(bytes/1048576).toFixed(1)+'MB';
 }
 
-function esc(s){
-  if(!s)return'';
-  const d=document.createElement('div');
-  d.appendChild(document.createTextNode(String(s)));
-  return d.innerHTML;
-}
-
 // ── Tab data loading ──
-
-function getLastRunNumber(p){
-  const rs=p.runs_summary||[];
-  if(!rs.length)return null;
-  return rs[rs.length-1].run_number;
+function getLastRunSuffix(p){
+  const rs=p.runs_summary||[];if(!rs.length)return null;
+  return rs[rs.length-1].run_id.replace(p.id+'-','');
 }
-
 async function loadTabData(id,tab){
   if(!state.tabData[id])state.tabData[id]={};
-  state.tabData[id][tab]=undefined; // loading
-  const dcont=document.getElementById('dcont-'+id);
+  state.tabData[id][tab]=undefined;
   try{
-    const pkts=getAllPackets(state.data);
-    const p=pkts.find(x=>x.id===id);
+    const p=getAllPackets(state.data).find(x=>x.id===id);
     let data=null;
-    if(tab==='events'){
-      const r=await fetch(apiUrl(`/api/admin/packet/${id}/timeline?limit=200`));
-      data=await r.json();
-    }else if(tab==='logs'){
-      const rn=getLastRunNumber(p);
-      if(!rn||!p){state.tabData[id][tab]=null;updateTabContent(id);return;}
-      const r=await fetch(apiUrl(`/api/admin/packet/${id}/runs/${rn}/logs?tail=200`));
-      data=await r.json();
-    }else if(tab==='evidence'){
-      const rn=getLastRunNumber(p);
-      if(!rn||!p){state.tabData[id][tab]=null;updateTabContent(id);return;}
-      const r=await fetch(apiUrl(`/api/admin/packet/${id}/runs/${rn}/evidence`));
-      data=await r.json();
-    }else if(tab==='artifacts'){
-      const rn=getLastRunNumber(p);
-      if(!rn||!p){state.tabData[id][tab]=null;updateTabContent(id);return;}
-      const r=await fetch(apiUrl(`/api/admin/packet/${id}/runs/${rn}/artifacts`));
-      data=await r.json();
-    }
+    if(tab==='events'){const r=await fetch(apiUrl(`/api/admin/packet/${id}/timeline?limit=200`));data=await r.json();}
+    else if(tab==='sessions'){const r=await fetch(apiUrl(`/api/admin/packet/${id}/sessions`));data=await r.json();}
+    else if(tab==='logs'){const suff=getLastRunSuffix(p);if(!suff||!p){state.tabData[id][tab]=null;updateTabContent(id);return;}const r=await fetch(apiUrl(`/api/admin/packet/${id}/runs/${suff}/logs?tail=200`));data=await r.json();}
+    else if(tab==='evidence'){const suff=getLastRunSuffix(p);if(!suff||!p){state.tabData[id][tab]=null;updateTabContent(id);return;}const r=await fetch(apiUrl(`/api/admin/packet/${id}/runs/${suff}/evidence`));data=await r.json();}
+    else if(tab==='artifacts'){const suff=getLastRunSuffix(p);if(!suff||!p){state.tabData[id][tab]=null;updateTabContent(id);return;}const r=await fetch(apiUrl(`/api/admin/packet/${id}/runs/${suff}/artifacts`));data=await r.json();}
     state.tabData[id][tab]=data;
-  }catch(e){
-    state.tabData[id][tab]=null;
-  }
+  }catch(e){state.tabData[id][tab]=null;}
   updateTabContent(id);
 }
-
 function updateTabContent(id){
-  const dcont=document.getElementById('dcont-'+id);
-  if(!dcont)return;
-  const pkts=getAllPackets(state.data);
-  const p=pkts.find(x=>x.id===id);
-  if(!p)return;
-  const t=state.tab[p.id]||'spec';
+  const dcont=document.getElementById('dcont-'+id);if(!dcont)return;
+  const p=getAllPackets(state.data).find(x=>x.id===id);if(!p)return;
+  const t=state.tab[p.id]||'events';
   dcont.innerHTML=renderTabContent(p,t);
+  const dtabs=dcont.parentElement?.querySelector('.dtabs');
+  if(dtabs)dtabs.querySelectorAll('.dtab').forEach(el=>el.classList.toggle('on',el.textContent.trim()===TLAB[t]));
 }
 
 // ── Toggle / Stab / Render ──
-
 function toggle(id){
-  state.sel=state.sel===id?null:id;
-  if(!state.sel)delete state.tabData[id];
-  render();
-  if(state.sel){
-    const detail=loadDetailCached(id);
-    if(detail){
-      mergeDetail(id,detail);
-    }
-    loadDetail(id).then(detail=>{
-      if(detail&&state.sel===id)mergeDetail(id,detail);
-    });
-  }
+  if(state.sel===id){state.sel=null;delete state.tabData[id];render();return;}
+  state.sel=id;delete state.tabData[id];delete state.tab[id];render();
+  loadDetail(id).then(d=>{if(d&&state.sel===id)mergeDetail(id,d);});
+  const cached=loadDetailCached(id);if(cached)mergeDetail(id,cached);
 }
-
 function mergeDetail(id,detail){
-  const pkts=getAllPackets(state.data);
-  const p=pkts.find(x=>x.id===id);
-  if(!p)return;
+  const p=getAllPackets(state.data).find(x=>x.id===id);if(!p)return;
   if(detail.pipeline)p.pipeline=detail.pipeline;
   if(detail.state_machine)p.state_machine=detail.state_machine;
   if(detail.runs_summary)p.runs_summary=detail.runs_summary;
   if(detail.sessions_summary)p.sessions=detail.sessions_summary.sessions||[];
   Object.assign(p,detail.packet||{});
   const dcont=document.getElementById('dcont-'+id);
-  if(dcont){
-    const t=state.tab[id]||'spec';
-    dcont.innerHTML=renderTabContent(p,t);
-  }
+  if(dcont){const t=state.tab[id]||'events';dcont.innerHTML=renderTabContent(p,t);}
 }
-
 function stab(id,t){
-  state.tab[id]=t;
-  const dcont=document.getElementById('dcont-'+id);
-  if(!dcont)return;
-  const pkts=getAllPackets(state.data);
-  const p=pkts.find(x=>x.id===id);
-  if(!p)return;
-  dcont.innerHTML=renderTabContent(p,t);
-  // Update tab highlight
-  const dtabs=dcont.parentElement?.querySelector('.dtabs');
-  if(dtabs){
-    dtabs.querySelectorAll('.dtab').forEach(el=>el.classList.toggle('on',el.textContent.toLowerCase().trim()===t));
-  }
+  state.tab[id]=t;updateTabContent(id);
 }
-
 function render(){
-  const pkts=getAllPackets(state.data);
-  renderChips(pkts);
-  renderBoard(pkts);
+  const pkts=getAllPackets(state.data);renderChips(pkts);renderBoard(pkts);
 }
 
 // ── API ──
-
-const _qp=new URLSearchParams(location.search);
-const _xtp=_qp.get('XTransformPort');
-function apiUrl(path){
-  if(_xtp){
-    const sep=path.includes('?')?'&':'?';
-    return path+sep+'XTransformPort='+_xtp;
-  }
-  return path;
-}
-
+const _qp=new URLSearchParams(location.search),_xtp=_qp.get('XTransformPort');
+function apiUrl(path){if(_xtp){const sep=path.includes('?')?'&':'?';return path+sep+'XTransformPort='+_xtp;}return path;}
 const detailCache={};
-async function loadDetail(id){
-  try{
-    const r=await fetch(apiUrl(`/api/admin/packet/${id}/detail`));
-    const d=await r.json();
-    d._ts=Date.now();
-    detailCache[id]=d;
-    return d;
-  }catch{return null;}
-}
-
-function loadDetailCached(id){
-  const d=detailCache[id];
-  if(d&&Date.now()-d._ts<15000)return d;
-  return null;
-}
-
-async function loadData(){
-  try{
-    const r=await fetch(apiUrl('/api/admin/features'));
-    state.data=await r.json();
-    render();
-  }catch(e){
-    console.error('Failed to load data:',e);
-    $('#board').innerHTML='<div class="empty">Failed to load data. Retrying...</div>';
-    setTimeout(loadData,5000);
-  }
-}
-
-// ── Event Listeners ──
+async function loadDetail(id){try{const r=await fetch(apiUrl(`/api/admin/packet/${id}/detail`));const d=await r.json();d._ts=Date.now();detailCache[id]=d;return d;}catch{return null;}}
+function loadDetailCached(id){const d=detailCache[id];if(d&&Date.now()-d._ts<15000)return d;return null;}
+async function loadData(){try{const r=await fetch(apiUrl('/api/admin/features'));state.data=await r.json();render();}catch(e){$('#board').innerHTML='<div class="empty">Failed to load data. Retrying...</div>';setTimeout(loadData,5000);}}
 
 $('#chips').addEventListener('click',e=>{const c=e.target.closest('.chip');if(!c)return;state.filter=c.dataset.f;state.sel=null;state.tabData={};render();});
 $('#search').addEventListener('input',e=>{state.q=e.target.value.trim();renderBoard(getAllPackets(state.data));});
-
-// Auto-refresh
 setInterval(loadData,15000);
-
-// Init
 loadData();
 </script>
 </body></html>

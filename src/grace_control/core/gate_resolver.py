@@ -89,13 +89,25 @@ _EXCLUDED_FILE_SUFFIXES: tuple[str, ...] = (
 )
 
 
-def _path_is_excluded(path: str) -> bool:
+def _load_canon_config(base: Path) -> dict:
+    """Load grace/canon.yaml config if it exists."""
+    for config_name in ("grace/canon.yaml", ".grace/canon.yaml"):
+        if (base / config_name).is_file():
+            try:
+                import yaml
+                return yaml.safe_load((base / config_name).read_text()) or {}
+            except Exception:
+                pass
+    return {}
+
+
+def _path_is_excluded(path: str, extra_prefixes: tuple[str, ...] = ()) -> bool:
     """Check if a relative file path should be excluded from GRACE lint."""
     fp = path.replace("\\", "/")
     for part in fp.split("/"):
         if part in _EXCLUDED_DIRS:
             return True
-    for prefix in _EXCLUDED_PATH_PREFIXES:
+    for prefix in _EXCLUDED_PATH_PREFIXES + extra_prefixes:
         if fp.startswith(prefix):
             return True
     for suffix in _EXCLUDED_FILE_SUFFIXES:
@@ -105,44 +117,17 @@ def _path_is_excluded(path: str) -> bool:
 
 
 def _is_grace_orchestrator(base: Path) -> bool:
-    """Check if the worktree is the GRACE orchestrator itself (not a target repo)."""
     return (base / ".grace" / "state").exists() or (base / "src" / "grace_control").exists()
 
 
 def resolve_linter_mode(worktree_path: Path) -> str:
-    """Determine which linter mode applies to this worktree.
-
-    Returns one of:
-      - 'strict'      — orchestrator repo: full GRACE lint on all scoped files
-      - 'changed-files' — target repo opted in: changed files only
-      - 'disabled'      — target repo without opt-in
-    """
     base = worktree_path.resolve() if worktree_path else Path.cwd()
-
-    # Orchestrator repo: always strict
     if _is_grace_orchestrator(base):
         return "strict"
-
-    # Check for explicit opt-in config
-    for config_name in ("grace/canon.yaml", ".grace/canon.yaml", "grace.toml"):
-        if (base / config_name).is_file():
-            try:
-                canon_raw = (base / config_name).read_text()
-                if config_name.endswith(".yaml"):
-                    import yaml
-                    canon = yaml.safe_load(canon_raw) or {}
-                elif config_name.endswith(".toml"):
-                    import tomllib
-                    canon = tomllib.loads(canon_raw)
-                else:
-                    canon = {}
-                gate_mode = canon.get("gate_mode", "changed-files")
-                if gate_mode in ("changed-files", "strict", "disabled"):
-                    return gate_mode
-            except Exception:
-                pass
-            return "changed-files"  # safe default even on parse error
-
+    canon = _load_canon_config(base)
+    gate_mode = canon.get("gate_mode", "")
+    if gate_mode in ("changed-files", "strict", "disabled"):
+        return gate_mode
     return "disabled"
 
 
@@ -155,6 +140,10 @@ def resolve_default_t0(
     origins: list[str] = []
     base = worktree_path.resolve() if worktree_path else Path.cwd()
     linter_mode = resolve_linter_mode(base)
+    canon = _load_canon_config(base)
+    extra_prefixes: tuple[str, ...] = ()
+    if "exclude" in canon:
+        extra_prefixes = tuple(p.rstrip("/") + "/" for p in (canon["exclude"] or []) if isinstance(p, str))
 
     areas = resolve_touched_areas(changed_files)
 
@@ -171,13 +160,13 @@ def resolve_default_t0(
         return commands, origins
 
     # Filter out excluded paths for GRACE linting
-    lint_py = [f for f in py_files if not _path_is_excluded(f)]
-    lint_fe = [f for f in fe_files if not _path_is_excluded(f)]
+    lint_py = [f for f in py_files if not _path_is_excluded(f, extra_prefixes)]
+    lint_fe = [f for f in fe_files if not _path_is_excluded(f, extra_prefixes)]
 
     frontend_lint_ran = False
 
-    # backend GRACE lint
-    if linter_mode in ("strict", "changed-files") and (base / "scripts" / "grace_lint.py").is_file():
+    # backend GRACE lint — only when there are non-excluded files
+    if linter_mode in ("strict", "changed-files") and lint_py and (base / "scripts" / "grace_lint.py").is_file():
         if linter_mode == "strict":
             commands.append(["python3", "scripts/grace_lint.py"] + lint_py)
         else:
@@ -185,8 +174,8 @@ def resolve_default_t0(
                 commands.append(["python3", "scripts/grace_lint.py", f])
         origins.append("auto:t0:backend_grace_lint")
 
-    # frontend GRACE lint
-    if linter_mode in ("strict", "changed-files") and (base / "scripts" / "grace_front_lint.py").is_file():
+    # frontend GRACE lint — only when there are non-excluded files
+    if linter_mode in ("strict", "changed-files") and lint_fe and (base / "scripts" / "grace_front_lint.py").is_file():
         if linter_mode == "strict":
             commands.append(["python3", "scripts/grace_front_lint.py"] + lint_fe)
         else:
