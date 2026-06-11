@@ -1,0 +1,37 @@
+id: solarsage-ui-safe-pilot-002
+target_repo_worktree: true
+waves:
+  - id: W1
+    title: Solar Sage UI-safe pilot 002
+    packets:
+      - id: P1
+        role: coder
+        acceptance_profile: NORMAL
+        prompt: >-
+          Make one tiny UI-safe copy-only change in Solar Sage using the existing UI structure.
+          Prefer the Today/current-day screen. If it cannot be identified quickly, use the home/main screen.
+          Add a small non-interactive helper copy: "Data is shown for guidance only. Check important decisions before acting."
+          Use Russian equivalent only if the surrounding UI is Russian.
+          Do not add dependencies, API calls, state, navigation, auth/payment/subscription changes, schema changes, or production config changes.
+          Keep final changes to 1 UI file and optionally 1 nearby test file.
+        verification:
+          t0:
+            commands:
+              - git status --short
+          t1:
+            commands:
+              - pnpm lint
+              - pnpm typecheck
+          t2:
+            commands:
+              - pnpm test:run
+        scope:
+          - app/**
+          - pages/**
+          - src/**
+          - components/**
+          - tests/**
+          - __tests__/**
+expected:
+  final_state: accepted
+  min_real_agent_runs: 1
