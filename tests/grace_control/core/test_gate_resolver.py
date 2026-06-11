@@ -159,16 +159,30 @@ def test_t1_no_auto_defaults(tmp_path):
 
 def test_t2_guardrails_strict(tmp_path):
     wt = _make_worktree(tmp_path, scripts={"guardrails.sh": "echo strict"})
-    cmds, origins = resolve_default_t2(["apps/api/main.py"], wt)
+    cmds, origins = resolve_default_t2(["apps/api/main.py"], wt, profile="STRICT")
     assert any("guardrails.sh" in " ".join(c) for c in cmds)
     assert any("strict" in " ".join(c) for c in cmds)
     assert any("auto:t2:guardrails_strict" in o for o in origins)
 
 
-def test_t2_no_guardrails(tmp_path):
+def test_t2_strict_no_guardrails(tmp_path):
     wt = _make_worktree(tmp_path)
-    cmds, origins = resolve_default_t2(["apps/api/main.py"], wt)
+    cmds, origins = resolve_default_t2(["apps/api/main.py"], wt, profile="STRICT")
     assert cmds == [], f"expected no defaults, got {cmds}"
+
+
+def test_t2_fast_returns_empty_even_with_guardrails(tmp_path):
+    """FAST profile must NOT get T2 defaults even if guardrails.sh exists."""
+    wt = _make_worktree(tmp_path, scripts={"guardrails.sh": "echo strict"})
+    cmds, origins = resolve_default_t2(["apps/api/main.py"], wt, profile="FAST")
+    assert cmds == [], f"FAST should get no T2 defaults, got {cmds}"
+
+
+def test_t2_normal_returns_empty_even_with_guardrails(tmp_path):
+    """NORMAL profile must NOT get T2 defaults even if guardrails.sh exists."""
+    wt = _make_worktree(tmp_path, scripts={"guardrails.sh": "echo strict"})
+    cmds, origins = resolve_default_t2(["apps/api/main.py"], wt, profile="NORMAL")
+    assert cmds == [], f"NORMAL should get no T2 defaults, got {cmds}"
 
 
 # ── Acceptance pipeline command_origins ─────────────────────────────────────

@@ -142,14 +142,18 @@ def resolve_default_t1(
 def resolve_default_t2(
     changed_files: list[str],
     worktree_path: Path,
+    profile: str = "STRICT",
 ) -> tuple[list[list[str]], list[str]]:
     commands: list[list[str]] = []
     origins: list[str] = []
     base = worktree_path.resolve() if worktree_path else Path.cwd()
-    guardrails = _detect_guardrails(base)
 
+    # T2 is only for STRICT profile
+    if profile != "STRICT":
+        return commands, origins
+
+    guardrails = _detect_guardrails(base)
     if guardrails:
-        # STRICT prefers strict level, else full
         strict_script = ["bash", f"scripts/{guardrails}", "strict"]
         if (base / "scripts" / guardrails).is_file():
             commands.append(strict_script)
@@ -169,7 +173,7 @@ def resolve_default_gates(
 ) -> dict[str, Any]:
     t0_cmds, t0_origins = resolve_default_t0(changed_files, worktree_path)
     t1_cmds, t1_origins = resolve_default_t1(changed_files, worktree_path)
-    t2_cmds, t2_origins = resolve_default_t2(changed_files, worktree_path)
+    t2_cmds, t2_origins = resolve_default_t2(changed_files, worktree_path, profile)
 
     return {
         "t0": {"commands": t0_cmds, "origins": t0_origins},
