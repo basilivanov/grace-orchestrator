@@ -1,16 +1,13 @@
-{# Stats bar partial — self-wrapping: returns <div id="stats-bar-container">.
-   hx-swap="outerHTML" on #stats-bar-container replaces this whole element.
-   The polling trigger (load, every 5s) re-attaches to the new element. #}
+{# Stats bar partial — returns inner content of #stats-bar-container.
+   Uses innerHTML swap so the container (with hx-trigger) stays in the DOM,
+   preventing the "load" trigger from re-firing after every swap and causing
+   an infinite request loop. #}
 {% set stats = overview.stats or {} %}
 {% set states = stats.by_state or {} %}
 {% set h = overview.health or {} %}
 {% set blocked = (states.blocked or 0) + (states.blocked_recoverable or 0) + (states.blocked_final or 0) %}
 {% set failed = (states.rejected or 0) + (states.failed or 0) %}
 {% set running = states.running or 0 %}
-<div id="stats-bar-container"
-     hx-get="/admin/_partial/stats"
-     hx-trigger="load, every 5s"
-     hx-swap="outerHTML">
   <div class="stats-bar">
     <span class="stats-title">Pipeline</span>
     <span class="stat {{ 'ok' if h.supervisor_alive else 'err' }}"
@@ -26,7 +23,7 @@
           hx-target="#timeline-pane"
           hx-swap="outerHTML"
           hx-push-url="{{ shell_url(filter='running') }}"
-          title="Packets running — click to filter">
+          title="Packets running">
       <span class="n">{{ running }}</span> running
     </span>
     {% endif %}
@@ -36,7 +33,7 @@
           hx-target="#timeline-pane"
           hx-swap="outerHTML"
           hx-push-url="{{ shell_url(filter='blocked') }}"
-          title="Packets blocked — click to filter (1-click to all blocked)">
+          title="Packets blocked">
       <span class="n">{{ blocked }}</span> blocked
     </span>
     {% endif %}
@@ -46,10 +43,9 @@
           hx-target="#timeline-pane"
           hx-swap="outerHTML"
           hx-push-url="{{ shell_url(filter='failed') }}"
-          title="Packets failed — click to filter (1-click to all failed)">
+          title="Packets failed">
       <span class="n">{{ failed }}</span> failed
     </span>
     {% endif %}
   </div>
   <script>setHealth({{ (h or {}) | tojson }});</script>
-</div>

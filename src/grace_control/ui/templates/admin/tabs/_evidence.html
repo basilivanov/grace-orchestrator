@@ -1,0 +1,24 @@
+{# Evidence tab — acceptance test evidence.
+   Expects: evidence #}
+<div class="tab-h">Evidence</div>
+{% if evidence and evidence.stages %}
+  <ul class="evidence-stages">
+    {% for st in evidence.stages %}
+      <li class="evidence-stage severity-{{ st.status | state_severity }}">
+        <strong>{{ st.name }}</strong>: {{ st.status }}
+        {% if st.summary %}<div class="muted small">{{ st.summary }}</div>{% endif %}
+        {% if st.blocking_issues %}
+          <ul>{% for iss in st.blocking_issues %}<li class="text-err">{{ iss }}</li>{% endfor %}</ul>
+        {% endif %}
+      </li>
+    {% endfor %}
+  </ul>
+{% else %}
+  <div class="muted small">
+    No acceptance evidence recorded.
+    <div style="margin-top: 4px;">
+      Acceptance is run as part of the coder command (NORMAL profile).
+      For STRICT profile, evidence stages (T0/T1/T2) are stored separately.
+    </div>
+  </div>
+{% endif %}

@@ -120,7 +120,7 @@ def create_app(settings: GraceSettings | None = None) -> FastAPI:
     # Admin UI — static assets for /static/* (HTMX is loaded from CDN in the template).
     from pathlib import Path as _P
 
-    from fastapi.responses import RedirectResponse
+    from fastapi.responses import HTMLResponse, RedirectResponse
     from fastapi.staticfiles import StaticFiles as _SF
 
     _ui_dir = _P(__file__).resolve().parents[1] / "ui"
@@ -130,7 +130,25 @@ def create_app(settings: GraceSettings | None = None) -> FastAPI:
 
     @app.get("/", include_in_schema=False)
     async def _root_redirect():
-        """Root URL → /admin (the operator console)."""
-        return RedirectResponse(url="/admin", status_code=307)
+        """Root URL → /admin.html (new flat dashboard)."""
+        return RedirectResponse(url="/admin.html", status_code=307)
+
+    # Serve the new flat admin dashboard as a standalone HTML page
+    _project_dir = _P(__file__).resolve().parents[4]  # grace-orchestrator/.. = project root
+    _new_admin_html = _project_dir / "public" / "admin.html"
+
+    @app.get("/admin.html", include_in_schema=False, response_class=HTMLResponse)
+    async def _new_admin_dashboard():
+        """New flat at-a-glance GRACE Control Plane dashboard."""
+        if _new_admin_html.exists():
+            return HTMLResponse(content=_new_admin_html.read_text())
+        return HTMLResponse(content="<h1>admin.html not found</h1>", status_code=404)
+
+    # Keep old HTMX console at /admin/old
+    @app.get("/admin/old", include_in_schema=False, response_class=HTMLResponse)
+    async def _old_admin_redirect(request: Request):
+        """Old HTMX console — still accessible for reference."""
+        from grace_control.api.routers.admin_ui import admin_console
+        return await admin_console(request=request)
 
     return app

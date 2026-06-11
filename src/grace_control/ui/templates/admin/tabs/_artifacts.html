@@ -1,0 +1,19 @@
+{# Artifacts tab — file tree with enhanced display.
+   Expects: artifacts, packet #}
+<div class="tab-h">Artifacts</div>
+{% if artifacts and artifacts.tree and artifacts.tree | length > 0 %}
+  <ul class="artifacts-tree">{% for n in artifacts.tree recursive %}
+    <li class="artifact-item {% if n.children %}artifact-dir{% else %}artifact-file{% endif %}">
+      <span class="artifact-icon">{{ '📁' if n.children else '📄' }}</span>
+      <span class="artifact-name">{{ n.name }}</span>
+      {% if n.size %}<span class="artifact-size muted">({{ n.size | fmt_size }})</span>{% endif %}
+      {% if n.children %}<ul>{{ loop(n.children) }}</ul>{% endif %}
+    </li>
+  {% endfor %}</ul>
+{% else %}
+<div class="tab-empty-state">
+  <div class="tab-empty-icon">📦</div>
+  <div class="tab-empty-text">No artifacts yet</div>
+  <div class="tab-empty-hint muted small">Artifacts are generated during the coder run. They will appear here once available.</div>
+</div>
+{% endif %}

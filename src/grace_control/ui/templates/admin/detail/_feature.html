@@ -1,0 +1,118 @@
+{# Feature detail partial — rendered inside _detail.html when only feature_id is set.
+   Expects: feature (dict with id, slug, title, status, description, wave_count,
+            total_packets, attention_count, waves, created_at, updated_at) #}
+{% if not feature %}
+  <div class="detail-empty">Feature not found.</div>
+{% else %}
+  {% set f = feature %}
+  {% set f_ui = f.status | ui_state %}
+  {% set f_has_attn = f.attention_count > 0 %}
+  {% set f_sev = 'attention' if f_has_attn and f_ui.severity == 'muted' else f_ui.severity %}
+  {% set f_dt = f.title | display_title('feature') %}
+
+  <a class="back-link" href="/admin" data-topnav="true">← overview</a>
+
+  {# ── Feature header ─────────────────────────────────────────────── #}
+  <div class="pkt-head-bar severity-{{ f_sev }}">
+    <div class="pkt-head-main">
+      <div class="pkt-head-label">Feature</div>
+      <h1 title="{{ f.title or f.slug or f.id }}">{{ f_dt.title }}</h1>
+      <div class="pkt-head-sub">
+        {% if f_ui.show == 'badge' %}
+          <span class="badge severity-{{ f_ui.severity }}">{{ f_ui.label }}</span>
+        {% else %}
+          <span class="muted small">{{ f_ui.label }}</span>
+        {% endif %}
+        {% if f_dt.is_placeholder %}
+          <span class="slug-chip">{{ f_dt.original or f.slug or '—' }}</span>
+        {% endif %}
+        <span class="raw-state muted small">raw: {{ f.status or '—' }}</span>
+      </div>
+    </div>
+  </div>
+
+  {# ── Feature metadata ───────────────────────────────────────────── #}
+  <div class="pkt-meta-block">
+    <div class="pkt-meta-row">
+      <span class="pkt-meta-label">feature_id</span>
+      <span class="pkt-meta-value mono">{{ f.id }}</span>
+    </div>
+    {% if f.slug %}
+    <div class="pkt-meta-row">
+      <span class="pkt-meta-label">slug</span>
+      <span class="pkt-meta-value mono">{{ f.slug }}</span>
+    </div>
+    {% endif %}
+    {% if f.created_at %}
+    <div class="pkt-meta-row">
+      <span class="pkt-meta-label">created</span>
+      <span class="pkt-meta-value mono">{{ f.created_at | fmt_time_short }}</span>
+    </div>
+    {% endif %}
+    {% if f.updated_at %}
+    <div class="pkt-meta-row">
+      <span class="pkt-meta-label">updated</span>
+      <span class="pkt-meta-value mono">{{ f.updated_at | fmt_time_short }}</span>
+    </div>
+    {% endif %}
+  </div>
+
+  {% if f.description %}
+  <div class="feature-description">
+    <div class="pipeline-h">Description</div>
+    <p>{{ f.description }}</p>
+  </div>
+  {% endif %}
+
+  {# ── Summary ─────────────────────────────────────────────────────── #}
+  <section class="wave-summary">
+    <h2 class="pipeline-h">Summary</h2>
+    <div class="wave-summary-grid">
+      <div class="wave-summary-cell">
+        <span class="wave-summary-key">waves</span>
+        <span class="wave-summary-val mono">{{ f.wave_count }}</span>
+      </div>
+      <div class="wave-summary-cell">
+        <span class="wave-summary-key">packets</span>
+        <span class="wave-summary-val mono">{{ f.total_packets }}</span>
+      </div>
+      {% if f_has_attn %}
+      <div class="wave-summary-cell severity-attention">
+        <span class="wave-summary-key">attention</span>
+        <span class="wave-summary-val mono">{{ f.attention_count }}</span>
+      </div>
+      {% endif %}
+    </div>
+  </section>
+
+  {# ── Wave breakdown ──────────────────────────────────────────────── #}
+  {% if f.waves %}
+  <section class="wave-summary">
+    <h2 class="pipeline-h">Waves</h2>
+    <div class="feature-wave-list">
+      {% for w in f.waves %}
+        {% set w_ui = w.status | ui_state %}
+        {% set w_has_attn = w.attention_count > 0 %}
+        {% set w_sev = 'attention' if w_has_attn and w_ui.severity == 'muted' else w_ui.severity %}
+        {% set w_dt = w.title | display_title('wave') %}
+        <div class="feature-wave-card severity-{{ w_sev }}"
+             hx-get="/admin/_partial/detail?wave_id={{ w.id }}&feature_id={{ f.id }}&filter={{ filter }}&expanded_features={{ expanded_features | join(',') }}&expanded_waves={{ expanded_waves | join(',') }}&search={{ search }}"
+             hx-target="#detail-pane"
+             hx-swap="outerHTML"
+             hx-push-url="{{ w.click_url }}"
+             style="cursor: pointer;">
+          <div class="feature-wave-card-head">
+            <span class="ft-wave-order">W{{ w.order }}</span>
+            <span class="feature-wave-title">{{ w_dt.title }}</span>
+            <span class="badge severity-{{ w_sev }}">{{ w_ui.label }}</span>
+          </div>
+          <div class="feature-wave-meta">
+            <span>{{ w.total_packets }} packet{{ '' if w.total_packets == 1 else 's' }}</span>
+            {% if w_has_attn %}<span class="attn-count">{{ w.attention_count }} needs attention</span>{% endif %}
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  </section>
+  {% endif %}
+{% endif %}

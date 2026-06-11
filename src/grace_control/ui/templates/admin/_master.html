@@ -1,18 +1,13 @@
 {# Master tree partial — self-wrapping: returns <div id="master-tree">.
-   hx-swap="outerHTML" on #master-tree replaces this whole element.
-   All clickable items carry server-pre-computed click_url.
+   Redesigned: card-based features with clear visual separation,
+   timing info on every item, compact packet rows.
 
-   UI layer: feature rows are navigation, not alert dashboard.
-   - NO loud colored pills on the row
-   - Small severity dot on the left (only colored if needs attention)
-   - Meta line: "{N} waves · {M} packets · {K} needs attention"
-   - Hide raw NOT_STARTED; show "1 needs attention" text instead. #}
+   FIX: When clicking a feature, also clear the detail pane so stale
+   content from a previously selected packet/wave doesn't remain. #}
 <div id="master-tree" class="master-tree">
   {% for f in features %}
     {% set f_ui = f.status | ui_state %}
     {% set has_attn = f.attention_count > 0 %}
-    {# Promote severity to 'attention' if the feature has failing packets,
-       even if the feature's own status is NOT_STARTED. #}
     {% set f_sev = 'attention' if has_attn and f_ui.severity == 'muted' else f_ui.severity %}
     {% set fexpanded = f.id in expanded_features %}
     <div class="tn-feature severity-{{ f_sev }} {{ 'has-attention' if has_attn else '' }} {{ 'selected' if f.id == selected_feature_id else '' }}">
@@ -22,6 +17,7 @@
            hx-target="#timeline-pane"
            hx-swap="outerHTML"
            hx-push-url="{{ f.click_url }}"
+           hx-on::after-request="document.getElementById('detail-pane') && htmx.ajax('GET', '/admin/_partial/detail?feature_id={{ f.id }}', '#detail-pane'); htmx.ajax('GET', '/admin/_partial/master?feature_id={{ f.id }}&filter={{ filter }}&expanded_features={{ (expanded_features + [f.id]) | join(',') }}&expanded_waves={{ expanded_waves | join(',') }}&search={{ search }}', '#master-tree')"
            style="cursor: pointer;">
         <span class="dot" aria-hidden="true"></span>
         <span class="title" title="{{ f.title or f.slug or f.id }}">
@@ -30,9 +26,8 @@
           {% endif %}
         </span>
         <span class="meta">
-          {{ f.wave_count }} wave{{ '' if f.wave_count == 1 else 's' }} ·
-          {{ f.total_packets }} packet{{ '' if f.total_packets == 1 else 's' }}{% if has_attn %} ·
-          <span class="attn-count">{{ f.attention_count }} needs attention</span>{% endif %}
+          {{ f.wave_count }}w · {{ f.total_packets }}p{% if has_attn %} ·
+          <span class="attn-count">{{ f.attention_count }}!</span>{% endif %}
         </span>
       </div>
       {% if fexpanded %}
@@ -47,13 +42,12 @@
                hx-get="/admin/_partial/timeline?feature_id={{ f.id }}&filter={{ filter }}&expanded_features={{ (expanded_features + [f.id]) | join(',') }}&expanded_waves={{ new_ew | join(',') }}&search={{ search }}"
                hx-target="#timeline-pane"
                hx-swap="outerHTML"
-               hx-push-url="{{ w.click_url }}">
+               hx-push-url="{{ w.click_url }}"
+               hx-on::after-request="document.getElementById('detail-pane') && htmx.ajax('GET', '/admin/_partial/detail?feature_id={{ f.id }}', '#detail-pane'); htmx.ajax('GET', '/admin/_partial/master?feature_id={{ f.id }}&filter={{ filter }}&expanded_features={{ (expanded_features + [f.id]) | join(',') }}&expanded_waves={{ new_ew | join(',') }}&search={{ search }}', '#master-tree')">
             <span class="caret">{{ '▾' if wexpanded else '▸' }}</span>
             <span class="title" title="{{ w.title or w.slug }}">{{ w.title or w.slug }}</span>
             <span class="meta">
-              #{{ w.order }} ·
-              {{ w.total_packets }} packet{{ '' if w.total_packets == 1 else 's' }}{% if w.attention_count > 0 %} ·
-              <span class="attn-count">{{ w.attention_count }} needs attention</span>{% endif %}
+              #{{ w.order }} · {{ w.total_packets }}p{% if w.attention_count > 0 %} · <span class="attn-count">{{ w.attention_count }}!</span>{% endif %}
             </span>
           </div>
           {% if wexpanded %}
@@ -73,11 +67,11 @@ attempts: {{ p.attempt_count }}/{{ p.max_attempts }}"
                    hx-on:click="event.stopPropagation()">
                 <span class="dot" aria-hidden="true"></span>
                 <span class="pkt-title">{{ p.title or p.slug or p.id }}</span>
-                <span class="pkt-stage">{{ p.stage.label or '—' }}</span>
-                <span class="pkt-attempts">{{ p.attempt_count }}/{{ p.max_attempts }}</span>
-                {% if p.started_at %}<span class="pkt-time">{{ p.started_at | fmt_time_short }}</span>{% endif %}
-                {% if p.duration_seconds %}<span class="pkt-duration">{{ p.duration_seconds | fmt_duration }}</span>{% endif %}
-                {% if p.size_bytes %}<span class="pkt-size muted" title="Run artifacts size">{{ p.size_bytes | fmt_size }}</span>{% endif %}
+                <span class="pkt-right">
+                  {% if p.started_at %}<span class="pkt-time">{{ p.started_at | fmt_time_short }}</span>{% endif %}
+                  {% if p.duration_seconds %}<span class="pkt-duration">{{ p.duration_seconds | fmt_duration }}</span>{% elif p.state == 'running' and p.started_at %}<span class="pkt-duration">{{ p.started_at | fmt_elapsed_since }}</span>{% endif %}
+                  <span class="pkt-attempts">{{ p.attempt_count }}/{{ p.max_attempts }}</span>
+                </span>
               </div>
               {% endif %}
             {% endfor %}

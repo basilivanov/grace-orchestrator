@@ -1,0 +1,162 @@
+{# Wave detail partial — rendered inside _detail.html when selected_wave_id is set.
+   Expects: wave, selected_wave_id, filter, expanded_features, expanded_waves, search #}
+{% if not wave %}
+  <div class="banner warn">Wave not found: {{ selected_wave_id }}</div>
+{% else %}
+  {% set w = wave.wave %}
+  {% set f = wave.feature %}
+  {% set counts = wave.counts %}
+  {% set w_packets = wave.packets or [] %}
+  {% set w_progress = wave.stage_progress or [] %}
+  {% set w_ui = w.status | ui_state %}
+  {% set w_has_attn = counts.attention > 0 %}
+  {% set w_sev = 'attention' if w_has_attn and w_ui.severity == 'muted' else w_ui.severity %}
+  {% set w_dt = w.title | display_title('wave') %}
+
+  <a class="back-link" href="/admin" data-topnav="true">← overview</a>
+
+  {# ── Wave header ─────────────────────────────────────────────── #}
+  <div class="wave-head-bar severity-{{ w_sev }}">
+    <div class="wave-head-label">Wave</div>
+    <div class="wave-head-main">
+      <h1 title="{{ w.title or w.slug or w.id }}">{{ w_dt.title }}</h1>
+      <div class="wave-head-sub">
+        <span class="ft-wave-order">W{{ w.order }}</span>
+        {% if w_ui.show == 'badge' %}
+          <span class="badge severity-{{ w_ui.severity }}">{{ w_ui.label }}</span>
+        {% else %}
+          <span class="muted small">{{ w_ui.label }}</span>
+        {% endif %}
+        {% if w_dt.is_placeholder %}
+          <span class="slug-chip">{{ w_dt.original or w.slug or '—' }}</span>
+        {% endif %}
+        <span class="raw-state muted small">raw: {{ w.status or '—' }}</span>
+      </div>
+    </div>
+  </div>
+
+  {# ── Wave metadata ───────────────────────────────────────────── #}
+  <div class="pkt-meta-block">
+    <div class="pkt-meta-row">
+      <span class="pkt-meta-label">wave_id</span>
+      <span class="pkt-meta-value mono">{{ w.id }}</span>
+    </div>
+    <div class="pkt-meta-row">
+      <span class="pkt-meta-label">feature_id</span>
+      <span class="pkt-meta-value mono">{{ f.id }}</span>
+    </div>
+    <div class="pkt-meta-row">
+      <span class="pkt-meta-label">order</span>
+      <span class="pkt-meta-value mono">#{{ w.order }}</span>
+    </div>
+    <div class="pkt-meta-row">
+      <span class="pkt-meta-label">status</span>
+      <span class="pkt-meta-value">{{ w_ui.label }}</span>
+    </div>
+    {% if wave.total_size_bytes %}
+    <div class="pkt-meta-row">
+      <span class="pkt-meta-label">runs size</span>
+      <span class="pkt-meta-value mono">{{ wave.total_size_bytes | fmt_size }}</span>
+    </div>
+    {% endif %}
+  </div>
+
+  {# ── Summary ─────────────────────────────────────────────────── #}
+  <section class="wave-summary">
+    <h2 class="pipeline-h">Summary</h2>
+    <div class="wave-summary-grid">
+      <div class="wave-summary-cell">
+        <span class="wave-summary-key">total</span>
+        <span class="wave-summary-val mono">{{ counts.all }}</span>
+      </div>
+      <div class="wave-summary-cell severity-{{ 'attention' if counts.failed > 0 else 'muted' }}">
+        <span class="wave-summary-key">failed</span>
+        <span class="wave-summary-val mono">{{ counts.failed }}</span>
+      </div>
+      <div class="wave-summary-cell severity-{{ 'ok' if counts.running > 0 else 'muted' }}">
+        <span class="wave-summary-key">running</span>
+        <span class="wave-summary-val mono">{{ counts.running }}</span>
+      </div>
+      <div class="wave-summary-cell severity-{{ 'attention' if counts.blocked > 0 else 'muted' }}">
+        <span class="wave-summary-key">blocked</span>
+        <span class="wave-summary-val mono">{{ counts.blocked }}</span>
+      </div>
+      <div class="wave-summary-cell severity-{{ 'ok' if counts.done > 0 else 'muted' }}">
+        <span class="wave-summary-key">done</span>
+        <span class="wave-summary-val mono">{{ counts.done }}</span>
+      </div>
+    </div>
+  </section>
+
+  {# ── Wave progress ───────────────────────────────────────────── #}
+  {% if w_progress %}
+    <section class="wave-progress">
+      <h2 class="pipeline-h">Progress</h2>
+      <div class="wave-progress-list">
+        {% for sp in w_progress %}
+          <div class="wave-progress-row severity-{{ sp.severity }}">
+            <span class="wave-progress-label">{{ sp.label }}</span>
+            <span class="wave-progress-counts mono">{{ sp.reached }}/{{ sp.total }}</span>
+            <span class="wave-progress-bar">
+              <span class="wave-progress-fill"
+                    style="width: {{ 100 * sp.reached // sp.total if sp.total > 0 else 0 }}%;"></span>
+            </span>
+          </div>
+        {% endfor %}
+      </div>
+    </section>
+  {% endif %}
+
+  {# ── Wave packets ────────────────────────────────────────────── #}
+  <section class="wave-packets-section">
+    <h2 class="pipeline-h">Packets</h2>
+    <div class="wave-packets">
+      {% if w_packets %}
+        {% for p in w_packets %}
+          {% set p_ui = p.state | ui_state %}
+          {% set p_dt = p.title | display_title('packet') %}
+          {% set p_stage = p.stage or {} %}
+          <a class="wave-packet-card severity-{{ p_ui.severity }}"
+             href="{{ p.click_url }}"
+             title="{{ p.title or p.slug or p.id }}
+{{ p.id }}
+state: {{ p.state }}
+attempts: {{ p.attempt_count }}/{{ p.max_attempts }}"
+             hx-get="/admin/_partial/detail?packet_id={{ p.id }}&feature_id={{ f.id }}&wave_id={{ w.id }}&tab=timeline&filter={{ filter }}&expanded_features={{ expanded_features | join(',') }}&expanded_waves={{ expanded_waves | join(',') }}&search={{ search }}"
+             hx-target="#detail-pane"
+             hx-swap="outerHTML"
+             hx-push-url="{{ p.click_url }}">
+            <div class="wave-pkt-title-row">
+              <h3 class="wave-pkt-title">{{ p_dt.title }}</h3>
+              <span class="badge severity-{{ p_ui.severity }}">{{ p_ui.label }}</span>
+            </div>
+            <div class="wave-pkt-grid">
+              <div class="wave-pkt-cell">
+                <span class="wave-pkt-key">started</span>
+                <span class="wave-pkt-val mono">{% if p.started_at %}{{ p.started_at | fmt_time_short }}{% else %}—{% endif %}</span>
+              </div>
+              <div class="wave-pkt-cell">
+                <span class="wave-pkt-key">duration</span>
+                <span class="wave-pkt-val mono">
+                  {%- if p.state == 'running' and p.started_at %}{{ p.started_at | fmt_elapsed_since }}
+                  {%- elif p.duration_seconds %}{{ p.duration_seconds | fmt_duration }}
+                  {%- else %}—{% endif -%}
+                </span>
+              </div>
+              <div class="wave-pkt-cell">
+                <span class="wave-pkt-key">stage</span>
+                <span class="wave-pkt-val">{{ p_stage.label or '—' }}</span>
+              </div>
+              <div class="wave-pkt-cell">
+                <span class="wave-pkt-key">attempt</span>
+                <span class="wave-pkt-val mono">{{ p.attempt_count }}/{{ p.max_attempts }}</span>
+              </div>
+            </div>
+          </a>
+        {% endfor %}
+      {% else %}
+        <div class="empty">No packets in this wave.</div>
+      {% endif %}
+    </div>
+  </section>
+{% endif %}

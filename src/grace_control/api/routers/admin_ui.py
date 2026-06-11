@@ -247,6 +247,14 @@ def admin_console(
                 search=search,
             )
 
+    # Find selected feature data for detail pane
+    selected_feature = None
+    if feature_id:
+        for f in features:
+            if f["id"] == feature_id:
+                selected_feature = f
+                break
+
     ctx = {
         "request": request,
         "active_nav": "overview",
@@ -261,6 +269,7 @@ def admin_console(
         "selected_packet_id": packet_id,
         "packet": packet,
         "wave": wave,
+        "feature": selected_feature,
         "expanded_features": ef,
         "expanded_waves": ew,
         "chips": chips,
@@ -499,10 +508,26 @@ def partial_detail(
         })
 
     if not packet_id:
+        # Feature detail mode: look up feature data if feature_id is set
+        feature = None
+        if feature_id:
+            features_data = _features_data()
+            for f in features_data.get("features", []):
+                if f["id"] == feature_id:
+                    # Pre-compute wave click URLs in the feature
+                    for w in (f.get("waves") or []):
+                        w["click_url"] = _shell_url(
+                            feature_id=f["id"], wave_id=w["id"],
+                            expanded_features=ef, expanded_waves=ew,
+                            filter=filter, search=search,
+                        )
+                    feature = f
+                    break
         return _templates.TemplateResponse(request, "_detail.html", {
             "request": request,
             "packet": None,
             "wave": None,
+            "feature": feature,
             "selected_feature_id": feature_id,
             "selected_wave_id": wave_id,
             "selected_packet_id": None,

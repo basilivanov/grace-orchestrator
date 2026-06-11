@@ -1,0 +1,135 @@
+/* ═══════════════════════════════════════════════════════════════════════════════
+   WAVE-DETAIL — Wave detail view: summary, progress, packet cards
+   ═══════════════════════════════════════════════════════════════════════════════ */
+.wave-summary {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.wave-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+  gap: 6px;
+}
+.wave-summary-cell {
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  background: var(--bg-3);
+}
+.wave-summary-cell.severity-ok        { background: var(--ok-bg); }
+.wave-summary-cell.severity-attention { background: var(--warn-bg); }
+.wave-summary-cell.severity-critical  { background: var(--err-bg); }
+.wave-summary-key {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--fg-3);
+}
+.wave-summary-val {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--fg);
+  margin-top: 2px;
+}
+
+/* Wave progress */
+.wave-progress {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.wave-progress-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.wave-progress-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 11px;
+}
+.wave-progress-label {
+  width: 120px;
+  flex-shrink: 0;
+  color: var(--fg-2);
+}
+.wave-progress-counts {
+  width: 50px;
+  text-align: right;
+  color: var(--fg-3);
+}
+.wave-progress-bar {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--bg-3);
+  overflow: hidden;
+}
+.wave-progress-fill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--sev-muted);
+  transition: width var(--t-base);
+}
+.wave-progress-row.severity-ok .wave-progress-fill        { background: var(--sev-ok); }
+.wave-progress-row.severity-attention .wave-progress-fill  { background: var(--sev-attn); }
+.wave-progress-row.severity-critical .wave-progress-fill   { background: var(--sev-crit); }
+
+/* Wave packets */
+.wave-packets-section {
+  padding: 12px 16px;
+}
+.wave-packets {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.wave-packet-card {
+  display: block;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+  text-decoration: none;
+  transition: border-color var(--t-fast), background var(--t-fast);
+}
+.wave-packet-card:hover {
+  border-color: var(--border-2);
+  text-decoration: none;
+}
+.wave-pkt-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.wave-pkt-title {
+  flex: 1;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wave-pkt-id { margin-top: 2px; }
+.wave-pkt-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+  gap: 4px 10px;
+  margin-top: 6px;
+}
+.wave-pkt-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.wave-pkt-key {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--fg-3);
+}
+.wave-pkt-val {
+  font-size: 11px;
+  color: var(--fg-2);
+}

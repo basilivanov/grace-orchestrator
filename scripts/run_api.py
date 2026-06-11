@@ -25,4 +25,6 @@ init_db()
 from grace_control.api.main import app
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=8042, log_level="info")
+    host = os.environ.get("GRACE_API_HOST", "127.0.0.1")
+    port = int(os.environ.get("GRACE_API_PORT", "8042"))
+    uvicorn.run(app, host=host, port=port, log_level="info")

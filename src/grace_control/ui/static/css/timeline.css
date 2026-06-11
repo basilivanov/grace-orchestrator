@@ -1,0 +1,205 @@
+/* ═══════════════════════════════════════════════════════════════════════════════
+   TIMELINE — Middle pane: filter chips, feature header, wave cards, packets
+   ═══════════════════════════════════════════════════════════════════════════════ */
+.middle-filter {
+  display: flex;
+  gap: 4px;
+  padding: 8px 12px;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 11px;
+  color: var(--fg-3);
+  background: var(--bg-3);
+  cursor: pointer;
+  transition: background var(--t-fast), color var(--t-fast);
+}
+.chip:hover { background: var(--bg-4); }
+.chip.active {
+  background: var(--accent-bg);
+  color: var(--accent);
+  font-weight: 600;
+}
+.chip.ok   { color: var(--ok); }
+.chip.warn { color: var(--warn); }
+.chip.err  { color: var(--err); }
+.chip .n   { font-weight: 600; font-family: var(--mono); }
+
+/* Feature timeline */
+.feature-timeline {
+  padding: 12px;
+}
+.feature-timeline .ft-h {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg-2);
+  margin-bottom: 12px;
+}
+.feature-timeline .empty {
+  padding: 20px;
+  text-align: center;
+  color: var(--fg-3);
+  font-size: 12px;
+}
+
+/* Selected feature header */
+.ft-feature-selected {
+  padding: 12px 14px;
+  background: var(--bg-3);
+  border-radius: var(--radius-lg);
+  border-left: 3px solid var(--sev-muted);
+  margin-bottom: 12px;
+}
+.ft-feature-selected.severity-ok        { border-left-color: var(--sev-ok); }
+.ft-feature-selected.severity-attention { border-left-color: var(--sev-attn); }
+.ft-feature-selected.severity-critical  { border-left-color: var(--sev-crit); }
+
+.ft-feature-selected-label {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--fg-3);
+  margin-bottom: 4px;
+}
+.ft-feature-selected-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg);
+  word-break: break-word;
+  line-height: 1.4;
+}
+.ft-feature-selected-slug,
+.ft-feature-selected-id {
+  margin-top: 4px;
+}
+.ft-feature-selected-summary {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--fg-3);
+}
+.ft-feature-selected-desc {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--fg-3);
+  line-height: 1.5;
+}
+
+/* Wave cards */
+.ft-wave {
+  margin-bottom: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-2);
+  overflow: hidden;
+  cursor: pointer;
+  transition: border-color var(--t-fast);
+}
+.ft-wave:hover { border-color: var(--border-2); }
+.ft-wave.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.ft-wave-head {
+  padding: 10px 14px;
+}
+.ft-wave-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ft-wave-order {
+  font-size: 10px;
+  font-family: var(--mono);
+}
+.ft-wave-title {
+  flex: 1;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ft-wave-id {
+  margin-top: 2px;
+}
+.ft-wave-meta {
+  margin-top: 4px;
+}
+
+/* Packet cards inside wave */
+.ft-packets {
+  border-top: 1px solid var(--border);
+  padding: 4px 0;
+}
+.ft-pkt-empty {
+  padding: 8px 14px;
+}
+
+.ft-packet {
+  margin: 4px 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: border-color var(--t-fast), background var(--t-fast);
+}
+.ft-packet:hover {
+  border-color: var(--border-2);
+  background: var(--bg-hover);
+}
+.ft-packet.selected {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+}
+
+.ft-pkt-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ft-pkt-title {
+  flex: 1;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ft-pkt-id {
+  margin-top: 2px;
+}
+
+.ft-pkt-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+  gap: 4px 10px;
+  margin-top: 6px;
+}
+.ft-pkt-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.ft-pkt-key {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--fg-3);
+}
+.ft-pkt-val {
+  font-size: 11px;
+  color: var(--fg-2);
+}

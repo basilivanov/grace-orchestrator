@@ -1,0 +1,49 @@
+{# Needs attention partial — rendered inside packet detail.
+   Expects: p, p_state, bd (blocking_decision) #}
+{% set bd = p.blocking_decision or {} %}
+{% if bd.has_blocking %}
+  {% set bd_ui = bd.state | ui_state %}
+  <section class="needs-attention severity-{{ bd_ui.severity }}">
+    <h2 class="na-h">Needs attention</h2>
+    <div class="na-meta muted small">
+      <span class="badge severity-{{ bd_ui.severity }}">{{ bd_ui.label }}</span>
+      {% if bd.decided_by %}<span> · by {{ bd.decided_by }}</span>{% endif %}
+      {% if bd.at %}<span> · {{ bd.at | fmt_time_short }}</span>{% endif %}
+    </div>
+    {% if bd.action %}<div class="na-row"><strong>What: </strong>{{ bd.action }}</div>{% endif %}
+    {% if bd.reason %}<div class="na-row"><strong>Why: </strong>{{ bd.reason }}</div>{% endif %}
+    {% set lf = bd.last_failure or {} %}
+    {% if lf.summary %}<div class="na-row"><strong>Summary: </strong>{{ lf.summary }}</div>{% endif %}
+    {% if lf.stages %}
+      <ul class="na-stages">
+        {% for st in lf.stages %}
+          {% set marker = '✗' if st.status == 'failed' else ('✓' if st.status == 'passed' else '·') %}
+          <li>{{ marker }} {{ st.name }}: {{ st.status }}</li>
+          {% for iss in (st.blocking_issues or []) %}
+            <li class="na-issue">  {{ iss }}</li>
+          {% endfor %}
+        {% endfor %}
+      </ul>
+    {% endif %}
+    {% if lf.command_preview %}
+      <div class="na-cmd">
+        <strong class="small">Last command:</strong>
+        <pre class="command-preview">{{ lf.command_preview | join(' ') }}</pre>
+      </div>
+    {% endif %}
+    {% if lf.stderr_tail %}
+      <div class="na-cmd">
+        <strong class="small">Stderr tail:</strong>
+        <pre class="stderr-tail">{{ lf.stderr_tail }}</pre>
+      </div>
+    {% endif %}
+    {% set next_text = [bd, p.recommendation] | next_action_text %}
+    {% if next_text %}
+      <div class="next-action {{ [bd, p.recommendation] | next_action_class }}">
+        <span class="label">Next:</span>
+        <span>{{ next_text }}</span>
+      </div>
+    {% endif %}
+    <div class="na-raw muted small">raw: {{ p_state or '—' }} / {{ bd.state or '—' }}</div>
+  </section>
+{% endif %}

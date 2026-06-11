@@ -25,6 +25,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -70,7 +71,8 @@ async def _safe_loop(name: str, fn, interval: int) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _lease_task
-    init_db(settings.database_url)
+    db_url = os.environ.get("GRACE_DB_URL") or settings.database_url
+    init_db(db_url)
     _lease_task = asyncio.create_task(lease_expiration_loop())
     asyncio.create_task(_safe_loop(
         "wave_gate", check_wave_gates, settings.wave_gate_interval_seconds))

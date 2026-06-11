@@ -1,0 +1,73 @@
+{# Packet header + metadata partial — used inside packet detail mode.
+   Expects: p, p_state, p_ui, p_title, p_slug, p_packet_id, p_feature_id,
+            p_wave_id, p_attempt, p_max_attempts, p_started, p_finished,
+            p_duration, p_worker, p_total_size_bytes, p_acceptance_profile #}
+<a class="back-link" href="/admin" data-topnav="true">← overview</a>
+
+{# ── Header ──────────────────────────────────────────────────── #}
+<div class="pkt-head-bar severity-{{ p_ui.severity }}">
+  <div class="pkt-head-main">
+    <h1>{{ p_title }}</h1>
+    <div class="pkt-head-sub">
+      {% if p_ui.show == 'badge' %}
+        <span class="badge severity-{{ p_ui.severity }}">{{ p_ui.label }}</span>
+      {% else %}
+        <span class="muted small">{{ p_ui.label }}</span>
+      {% endif %}
+      {% if p_slug %}<span class="slug-chip">{{ p_slug }}</span>{% endif %}
+      <span class="raw-state muted small">raw: {{ p_state or '—' }}</span>
+    </div>
+  </div>
+</div>
+
+{# ── Metadata ────────────────────────────────────────────────── #}
+<div class="pkt-meta-block">
+  <div class="pkt-meta-row">
+    <span class="pkt-meta-label">packet_id</span>
+    <span class="pkt-meta-value mono">{{ p_packet_id }}</span>
+  </div>
+  <div class="pkt-meta-row">
+    <span class="pkt-meta-label">feature</span>
+    <span class="pkt-meta-value mono">{{ p_feature_id or '—' }}</span>
+  </div>
+  <div class="pkt-meta-row">
+    <span class="pkt-meta-label">wave</span>
+    <span class="pkt-meta-value mono">{{ p_wave_id or '—' }}</span>
+  </div>
+  <div class="pkt-meta-row">
+    <span class="pkt-meta-label">started</span>
+    <span class="pkt-meta-value mono">{% if p_started %}{{ p_started | fmt_time_short }}{% else %}not started{% endif %}</span>
+  </div>
+  <div class="pkt-meta-row">
+    <span class="pkt-meta-label">finished</span>
+    <span class="pkt-meta-value mono">
+      {% if p_finished and p_state not in ('running', 'ready', 'draft') %}{{ p_finished | fmt_time_short }}{% else %}—{% endif %}
+    </span>
+  </div>
+  <div class="pkt-meta-row">
+    <span class="pkt-meta-label">duration</span>
+    <span class="pkt-meta-value mono">
+      {%- if p.is_running and p_started %}{{ p_started | fmt_elapsed_since }}
+      {%- elif p_duration %}{{ p_duration | fmt_duration }}
+      {%- else %}—{% endif -%}
+    </span>
+  </div>
+  <div class="pkt-meta-row">
+    <span class="pkt-meta-label">attempt</span>
+    <span class="pkt-meta-value mono">{{ p_attempt }}/{{ p_max_attempts }}</span>
+  </div>
+  <div class="pkt-meta-row">
+    <span class="pkt-meta-label">worker</span>
+    <span class="pkt-meta-value mono">{{ p_worker or '—' }}</span>
+  </div>
+  <div class="pkt-meta-row">
+    <span class="pkt-meta-label">model</span>
+    <span class="pkt-meta-value mono">{{ p.model or '—' }}</span>
+  </div>
+  {% if p_total_size_bytes %}
+  <div class="pkt-meta-row">
+    <span class="pkt-meta-label">size</span>
+    <span class="pkt-meta-value mono">{{ p_total_size_bytes | fmt_size }}</span>
+  </div>
+  {% endif %}
+</div>

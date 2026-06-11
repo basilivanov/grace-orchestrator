@@ -1,0 +1,54 @@
+{# Pipeline view partial — compact horizontal flow layout.
+   Expects: pipeline, stages, p_state, p_acceptance_profile, p_packet_id, p_feature_id
+   Design: Small blocks arranged in a horizontal flow (wrapping to 2 rows max).
+   Each block shows: icon + label + status. Clicking opens the relevant tab. #}
+{% set pipeline_rows = stages | pipeline_visible_rows(p_state, p_acceptance_profile) %}
+<section class="pipeline-view">
+  <h2 class="pipeline-h">Pipeline</h2>
+  <div class="pipeline-flow">
+    {% for row in pipeline_rows %}
+      {% set row_sev = row.status | pipeline_severity %}
+      <div class="pipeline-block is-{{ row.status }} severity-{{ row_sev }}"
+           {% if row.target_tab %}
+           hx-get="/admin/_partial/tab?packet_id={{ p_packet_id }}&feature_id={{ p_feature_id }}&tab={{ row.target_tab }}"
+           hx-target="#packet-tab-content"
+           hx-swap="outerHTML"
+           hx-push-url="{{ shell_url(feature_id=p_feature_id, packet_id=p_packet_id, tab=row.target_tab) }}"
+           style="cursor: pointer;"
+           {% endif %}
+           title="{{ row.label }}{% if row.duration_label and row.duration_label != '—' %} · {{ row.duration_label }}{% endif %}{% if row.meta %} · {{ row.meta }}{% endif %}">
+        <span class="pipeline-block-icon severity-{{ row_sev }}">{{ row.icon }}</span>
+        <span class="pipeline-block-name">{{ row.label }}</span>
+        <span class="pipeline-block-status severity-{{ row_sev }}">{{ row.status_label }}</span>
+      </div>
+    {% endfor %}
+  </div>
+  {# Expanded detail row — shows timing/meta for running/failed/rejected stages #}
+  {% set ns = namespace(has_active=false) %}
+  {% for row in pipeline_rows %}
+    {% if row.status == 'running' or row.status == 'failed' or row.status == 'rejected' %}
+      {% set ns.has_active = true %}
+    {% endif %}
+  {% endfor %}
+  {% if ns.has_active %}
+  <div class="pipeline-details">
+    {% for row in pipeline_rows %}
+      {% if row.status == 'running' or row.status == 'failed' or row.status == 'rejected' %}
+      {% set row_sev = row.status | pipeline_severity %}
+      <div class="pipeline-detail-row severity-{{ row_sev }}">
+        <span class="pipeline-detail-name">{{ row.label }}</span>
+        {% if row.time_range and row.time_range != '—' %}
+        <span class="pipeline-detail-fact mono">{{ row.time_range }}</span>
+        {% endif %}
+        {% if row.duration_label and row.duration_label != '—' %}
+        <span class="pipeline-detail-fact mono">{{ row.duration_label }}</span>
+        {% endif %}
+        {% if row.meta %}
+        <span class="pipeline-detail-fact mono">{{ row.meta }}</span>
+        {% endif %}
+      </div>
+      {% endif %}
+    {% endfor %}
+  </div>
+  {% endif %}
+</section>

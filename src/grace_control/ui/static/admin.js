@@ -1,49 +1,58 @@
 /* ############################################################################
- * AI_HEADER: admin.js (HTMX init + clock + health)
- * ROLE: Minimal JS for the HTMX-based operator console.
- *       - htmx.org is loaded via CDN in the base template.
- *       - This file only does: clock, health pill, and HTMX config tweaks
- *         (preserve scroll position in sidebars, set health on swap).
- *       - All routing, partial updates, search, filter, and tab swaps are
- *         handled by HTMX attributes in the server-rendered HTML.
- *       - For backward compat (the old /api/admin/* JSON endpoints) we
- *         also expose window.api() so the legacy fetch-style code keeps
- *         working, but no admin page uses it anymore.
+ * GRACE Admin v3 — Redesigned JS
+ * Minimal JS for the HTMX-based operator console.
+ * - htmx.org is loaded via CDN in the base template.
+ * - This file: clock, health pill, HTMX scroll preservation,
+ *   redraw fix (clear detail pane on feature switch), dev replay.
  * ############################################################################ */
 
-// ── HTMX config (preserves scroll in sidebars) ────────────────────────────
-document.addEventListener("htmx:beforeRequest", function (evt) {
-  // Mark the request so we can decide whether to preserve scroll.
-  const target = evt.detail.target;
-  if (target && target.id === "master-tree" || target && target.id === "timeline-pane") {
-    evt.detail.requestConfig = evt.detail.requestConfig || {};
-    // Don't reset scroll in the master/timeline panes on swap.
-  }
-});
+// ── HTMX config ────────────────────────────────────────────────────────────
 
+// Preserve scroll positions in sidebars during HTMX swaps
 document.addEventListener("htmx:beforeSwap", function (evt) {
-  // When the master tree or timeline pane is swapped, don't change the
-  // page scroll — only the new content's own scroll is reset by the browser.
-  const target = evt.detail.target;
+  var target = evt.detail.target;
   if (target && (target.id === "master-tree" || target.id === "timeline-pane")) {
-    // Save the existing scroll position of #main (page-level)
-    const main = document.getElementById("main");
-    const pageScrollY = window.scrollY;
-    evt.detail.requestConfig = evt.detail.requestConfig || {};
-    // Use swap="outerHTML" (set on the element) so the swap is in-place.
-    // After the swap, restore page scroll:
-    setTimeout(() => {
-      if (main) main.scrollTop = main.scrollTop;  // no-op for outerHTML
+    var pageScrollY = window.scrollY;
+    setTimeout(function () {
       window.scrollTo(0, pageScrollY);
     }, 0);
   }
 });
 
+// After any HTMX swap, update master tree selection state
+document.addEventListener("htmx:afterSwap", function (evt) {
+  var target = evt.detail.target;
+
+  // Health pill update after stats bar swap
+  if (target && target.id === "stats-bar-container") {
+    // The stats template includes inline <script>setHealth(...)</script>
+    // which the browser already executed.
+  }
+
+  // When timeline pane is swapped (feature selection changed),
+  // also clear the detail pane if no packet/wave is explicitly selected.
+  // This fixes the "stale detail" redraw bug.
+  if (target && target.id === "timeline-pane") {
+    // Check if the URL has a packet_id or wave_id — if not, clear detail
+    var url = new URL(window.location);
+    if (!url.searchParams.get("packet_id") && !url.searchParams.get("wave_id")) {
+      var detailPane = document.getElementById("detail-pane");
+      if (detailPane) {
+        // Only clear if it still has old content (not already empty)
+        var hasContent = detailPane.querySelector(".pkt-head-bar, .wave-head-bar, .needs-attention, .pipeline-view, .tabs");
+        if (hasContent) {
+          htmx.ajax("GET", "/admin/_partial/detail?feature_id=" + (url.searchParams.get("feature_id") || ""), "#detail-pane");
+        }
+      }
+    }
+  }
+});
+
 // ── Health pill ────────────────────────────────────────────────────────────
 window.setHealth = function (h) {
-  const node = document.getElementById("health");
+  var node = document.getElementById("health");
   if (!h || !node) { return; }
-  const cls = h.supervisor_alive ? (h.db_ok ? "ok" : "warn") : "err";
+  var cls = h.supervisor_alive ? (h.db_ok ? "ok" : "warn") : "err";
   node.className = "health " + cls;
   node.textContent = h.supervisor_alive
     ? "supervisor: " + (h.workers_alive || 0) + " workers"
@@ -52,46 +61,38 @@ window.setHealth = function (h) {
 
 // ── Clock (24h format) ─────────────────────────────────────────────────────
 function tick() {
-  const el = document.getElementById("clock");
+  var el = document.getElementById("clock");
   if (!el) return;
-  const d = new Date();
-  const hh = String(d.getHours()).padStart(2, "0");
-  const mm = String(d.getMinutes()).padStart(2, "0");
-  const ss = String(d.getSeconds()).padStart(2, "0");
+  var d = new Date();
+  var hh = String(d.getHours()).padStart(2, "0");
+  var mm = String(d.getMinutes()).padStart(2, "0");
+  var ss = String(d.getSeconds()).padStart(2, "0");
   el.textContent = hh + ":" + mm + ":" + ss;
 }
 tick();
 setInterval(tick, 1000);
 
-// ── Legacy: window.api for /api/admin/* JSON consumers ─────────────────────
-window.api = async function (path, opts = {}) {
-  const r = await fetch("/api/admin" + path, {
-    headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
-    ...opts,
+// ── Legacy API ─────────────────────────────────────────────────────────────
+window.api = async function (path, opts) {
+  opts = opts || {};
+  var r = await fetch("/api/admin" + path, {
+    headers: Object.assign({ "Content-Type": "application/json" }, opts.headers || {}),
+    method: opts.method || "GET",
+    body: opts.body,
   });
   if (!r.ok) {
-    let detail = "";
+    var detail = "";
     try { detail = (await r.json()).detail || ""; } catch (_) {}
     throw new Error(detail || ("HTTP " + r.status));
   }
   return r.json();
 };
 
-// Top-level navigation links should do a full reload (per spec:
-// "Full page reload is allowed only for top-level navigation: Overview/System").
+// ── Top-level nav: full reload ─────────────────────────────────────────────
 document.addEventListener("click", function (e) {
-  const a = e.target.closest("a[data-topnav='true']");
+  var a = e.target.closest("a[data-topnav='true']");
   if (!a) return;
-  // Let the browser handle it normally — full reload.
-});
-
-// HX-Trigger handlers for events from server → JS
-document.addEventListener("htmx:afterSwap", function (evt) {
-  // Update the health pill after a stats bar swap
-  if (evt.detail.target && evt.detail.target.id === "stats-bar-container") {
-    // The stats template includes a <script>setHealth(...)</script> inline.
-    // The browser already executed it; nothing to do here.
-  }
+  // Let the browser handle it — full reload
 });
 
 // ── Dev Replay ─────────────────────────────────────────────────────────────
@@ -135,7 +136,6 @@ window.replayStage = function (btn) {
         return r.json().then(function (err) {
           throw err;
         }).catch(function (parseErr) {
-          // If JSON parse fails, throw a generic error
           throw { detail: "HTTP " + r.status };
         });
       }
@@ -166,7 +166,6 @@ window.replayStage = function (btn) {
           issues +
           meta +
         "</div>";
-      // Append to history
       appendReplayHistory(runId, action, stage, d.status || (d.verdict || "done"), summary, elapsed);
     })
     .catch(function (err) {
@@ -185,7 +184,6 @@ window.replayStage = function (btn) {
       appendReplayHistory(runId, action, stage, "error", detail, "—");
     })
     .finally(function () {
-      // Re-enable buttons
       for (var k = 0; k < allBtns.length; k++) {
         allBtns[k].disabled = false;
       }
@@ -195,7 +193,7 @@ window.replayStage = function (btn) {
 
 function actionLabel(action, stage) {
   if (action === "acceptance") {
-    var labels = { t0: "Replay T0", t1: "Replay T1", t2: "Replay T2", full_acceptance: "Replay Full Acceptance" };
+    var labels = { t0: "Replay T0", t1: "Replay T1", t2: "Replay T2", full_acceptance: "Full Acceptance" };
     return labels[stage] || "Replay " + stage;
   }
   if (action === "verifier") return "Replay Verifier";
@@ -218,7 +216,6 @@ function appendReplayHistory(runId, action, stage, status, summary, elapsed) {
     "<span class='muted small'> (" + elapsed + "s)</span>" +
     "<div class='dev-replay-history-summary muted small'>" + escapeHtml(summary) + "</div>";
   container.appendChild(entry);
-  // Keep last 20 entries
   while (container.children.length > 20) {
     container.removeChild(container.firstChild);
   }

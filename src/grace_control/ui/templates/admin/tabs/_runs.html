@@ -1,0 +1,44 @@
+{# Runs tab — attempt history.
+   Expects: packet (p), runs #}
+<div class="tab-h">Attempts</div>
+{% if runs %}
+  <div class="attempts-list">
+    {% for r in runs %}
+      <div class="attempt-card severity-{{ r.status | state_severity }}">
+        <div class="attempt-head">
+          <span class="attempt-num">Attempt {{ r.run_number or loop.index }}</span>
+          <span class="badge severity-{{ r.status | state_severity }}">{{ r.status }}</span>
+          {% if r.started_at %}<span class="muted small">{{ r.started_at | fmt_time_short }}</span>{% endif %}
+          {% if r.duration_ms %}<span class="muted small">· {{ r.duration_ms | fmt_duration_ms }}</span>{% endif %}
+        </div>
+        <div class="attempt-meta muted small">
+          <span>{{ r.executor_id or '—' }}</span>
+          {% if r.worker_id %}<span> · {{ r.worker_id }}</span>{% endif %}
+          {% if r.model %}<span> · {{ r.model }}</span>{% endif %}
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+{% else %}
+  <div class="attempts-list">
+    {% set p_state = packet.packet.state if packet.packet else packet.state %}
+    {% set attempt_count = (packet.packet.attempt_count if packet.packet else None) or 0 %}
+    {% set p_started = packet.started_at %}
+    {% set p_duration = packet.elapsed_seconds %}
+    <div class="attempt-card severity-{{ p_state | state_severity }}">
+      <div class="attempt-head">
+        <span class="attempt-num">Attempt {{ attempt_count }} (last)</span>
+        <span class="badge severity-{{ p_state | state_severity }}">{{ p_state }}</span>
+        {% if p_started %}<span class="muted small">{{ p_started | fmt_time_short }}</span>{% endif %}
+        {% if p_duration %}<span class="muted small">· {{ p_duration | fmt_duration }}</span>{% endif %}
+      </div>
+      <div class="attempt-meta muted small">
+        {% if packet.worker_id %}<span>worker: {{ packet.worker_id }}</span>{% endif %}
+        {% if packet.model %}<span> · model: {{ packet.model }}</span>{% endif %}
+      </div>
+    </div>
+    <div class="muted small" style="margin-top: 8px;">
+      Detailed run logs not stored. Check <strong>Logs</strong> or <strong>Evidence</strong> tabs.
+    </div>
+  </div>
+{% endif %}

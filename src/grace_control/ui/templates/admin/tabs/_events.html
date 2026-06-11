@@ -1,0 +1,27 @@
+{# Events tab — timeline of packet events.
+   Expects: timeline_events, timeline_total #}
+<div class="tab-h">Events <span class="muted small">{{ timeline_total or 0 }} total</span></div>
+{% if timeline_events %}
+<table class="responsive-table">
+  <thead><tr><th>Time</th><th>Event</th><th>Component</th><th>Reason</th><th>Detail</th></tr></thead>
+  <tbody>
+    {% for ev in (timeline_events or []) %}
+    <tr>
+      <td class="mono small">{{ ev.timestamp }}</td>
+      <td class="mono">{{ ev.event_type }}</td>
+      <td class="mono small">{{ ev.component or '' }}</td>
+      <td class="small">{{ ev.reason or '' }}</td>
+      <td>
+        {% if ev.payload and (ev.payload | length) > 0 %}
+          <details><summary>view</summary>
+            <pre>{{ ev.payload | tojson(indent=2) }}</pre>
+          </details>
+        {% else %}<span class="muted">—</span>{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="muted small">No events recorded.</div>
+{% endif %}

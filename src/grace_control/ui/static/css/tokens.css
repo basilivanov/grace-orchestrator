@@ -1,0 +1,86 @@
+/* ═══════════════════════════════════════════════════════════════════════════════
+   TOKENS — Design system variables
+   ═══════════════════════════════════════════════════════════════════════════════ */
+:root {
+  /* Surfaces */
+  --bg:       #0b0e13;
+  --bg-2:     #131720;
+  --bg-3:     #1a1f2b;
+  --bg-4:     #222836;
+  --bg-hover: #1e2535;
+
+  /* Text */
+  --fg:       #e2e5eb;
+  --fg-2:     #929aad;
+  --fg-3:     #5c6478;
+
+  /* Borders */
+  --border:   #1e2535;
+  --border-2: #2a3144;
+
+  /* Accent */
+  --accent:   #5b9cf5;
+  --accent-bg: rgba(91, 156, 245, 0.08);
+
+  /* Status — vivid enough to read, not screaming */
+  --ok:       #3dd68c;
+  --ok-bg:    rgba(61, 214, 140, 0.08);
+  --warn:     #f0b429;
+  --warn-bg:  rgba(240, 180, 41, 0.08);
+  --err:      #ef5f5f;
+  --err-bg:   rgba(239, 95, 95, 0.08);
+  --info:     #7b8ca8;
+
+  /* Severity (calm, desaturated for background usage) */
+  --sev-ok:       #3dd68c;
+  --sev-ok-soft:  rgba(61, 214, 140, 0.12);
+  --sev-muted:    #5c6478;
+  --sev-attn:     #e8a838;
+  --sev-attn-soft:rgba(232, 168, 56, 0.12);
+  --sev-crit:     #e05252;
+  --sev-crit-soft:rgba(224, 82, 82, 0.12);
+  --sev-crit-bg:  rgba(224, 82, 82, 0.06);
+  --sev-attn-bg:  rgba(232, 168, 56, 0.06);
+
+  /* Running pulse */
+  --running:     #5b9cf5;
+  --running-bg:  rgba(91, 156, 245, 0.08);
+
+  /* Typography */
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+
+  /* Sizing */
+  --radius:     6px;
+  --radius-lg:  10px;
+  --pane-left:  300px;
+  --pane-mid:   380px;
+
+  /* Transitions */
+  --t-fast: 120ms ease;
+  --t-base: 200ms ease;
+}
+
+[data-theme="light"] {
+  --bg:       #f5f7fa;
+  --bg-2:     #ffffff;
+  --bg-3:     #edf0f5;
+  --bg-4:     #e2e7ee;
+  --bg-hover: #e8ecf3;
+  --fg:       #111827;
+  --fg-2:     #4b5563;
+  --fg-3:     #9ca3af;
+  --border:   #dde2ea;
+  --border-2: #c7ced8;
+  --accent:   #2563eb;
+  --accent-bg:rgba(37, 99, 235, 0.06);
+  --ok-bg:    rgba(16, 185, 129, 0.08);
+  --warn-bg:  rgba(245, 158, 11, 0.08);
+  --err-bg:   rgba(239, 68, 68, 0.08);
+  --running-bg:rgba(37, 99, 235, 0.06);
+  --sev-ok-soft:  rgba(16, 185, 129, 0.12);
+  --sev-attn-soft:rgba(245, 158, 11, 0.12);
+  --sev-crit-soft:rgba(239, 68, 68, 0.12);
+  --sev-crit-bg:  rgba(239, 68, 68, 0.05);
+  --sev-attn-bg:  rgba(245, 158, 11, 0.05);
+}

@@ -1,191 +1,16 @@
 {# Packet detail partial — self-wrapping: returns <div id="detail-pane">.
-   hx-swap="outerHTML" on #detail-pane replaces this whole element.
+   Refactored: delegates to sub-partials for each mode.
 
    Modes (mutually exclusive):
    1. Wave details: selected_wave_id is set, no selected_packet_id.
-      Shows wave header, status summary, and a clickable list of packets.
    2. Packet details: selected_packet_id is set.
-      Header: title + small severity badge + ID/slug/full metadata block
-      GRACE pipeline (replaces the old Created/Claimed/Reviewed state machine)
-      Each stage card is clickable (switches the active tab)
-      Tab bar with correct packet_id (fixes the "Packet not found" tab bug)
-   3. Empty: nothing selected. #}
+   3. Feature details: selected_feature_id is set, no wave/packet.
+   4. Empty: nothing selected. #}
 <div class="console-detail" id="detail-pane">
   {# ── Mode 1: Wave details ──────────────────────────────────────────── #}
   {% if selected_wave_id and not selected_packet_id %}
-    {% if not wave %}
-      <div class="banner warn">Wave not found: {{ selected_wave_id }}</div>
-    {% else %}
-      {% set w = wave.wave %}
-      {% set f = wave.feature %}
-      {% set counts = wave.counts %}
-      {% set w_packets = wave.packets or [] %}
-      {% set w_progress = wave.stage_progress or [] %}
-      {% set w_ui = w.status | ui_state %}
-      {% set w_has_attn = counts.attention > 0 %}
-      {% set w_sev = 'attention' if w_has_attn and w_ui.severity == 'muted' else w_ui.severity %}
-      {% set w_dt = w.title | display_title('wave') %}
+    {% include "detail/_wave.html" %}
 
-      <a class="back-link" href="/admin" data-topnav="true">← back to overview</a>
-
-      {# ── Wave header ─────────────────────────────────────────────── #}
-      <div class="wave-head-bar severity-{{ w_sev }}">
-        <div class="wave-head-label">Selected wave</div>
-        <div class="wave-head-main">
-          <h1 title="{{ w.title or w.slug or w.id }}">{{ w_dt.title }}</h1>
-          <div class="wave-head-sub">
-            <span class="ft-wave-order muted small">Wave #{{ w.order }}</span>
-            {% if w_ui.show == 'badge' %}
-              <span class="badge severity-{{ w_ui.severity }}">{{ w_ui.label }}</span>
-            {% else %}
-              <span class="muted small">{{ w_ui.label }}</span>
-            {% endif %}
-            {% if w_dt.is_placeholder %}
-              <span class="slug-chip">slug: {{ w_dt.original or w.slug or '—' }}</span>
-            {% endif %}
-            <span class="raw-state muted small" title="raw backend state">raw: {{ w.status or '—' }}</span>
-          </div>
-        </div>
-      </div>
-
-      {# ── Wave metadata block ─────────────────────────────────────── #}
-      <div class="pkt-meta-block">
-        <div class="pkt-meta-row">
-          <span class="pkt-meta-label">wave_id</span>
-          <span class="pkt-meta-value mono">{{ w.id }}</span>
-        </div>
-        <div class="pkt-meta-row">
-          <span class="pkt-meta-label">feature_id</span>
-          <span class="pkt-meta-value mono">{{ f.id }}</span>
-        </div>
-        <div class="pkt-meta-row">
-          <span class="pkt-meta-label">order</span>
-          <span class="pkt-meta-value mono">#{{ w.order }}</span>
-        </div>
-        <div class="pkt-meta-row">
-          <span class="pkt-meta-label">status</span>
-          <span class="pkt-meta-value">{{ w_ui.label }}</span>
-        </div>
-        {% if wave.total_size_bytes %}
-        <div class="pkt-meta-row">
-          <span class="pkt-meta-label">runs size</span>
-          <span class="pkt-meta-value mono" title="Total size of all run artifacts in this wave">{{ wave.total_size_bytes | fmt_size }}</span>
-        </div>
-        {% endif %}
-      </div>
-
-      {# ── Summary section: per-state counts ───────────────────────── #}
-      <section class="wave-summary">
-        <h2 class="pipeline-h">Summary</h2>
-        <div class="wave-summary-grid">
-          <div class="wave-summary-cell">
-            <span class="wave-summary-key">total packets</span>
-            <span class="wave-summary-val mono">{{ counts.all }}</span>
-          </div>
-          <div class="wave-summary-cell severity-{{ 'attention' if counts.failed > 0 else 'muted' }}">
-            <span class="wave-summary-key">rejected / failed</span>
-            <span class="wave-summary-val mono">{{ counts.failed }}</span>
-          </div>
-          <div class="wave-summary-cell severity-{{ 'ok' if counts.running > 0 else 'muted' }}">
-            <span class="wave-summary-key">running</span>
-            <span class="wave-summary-val mono">{{ counts.running }}</span>
-          </div>
-          <div class="wave-summary-cell severity-{{ 'attention' if counts.blocked > 0 else 'muted' }}">
-            <span class="wave-summary-key">blocked</span>
-            <span class="wave-summary-val mono">{{ counts.blocked }}</span>
-          </div>
-          <div class="wave-summary-cell severity-{{ 'ok' if counts.done > 0 else 'muted' }}">
-            <span class="wave-summary-key">done</span>
-            <span class="wave-summary-val mono">{{ counts.done }}</span>
-          </div>
-        </div>
-      </section>
-
-      {# ── Wave progress section: per-stage counts ─────────────────── #}
-      {% if w_progress %}
-        <section class="wave-progress">
-          <h2 class="pipeline-h">Wave progress</h2>
-          <div class="wave-progress-list">
-            {% for sp in w_progress %}
-              <div class="wave-progress-row severity-{{ sp.severity }}">
-                <span class="wave-progress-label">{{ sp.label }}</span>
-                <span class="wave-progress-counts mono">
-                  {{ sp.reached }}/{{ sp.total }}
-                </span>
-                <span class="wave-progress-bar">
-                  <span class="wave-progress-fill"
-                        style="width: {{ 100 * sp.reached // sp.total if sp.total > 0 else 0 }}%;"></span>
-                </span>
-              </div>
-            {% endfor %}
-          </div>
-        </section>
-      {% endif %}
-
-      {# ── Wave packets (clickable list, extended cards) ───────────── #}
-      <section class="wave-packets-section">
-        <h2 class="pipeline-h">Packets in this wave</h2>
-        <div class="wave-packets">
-          {% if w_packets %}
-            {% for p in w_packets %}
-              {% set p_ui = p.state | ui_state %}
-              {% set p_dt = p.title | display_title('packet') %}
-              {% set p_stage = p.stage or {} %}
-              <a class="wave-packet-card severity-{{ p_ui.severity }}"
-                 href="{{ p.click_url }}"
-                 title="{{ p.title or p.slug or p.id }}
-{{ p.id }}
-state: {{ p.state }}
-attempts: {{ p.attempt_count }}/{{ p.max_attempts }}"
-                 hx-get="/admin/_partial/detail?packet_id={{ p.id }}&feature_id={{ f.id }}&wave_id={{ w.id }}&tab=timeline&filter={{ filter }}&expanded_features={{ expanded_features | join(',') }}&expanded_waves={{ expanded_waves | join(',') }}&search={{ search }}"
-                 hx-target="#detail-pane"
-                 hx-swap="outerHTML"
-                 hx-push-url="{{ p.click_url }}">
-                <div class="wave-pkt-title-row">
-                  <h3 class="wave-pkt-title"
-                      title="{{ p.title or p.slug or p.id }}">
-                    {{ p_dt.title }}
-                  </h3>
-                  <span class="wave-pkt-status badge severity-{{ p_ui.severity }}">{{ p_ui.label }}</span>
-                </div>
-                <div class="wave-pkt-id muted small">
-                  packet_id: <span class="mono">{{ p.id }}</span>
-                  {% if p_dt.is_placeholder %}
-                    · slug: <span class="mono">{{ p_dt.original or p.slug or '—' }}</span>
-                  {% elif p.slug and p.slug != p_dt.title %}
-                    · slug: <span class="mono">{{ p.slug }}</span>
-                  {% endif %}
-                </div>
-                <div class="wave-pkt-grid">
-                  <div class="wave-pkt-cell">
-                    <span class="wave-pkt-key">stage</span>
-                    <span class="wave-pkt-val">{{ p_stage.label or '—' }}</span>
-                  </div>
-                  <div class="wave-pkt-cell">
-                    <span class="wave-pkt-key">attempts</span>
-                    <span class="wave-pkt-val mono">{{ p.attempt_count }}/{{ p.max_attempts }}</span>
-                  </div>
-                  <div class="wave-pkt-cell">
-                    <span class="wave-pkt-key">started</span>
-                    <span class="wave-pkt-val mono">
-                      {% if p.started_at %}{{ p.started_at | fmt_time_short }}{% else %}not started{% endif %}
-                    </span>
-                  </div>
-                  <div class="wave-pkt-cell">
-                    <span class="wave-pkt-key">duration</span>
-                    <span class="wave-pkt-val mono">
-                      {% if p.duration_seconds %}{{ p.duration_seconds | fmt_duration }}{% else %}—{% endif %}
-                    </span>
-                  </div>
-                </div>
-              </a>
-            {% endfor %}
-          {% else %}
-            <div class="empty">No packets in this wave.</div>
-          {% endif %}
-        </div>
-      </section>
-    {% endif %}
   {# ── Mode 2: Packet details ────────────────────────────────────────── #}
   {% elif selected_packet_id %}
     {% if not packet %}
@@ -210,280 +35,25 @@ attempts: {{ p.attempt_count }}/{{ p.max_attempts }}"
       {% set pipeline = p.pipeline or {} %}
       {% set stages = pipeline.stages or [] %}
 
-      <a class="back-link" href="/admin" data-topnav="true">← back to overview</a>
+      {# Header + metadata #}
+      {% include "detail/_packet_header.html" %}
 
-      {# ── Header ──────────────────────────────────────────────────────── #}
-      <div class="pkt-head-bar severity-{{ p_ui.severity }} {{ 'selected' if p_ui.severity == 'critical' else '' }}">
-        <div class="pkt-head-main">
-          <h1>{{ p_title }}</h1>
-          <div class="pkt-head-sub">
-            {% if p_ui.show == 'badge' %}
-              <span class="badge severity-{{ p_ui.severity }}">{{ p_ui.label }}</span>
-            {% else %}
-              <span class="muted small">{{ p_ui.label }}</span>
-            {% endif %}
-            {% if p_slug %}<span class="slug-chip">{{ p_slug }}</span>{% endif %}
-            <span class="raw-state muted small" title="raw backend state">raw: {{ p_state or '—' }}</span>
-          </div>
-        </div>
-      </div>
+      {# Pipeline #}
+      {% include "detail/_pipeline.html" %}
 
-      {# ── Metadata block: ids, timing, attempt, worker ──────────────── #}
-      <div class="pkt-meta-block">
-        <div class="pkt-meta-row">
-          <span class="pkt-meta-label">packet_id</span>
-          <span class="pkt-meta-value mono">{{ p_packet_id }}</span>
-        </div>
-        <div class="pkt-meta-row">
-          <span class="pkt-meta-label">feature_id</span>
-          <span class="pkt-meta-value mono">{{ p_feature_id or '—' }}</span>
-        </div>
-        <div class="pkt-meta-row">
-          <span class="pkt-meta-label">wave_id</span>
-          <span class="pkt-meta-value mono">{{ p_wave_id or '—' }}</span>
-        </div>
-        <div class="pkt-meta-row">
-          <span class="pkt-meta-label">started</span>
-          <span class="pkt-meta-value mono">
-            {% if p_started %}{{ p_started | fmt_time_short }}{% else %}not started{% endif %}
-          </span>
-        </div>
-        <div class="pkt-meta-row">
-          <span class="pkt-meta-label">finished</span>
-          <span class="pkt-meta-value mono">
-            {% if p_finished and p_state not in ('running', 'ready', 'draft') %}{{ p_finished | fmt_time_short }}{% else %}—{% endif %}
-          </span>
-        </div>
-        <div class="pkt-meta-row">
-          <span class="pkt-meta-label">duration</span>
-          <span class="pkt-meta-value mono">
-            {%- if p.is_running and p_started %}{{ p_started | fmt_elapsed_since }}
-            {%- elif p_duration %}{{ p_duration | fmt_duration }}
-            {%- else %}—{% endif -%}
-          </span>
-        </div>
-        <div class="pkt-meta-row">
-          <span class="pkt-meta-label">attempt</span>
-          <span class="pkt-meta-value mono">{{ p_attempt }}/{{ p_max_attempts }}</span>
-        </div>
-        <div class="pkt-meta-row">
-          <span class="pkt-meta-label">worker</span>
-          <span class="pkt-meta-value mono">{{ p_worker or '—' }}</span>
-        </div>
-        {% if p_total_size_bytes %}
-        <div class="pkt-meta-row">
-          <span class="pkt-meta-label">runs size</span>
-          <span class="pkt-meta-value mono" title="Total size of all run artifacts in .grace/state/">{{ p_total_size_bytes | fmt_size }}</span>
-        </div>
-        {% endif %}
-      </div>
+      {# Needs attention #}
+      {% include "detail/_attention.html" %}
 
-      {# ── GRACE pipeline (wide stacked cards with labelled facts) ───── #}
-      {% set pipeline_rows = stages | pipeline_visible_rows(p_state, p_acceptance_profile) %}
-      <section class="pipeline-view">
-        <h2 class="pipeline-h">Pipeline</h2>
-        <div class="pipeline-card-list">
-          {% for row in pipeline_rows %}
-            {% set row_sev = row.status | pipeline_severity %}
-            <div class="pipeline-card is-{{ row.status }} severity-{{ row_sev }}"
-                 {% if row.target_tab %}
-                 hx-get="/admin/_partial/tab?packet_id={{ p_packet_id }}&feature_id={{ p_feature_id }}&tab={{ row.target_tab }}"
-                 hx-target="#packet-tab-content"
-                 hx-swap="outerHTML"
-                 hx-push-url="{{ shell_url(feature_id=p_feature_id, packet_id=p_packet_id, tab=row.target_tab) }}"
-                 style="cursor: pointer;"
-                 {% endif %}>
-              <div class="pipeline-card-head">
-                <div class="pipeline-card-title">
-                  <span class="pipeline-card-icon severity-{{ row_sev }}">{{ row.icon }}</span>
-                  <span class="pipeline-card-name">{{ row.label }}</span>
-                </div>
-                <span class="pipeline-card-status badge severity-{{ row_sev }}">{{ row.status_label }}</span>
-              </div>
-              {% if row.time_range != '—' or row.duration_label != '—' or row.meta %}
-              <div class="pipeline-card-body">
-                {% if row.time_range and row.time_range != '—' %}
-                <div class="pipeline-fact">
-                  <span class="pipeline-fact-label">Time</span>
-                  <span class="pipeline-fact-value mono">{{ row.time_range }}</span>
-                </div>
-                {% endif %}
-                {% if row.duration_label and row.duration_label != '—' %}
-                <div class="pipeline-fact">
-                  <span class="pipeline-fact-label">{{ 'Elapsed' if row.status == 'running' else 'Duration' }}</span>
-                  <span class="pipeline-fact-value mono">{{ row.duration_label }}</span>
-                </div>
-                {% endif %}
-                {% if row.meta %}
-                <div class="pipeline-fact">
-                  <span class="pipeline-fact-label">{{ row.meta_label or 'Meta' }}</span>
-                  <span class="pipeline-fact-value mono">{{ row.meta }}</span>
-                </div>
-                {% endif %}
-              </div>
-              {% endif %}
-            </div>
-          {% endfor %}
-        </div>
-      </section>
+      {# Dev replay #}
+      {% include "detail/_replay.html" %}
 
-      {# ── Current Run block ───────────────────────────────────────────── #}
-      {% set last_stage = stages | last_active_stage %}
-      <section class="current-run">
-        <h2 class="pipeline-h">CURRENT RUN</h2>
-        <div class="pkt-meta-block">
-          <div class="pkt-meta-row">
-            <span class="pkt-meta-label">attempt</span>
-            <span class="pkt-meta-value mono">{{ p_attempt }}/{{ p_max_attempts }}</span>
-          </div>
-          <div class="pkt-meta-row">
-            <span class="pkt-meta-label">state</span>
-            <span class="pkt-meta-value">
-              {% if p_ui.show == 'badge' %}
-                <span class="badge severity-{{ p_ui.severity }}">{{ p_ui.label }}</span>
-              {% else %}
-                <span class="muted">{{ p_ui.label }}</span>
-              {% endif %}
-            </span>
-          </div>
-          <div class="pkt-meta-row">
-            <span class="pkt-meta-label">worker</span>
-            <span class="pkt-meta-value mono">{{ p_worker or '—' }}</span>
-          </div>
-          <div class="pkt-meta-row">
-            <span class="pkt-meta-label">model</span>
-            <span class="pkt-meta-value mono">{{ p.model or '—' }}</span>
-          </div>
-          <div class="pkt-meta-row">
-            <span class="pkt-meta-label">started</span>
-            <span class="pkt-meta-value mono">{% if p_started %}{{ p_started | fmt_time_short }}{% else %}—{% endif %}</span>
-          </div>
-          <div class="pkt-meta-row">
-            <span class="pkt-meta-label">elapsed</span>
-            <span class="pkt-meta-value mono">
-              {%- if p.is_running and p_started %}{{ p_started | fmt_elapsed_since }}
-              {%- elif p_duration %}{{ p_duration | fmt_duration }}
-              {%- else %}—{% endif -%}
-            </span>
-          </div>
-          <div class="pkt-meta-row">
-            <span class="pkt-meta-label">finished</span>
-            <span class="pkt-meta-value mono">
-              {%- if p_finished and not p.is_running %}{{ p_finished | fmt_time_short }}
-              {%- elif p.is_running %}—
-              {%- else %}—{% endif -%}
-            </span>
-          </div>
-          <div class="pkt-meta-row">
-            <span class="pkt-meta-label">stage</span>
-            <span class="pkt-meta-value">{{ last_stage.label if last_stage else '—' }}</span>
-          </div>
-        </div>
-      </section>
-
-      {# ── Needs attention (calm, replaces "Why it failed") ──────────── #}
-      {% set bd = p.blocking_decision or {} %}
-      {% if bd.has_blocking %}
-        {% set bd_ui = bd.state | ui_state %}
-        <section class="needs-attention severity-{{ bd_ui.severity }}">
-          <h2 class="na-h">Needs attention</h2>
-          <div class="na-meta muted small">
-            <span class="badge severity-{{ bd_ui.severity }}">{{ bd_ui.label }}</span>
-            {% if bd.decided_by %}<span> · decided by {{ bd.decided_by }}</span>{% endif %}
-            {% if bd.at %}<span> · {{ bd.at | fmt_time_short }}</span>{% endif %}
-          </div>
-          {% if bd.action %}<div class="na-row"><strong>What happened: </strong>{{ bd.action }}</div>{% endif %}
-          {% if bd.reason %}<div class="na-row"><strong>Why: </strong>{{ bd.reason }}</div>{% endif %}
-          {% set lf = bd.last_failure or {} %}
-          {% if lf.summary %}<div class="na-row"><strong>Summary: </strong>{{ lf.summary }}</div>{% endif %}
-          {% if lf.stages %}
-            <ul class="na-stages">
-              {% for st in lf.stages %}
-                {% set marker = '✗' if st.status == 'failed' else ('✓' if st.status == 'passed' else '·') %}
-                <li>{{ marker }} {{ st.name }}: {{ st.status }}</li>
-                {% for iss in (st.blocking_issues or []) %}
-                  <li class="na-issue">  {{ iss }}</li>
-                {% endfor %}
-              {% endfor %}
-            </ul>
-          {% endif %}
-          {% if lf.command_preview %}
-            <div class="na-cmd">
-              <strong class="small">Last command:</strong>
-              <pre class="command-preview">{{ lf.command_preview | join(' ') }}</pre>
-            </div>
-          {% endif %}
-          {% if lf.stderr_tail %}
-            <div class="na-cmd">
-              <strong class="small">Stderr tail:</strong>
-              <pre class="stderr-tail">{{ lf.stderr_tail }}</pre>
-            </div>
-          {% endif %}
-          {% set next_text = [bd, p.recommendation] | next_action_text %}
-          {% if next_text %}
-            <div class="next-action {{ [bd, p.recommendation] | next_action_class }}">
-              <span class="label">Next:</span>
-              <span>{{ next_text }}</span>
-            </div>
-          {% endif %}
-          <div class="na-raw muted small" title="raw backend state">raw: {{ p_state or '—' }} / {{ bd.state or '—' }}</div>
-        </section>
-      {% endif %}
-
-      {# ── Dev Replay (only when dev tools enabled + replayable) ───── #}
-      {% if dev_tools_enabled and packet.dev_replay %}
-      {% set dr = packet.dev_replay %}
-      {% set dr_run_id = dr.run_id %}
-      <section class="dev-replay">
-        <h2 class="pipeline-h">Dev Replay</h2>
-        <div class="dev-replay-meta muted small">
-          worktree: <span class="mono">{{ dr.worktree_path or '—' }}</span>
-          &middot; branch: <span class="mono">{{ dr.branch_name or '—' }}</span>
-          &middot; run: <span class="mono">{{ dr_run_id }}</span>
-        </div>
-        <div class="dev-replay-buttons">
-          <button class="dev-replay-btn" data-run-id="{{ dr_run_id }}" data-action="acceptance" data-stage="t0"
-                  onclick="replayStage(this)">Replay T0</button>
-          <button class="dev-replay-btn" data-run-id="{{ dr_run_id }}" data-action="acceptance" data-stage="t1"
-                  onclick="replayStage(this)">Replay T1</button>
-          <button class="dev-replay-btn" data-run-id="{{ dr_run_id }}" data-action="acceptance" data-stage="t2"
-                  onclick="replayStage(this)">Replay T2</button>
-          <button class="dev-replay-btn" data-run-id="{{ dr_run_id }}" data-action="acceptance" data-stage="full_acceptance"
-                  onclick="replayStage(this)">Replay Full Acceptance</button>
-          <button class="dev-replay-btn" data-run-id="{{ dr_run_id }}" data-action="verifier"
-                  onclick="replayStage(this)">Replay Verifier</button>
-          <button class="dev-replay-btn" data-run-id="{{ dr_run_id }}" data-action="reviewer"
-                  onclick="replayStage(this)">Replay Reviewer</button>
-        </div>
-        <div id="replay-result" class="dev-replay-result"></div>
-        {# ── Replay History panel ─────────────────────────────────── #}
-        {% set replay_history = dr.replays or [] %}
-        {% if replay_history %}
-        <div class="dev-replay-history" id="replay-history">
-          <h3 class="dev-replay-history-h">Replay History</h3>
-          {% for entry in replay_history | reverse %}
-            {% set ec = 'dev-replay-ok' if entry.passed else 'dev-replay-fail' %}
-            <div class="dev-replay-history-entry {{ ec }}">
-              <span class="muted small">{{ entry.timestamp | fmt_time_short }}</span>
-              <strong>{{ entry.type }}{% if entry.stage %} {{ entry.stage }}{% endif %}</strong>:
-              <span class="dev-replay-status">{{ 'passed' if entry.passed else 'failed' }}</span>
-              <div class="dev-replay-history-summary muted small">{{ entry.summary or '' }}</div>
-            </div>
-          {% endfor %}
-        </div>
-        {% else %}
-        <div class="dev-replay-history" id="replay-history"></div>
-        {% endif %}
-      </section>
-      {% endif %}
-
-      {# ── Tab bar (fixes the "Packet not found" tab bug) ───────────── #}
+      {# Tab bar ─────────────────────────────────────────── #}
       <nav class="tabs" id="packet-tabs">
         {% set tab_labels = {
              'timeline': 'Events',
              'spec': 'Spec',
              'runs': 'Attempts',
-             'sessions': 'Agent sessions',
+             'sessions': 'Sessions',
              'evidence': 'Evidence',
              'logs': 'Logs',
              'artifacts': 'Artifacts'} %}
@@ -500,7 +70,12 @@ attempts: {{ p.attempt_count }}/{{ p.max_attempts }}"
         {% include "_tab.html" %}
       </div>
     {% endif %}
-  {# ── Mode 3: Empty ────────────────────────────────────────────────── #}
+
+  {# ── Mode 3: Feature details ─────────────────────────────────────── #}
+  {% elif selected_feature_id and feature %}
+    {% include "detail/_feature.html" %}
+
+  {# ── Mode 4: Empty ────────────────────────────────────────────────── #}
   {% else %}
     <div class="detail-empty">
       Select a feature, wave, or packet to inspect.

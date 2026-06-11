@@ -1,0 +1,5 @@
+{# Spec tab — packet spec JSON.
+   Expects: packet (p) #}
+<div class="tab-h">Spec</div>
+{% set p_inner = packet.packet or packet %}
+<pre>{{ p_inner.spec_json | tojson(indent=2) if p_inner.spec_json is mapping else (p_inner.spec_json or '{}') }}</pre>

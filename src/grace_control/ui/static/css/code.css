@@ -1,0 +1,92 @@
+/* ═══════════════════════════════════════════════════════════════════════════════
+   CODE — Code blocks, pre, details, banners, forms, animations
+   ═══════════════════════════════════════════════════════════════════════════════ */
+pre {
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--fg-2);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+code {
+  font-family: var(--mono);
+  font-size: 0.92em;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--bg-3);
+}
+details {
+  margin: 4px 0;
+}
+details summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-size: 11px;
+}
+.command-preview {
+  margin-top: 4px;
+  padding: 6px 8px;
+  background: var(--bg-3);
+  border-radius: var(--radius);
+  font-size: 11px;
+  overflow-x: auto;
+}
+.stderr-tail {
+  margin-top: 4px;
+  padding: 6px 8px;
+  background: var(--bg-3);
+  border-radius: var(--radius);
+  font-size: 11px;
+  overflow-x: auto;
+  color: var(--err);
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+/* ── Forms / Inputs ─────────────────────────────────────────────────────── */
+input, select, button {
+  font-family: var(--font);
+  font-size: 12px;
+}
+
+/* ── Banner ─────────────────────────────────────────────────────────────── */
+.banner {
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  margin: 8px 16px;
+  font-size: 12px;
+}
+.banner.info  { background: var(--accent-bg); color: var(--accent); border: 1px solid rgba(91,156,245,0.2); }
+.banner.warn  { background: var(--warn-bg);  color: var(--warn);   border: 1px solid var(--sev-attn-soft); }
+.banner.err   { background: var(--err-bg);   color: var(--err);    border: 1px solid var(--sev-crit-soft); }
+
+/* ── Running Animation ──────────────────────────────────────────────────── */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+.severity-ok .dot[aria-hidden] {
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+.is-running .pipeline-card-icon {
+  animation: pulse-dot 1.5s ease-in-out infinite;
+}
+.is-running {
+  position: relative;
+}
+.is-running::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--running);
+  border-radius: 1px;
+  animation: pulse-dot 1.5s ease-in-out infinite;
+}
+
+/* ── Miscellaneous ──────────────────────────────────────────────────────── */
+.detail-pane { /* used by maintenance pane root element */ }
+.size-info { font-family: var(--mono); font-weight: 600; }

@@ -1,29 +1,31 @@
 {% extends "base.html" %}
 {% block title %}GRACE Admin · System{% endblock %}
 {% block content %}
-<h2>System</h2>
-<div class="card">
-  <h3>Health</h3>
-  <pre>{{ health | tojson(indent=2) }}</pre>
-</div>
-<div class="card">
-  <h3>Workers</h3>
-  {% if workers %}
-  <table class="responsive-table">
-    <thead><tr><th>ID</th><th>Status</th><th>Current packet</th><th>Heartbeat</th></tr></thead>
-    <tbody>
-      {% for w in workers %}
-      <tr>
-        <td class="mono">{{ w.id }}</td>
-        <td><span class="pill {{ w.status }}">{{ w.status }}</span></td>
-        <td class="mono small">{{ w.current_packet_id or '—' }}</td>
-        <td class="mono small">{{ w.last_heartbeat or '—' }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  {% else %}
-  <div class="empty">No workers</div>
-  {% endif %}
+<div class="system-page">
+  <h1>System</h1>
+  <div style="padding: 16px; background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--radius-lg); margin-bottom: 16px;">
+    <h2 style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.8px; color: var(--fg-3); margin-bottom: 10px; font-weight: 600;">Health</h2>
+    <pre style="background: var(--bg); padding: 10px; border-radius: var(--radius); border: 1px solid var(--border);">{{ health | tojson(indent=2) }}</pre>
+  </div>
+  <div style="padding: 16px; background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--radius-lg);">
+    <h2 style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.8px; color: var(--fg-3); margin-bottom: 10px; font-weight: 600;">Workers</h2>
+    {% if workers %}
+    <table class="responsive-table">
+      <thead><tr><th>ID</th><th>Status</th><th>Current packet</th><th>Heartbeat</th></tr></thead>
+      <tbody>
+        {% for w in workers %}
+        <tr>
+          <td class="mono">{{ w.id }}</td>
+          <td><span class="badge severity-{{ 'ok' if w.status == 'alive' else 'critical' }}">{{ w.status }}</span></td>
+          <td class="mono small">{{ w.current_packet_id or '—' }}</td>
+          <td class="mono small">{{ w.last_heartbeat or '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="muted small">No workers registered.</div>
+    {% endif %}
+  </div>
 </div>
 {% endblock %}

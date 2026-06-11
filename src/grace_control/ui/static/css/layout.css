@@ -1,0 +1,98 @@
+/* ═══════════════════════════════════════════════════════════════════════════════
+   LAYOUT — Three-pane console grid + responsive breakpoints
+   ═══════════════════════════════════════════════════════════════════════════════ */
+.console {
+  display: grid;
+  grid-template-columns: var(--pane-left) var(--pane-mid) minmax(0, 1fr);
+  grid-template-rows: 1fr;
+  height: calc(100vh - 44px - 36px - 34px - 30px);  /* header + nav + view-tabs + stats */
+  overflow: hidden;
+}
+
+/* Each pane */
+.console-master,
+.console-middle,
+.console-detail {
+  overflow-y: auto;
+  overflow-x: hidden;
+  border-right: 1px solid var(--border);
+}
+.console-master { background: var(--bg); }
+.console-middle { background: var(--bg-2); }
+.console-detail {
+  background: var(--bg);
+  border-right: none;
+}
+
+/* Scrollbar */
+.console-master::-webkit-scrollbar,
+.console-middle::-webkit-scrollbar,
+.console-detail::-webkit-scrollbar {
+  width: 5px;
+}
+.console-master::-webkit-scrollbar-track,
+.console-middle::-webkit-scrollbar-track,
+.console-detail::-webkit-scrollbar-track {
+  background: transparent;
+}
+.console-master::-webkit-scrollbar-thumb,
+.console-middle::-webkit-scrollbar-thumb,
+.console-detail::-webkit-scrollbar-thumb {
+  background: var(--border-2);
+  border-radius: 3px;
+}
+
+/* ── Responsive ─────────────────────────────────────────────────────────── */
+
+/* Two-pane: hide middle on medium screens */
+@media (max-width: 1200px) {
+  .console {
+    grid-template-columns: var(--pane-left) minmax(0, 1fr);
+  }
+  .console-middle {
+    display: none;
+  }
+}
+
+/* Single-pane on small screens */
+@media (max-width: 768px) {
+  html { font-size: 12px; }
+
+  .console {
+    grid-template-columns: 1fr;
+    height: auto;
+    min-height: 0;
+  }
+
+  .console-master,
+  .console-middle,
+  .console-detail {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    max-height: 50vh;
+    overflow-y: auto;
+  }
+
+  .hdr { padding: 0 12px; gap: 10px; }
+  .stats-bar { padding: 6px 12px; flex-wrap: wrap; }
+  .nav a { padding: 0 10px; }
+
+  .ft-pkt-grid { grid-template-columns: repeat(2, 1fr); }
+  .wave-pkt-grid { grid-template-columns: repeat(2, 1fr); }
+  .wave-summary-grid { grid-template-columns: repeat(2, 1fr); }
+  .maint-grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 480px) {
+  html { font-size: 11px; }
+  .console { height: auto; }
+  .ft-pkt-grid { grid-template-columns: 1fr; }
+  .wave-pkt-grid { grid-template-columns: 1fr; }
+}
+
+/* Maintenance view (full-height single pane) */
+.console-maintenance {
+  padding: 0;
+  overflow-y: auto;
+  height: calc(100vh - 44px - 36px - 34px - 30px);
+}

@@ -1,176 +1,30 @@
 {# Tab body partial — self-wrapping: returns <div id="packet-tab-content">.
-   hx-swap="outerHTML" on #packet-tab-content replaces this whole element.
-
-   Tab labels are remapped to human-friendly names:
-     timeline -> Events
-     spec     -> Spec
-     runs     -> Attempts
-     sessions -> Agent sessions
-     evidence -> Evidence
-     logs     -> Logs
-     artifacts-> Artifacts #}
+   Refactored: delegates to per-tab sub-partials. #}
 <div id="packet-tab-content">
   {% if not packet %}
     <div class="banner err">Packet not found</div>
   {% else %}
-    {% set p = packet %}
     {% if active_tab == 'timeline' %}
-      <div class="tab-h">Events</div>
-      <div class="muted small mb">Total: {{ timeline_total or 0 }}</div>
-      <table class="responsive-table">
-        <thead><tr><th>Time</th><th>Event</th><th>Component</th><th>Reason</th><th>Payload</th></tr></thead>
-        <tbody>
-          {% for ev in (timeline_events or []) %}
-          <tr>
-            <td class="mono">{{ ev.timestamp }}</td>
-            <td class="mono">{{ ev.event_type }}</td>
-            <td class="mono">{{ ev.component or '' }}</td>
-            <td class="small">{{ ev.reason or '' }}</td>
-            <td>
-              {% if ev.payload and (ev.payload | length) > 0 %}
-                <details><summary>view</summary>
-                  <pre>{{ ev.payload | tojson(indent=2) }}</pre>
-                </details>
-              {% else %}<span class="muted">—</span>{% endif %}
-            </td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
+      {% include "tabs/_events.html" %}
+
     {% elif active_tab == 'spec' %}
-      <div class="tab-h">Spec</div>
-      {% set p_inner = p.packet or p %}
-      <pre>{{ p_inner.spec_json | tojson(indent=2) if p_inner.spec_json is mapping else (p_inner.spec_json or '{}') }}</pre>
+      {% include "tabs/_spec.html" %}
+
     {% elif active_tab == 'runs' %}
-      <div class="tab-h">Attempts</div>
-      {% if runs %}
-        <div class="attempts-list">
-          {% for r in runs %}
-            <div class="attempt-card severity-{{ r.status | state_severity }}">
-              <div class="attempt-head">
-                <span class="attempt-num">Attempt {{ r.run_number or loop.index }}</span>
-                <span class="badge severity-{{ r.status | state_severity }}">{{ r.status }}</span>
-                {% if r.started_at %}<span class="muted small">started {{ r.started_at | fmt_time_short }}</span>{% endif %}
-                {% if r.duration_ms %}<span class="muted small">· {{ r.duration_ms | fmt_duration_ms }}</span>{% endif %}
-              </div>
-              <div class="attempt-meta muted small">
-                <span>{{ r.executor_id or '—' }}</span>
-                {% if r.worker_id %}<span> · {{ r.worker_id }}</span>{% endif %}
-                {% if r.model %}<span> · {{ r.model }}</span>{% endif %}
-              </div>
-            </div>
-          {% endfor %}
-        </div>
-      {% else %}
-        {# Fallback: derive attempts from the last claim/release cycle in events.
-           With sparse data (no PacketRun rows) we still want to show the
-           attempt history. #}
-        <div class="attempts-list">
-          {% set p_state = p.packet.state if p.packet else p.state %}
-          {% set attempt_count = (p.packet.attempt_count if p.packet else None) or 0 %}
-          {% set p_started = p.started_at %}
-          {% set p_duration = p.elapsed_seconds %}
-          <div class="attempt-card severity-{{ p_state | state_severity }}">
-            <div class="attempt-head">
-              <span class="attempt-num">Attempt {{ attempt_count }} (last)</span>
-              <span class="badge severity-{{ p_state | state_severity }}">{{ p_state }}</span>
-              {% if p_started %}<span class="muted small">started {{ p_started | fmt_time_short }}</span>{% endif %}
-              {% if p_duration %}<span class="muted small">· {{ p_duration | fmt_duration }}</span>{% endif %}
-            </div>
-            <div class="attempt-meta muted small">
-              {% if p.worker_id %}<span>worker: {{ p.worker_id }}</span>{% endif %}
-              {% if p.model %}<span> · model: {{ p.model }}</span>{% endif %}
-            </div>
-          </div>
-          <div class="muted small" style="margin-top: 8px;">
-            Detailed run logs are not stored in this environment.
-            Click <strong>Logs</strong> for stderr tail, or <strong>Evidence</strong> for acceptance stages.
-          </div>
-        </div>
-      {% endif %}
+      {% include "tabs/_runs.html" %}
+
     {% elif active_tab == 'sessions' %}
-      <div class="tab-h">Agent sessions</div>
-      {% if sessions and sessions.reason == 'table_missing' %}
-        <div class="banner warn">Sessions not yet tracked (TZ_SESSION_RESUME pending).</div>
-      {% elif sessions and sessions.sessions %}
-        <div class="session-chain">
-          {% for s in sessions.sessions %}
-            <div class="session-node {% if s.status == 'active' %}session-active{% elif s.status == 'failed' %}session-failed{% endif %}"
-                 {% if s.parent_session_id %}style="margin-left: 28px"{% endif %}>
-              {% if s.parent_session_id %}
-                <div class="session-fork-arrow" title="fork/resume from {{ s.parent_session_id }}">&#8627;</div>
-              {% endif %}
-              <div class="session-row">
-                <span class="session-id mono">{{ s.id }}</span>
-                <span class="session-role badge severity-{% if s.role == 'coder' %}ok-soft{% elif s.role == 'architect' %}attn-soft{% elif s.role == 'verifier' %}ok-soft{% else %}muted{% endif %}">{{ s.role }}</span>
-                {% if s.status == 'forked' %}<span class="session-tag">fork</span>{% endif %}
-                {% if s.status == 'active' %}<span class="session-tag session-tag-active">active</span>{% endif %}
-              </div>
-              <div class="session-meta muted small">
-                <span>executor: <code class="mono">{{ s.executor_id or '—' }}</code></span>
-                <span class="pipe">|</span>
-                <span>attempt: <code>{{ s.attempt_number }}</code></span>
-                <span class="pipe">|</span>
-                <span>status: {{ s.status }}</span>
-                <span class="pipe">|</span>
-                <span>started: {% if s.created_at %}{{ s.created_at | fmt_time_short }}{% else %}—{% endif %}</span>
-                {% if s.duration_seconds %}
-                <span class="pipe">|</span>
-                <span>duration: {{ s.duration_seconds | fmt_duration }}</span>
-                {% endif %}
-                {% if s.external_id %}
-                <span class="pipe">|</span>
-                <span title="openCode session ID">session: <code class="mono">{{ s.external_id }}</code></span>
-                {% endif %}
-                {% if s.fork_of %}
-                <span class="pipe">|</span>
-                <span>fork of <code class="mono">{{ s.fork_of }}</code></span>
-                {% endif %}
-              </div>
-            </div>
-          {% endfor %}
-        </div>
-      {% else %}
-        <div class="empty">No agent sessions</div>
-      {% endif %}
+      {% include "tabs/_sessions.html" %}
+
     {% elif active_tab == 'evidence' %}
-      <div class="tab-h">Evidence</div>
-      {% if evidence and evidence.stages %}
-        <ul class="evidence-stages">
-          {% for st in evidence.stages %}
-            <li class="evidence-stage severity-{{ st.status | state_severity }}">
-              <strong>{{ st.name }}</strong>: {{ st.status }}
-              {% if st.summary %}<div class="muted small">{{ st.summary }}</div>{% endif %}
-              {% if st.blocking_issues %}
-                <ul>{% for iss in st.blocking_issues %}<li class="text-err">{{ iss }}</li>{% endfor %}</ul>
-              {% endif %}
-            </li>
-          {% endfor %}
-        </ul>
-      {% else %}
-        <div class="empty">
-          No acceptance evidence recorded
-          <div class="muted small" style="margin-top: 4px;">
-            Acceptance is run as part of the coder's command (NORMAL profile).
-            For STRICT profile, evidence stages (T0/T1/T2) are stored separately.
-          </div>
-        </div>
-      {% endif %}
+      {% include "tabs/_evidence.html" %}
+
     {% elif active_tab == 'logs' %}
-      <div class="tab-h">Logs</div>
-      <div class="muted small mb">Showing last 200 lines of stderr</div>
-      <pre>{{ logs_text or '(no logs)' }}</pre>
+      {% include "tabs/_logs.html" %}
+
     {% elif active_tab == 'artifacts' %}
-      <div class="tab-h">Artifacts</div>
-      {% if artifacts and artifacts.tree %}
-        <ul>{% for n in artifacts.tree recursive %}
-          <li>{{ n.name }} {% if n.size %}<span class="muted">({{ n.size }} B)</span>{% endif %}
-            {% if n.children %}<ul>{{ loop(n.children) }}</ul>{% endif %}
-          </li>
-        {% endfor %}</ul>
-      {% else %}
-        <div class="empty">No artifacts</div>
-      {% endif %}
+      {% include "tabs/_artifacts.html" %}
+
     {% else %}
       <div class="banner warn">Unknown tab: {{ active_tab }}</div>
     {% endif %}

@@ -1,0 +1,12 @@
+{# Logs tab — stderr tail with enhanced display.
+   Expects: logs_text, packet #}
+<div class="tab-h">Logs <span class="muted small">stderr output</span></div>
+{% if logs_text %}
+<pre class="logs-output">{{ logs_text }}</pre>
+{% else %}
+<div class="tab-empty-state">
+  <div class="tab-empty-icon">📋</div>
+  <div class="tab-empty-text">No logs available yet</div>
+  <div class="tab-empty-hint muted small">Logs appear here once the coder run starts producing output.</div>
+</div>
+{% endif %}
