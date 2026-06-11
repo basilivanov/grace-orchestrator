@@ -119,15 +119,15 @@ def resolve_default_t0(
         commands.append(["python3", "scripts/grace_front_lint.py"] + fe_files)
         origins.append("auto:t0:frontend_grace_lint")
         frontend_lint_ran = True
-    elif "frontend" in areas:
-        # legacy fallback
+    elif is_grace and "frontend" in areas:
+        # legacy fallback — only for orchestrator repo
         if (base / "scripts" / "grace" / "check-markers.sh").is_file():
             commands.append(["bash", "scripts/grace/check-markers.sh"])
             origins.append("auto:t0:frontend_markers_fallback")
             frontend_lint_ran = True
 
-    # NORMAL/STRICT: fail if frontend changed but no frontend lint available
-    if "frontend" in areas and not frontend_lint_ran and profile in ("NORMAL", "STRICT"):
+    # NORMAL/STRICT: fail only for orchestrator repo when frontend changed but no lint
+    if is_grace and "frontend" in areas and not frontend_lint_ran and profile in ("NORMAL", "STRICT"):
         commands.append(_FRONTEND_LINT_MISSING_CMD)
         origins.append("auto:t0:frontend_lint_missing")
 

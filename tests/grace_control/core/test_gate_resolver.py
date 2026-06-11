@@ -101,6 +101,8 @@ def test_t0_backend_only_ruff(tmp_path):
 
 def test_t0_frontend_fallback_markers(tmp_path):
     wt = _make_worktree(tmp_path, scripts={"grace/check-markers.sh": "echo ok"})
+    # Mark as GRACE orchestrator
+    (wt / ".grace" / "state").mkdir(parents=True)
     cmds, origins = resolve_default_t0(["app/page.tsx"], wt)
     assert any("check-markers.sh" in " ".join(c) for c in cmds)
     assert any("auto:t0:frontend_markers_fallback" in o for o in origins)
@@ -122,8 +124,9 @@ def test_t0_target_repo_skips_grace_lint(tmp_path):
 
 
 def test_t0_frontend_missing_lint_fails_normal(tmp_path):
-    """NORMAL with frontend changed but no frontend GRACE lint → fail."""
+    """NORMAL with frontend changed but no frontend GRACE lint → fail (for orchestrator repos)."""
     wt = _make_worktree(tmp_path)
+    (wt / ".grace" / "state").mkdir(parents=True)
     cmds, origins = resolve_default_t0(["app/page.tsx"], wt, profile="NORMAL")
     assert any("frontend_lint_missing" in o for o in origins), (
         f"expected frontend_lint_missing origin, got {origins}"
@@ -134,8 +137,9 @@ def test_t0_frontend_missing_lint_fails_normal(tmp_path):
 
 
 def test_t0_frontend_missing_lint_fails_strict(tmp_path):
-    """STRICT with frontend changed but no frontend GRACE lint → fail."""
+    """STRICT with frontend changed but no frontend GRACE lint → fail (for orchestrator repos)."""
     wt = _make_worktree(tmp_path)
+    (wt / ".grace" / "state").mkdir(parents=True)
     cmds, origins = resolve_default_t0(["app/page.tsx"], wt, profile="STRICT")
     assert any("frontend_lint_missing" in o for o in origins)
 
@@ -143,6 +147,7 @@ def test_t0_frontend_missing_lint_fails_strict(tmp_path):
 def test_t0_frontend_missing_lint_warns_fast(tmp_path):
     """FAST with frontend changed but no frontend GRACE lint → no failing command."""
     wt = _make_worktree(tmp_path)
+    (wt / ".grace" / "state").mkdir(parents=True)
     cmds, origins = resolve_default_t0(["app/page.tsx"], wt, profile="FAST")
     frontend_lint_issues = [o for o in origins if "frontend" in o]
     assert not frontend_lint_issues, (
