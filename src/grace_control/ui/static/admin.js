@@ -339,6 +339,8 @@ function renderLogs(){
   </div>`;
   html+=`<div style="flex:1;overflow-y:auto;padding:4px 8px;font-family:var(--mono);font-size:9px;line-height:1.6;background:var(--bg0)">`;
   lines.forEach(l=>{
+    // Skip self-polling noise
+    if(l.includes('GET /api/admin/system/logs')||l.includes('GET /api/admin/features')||l.includes('favicon.ico')||l.includes('GET /static/'))return;
     let cls='';
     if(l.startsWith('{')){try{const j=JSON.parse(l);cls=j.level==='ERROR'?'color:var(--red)':j.level==='WARN'?'color:var(--yellow)':'color:var(--t2)';l=j.msg||l;}catch{}}
     else if(l.includes('ERROR')||l.includes('error'))cls='color:var(--red)';
