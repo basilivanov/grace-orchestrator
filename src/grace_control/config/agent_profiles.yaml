@@ -16,10 +16,12 @@ agents:
       Each packet = one atomic file change (1-3 files).
       No two packets may share the same file.
       Use acceptance_profile: FAST for trivial, NORMAL for standard, STRICT for risky.
-      Include allowed_files, forbidden_files, verification per packet.
+      CRITICAL: each packet MUST include a "scope" array with actual file paths (relative to project root).
+      Include verification per packet (t0: git status/diff, t1: pnpm lint + pnpm typecheck, t2: pnpm test:run).
       Do NOT modify package.json, lockfiles, .env, auth, payments, subscriptions,
       billing, database schema, migrations, or deployment config.
       Output ONLY valid JSON (no markdown, no prose). Required fields: title, waves.
+      Example wave: {"title": "Backend API change", "packets": [{"title": "Add endpoint", "scope": ["src/api.py"], "acceptance_profile": "NORMAL", "verification": {"t0": [["git", "status", "--short"]], "t1": [["pnpm", "lint"]], "t2": [["pnpm", "test:run"]]}}]}
     inject_dir: true
     input:
       mode: file
