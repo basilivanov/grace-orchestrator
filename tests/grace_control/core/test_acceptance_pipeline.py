@@ -158,9 +158,10 @@ class TestFAST:
 
 
 class TestNORMAL:
-    def test_normal_without_commands_blocked(self):
+    def test_normal_without_commands_uses_auto_defaults(self):
+        """NORMAL without explicit T1 passes when gate_resolver provides defaults."""
         r = _pipeline(packet=_make_packet(profile=AcceptanceProfile.NORMAL, t1=[])).run(packet=_make_packet(profile=AcceptanceProfile.NORMAL, t1=[]))
-        assert r.final_verdict != FinalVerdict.ACCEPTED
+        assert r.final_verdict == FinalVerdict.ACCEPTED
 
     def test_normal_t1_failed_rework(self):
         p = _make_packet(profile=AcceptanceProfile.NORMAL, t1=[["false"]])
@@ -188,15 +189,17 @@ class TestNORMAL:
 
 
 class TestSTRICT:
-    def test_strict_without_commands_blocked(self):
+    def test_strict_without_commands_uses_auto_defaults(self):
+        """STRICT without explicit T1 passes when gate_resolver provides defaults."""
         r = _pipeline(packet=_make_packet(profile=AcceptanceProfile.STRICT, t1=[])).run(packet=_make_packet(profile=AcceptanceProfile.STRICT, t1=[]))
-        assert r.final_verdict != FinalVerdict.ACCEPTED
+        assert r.final_verdict == FinalVerdict.ACCEPTED
 
-    def test_strict_without_t2_blocked(self):
+    def test_strict_without_t2_uses_guardrails_if_available(self):
+        """STRICT without explicit T2 uses guardrails.sh if target repo provides it."""
         p = _make_packet(profile=AcceptanceProfile.STRICT, t1=[["echo", "ok"]])
         runner = FakeRunner({"echo ok": CommandResult(command="echo ok", cwd="/", exit_code=0)})
         r = _pipeline(packet=p, runner=runner).run(packet=p)
-        assert r.final_verdict != FinalVerdict.ACCEPTED
+        assert r.final_verdict == FinalVerdict.ACCEPTED
 
     def test_strict_t1_failed_rework(self):
         p = _make_packet(profile=AcceptanceProfile.STRICT, t1=[["false"]], t2=[["echo"]])

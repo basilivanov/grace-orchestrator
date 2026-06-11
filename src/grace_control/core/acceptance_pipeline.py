@@ -45,6 +45,7 @@ from grace_control.core.contracts import (
     validate_packet_contract,
 )
 from grace_control.core.evidence import EvidenceCollector, check_expected_evidence
+from grace_control.core.gate_resolver import resolve_default_gates, resolve_default_t0, resolve_touched_areas
 from grace_control.core.scope_guard import ScopeGuard, get_changed_files
 
 
@@ -160,7 +161,7 @@ def run_acceptance_stage_replay(
         )
     elif stage == "t1":
         run_dir_t1 = Path(run_dir) / "t1" if run_dir else worktree_path
-        t1_result = pipe._run_t1(packet, run_dir=run_dir_t1, cwd=worktree_path)
+        t1_result = pipe._run_t1(packet, changed_files or [], run_dir=run_dir_t1, cwd=worktree_path)
         passed = t1_result.status == StageStatus.PASSED
         return AcceptanceReport(
             packet_id=packet.packet_id,
@@ -171,7 +172,7 @@ def run_acceptance_stage_replay(
         )
     elif stage == "t2":
         run_dir_t2 = Path(run_dir) / "t2" if run_dir else worktree_path
-        t2_result = pipe._run_t2(packet, run_dir=run_dir_t2, cwd=worktree_path)
+        t2_result = pipe._run_t2(packet, changed_files or [], run_dir=run_dir_t2, cwd=worktree_path)
         passed = t2_result.status == StageStatus.PASSED
         return AcceptanceReport(
             packet_id=packet.packet_id,
@@ -238,21 +239,24 @@ class AcceptancePipeline:
         packet: ExecutionPacketContract,
         changed_files: list[str],
         cwd: Path | None = None,
-    ) -> list[list[str]]:
+    ) -> tuple[list[list[str]], list[str]]:
+        """Return (commands, origins) for T0 using gate_resolver defaults."""
         scope_paths = self._resolve_t0_scope_paths(packet, changed_files, cwd=cwd)
-        if not scope_paths:
-            return self._t0_command_template
-        commands: list[list[str]] = []
-        # scripts/grace_lint.py is repo-supplied and optional — only run it
-        # if the file is committed in the worktree.
         base = (cwd or self._root).resolve()
-        if (base / "scripts" / "grace_lint.py").is_file():
-            commands.append(["python3", "scripts/grace_lint.py"] + scope_paths)
-        # ruff can only check Python files — filter out non-.py paths
+
+        cmds, origins = resolve_default_t0(scope_paths, base)
+        if cmds:
+            return cmds, origins
+
+        # Fallback: hardcoded ruff on src/
         py_paths = [p for p in scope_paths if p.endswith(".py")]
         if py_paths:
-            commands.append(["python3", "-m", "ruff", "check"] + py_paths)
-        return commands
+            return (
+                [["python3", "-m", "ruff", "check"] + py_paths],
+                ["auto:t0:ruff_fallback"],
+            )
+
+        return self._t0_command_template, ["auto:t0:ruff_src"]
 
     def _resolve_t0_scope_paths(
         self,
@@ -338,7 +342,7 @@ class AcceptancePipeline:
 
         # ── T1: targeted verification + VerifierReport ────────────────────────
         run_dir_t1 = Path(run_dir) / "t1" if run_dir else worktree_root
-        t1_result = self._run_t1(packet, run_dir=run_dir_t1, cwd=worktree_root)
+        t1_result = self._run_t1(packet, changed_files or [], run_dir=run_dir_t1, cwd=worktree_root)
         ep += self._evidence.collect_from_stage(t1_result)
 
         if t1_result.status == StageStatus.FAILED:
@@ -353,7 +357,7 @@ class AcceptancePipeline:
 
         # ── T2: full checks ──────────────────────────────────────────────────
         run_dir_t2 = Path(run_dir) / "t2" if run_dir else worktree_root
-        t2_result = self._run_t2(packet, run_dir=run_dir_t2, cwd=worktree_root)
+        t2_result = self._run_t2(packet, changed_files or [], run_dir=run_dir_t2, cwd=worktree_root)
         ep += self._evidence.collect_from_stage(t2_result)
         if t2_result.status == StageStatus.FAILED:
             return AcceptanceReport(
@@ -506,7 +510,7 @@ class AcceptancePipeline:
                     blocking_issues=[], commands=[]),
                 scope_violations=violations)
 
-        t0_cmds = self._build_t0_commands(packet, cf, cwd=cwd or self._root)
+        t0_cmds, t0_origins = self._build_t0_commands(packet, cf, cwd=cwd or self._root)
 
         for cmd in t0_cmds:
             r = self._runner.run(cmd, output_dir=output_dir, cwd=cwd)
@@ -522,7 +526,7 @@ class AcceptancePipeline:
                     stage=StageResult(name=StageName.T0_SCOPE_AND_LINT,
                         status=StageStatus.FAILED, summary="T0 cheap check failed",
                         blocking_issues=[f"{' '.join(cmd)} failed: {r.stderr[:200]}"],
-                        commands=commands),
+                        commands=commands, command_origins=t0_origins),
                     scope_violations=violations)
 
         summary = "T0 passed: scope clean, contract valid"
@@ -534,21 +538,36 @@ class AcceptancePipeline:
         return _T0Result(
             stage=StageResult(name=StageName.T0_SCOPE_AND_LINT, status=StageStatus.PASSED,
                 summary=summary,
-                commands=commands),
+                commands=commands, command_origins=t0_origins),
             scope_violations=violations)
 
-    def _run_t1(self, packet: ExecutionPacketContract, *, run_dir: Path | None = None, cwd: Path | None = None) -> StageResult:
-        cmds = packet.verification.get("t1", [])
-        commands = [self._runner.run(cmd, output_dir=run_dir, cwd=cwd) for cmd in cmds]
+    def _run_t1(self, packet: ExecutionPacketContract, changed_files: list[str],
+                *, run_dir: Path | None = None, cwd: Path | None = None) -> StageResult:
+        base_path = (cwd or self._root).resolve()
 
-        if not cmds:
+        # Default commands from gate resolver
+        defaults = resolve_default_gates(changed_files, packet.acceptance_profile.value, base_path)
+        t1_defaults = defaults["t1"]["commands"]
+        t1_default_origins = defaults["t1"]["origins"]
+
+        # Explicit commands from architect
+        explicit = packet.verification.get("t1", [])
+
+        # Merge: defaults first, then explicit
+        all_cmds = list(t1_defaults) + [list(c) if isinstance(c, str) else c for c in explicit]
+        all_origins = list(t1_default_origins) + ["architect:extra_verification"] * len(explicit)
+        commands = [self._runner.run(cmd, output_dir=run_dir, cwd=cwd) for cmd in all_cmds]
+
+        if not all_cmds:
             if packet.acceptance_profile == AcceptanceProfile.FAST:
                 return StageResult(name=StageName.T1_TARGETED_TESTS, status=StageStatus.SKIPPED,
                                   summary="FAST profile without T1 commands",
-                                  skipped_reason="FAST profile without T1 commands")
+                                  skipped_reason="FAST profile without T1 commands",
+                                  command_origins=[])
             return StageResult(name=StageName.T1_TARGETED_TESTS, status=StageStatus.FAILED,
-                              summary="NORMAL/STRICT requires verification.t1",
-                              blocking_issues=["missing verification.t1 for NORMAL/STRICT"])
+                              summary="NORMAL/STRICT requires T1 — no auto defaults and no explicit commands",
+                              blocking_issues=["no auto T1 defaults resolved and architect did not provide extra_verification.t1"],
+                              command_origins=[])
 
         failed = [c for c in commands if not c.passed]
         if failed:
@@ -562,25 +581,45 @@ class AcceptancePipeline:
             return StageResult(name=StageName.T1_TARGETED_TESTS, status=StageStatus.FAILED,
                               summary=f"T1 failed: {len(failed)}/{len(commands)} commands failed",
                               commands=commands,
-                              blocking_issues=[f"command failed: {c.command} (exit={c.exit_code}) stderr={c.stderr[:200]} stdout={c.stdout[:200]}" for c in failed])
+                              blocking_issues=[f"command failed: {c.command} (exit={c.exit_code}) stderr={c.stderr[:200]} stdout={c.stdout[:200]}" for c in failed],
+                              command_origins=all_origins)
         return StageResult(name=StageName.T1_TARGETED_TESTS, status=StageStatus.PASSED,
-                          summary=f"T1 passed: {len(commands)} commands ok", commands=commands)
+                          summary=f"T1 passed: {len(commands)} commands ok",
+                          commands=commands, command_origins=all_origins)
 
-    def _run_t2(self, packet: ExecutionPacketContract, *, run_dir: Path | None = None, cwd: Path | None = None) -> StageResult:
-        cmds = packet.verification.get("t2", [])
-        if not cmds:
+    def _run_t2(self, packet: ExecutionPacketContract, changed_files: list[str],
+                *, run_dir: Path | None = None, cwd: Path | None = None) -> StageResult:
+        base_path = (cwd or self._root).resolve()
+
+        # Default commands from gate resolver
+        defaults = resolve_default_gates(changed_files, packet.acceptance_profile.value, base_path)
+        t2_defaults = defaults["t2"]["commands"]
+        t2_default_origins = defaults["t2"]["origins"]
+
+        # Explicit commands from architect
+        explicit = packet.verification.get("t2", [])
+
+        # Merge
+        all_cmds = list(t2_defaults) + [list(c) if isinstance(c, str) else c for c in explicit]
+        all_origins = list(t2_default_origins) + ["architect:extra_verification"] * len(explicit)
+
+        if not all_cmds:
             if packet.acceptance_profile == AcceptanceProfile.STRICT:
                 return StageResult(name=StageName.T2_FULL_TESTS, status=StageStatus.FAILED,
-                                  summary="STRICT requires verification.t2",
-                                  blocking_issues=["missing verification.t2 for STRICT"])
+                                  summary="STRICT requires T2 — target repo has no strict guardrails",
+                                  blocking_issues=["target repo does not provide scripts/guardrails.sh strict and no extra_verification.t2"],
+                                  command_origins=[])
             if packet.acceptance_profile == AcceptanceProfile.NORMAL:
                 return StageResult(name=StageName.T2_FULL_TESTS, status=StageStatus.SKIPPED,
                                   summary="NORMAL without T2 commands",
-                                  skipped_reason="no verification.t2 configured")
+                                  skipped_reason="no verification.t2 configured",
+                                  command_origins=[])
             return StageResult(name=StageName.T2_FULL_TESTS, status=StageStatus.SKIPPED,
-                              summary="FAST always skips T2", skipped_reason="FAST profile skips T2")
+                              summary="FAST always skips T2",
+                              skipped_reason="FAST profile skips T2",
+                              command_origins=[])
 
-        commands = [self._runner.run(cmd, output_dir=run_dir, cwd=cwd) for cmd in cmds]
+        commands = [self._runner.run(cmd, output_dir=run_dir, cwd=cwd) for cmd in all_cmds]
         failed = [c for c in commands if not c.passed]
         if failed:
             for c in failed:
@@ -593,9 +632,11 @@ class AcceptancePipeline:
             return StageResult(name=StageName.T2_FULL_TESTS, status=StageStatus.FAILED,
                               summary=f"T2 failed: {len(failed)}/{len(commands)} commands failed",
                               commands=commands,
-                              blocking_issues=[f"full check failed: {c.command} (exit={c.exit_code}) stderr={c.stderr[:200]} stdout={c.stdout[:200]}" for c in failed])
+                              blocking_issues=[f"full check failed: {c.command} (exit={c.exit_code}) stderr={c.stderr[:200]} stdout={c.stdout[:200]}" for c in failed],
+                              command_origins=all_origins)
         return StageResult(name=StageName.T2_FULL_TESTS, status=StageStatus.PASSED,
-                          summary=f"T2 passed: {len(commands)} commands ok", commands=commands)
+                          summary=f"T2 passed: {len(commands)} commands ok",
+                          commands=commands, command_origins=all_origins)
 
 # END_BLOCK_PIPELINE_CLASS
 

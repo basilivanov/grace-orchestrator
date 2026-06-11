@@ -108,6 +108,7 @@ class StageResult:
     blocking_issues: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     skipped_reason: str | None = None
+    command_origins: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -232,9 +233,11 @@ def validate_packet_contract(packet: ExecutionPacketContract) -> list[str]:
     for p in packet.frozen_scope:
         if _has_abs_or_parent(p):
             errors.append(f"frozen_scope path invalid: {p}")
-    if packet.acceptance_profile in (AcceptanceProfile.NORMAL, AcceptanceProfile.STRICT):
-        if not packet.verification.get("t1", []):
-            errors.append(f"{packet.acceptance_profile.value} requires verification.t1")
+    # NORMAL/STRICT no longer requires verification.t1 — auto defaults
+    # from gate_resolver fill in when architect does not provide them.
+    # validate_packet_contract is called before resolution, so skip
+    # the t1-required check here. The pipeline will fail at T1 stage
+    # if no defaults and no explicit commands exist.
     return errors
 
 
