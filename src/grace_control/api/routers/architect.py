@@ -224,9 +224,7 @@ async def _warm_context(spec: dict, feature_id: str, target_repo_root: str = "")
     if scope_paths:
         scene = sorted(scope_paths)
     elif target_repo_root:
-        # When target_repo_root is provided, scan the target repo instead of
-        # defaulting to src/grace_control/ (which is the orchestrator's code).
-        scene = [target_repo_root.rstrip("/") + "/"]
+        scene = None  # Let context collector auto-discover from task description
     else:
         scene = spec.get("constraints", {}).get("allowed_scope") or ["src/grace_control/"]
     # If task_desc references a specific file (e.g. docs/codex/tz-019-...md), include its directory
