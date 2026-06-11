@@ -122,11 +122,171 @@ def _ctx(
     }
 
 
-# ── Top-level pages (deprecated — redirect to /admin.html) ─────────────
+# ── Top-level pages (full reload allowed) ───────────────────────────────────
 
-# The /admin route is now handled in app_factory.py as a redirect to the
-# new SPA at /admin.html. Only HTMX partials are kept here for the
-# /admin/old fallback.
+
+@router.get("/admin", response_class=HTMLResponse)
+def admin_console(
+    request: Request,
+    feature_id: str | None = None,
+    wave_id: str | None = None,
+    packet_id: str | None = None,
+    tab: str = "timeline",
+    search: str = "",
+    filter: str = "all",
+    expanded_features: str = "",
+    expanded_waves: str = "",
+    view: str = "overview",
+) -> HTMLResponse:
+    """The main operator console — server-rendered with HTMX.
+
+    Top-level navigation. Within the page, HTMX handles all interactions
+    (feature click → partial timeline update, packet click → partial detail
+    update, tab click → partial tab update, search → partial master update).
+
+    `view` switches between "overview" (default) and "maintenance".
+    """
+    features_data = _features_data()
+    overview = _overview_data()
+    features = features_data.get("features", [])
+
+    # Expand feature/wave sets from query string (comma-separated)
+    ef, ew = _split_sets(expanded_features, expanded_waves)
+    ef_set = set(ef)
+    ew_set = set(ew)
+    # If a packet is selected, auto-expand its feature/wave so it's visible
+    if packet_id and not ef_set and not ew_set:
+        for f in features:
+            for w in (f.get("waves") or []):
+                for p in (w.get("packets") or []):
+                    if p["id"] == packet_id:
+                        ef_set.add(f["id"])
+                        ew_set.add(w["id"])
+                        break
+    elif wave_id and not ef_set and not ew_set:
+        # If a wave is selected, auto-expand its feature so it's visible
+        for f in features:
+            for w in (f.get("waves") or []):
+                if w["id"] == wave_id:
+                    ef_set.add(f["id"])
+                    ew_set.add(w["id"])
+                    break
+    ef = sorted(ef_set)
+    ew = sorted(ew_set)
+
+    # Load packet detail if selected; else wave detail if selected
+    packet = _packet_detail(packet_id) if packet_id else None
+    wave = (
+        _wave_detail(feature_id, wave_id)
+        if (wave_id and feature_id and not packet_id) else None
+    )
+
+    # Pre-compute click URLs for each feature / wave / packet.
+    for f in features:
+        new_ef = sorted(set(ef) | {f["id"]})
+        f["click_url"] = _shell_url(
+            feature_id=f["id"], expanded_features=new_ef, expanded_waves=ew,
+            search=search, filter=filter,
+        )
+        for w in (f.get("waves") or []):
+            new_ew = sorted(set(ew) | {w["id"]}) if w["id"] != wave_id else sorted(set(ew))
+            # Wave click URL: expand the wave so its packets are visible
+            w["click_url"] = _shell_url(
+                feature_id=f["id"], wave_id=w["id"],
+                expanded_features=new_ef, expanded_waves=new_ew,
+                search=search, filter=filter,
+            )
+            for p in (w.get("packets") or []):
+                p["click_url"] = _shell_url(
+                    feature_id=f["id"], packet_id=p["id"], tab="timeline",
+                    expanded_features=new_ef, expanded_waves=new_ew,
+                    search=search, filter=filter,
+                )
+
+    # Pre-compute filter chip URLs.
+    chips: list[dict] = []
+    for chip_filter in ("all", "failed", "running", "blocked", "attention"):
+        chips.append({
+            "filter": chip_filter,
+            "url": _shell_url(
+                feature_id=feature_id, wave_id=wave_id,
+                filter=chip_filter,
+                expanded_features=ef, expanded_waves=ew, search=search,
+            ),
+        })
+
+    # Pre-compute packet click URLs in the rendered feature timeline.
+    if feature_id:
+        for f in features:
+            if f["id"] != feature_id:
+                continue
+            for w in (f.get("waves") or []):
+                for p in (w.get("packets") or []):
+                    p["click_url"] = _shell_url(
+                        feature_id=f["id"], packet_id=p["id"], tab="timeline",
+                        filter=filter, expanded_features=ef, expanded_waves=ew,
+                        search=search,
+                    )
+
+    # Pre-compute tab URLs for packet detail.
+    tab_urls: dict[str, str] = {}
+    if packet:
+        for t in _TABS:
+            tab_urls[t] = _shell_url(
+                feature_id=feature_id, packet_id=packet_id, tab=t,
+                expanded_features=ef, expanded_waves=ew,
+                search=search, filter=filter,
+            )
+
+    # Pre-compute wave click URLs in the detail-pane packet list
+    if wave:
+        for p in (wave.get("packets") or []):
+            p["click_url"] = _shell_url(
+                feature_id=feature_id, packet_id=p["id"], tab="timeline",
+                filter=filter, expanded_features=ef, expanded_waves=ew,
+                search=search,
+            )
+
+    # Find selected feature data for detail pane
+    selected_feature = None
+    if feature_id:
+        for f in features:
+            if f["id"] == feature_id:
+                selected_feature = f
+                break
+
+    ctx = {
+        "request": request,
+        "active_nav": "overview",
+        "active_tab": tab if tab in _TABS else "timeline",
+        "tabs": _TABS,
+        "overview": overview,
+        "features": features,
+        "search": search,
+        "filter": filter,
+        "selected_feature_id": feature_id,
+        "selected_wave_id": wave_id,
+        "selected_packet_id": packet_id,
+        "packet": packet,
+        "wave": wave,
+        "feature": selected_feature,
+        "expanded_features": ef,
+        "expanded_waves": ew,
+        "chips": chips,
+        "view": view,
+        "tab_urls": tab_urls,
+        "shell_url": _shell_url,
+        "total_packets": sum(
+            len(p) for f in features for w in (f.get("waves") or [])
+            for p in [w.get("packets") or []] for p in p
+        ),
+    }
+    # Maintenance view: pass snapshot for the inlined _maintenance.html
+    if view == "maintenance":
+        with get_db() as db:
+            states = _packet_states_map(db)
+        ctx["snapshot"] = _maint_svc.snapshot(packet_states=states)
+    return _templates.TemplateResponse(request, "console.html", ctx)
 
 
 @router.get("/admin/system", response_class=HTMLResponse)
