@@ -73,6 +73,8 @@ def test_touched_areas_empty():
 
 def test_t0_backend_grace_lint_plus_ruff(tmp_path):
     wt = _make_worktree(tmp_path, scripts={"grace_lint.py": "print('ok')"})
+    # Mark as GRACE orchestrator
+    (wt / ".grace" / "state").mkdir(parents=True)
     cmds, origins = resolve_default_t0(["apps/api/main.py"], wt)
     assert any("grace_lint.py" in " ".join(c) for c in cmds), f"missing grace_lint, got {cmds}"
     assert any("ruff" in " ".join(c) for c in cmds), f"missing ruff, got {cmds}"
@@ -82,6 +84,8 @@ def test_t0_backend_grace_lint_plus_ruff(tmp_path):
 
 def test_t0_frontend_grace_lint(tmp_path):
     wt = _make_worktree(tmp_path, scripts={"grace_front_lint.py": "print('ok')"})
+    # Mark as GRACE orchestrator
+    (wt / ".grace" / "state").mkdir(parents=True)
     cmds, origins = resolve_default_t0(["app/page.tsx"], wt)
     assert any("grace_front_lint.py" in " ".join(c) for c in cmds)
     assert any("auto:t0:frontend_grace_lint" in o for o in origins)
@@ -100,6 +104,21 @@ def test_t0_frontend_fallback_markers(tmp_path):
     cmds, origins = resolve_default_t0(["app/page.tsx"], wt)
     assert any("check-markers.sh" in " ".join(c) for c in cmds)
     assert any("auto:t0:frontend_markers_fallback" in o for o in origins)
+
+
+def test_t0_target_repo_skips_grace_lint(tmp_path):
+    """Target repo (not GRACE orchestrator) should skip grace_lint and grace_front_lint
+    even if those scripts exist, because they enforce orchestrator-specific conventions."""
+    wt = _make_worktree(tmp_path, scripts={
+        "grace_lint.py": "print('backend')",
+        "grace_front_lint.py": "print('frontend')",
+    })
+    # No .grace/state — not a GRACE orchestrator
+    cmds, origins = resolve_default_t0(["apps/api/main.py", "app/page.tsx"], wt)
+    grace_cmds = [c for c in cmds if "grace_lint.py" in " ".join(c) or "grace_front_lint.py" in " ".join(c)]
+    assert not grace_cmds, f"target repo should not get GRACE linters, got: {grace_cmds}"
+    # ruff should still run
+    assert any("ruff" in " ".join(c) for c in cmds)
 
 
 def test_t0_frontend_missing_lint_fails_normal(tmp_path):

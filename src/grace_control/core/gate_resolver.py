@@ -77,6 +77,15 @@ _FRONTEND_LINT_MISSING_CMD = [
 ]
 
 
+def _is_grace_orchestrator(base: Path) -> bool:
+    """Check if the worktree is the GRACE orchestrator itself (not a target repo).
+
+    The GRACE orchestrator has .grace/state/ and src/grace_control/.
+    Target repos like Solar Sage don't.
+    """
+    return (base / ".grace" / "state").exists() or (base / "src" / "grace_control").exists()
+
+
 def resolve_default_t0(
     changed_files: list[str],
     worktree_path: Path,
@@ -85,6 +94,7 @@ def resolve_default_t0(
     commands: list[list[str]] = []
     origins: list[str] = []
     base = worktree_path.resolve() if worktree_path else Path.cwd()
+    is_grace = _is_grace_orchestrator(base)
 
     areas = resolve_touched_areas(changed_files)
 
@@ -92,20 +102,20 @@ def resolve_default_t0(
     fe_files = [f for f in changed_files if Path(f).suffix in _FRONTEND_EXTS
                 or any(f.startswith(p) for p in _FRONTEND_PREFIXES)]
 
-    # backend GRACE lint
-    if "backend" in areas and (base / "scripts" / "grace_lint.py").is_file():
+    # backend GRACE lint — only for orchestrator repo itself
+    if is_grace and "backend" in areas and (base / "scripts" / "grace_lint.py").is_file():
         commands.append(["python3", "scripts/grace_lint.py"] + py_files)
         origins.append("auto:t0:backend_grace_lint")
 
-    # ruff on changed Python files
+    # ruff on changed Python files (always, regardless of repo)
     if py_files:
         commands.append(["python3", "-m", "ruff", "check"] + py_files)
         origins.append("auto:t0:ruff")
 
     frontend_lint_ran = False
 
-    # frontend GRACE lint
-    if "frontend" in areas and (base / "scripts" / "grace_front_lint.py").is_file():
+    # frontend GRACE lint — only for orchestrator repo itself
+    if is_grace and "frontend" in areas and (base / "scripts" / "grace_front_lint.py").is_file():
         commands.append(["python3", "scripts/grace_front_lint.py"] + fe_files)
         origins.append("auto:t0:frontend_grace_lint")
         frontend_lint_ran = True
