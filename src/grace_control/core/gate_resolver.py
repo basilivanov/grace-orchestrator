@@ -16,7 +16,7 @@
 from __future__ import annotations
 
 import re
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
 TouchedArea = Literal["frontend", "backend", "contracts", "db", "docs", "domain"]
@@ -101,17 +101,21 @@ def _load_canon_config(base: Path) -> dict:
     return {}
 
 
-def _path_is_excluded(path: str, extra_prefixes: tuple[str, ...] = ()) -> bool:
+def _path_is_excluded(path: str, extra_globs: tuple[str, ...] = ()) -> bool:
     """Check if a relative file path should be excluded from GRACE lint."""
     fp = path.replace("\\", "/")
+    pp = PurePosixPath(fp)
     for part in fp.split("/"):
         if part in _EXCLUDED_DIRS:
             return True
-    for prefix in _EXCLUDED_PATH_PREFIXES + extra_prefixes:
+    for prefix in _EXCLUDED_PATH_PREFIXES:
         if fp.startswith(prefix):
             return True
     for suffix in _EXCLUDED_FILE_SUFFIXES:
         if fp.endswith(suffix):
+            return True
+    for glob_pattern in extra_globs:
+        if pp.match(glob_pattern):
             return True
     return False
 
@@ -141,9 +145,9 @@ def resolve_default_t0(
     base = worktree_path.resolve() if worktree_path else Path.cwd()
     linter_mode = resolve_linter_mode(base)
     canon = _load_canon_config(base)
-    extra_prefixes: tuple[str, ...] = ()
+    extra_globs: tuple[str, ...] = ()
     if "exclude" in canon:
-        extra_prefixes = tuple(p.rstrip("/") + "/" for p in (canon["exclude"] or []) if isinstance(p, str))
+        extra_globs = tuple(p for p in (canon["exclude"] or []) if isinstance(p, str) and p.strip())
 
     areas = resolve_touched_areas(changed_files)
 
@@ -160,8 +164,8 @@ def resolve_default_t0(
         return commands, origins
 
     # Filter out excluded paths for GRACE linting
-    lint_py = [f for f in py_files if not _path_is_excluded(f, extra_prefixes)]
-    lint_fe = [f for f in fe_files if not _path_is_excluded(f, extra_prefixes)]
+    lint_py = [f for f in py_files if not _path_is_excluded(f, extra_globs)]
+    lint_fe = [f for f in fe_files if not _path_is_excluded(f, extra_globs)]
 
     frontend_lint_ran = False
 
