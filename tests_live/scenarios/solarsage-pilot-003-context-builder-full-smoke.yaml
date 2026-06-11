@@ -1,0 +1,80 @@
+id: solarsage-pilot-003-context-builder-full-smoke
+tz_path: docs/work/TZ_SOLARSAGE_PILOT_003_CONTEXT_BUILDER_FULL_SMOKE.md
+target_repo_worktree: true
+target_repo_root: /opt/solarsage-astro
+workspace_mode: target_repo_worktree
+project_overlay: solarsage
+context_builder:
+  enabled: true
+  mode: bounded_bundle
+  required: true
+  min_context_runs: 1
+  expected_selected_files:
+    - components/today/tab-bar.tsx
+    - __tests__/components/TabBar.test.tsx
+architect:
+  profile: architect-premium
+  require_context_bundle: true
+expected_output: waves_json
+waves:
+  - id: W0
+    title: Bounded context bundle
+    packets:
+      - id: C1
+        role: context-builder
+        acceptance_profile: NORMAL
+        prompt: >-
+          Build a bounded context bundle for Solar Sage pilot 003. Use only the target repo worktree.
+          Prefer explicit task paths, AI_HEADER/MODULE_CONTRACT/FUNCTION_CONTRACT/START_BLOCK markers when present,
+          and short snippets from components/today/tab-bar.tsx and __tests__/components/TabBar.test.tsx.
+          Do not modify files. Do not read outside cwd. Do not crawl the whole repository.
+        scope:
+          - components/today/tab-bar.tsx
+          - __tests__/components/TabBar.test.tsx
+        expected:
+          context_bundle_path: required
+          selected_files:
+            - components/today/tab-bar.tsx
+            - __tests__/components/TabBar.test.tsx
+  - id: W1
+    title: Solar Sage TabBar profile active test
+    packets:
+      - id: P1
+        role: coder
+        acceptance_profile: NORMAL
+        prompt: >-
+          Solar Sage pilot 003: context-builder full smoke with minimal test-only change.
+
+          In /opt/solarsage-astro target_repo_worktree only:
+          1. Modify only __tests__/components/TabBar.test.tsx.
+          2. Add a focused unit test for pathname=/profile.
+          3. Assert data-testid="today-tab-profile" has aria-current="page".
+          4. Assert today-tab-today, today-tab-calendar, today-tab-readings, and today-tab-chat do not have aria-current="page".
+          5. Do not change production code, labels, hrefs, styles, active matching, icons, routing, package files, or app logic.
+          6. Run pnpm lint, pnpm typecheck, pnpm test:run.
+        verification:
+          t0:
+            commands:
+              - git status --short
+              - git diff --stat
+              - git diff --name-only
+          t1:
+            commands:
+              - python3 /tmp/grace-orchestrator-export/scripts/grace_changed_files_lint.py --repo .
+              - pnpm lint
+              - pnpm typecheck
+          t2:
+            commands:
+              - pnpm test:run
+        scope:
+          - __tests__/components/TabBar.test.tsx
+expected:
+  final_state: accepted
+  min_real_agent_runs: 1
+  min_context_runs: 1
+  changed_files:
+    - __tests__/components/TabBar.test.tsx
+  forbidden_changed_files:
+    - components/today/tab-bar.tsx
+    - package.json
+    - pnpm-lock.yaml
