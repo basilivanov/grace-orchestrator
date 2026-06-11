@@ -242,7 +242,10 @@ class AcceptancePipeline:
         base = (cwd or self._root).resolve()
         if (base / "scripts" / "grace_lint.py").is_file():
             commands.append(["python3", "scripts/grace_lint.py"] + scope_paths)
-        commands.append(["python3", "-m", "ruff", "check"] + scope_paths)
+        # ruff can only check Python files — filter out non-.py paths
+        py_paths = [p for p in scope_paths if p.endswith(".py")]
+        if py_paths:
+            commands.append(["python3", "-m", "ruff", "check"] + py_paths)
         return commands
 
     def _resolve_t0_scope_paths(
