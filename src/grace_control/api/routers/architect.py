@@ -59,12 +59,13 @@ async def create_plan(request: dict) -> dict:
 
     slug = _slugify(title)
     has_waves = bool(spec.get("waves"))
+    target_repo_root = spec.get("target_repo_root", "")
     architect_generated = False
 
     # ── Context pre-warming ──────────────────────────────────────────────
     # Skip expensive context collection when explicit waves are provided;
     # the caller already knows the scope and architecture.
-    context = {} if has_waves else await _warm_context(spec, "planning")
+    context = {} if has_waves else await _warm_context(spec, "planning", target_repo_root)
 
     # ── LLM path: business-TZ → generate waves/packets ───────────────────
     if not has_waves and not os.environ.get("GRACE_CONTEXT_DISABLED"):
@@ -74,7 +75,8 @@ async def create_plan(request: dict) -> dict:
         _self_improvement = spec.get("self_improvement", False)
         try:
             spec = await _call_architect_llm(task_desc, context, slug,
-                self_improvement=_self_improvement or _origin == "self_evolution")
+                self_improvement=_self_improvement or _origin == "self_evolution",
+                worktree_root=target_repo_root)
             spec["title"] = title
             spec["description"] = spec.get("description", task_desc)
             spec["origin"] = _origin
@@ -208,7 +210,7 @@ async def create_plan(request: dict) -> dict:
     }
 
 
-async def _warm_context(spec: dict, feature_id: str) -> dict:
+async def _warm_context(spec: dict, feature_id: str, target_repo_root: str = "") -> dict:
     if os.environ.get("GRACE_CONTEXT_DISABLED"):
         return {"summary": "Context collection disabled", "disabled": True}
 
@@ -219,14 +221,31 @@ async def _warm_context(spec: dict, feature_id: str) -> dict:
             for s in pkt_spec.get("scope", []):
                 scope_paths.add(s)
 
-    scene = sorted(scope_paths) if scope_paths else (spec.get("constraints", {}).get("allowed_scope") or ["src/grace_control/"])
+    if scope_paths:
+        scene = sorted(scope_paths)
+    elif target_repo_root:
+        # When target_repo_root is provided, scan the target repo instead of
+        # defaulting to src/grace_control/ (which is the orchestrator's code).
+        scene = [target_repo_root.rstrip("/") + "/"]
+    else:
+        scene = spec.get("constraints", {}).get("allowed_scope") or ["src/grace_control/"]
     # If task_desc references a specific file (e.g. docs/codex/tz-019-...md), include its directory
     if task_desc.endswith(".md") and "/" in task_desc:
         doc_dir = "/".join(task_desc.split("/")[:-1]) + "/"
         if doc_dir not in scene:
             scene.append(doc_dir)
-    try:
-        collector = ContextCollector(cli=resolve_model("context_collector")["command"], model=resolve_model("context_collector")["model"])
+    if target_repo_root and Path(target_repo_root).exists():
+        collector = ContextCollector(
+            cli=resolve_model("context_collector")["command"],
+            model=resolve_model("context_collector")["model"],
+            project_root=Path(target_repo_root),
+        )
+    else:
+        collector = ContextCollector(
+            cli=resolve_model("context_collector")["command"],
+            model=resolve_model("context_collector")["model"],
+        )
+    try:  # existing try block
         code_ctx = await collector.collect(task_description=task_desc, target_scope=scene)
         ctx = {
             "summary": code_ctx.summary,
@@ -246,7 +265,8 @@ async def _warm_context(spec: dict, feature_id: str) -> dict:
 
 
 async def _call_architect_llm(task: str, context: dict, feature_slug: str,
-                              self_improvement: bool = False) -> dict:
+                              self_improvement: bool = False,
+                              worktree_root: str = "") -> dict:
     tz_source = ""
     for line in task.split("\n"):
         candidate = line.strip()
@@ -374,7 +394,7 @@ Respond ONLY with valid JSON (no markdown, no backticks):
 
     for attempt in range(2):
         try:
-            raw = await _run_opencode(prompt, resolve_model("architect")["model"])
+            raw = await _run_opencode(prompt, resolve_model("architect")["model"], cwd=worktree_root)
             plan = json.loads(raw)
             if "plan" in plan and isinstance(plan["plan"], dict) and plan["plan"].get("waves"):
                 plan["waves"] = plan["plan"]["waves"]
@@ -410,9 +430,10 @@ Respond ONLY with valid JSON (no markdown, no backticks):
     raise RuntimeError("Architect LLM failed")
 
 
-async def _run_opencode(prompt: str, model: str) -> str:
+async def _run_opencode(prompt: str, model: str, cwd: str = "") -> str:
     from grace_control.core.llm_runner import run_llm
-    return await run_llm(prompt, role="architect", model=model, cli="architect-premium")
+    return await run_llm(prompt, role="architect", model=model, cli="architect-premium",
+                         cwd=Path(cwd) if cwd else None)
 
 
 def _slugify(text: str) -> str:

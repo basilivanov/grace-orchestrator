@@ -563,6 +563,7 @@ class WaveResumeRunner:
             feature_spec = {
                 "title": f"Live: {self.scenario_id}",
                 "description": description,
+                "target_repo_root": self.target_repo_root or str(self.target_dir),
             }
             self.report["waves_requested"] = 0
             print("[runner] Submitting business feature to architect...")
