@@ -139,15 +139,19 @@ def create_app(settings: GraceSettings | None = None) -> FastAPI:
     @app.get("/admin.html", include_in_schema=False, response_class=HTMLResponse)
     async def _new_admin_dashboard():
         """New flat at-a-glance GRACE Control Plane dashboard."""
+        from fastapi.responses import HTMLResponse as _HR
+        from fastapi.responses import Response as _Resp
         if _new_admin_html.exists():
-            return HTMLResponse(content=_new_admin_html.read_text())
-        return HTMLResponse(content="<h1>admin.html not found</h1>", status_code=404)
+            return _Resp(content=_new_admin_html.read_bytes(), media_type="text/html", headers={"Cache-Control": "no-store, max-age=0"})
+        return _HR(content="<h1>admin.html not found</h1>", status_code=404)
 
-    # Keep old HTMX console at /admin/old
+    # New SPA at /admin too
+    from fastapi.responses import RedirectResponse as _RR2
+
+    @app.get("/admin", include_in_schema=False, response_class=HTMLResponse)
     @app.get("/admin/old", include_in_schema=False, response_class=HTMLResponse)
-    async def _old_admin_redirect(request: Request):
-        """Old HTMX console — still accessible for reference."""
-        from grace_control.api.routers.admin_ui import admin_console
-        return await admin_console(request=request)
+    async def _admin_or_old(request: Request):
+        """Redirect /admin and /admin/old to new SPA."""
+        return _RR2(url="/admin.html", status_code=307)
 
     return app
