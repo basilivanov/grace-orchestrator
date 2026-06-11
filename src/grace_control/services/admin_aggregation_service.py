@@ -376,7 +376,7 @@ class AdminAggregationService:
         # 11. Merge
         merge_s = self._stage_merge(events, last_run, p)
 
-        stages = [architect_s, ctx_s, mat_s, exec_s, coder_s] + t_stages + [verifier_s, reviewer_s, merge_s]
+        stages = [ctx_s, architect_s, mat_s, exec_s, coder_s] + t_stages + [verifier_s, reviewer_s, merge_s]
 
         return {"stages": stages, "has_started": coder_s["status"] != "pending", "has_acceptance_data": any(s["status"] in ("done", "failed", "running") for s in t_stages), "has_reviewer": reviewer_s["status"] in ("done", "failed", "running")}
 
@@ -1171,8 +1171,8 @@ class AdminAggregationService:
         has_run = last_run is not None
         is_planning = feature_status == "PLANNING"
         stages: list[dict[str, Any]] = []
-        stages.append({"key": "architect", "label": "Architect", "status": "running" if is_planning else "done", "started_at": created_iso, "finished_at": None if is_planning else created_iso, "duration_ms": 0, "meta": "", "target_tab": "spec"})
         stages.append({"key": "context_builder", "label": "Context Builder", "status": "pending" if is_planning else ("done" if has_run else "pending"), "started_at": None if is_planning else created_iso, "finished_at": None, "duration_ms": 0, "meta": "", "target_tab": "spec"})
+        stages.append({"key": "architect", "label": "Architect", "status": "running" if is_planning else "done", "started_at": created_iso, "finished_at": None if is_planning else created_iso, "duration_ms": 0, "meta": "", "target_tab": "spec"})
         stages.append({"key": "materialized", "label": "Materialize", "status": "done", "started_at": created_iso, "finished_at": created_iso, "duration_ms": 0, "meta": p.slug or "", "target_tab": "spec"})
         stages.append({"key": "executor", "label": "Executor", "status": "done" if executor else "skipped", "started_at": run_started, "finished_at": run_started, "duration_ms": 0, "meta": executor or "", "target_tab": "runs"})
         if not has_run:

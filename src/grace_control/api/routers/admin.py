@@ -55,23 +55,41 @@ router = APIRouter()
 _svc = AdminAggregationService()
 
 
-# ── Overview ───────────────────────────────────────────────────────────────
+# START_BLOCK_OVERVIEW
 
-
+# START_FUNCTION_CONTRACT
+# name: overview
+# purpose: Return the admin overview dashboard data.
+# inputs: None.
+# returns: dict with overview stats.
+# side_effects: None.
+# emitted_logs: None.
+# error_behavior: Never raises.
+# END_FUNCTION_CONTRACT
 @router.get("/api/admin/overview")
 def overview() -> dict:
     with get_db() as db:
         return _svc.get_overview(db)
 
 
+# START_FUNCTION_CONTRACT
+# name: features_tree
+# purpose: Return all features with nested waves and packets for the overview tree.
+# inputs: include_archived (bool, default False).
+# returns: dict with feature tree.
+# side_effects: None.
+# emitted_logs: None.
+# error_behavior: Never raises.
+# END_FUNCTION_CONTRACT
 @router.get("/api/admin/features")
 def features_tree(include_archived: bool = Query(False)) -> dict:
     """All features with nested waves → packets. Powers the main Overview."""
     with get_db() as db:
         return _svc.get_features_tree(db, include_archived=include_archived)
 
+# END_BLOCK_OVERVIEW
 
-# ── Packet detail ──────────────────────────────────────────────────────────
+# START_BLOCK_PACKET_DETAIL
 
 
 @router.get("/api/admin/packet/{packet_id}/detail")
