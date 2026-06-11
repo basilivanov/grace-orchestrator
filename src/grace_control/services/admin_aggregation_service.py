@@ -1138,7 +1138,7 @@ class AdminAggregationService:
                     .order_by(PacketRun.run_number.desc())
                     .first()
                 )
-                stage = self._derive_packet_stage(p, last_run)
+                pipeline = self._derive_simple_pipeline(p, last_run)
                 started_at = (
                     _iso(last_run.started_at)
                     if last_run and last_run.started_at else None
@@ -1151,7 +1151,8 @@ class AdminAggregationService:
                     "id": p.id, "slug": p.slug, "title": p.title,
                     "state": p.state, "attempt_count": p.attempt_count,
                     "max_attempts": p.max_attempts,
-                    "stage": stage,
+                    "pipeline": pipeline,
+                    "stage": {"key": pipeline["stages"][-1]["key"], "label": pipeline["stages"][-1]["label"]},
                     "started_at": started_at,
                     "duration_seconds": duration_seconds,
                     "size_bytes": self._size_calc.packet_runs_size(p.id),
@@ -1195,6 +1196,145 @@ class AdminAggregationService:
                 "waves": wave_rows,
             })
         return {"features": out}
+
+    def _derive_simple_pipeline(
+        self, p: Packet, last_run: PacketRun | None
+    ) -> dict[str, Any]:
+        """Derive a full 9-stage pipeline preview from packet + last_run alone.
+
+        Cheap — no events/evidence queries. Used by get_features_tree so the
+        SPA can render pipeline blocks immediately. The full pipeline (with
+        real durations, verifier events, etc.) is loaded on-demand via
+        get_packet_detail → _derive_pipeline and merged into the same field.
+        """
+        state = (p.state or "draft").lower()
+        profile = p.acceptance_profile or "NORMAL"
+        created_iso = _iso(p.created_at)
+        run_started = _iso(last_run.started_at) if last_run else None
+        run_finished = _iso(last_run.finished_at) if last_run else None
+        run_duration = last_run.duration_ms if last_run else 0
+        run_status = (last_run.status or "").lower() if last_run else ""
+
+        stages: list[dict[str, Any]] = []
+
+        # 1. Materialized — always done
+        stages.append({
+            "key": "materialized", "label": "Materialized",
+            "status": "done",
+            "started_at": created_iso, "finished_at": created_iso,
+            "duration_ms": 0, "meta": p.slug or "", "target_tab": "spec",
+        })
+
+        # 2. Executor selected
+        executor = (last_run.executor_id or "") if last_run else ""
+        stages.append({
+            "key": "executor", "label": "Executor selected",
+            "status": "done" if executor else ("running" if state == "running" else "skipped"),
+            "started_at": run_started, "finished_at": run_started,
+            "duration_ms": 0, "meta": executor or "", "target_tab": "attempts",
+        })
+
+        # 3. Coder run
+        if not last_run:
+            coder_status = "running" if state == "running" else "pending"
+        elif run_status == "running" or state == "running":
+            coder_status = "running"
+        elif state in ("rejected", "failed", "blocked", "blocked_recoverable", "blocked_final"):
+            coder_status = "failed"
+        elif state in ("accepted", "merged") or run_status in ("accepted", "completed"):
+            coder_status = "done"
+        else:
+            coder_status = "pending"
+        stages.append({
+            "key": "coder_run", "label": "Coder run",
+            "status": coder_status,
+            "started_at": run_started, "finished_at": run_finished,
+            "duration_ms": run_duration if coder_status in ("done", "failed") else 0,
+            "meta": (last_run.worker_id or "") if last_run else "",
+            "target_tab": "attempts",
+        })
+
+        # 4-6. T0/T1/T2 — derive from acceptance profile
+        for stage_key, stage_name, label in [
+            ("T0_SCOPE_AND_LINT", "t0", "T0 scope/lint"),
+            ("T1_UNIT_TESTS", "t1", "T1 tests"),
+            ("T2_E2E_OR_SMOKE", "t2", "T2 smoke/e2e"),
+        ]:
+            if profile in ("FAST", "NORMAL"):
+                stages.append({
+                    "key": stage_name, "label": label,
+                    "status": "skipped",
+                    "started_at": None, "finished_at": None,
+                    "duration_ms": 0,
+                    "meta": f"no separate run ({profile} profile)",
+                    "target_tab": "evidence",
+                })
+            else:
+                stages.append({
+                    "key": stage_name, "label": label,
+                    "status": "pending",
+                    "started_at": None, "finished_at": None,
+                    "duration_ms": 0,
+                    "meta": "no command configured",
+                    "target_tab": "evidence",
+                })
+
+        # 7. Evidence verifier
+        if profile == "STRICT":
+            verifier_status = "running" if state == "running" else (
+                "done" if state in ("accepted", "merged") else "pending")
+            stages.append({
+                "key": "verifier", "label": "Evidence verifier",
+                "status": verifier_status,
+                "started_at": None, "finished_at": None,
+                "duration_ms": 0, "meta": "STRICT profile active",
+                "target_tab": "evidence",
+            })
+        else:
+            stages.append({
+                "key": "verifier", "label": "Evidence verifier",
+                "status": "skipped",
+                "started_at": None, "finished_at": None,
+                "duration_ms": 0,
+                "meta": f"not in profile ({profile})",
+                "target_tab": "evidence",
+            })
+
+        # 8. Reviewer gate
+        if state in ("merged", "accepted"):
+            r_status = "done"
+        elif state in ("rejected", "failed"):
+            r_status = "failed"
+        elif state in ("blocked", "blocked_recoverable", "blocked_final"):
+            r_status = "failed"
+        else:
+            r_status = "pending"
+        stages.append({
+            "key": "reviewer", "label": "Reviewer gate",
+            "status": r_status,
+            "started_at": run_finished, "finished_at": run_finished,
+            "duration_ms": 0, "meta": "", "target_tab": "events",
+        })
+
+        # 9. Merge / finish
+        if state in ("merged", "accepted"):
+            m_status = "done"
+        elif state in ("rejected", "failed"):
+            m_status = "skipped"
+        elif state in ("blocked", "blocked_recoverable", "blocked_final"):
+            m_status = "skipped"
+        else:
+            m_status = "pending"
+        stages.append({
+            "key": "merge", "label": "Merge",
+            "status": m_status,
+            "started_at": _iso(p.updated_at) if m_status == "done" else None,
+            "finished_at": _iso(p.updated_at) if m_status == "done" else None,
+            "duration_ms": 0, "meta": p.state if m_status == "done" else "",
+            "target_tab": "events",
+        })
+
+        return {"stages": stages, "has_started": last_run is not None, "has_acceptance_data": False, "has_reviewer": False}
 
     def _derive_packet_stage(
         self, p: Packet, last_run: PacketRun | None

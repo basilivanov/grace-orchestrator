@@ -134,8 +134,7 @@ def create_app(settings: GraceSettings | None = None) -> FastAPI:
         return RedirectResponse(url="/admin.html", status_code=307)
 
     # Serve the new flat admin dashboard as a standalone HTML page
-    _project_dir = _P(__file__).resolve().parents[4]  # grace-orchestrator/.. = project root
-    _new_admin_html = _project_dir / "public" / "admin.html"
+    _new_admin_html = _admin_static / "admin.html"
 
     @app.get("/admin.html", include_in_schema=False, response_class=HTMLResponse)
     async def _new_admin_dashboard():
