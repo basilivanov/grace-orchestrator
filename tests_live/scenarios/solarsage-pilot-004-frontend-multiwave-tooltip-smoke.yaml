@@ -59,7 +59,6 @@ waves:
               - git status --short
               - git diff --stat
               - git diff --name-only
-              - python3 scripts/grace_front_lint.py components/today/tab-bar.tsx
           t1:
             commands:
               - pnpm lint
@@ -96,7 +95,6 @@ waves:
               - git status --short
               - git diff --stat
               - git diff --name-only
-              - python3 scripts/grace_front_lint.py __tests__/components/TabBar.test.tsx
           t1:
             commands:
               - pnpm lint

@@ -510,7 +510,13 @@ class AcceptancePipeline:
                     blocking_issues=[], commands=[]),
                 scope_violations=violations)
 
-        t0_cmds, t0_origins = self._build_t0_commands(packet, cf, cwd=cwd or self._root)
+        # Use explicit T0 commands if provided; otherwise fall back to auto defaults.
+        explicit_t0 = packet.verification.get("t0", [])
+        if explicit_t0:
+            t0_cmds = [c.split() if isinstance(c, str) else c for c in explicit_t0]
+            t0_origins = ["architect:verification"] * len(explicit_t0)
+        else:
+            t0_cmds, t0_origins = self._build_t0_commands(packet, cf, cwd=cwd or self._root)
 
         for cmd in t0_cmds:
             r = self._runner.run(cmd, output_dir=output_dir, cwd=cwd)
