@@ -137,6 +137,15 @@ class WaveResumeRunner:
             self._write_report()
             return 1
 
+        # Reset target repo after context-builder may have left it dirty
+        if self.target_repo_root:
+            target = Path(self.target_repo_root)
+            if (target / ".git").exists():
+                subprocess.run(["git", "reset", "--hard", "HEAD"],
+                               cwd=str(target), capture_output=True, timeout=10)
+                subprocess.run(["git", "clean", "-fd"],
+                               cwd=str(target), capture_output=True, timeout=10)
+
         # 3. Connect to API
         if not self._check_api():
             print("[runner] API not reachable, starting supervisor...")
@@ -157,15 +166,6 @@ class WaveResumeRunner:
             self.report["status"] = "error" if not is_business else "failed"
             self._write_report()
             return 1
-
-        # Reset target repo after architect may have left it dirty
-        if self.target_repo_root:
-            target = Path(self.target_repo_root)
-            if (target / ".git").exists():
-                subprocess.run(["git", "reset", "--hard", "HEAD"],
-                               cwd=str(target), capture_output=True, timeout=10)
-                subprocess.run(["git", "clean", "-fd"],
-                               cwd=str(target), capture_output=True, timeout=10)
 
         # 5. Start worker
         self._start_worker()
