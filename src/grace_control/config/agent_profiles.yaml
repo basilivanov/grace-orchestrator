@@ -24,7 +24,7 @@ agents:
     input:
       mode: file
     model: deepseek/deepseek-v4-flash
-    timeout_seconds: 300
+    timeout_seconds: 600
 
   architect-premium:
     backend: cli
