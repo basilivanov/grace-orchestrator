@@ -14,15 +14,41 @@ Pilot 006 moves in the right direction: it introduces explicit linter modes, tar
 
 However, the current result should not be treated as fully PASS yet. The implementation has several correctness gaps that will make the policy unreliable in real runs.
 
+## Corrected GRACE marker canon decision
+
+Canonical source markers are **no-id module/map/block markers**:
+
+```python
+# START_MODULE_CONTRACT
+# END_MODULE_CONTRACT
+# START_MODULE_MAP
+# END_MODULE_MAP
+# START_BLOCK
+# END_BLOCK
+```
+
+```ts
+// START_MODULE_CONTRACT
+// END_MODULE_CONTRACT
+// START_MODULE_MAP
+// END_MODULE_MAP
+// START_BLOCK
+// END_BLOCK
+```
+
+The previous review incorrectly suggested `START_MODULE_CONTRACT: ID` as the preferred canonical form. That is not the project convention.
+
+The correct requirement is: **linters must accept the no-id canonical form used across the project**, while they may remain backwards-compatible with legacy `: ID` markers where already present.
+
 ## Verdict
 
 **NEEDS_REWORK** before this can be accepted as a stable GRACE-canon linter policy.
 
 ## Blockers
 
-### 1. Adopted Solar Sage TS/TSX files do not match the current frontend linter marker grammar
+### 1. Frontend linter grammar is stale relative to the accepted no-id marker canon
 
-`solarsage-astro/scripts/grace_front_lint.py` parses module/block markers with this grammar:
+`solarsage-astro/scripts/grace_front_lint.py` currently parses module/block markers with this grammar:
 
 ```python
 r"(?://|/\*|\*)\s*(?P<edge>START|END)_(?P<kind>MODULE_CONTRACT|MODULE_MAP|BLOCK)\s*:\s*(?P<id>[^\s\*\/]+)"
@@ -35,7 +61,7 @@ That requires a colon and marker id, for example:
 // END_MODULE_CONTRACT: TAB_BAR
 ```
 
-But the newly adopted files use markers without ids:
+But the canonical project style is:
 
 ```ts
 // START_MODULE_CONTRACT
@@ -44,7 +70,7 @@ But the newly adopted files use markers without ids:
 // END_MODULE_MAP
 ```
 
-This means `parse_markers()` will not recognize those module markers, and `check_pairing()` will still report missing `MODULE_CONTRACT` / `MODULE_MAP` markers.
+This means `parse_markers()` may not recognize correctly canonicalized Solar Sage files, and `check_pairing()` may still report missing `MODULE_CONTRACT` / `MODULE_MAP` markers.
 
 Affected examples:
 
@@ -53,7 +79,19 @@ Affected examples:
 
 Required fix:
 
-Either update the files to canonical marker ids, or deliberately relax the linter grammar to allow no-id module markers. Prefer canonical ids for machine-friendly pairing.
+Update backend and frontend GRACE linters to support no-id markers as first-class canonical syntax.
+
+Suggested parser behavior:
+
+- Accept `# START_MODULE_CONTRACT`
+- Accept `# START_MODULE_CONTRACT: OPTIONAL_ID` for backward compatibility
+- Accept `// START_MODULE_CONTRACT`
+- Accept `// START_MODULE_CONTRACT: OPTIONAL_ID` for backward compatibility
+- Same for `MODULE_MAP` and `BLOCK`
+- Pair no-id markers by kind/stack order
+- Pair id markers by id when id exists
+
+Add tests for both spaced/no-id and legacy/id forms.
 
 ### 2. `grace/canon.yaml` include/exclude/adopt_first are mostly inert in the orchestrator policy
 
@@ -125,6 +163,7 @@ Split report-only docs commit from unrelated admin UI changes.
 - Alembic/migrations exclusion is the right default.
 - `components/ui/` as vendor/shadcn exclusion is reasonable unless explicitly owned.
 - Comment marker whitespace tolerance is the right parser behavior; canonical generated style should be spaced.
+- No-id markers are the correct project canon and should remain the generated style.
 - Staged adoption plan is correct: policy first, then small owned frontend slice, then backend/API slice.
 
 ## Required follow-up task
@@ -133,13 +172,14 @@ Create a rework task for Pilot 006 instead of starting mass migration.
 
 Suggested rework scope:
 
-1. Fix frontend marker grammar mismatch.
-2. Make `grace/canon.yaml` semantics honest: either implement include/exclude/adopt_first or document only `gate_mode` is active.
-3. Avoid empty linter invocations.
-4. Avoid false origins when all files are excluded.
-5. Apply exclusions consistently in frontend linter discovery and explicit path expansion.
-6. Split/revert unrelated `admin.html` changes from the report commit.
-7. Add tests for the above cases.
+1. Update backend/frontend linter marker parser to accept no-id canonical markers.
+2. Keep backward compatibility for legacy `: ID` markers.
+3. Make `grace/canon.yaml` semantics honest: either implement include/exclude/adopt_first or document only `gate_mode` is active.
+4. Avoid empty linter invocations.
+5. Avoid false origins when all files are excluded.
+6. Apply exclusions consistently in frontend linter discovery and explicit path expansion.
+7. Split/revert unrelated `admin.html` changes from the report commit.
+8. Add tests for the above cases.
 
 ## Final review decision
 
