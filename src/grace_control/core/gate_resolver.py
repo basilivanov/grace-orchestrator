@@ -70,9 +70,17 @@ def _detect_guardrails(worktree_path: Path) -> str | None:
     return None
 
 
+_FRONTEND_LINT_MISSING_CMD = [
+    "python3", "-c",
+    "import sys; print('ERROR: frontend changed but no frontend GRACE lint "
+    "(scripts/grace_front_lint.py) available'); sys.exit(1)",
+]
+
+
 def resolve_default_t0(
     changed_files: list[str],
     worktree_path: Path,
+    profile: str = "FAST",
 ) -> tuple[list[list[str]], list[str]]:
     commands: list[list[str]] = []
     origins: list[str] = []
@@ -94,17 +102,24 @@ def resolve_default_t0(
         commands.append(["python3", "-m", "ruff", "check"] + py_files)
         origins.append("auto:t0:ruff")
 
+    frontend_lint_ran = False
+
     # frontend GRACE lint
     if "frontend" in areas and (base / "scripts" / "grace_front_lint.py").is_file():
         commands.append(["python3", "scripts/grace_front_lint.py"] + fe_files)
         origins.append("auto:t0:frontend_grace_lint")
+        frontend_lint_ran = True
     elif "frontend" in areas:
         # legacy fallback
         if (base / "scripts" / "grace" / "check-markers.sh").is_file():
             commands.append(["bash", "scripts/grace/check-markers.sh"])
             origins.append("auto:t0:frontend_markers_fallback")
-        # If no frontend lint exists and frontend changed, we just warn
-        # (don't fail — some repos manage frontend separately)
+            frontend_lint_ran = True
+
+    # NORMAL/STRICT: fail if frontend changed but no frontend lint available
+    if "frontend" in areas and not frontend_lint_ran and profile in ("NORMAL", "STRICT"):
+        commands.append(_FRONTEND_LINT_MISSING_CMD)
+        origins.append("auto:t0:frontend_lint_missing")
 
     return commands, origins
 
@@ -177,7 +192,7 @@ def resolve_default_gates(
     profile: str,
     worktree_path: Path,
 ) -> dict[str, Any]:
-    t0_cmds, t0_origins = resolve_default_t0(changed_files, worktree_path)
+    t0_cmds, t0_origins = resolve_default_t0(changed_files, worktree_path, profile)
     t1_cmds, t1_origins = resolve_default_t1(changed_files, worktree_path, profile)
     t2_cmds, t2_origins = resolve_default_t2(changed_files, worktree_path, profile)
 

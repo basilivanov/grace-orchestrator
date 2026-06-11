@@ -360,3 +360,161 @@ class TestGraceBaseSha:
             base_ref=None, base_sha=None,
         )
         assert "GRACE_BASE_SHA" not in os.environ
+
+
+# ── Pipeline-level profile integration tests ────────────────────────────────
+
+
+class TestProfilePipeline:
+    """Full pipeline integration with gate_resolver for FAST/NORMAL/STRICT."""
+
+    def test_fast_no_t1_no_t2(self, tmp_path):
+        """FAST must not run T1 or T2 defaults even when guardrails.sh exists."""
+        scripts = tmp_path / "scripts"
+        scripts.mkdir()
+        (scripts / "guardrails.sh").write_text("echo called")
+        (tmp_path / "package.json").write_text("{}")
+
+        from grace_control.core.acceptance_pipeline import AcceptancePipeline
+        from grace_control.core.command_runner import CommandRunner
+        from grace_control.core.scope_guard import ScopeGuard
+        from grace_control.core.evidence import EvidenceCollector
+
+        pkt = ExecutionPacketContract(
+            packet_id="p1", title="test",
+            allowed_write_scope=["src/"], frozen_scope=[],
+            acceptance_profile=AcceptanceProfile.FAST,
+            verification={},
+        )
+        runner = FakeRunner()
+        pipe = AcceptancePipeline(
+            repo_root=tmp_path,
+            command_runner=runner,
+            scope_guard=ScopeGuard(tmp_path),
+            evidence_collector=EvidenceCollector(),
+        )
+        report = pipe.run(packet=pkt, changed_files=["app/page.tsx"])
+
+        assert report.final_verdict == FinalVerdict.ACCEPTED
+        t1_ran = any("guardrails.sh" in c and "normal" in c for c in runner.calls)
+        t2_ran = any("guardrails.sh" in c and "strict" in c for c in runner.calls)
+        assert not t1_ran, f"FAST should not run T1, got calls: {runner.calls}"
+        assert not t2_ran, f"FAST should not run T2, got calls: {runner.calls}"
+
+    def test_fast_runs_explicit_t1(self, tmp_path):
+        """FAST runs T1 commands only if explicitly set in verification."""
+        from grace_control.core.acceptance_pipeline import AcceptancePipeline
+        from grace_control.core.command_runner import CommandRunner
+        from grace_control.core.scope_guard import ScopeGuard
+        from grace_control.core.evidence import EvidenceCollector
+
+        pkt = ExecutionPacketContract(
+            packet_id="p1", title="test",
+            allowed_write_scope=["src/"], frozen_scope=[],
+            acceptance_profile=AcceptanceProfile.FAST,
+            verification={"t1": [["echo", "explicit-fast-t1"]]},
+        )
+        runner = FakeRunner()
+        pipe = AcceptancePipeline(
+            repo_root=tmp_path,
+            command_runner=runner,
+            scope_guard=ScopeGuard(tmp_path),
+            evidence_collector=EvidenceCollector(),
+        )
+        report = pipe.run(packet=pkt, changed_files=["src/main.py"])
+        assert report.final_verdict == FinalVerdict.ACCEPTED
+        assert any("explicit-fast-t1" in c for c in runner.calls)
+
+    def test_normal_runs_t1_not_t2(self, tmp_path):
+        """NORMAL runs T1 defaults but skips T2."""
+        scripts = tmp_path / "scripts"
+        scripts.mkdir()
+        (scripts / "guardrails.sh").write_text("echo normal")
+        (tmp_path / "package.json").write_text("{}")
+
+        from grace_control.core.acceptance_pipeline import AcceptancePipeline
+        from grace_control.core.command_runner import CommandRunner
+        from grace_control.core.scope_guard import ScopeGuard
+        from grace_control.core.evidence import EvidenceCollector
+
+        pkt = ExecutionPacketContract(
+            packet_id="p1", title="test",
+            allowed_write_scope=["src/"], frozen_scope=[],
+            acceptance_profile=AcceptanceProfile.NORMAL,
+            verification={},
+        )
+        runner = FakeRunner()
+        pipe = AcceptancePipeline(
+            repo_root=tmp_path,
+            command_runner=runner,
+            scope_guard=ScopeGuard(tmp_path),
+            evidence_collector=EvidenceCollector(),
+        )
+        report = pipe.run(packet=pkt, changed_files=["app/page.tsx"])
+        assert report.final_verdict == FinalVerdict.ACCEPTED, (
+            f"NORMAL should accept, verdict={report.final_verdict}"
+        )
+        t1_ran = any("guardrails.sh" in c for c in runner.calls)
+        t2_ran = any("strict" in c for c in runner.calls)
+        assert t1_ran, f"NORMAL should run T1, got calls: {runner.calls}"
+        assert not t2_ran, f"NORMAL should not run T2, got calls: {runner.calls}"
+
+    def test_strict_runs_t1_and_t2(self, tmp_path):
+        """STRICT runs T1 defaults and T2 strict guardrails."""
+        scripts = tmp_path / "scripts"
+        scripts.mkdir()
+        (scripts / "guardrails.sh").write_text("echo full")
+
+        from grace_control.core.acceptance_pipeline import AcceptancePipeline
+        from grace_control.core.command_runner import CommandRunner
+        from grace_control.core.scope_guard import ScopeGuard
+        from grace_control.core.evidence import EvidenceCollector
+
+        pkt = ExecutionPacketContract(
+            packet_id="p1", title="test",
+            allowed_write_scope=["src/"], frozen_scope=[],
+            acceptance_profile=AcceptanceProfile.STRICT,
+            verification={"t1": [["echo", "ok"]]},
+        )
+        runner = FakeRunner({
+            "echo ok": CommandResult(command="echo ok", cwd="/", exit_code=0),
+        })
+        pipe = AcceptancePipeline(
+            repo_root=tmp_path,
+            command_runner=runner,
+            scope_guard=ScopeGuard(tmp_path),
+            evidence_collector=EvidenceCollector(),
+        )
+        report = pipe.run(packet=pkt, changed_files=["src/main.py"])
+        assert report.final_verdict == FinalVerdict.ACCEPTED
+        t1_ran = any("echo ok" in c for c in runner.calls)
+        t2_ran = any("guardrails.sh" in c for c in runner.calls)
+        assert t1_ran, f"STRICT should run T1, got calls: {runner.calls}"
+        assert t2_ran, f"STRICT should run T2 guardrails, got calls: {runner.calls}"
+
+    def test_strict_fails_without_guardrails(self, tmp_path):
+        """STRICT without guardrails.sh and without explicit T2 → fail."""
+        from grace_control.core.acceptance_pipeline import AcceptancePipeline
+        from grace_control.core.command_runner import CommandRunner
+        from grace_control.core.scope_guard import ScopeGuard
+        from grace_control.core.evidence import EvidenceCollector
+
+        pkt = ExecutionPacketContract(
+            packet_id="p1", title="test",
+            allowed_write_scope=["src/"], frozen_scope=[],
+            acceptance_profile=AcceptanceProfile.STRICT,
+            verification={"t1": [["echo", "ok"]]},
+        )
+        runner = FakeRunner({"echo ok": CommandResult(command="echo ok", cwd="/", exit_code=0)})
+        pipe = AcceptancePipeline(
+            repo_root=tmp_path,
+            command_runner=runner,
+            scope_guard=ScopeGuard(tmp_path),
+            evidence_collector=EvidenceCollector(),
+        )
+        report = pipe.run(packet=pkt, changed_files=["src/main.py"])
+        assert report.final_verdict != FinalVerdict.ACCEPTED
+        t2_stage = [s for s in report.stages if "T2" in s.name.value]
+        assert any("guardrails" in (s.summary or "").lower() for s in t2_stage), (
+            f"expected guardrails message, got: {[s.summary for s in t2_stage]}"
+        )

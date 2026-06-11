@@ -102,6 +102,35 @@ def test_t0_frontend_fallback_markers(tmp_path):
     assert any("auto:t0:frontend_markers_fallback" in o for o in origins)
 
 
+def test_t0_frontend_missing_lint_fails_normal(tmp_path):
+    """NORMAL with frontend changed but no frontend GRACE lint → fail."""
+    wt = _make_worktree(tmp_path)
+    cmds, origins = resolve_default_t0(["app/page.tsx"], wt, profile="NORMAL")
+    assert any("frontend_lint_missing" in o for o in origins), (
+        f"expected frontend_lint_missing origin, got {origins}"
+    )
+    assert any("sys.exit(1)" in " ".join(c) for c in cmds), (
+        f"expected failing command, got {cmds}"
+    )
+
+
+def test_t0_frontend_missing_lint_fails_strict(tmp_path):
+    """STRICT with frontend changed but no frontend GRACE lint → fail."""
+    wt = _make_worktree(tmp_path)
+    cmds, origins = resolve_default_t0(["app/page.tsx"], wt, profile="STRICT")
+    assert any("frontend_lint_missing" in o for o in origins)
+
+
+def test_t0_frontend_missing_lint_warns_fast(tmp_path):
+    """FAST with frontend changed but no frontend GRACE lint → no failing command."""
+    wt = _make_worktree(tmp_path)
+    cmds, origins = resolve_default_t0(["app/page.tsx"], wt, profile="FAST")
+    frontend_lint_issues = [o for o in origins if "frontend" in o]
+    assert not frontend_lint_issues, (
+        f"FAST should not get frontend lint issues, got {frontend_lint_issues}"
+    )
+
+
 def test_t0_no_matching_changes(tmp_path):
     wt = _make_worktree(tmp_path)
     cmds, origins = resolve_default_t0(["random.txt"], wt)

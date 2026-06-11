@@ -244,7 +244,7 @@ class AcceptancePipeline:
         scope_paths = self._resolve_t0_scope_paths(packet, changed_files, cwd=cwd)
         base = (cwd or self._root).resolve()
 
-        cmds, origins = resolve_default_t0(scope_paths, base)
+        cmds, origins = resolve_default_t0(scope_paths, base, packet.acceptance_profile.value)
         if cmds:
             return cmds, origins
 
@@ -554,7 +554,7 @@ class AcceptancePipeline:
         explicit = packet.verification.get("t1", [])
 
         # Merge: defaults first, then explicit
-        all_cmds = list(t1_defaults) + [list(c) if isinstance(c, str) else c for c in explicit]
+        all_cmds = list(t1_defaults) + [c.split() if isinstance(c, str) else c for c in explicit]
         all_origins = list(t1_default_origins) + ["architect:extra_verification"] * len(explicit)
         commands = [self._runner.run(cmd, output_dir=run_dir, cwd=cwd) for cmd in all_cmds]
 
@@ -600,7 +600,7 @@ class AcceptancePipeline:
         explicit = packet.verification.get("t2", [])
 
         # Merge
-        all_cmds = list(t2_defaults) + [list(c) if isinstance(c, str) else c for c in explicit]
+        all_cmds = list(t2_defaults) + [c.split() if isinstance(c, str) else c for c in explicit]
         all_origins = list(t2_default_origins) + ["architect:extra_verification"] * len(explicit)
 
         if not all_cmds:
