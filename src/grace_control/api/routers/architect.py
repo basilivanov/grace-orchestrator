@@ -66,16 +66,27 @@ async def create_plan(request: dict) -> dict:
     _self_improvement = spec.get("self_improvement", False)
 
     if not has_waves and is_async:
-        # ── Immediate mode: create feature, return fast, plan in background ──
+        # ── Immediate mode: create feature + placeholder wave/packet, return fast ──
         task_desc = spec.get("description", "") or title
+        from grace_control.db.schema import Wave as _Wave, Packet as _Packet
+        from grace_control.core.uid import new_wave_uid as _nwu, new_packet_uid as _npu
         plan_used_ids: set[str] = set()
         with get_db() as db:
             feature_id = generate_unique_id(db, Feature, new_feature_uid, reserved=plan_used_ids)
+        plan_used_ids.add(feature_id)
+        with get_db() as db:
+            wave_id = generate_unique_id(db, _Wave, _nwu, reserved=plan_used_ids)
+        plan_used_ids.add(wave_id)
+        with get_db() as db:
+            pkt_id = generate_unique_id(db, _Packet, _npu, reserved=plan_used_ids)
         with get_db() as db:
             db.add(Feature(id=feature_id, slug=slug, title=title, description=task_desc[:500],
                            spec_json={"title": title, "description": task_desc, "origin": _origin},
                            status="PLANNING"))
-        _log.info("feature_created_immediate", feature_id=feature_id, title=title)
+            db.add(_Wave(id=wave_id, feature_id=feature_id, slug=_slugify(title+"-wave"), title="Initial planning", order=1, status="PENDING"))
+            db.add(_Packet(id=pkt_id, feature_id=feature_id, wave_id=wave_id, slug="initial-planning", title="Architect planning",
+                          state="draft", acceptance_profile="FAST", spec_json={"scope": []}))
+        _log.info("feature_created_immediate", feature_id=feature_id, title=title, wave_id=wave_id, pkt_id=pkt_id)
 
         # ── Background: full architect plan ──
         import asyncio as _asyncio
@@ -129,18 +140,40 @@ async def create_plan(request: dict) -> dict:
         feature_id = generate_unique_id(db, Feature, new_feature_uid, reserved=plan_used_ids)
     plan_used_ids.add(feature_id)
 
-    await _persist_plan(feature_id, slug, title, spec, plan_used_ids, spec.get("description", "") or title)
+    # Validate DAG before persisting
+    dag_packets = []
+    for wave_spec in spec.get("waves", []):
+        for pkt_spec in wave_spec.get("packets", []):
+            action = _extract_action(pkt_spec["title"])
+            dag_packets.append({
+                "id": action,
+                "depends_on": pkt_spec.get("depends_on", []),
+                "scope": pkt_spec.get("scope", []),
+            })
+    if dag_packets:
+        from grace_control.core.dag_validator import validate_dag as _validate_dag
+        vresult = _validate_dag(dag_packets)
+        if not vresult.valid:
+            from fastapi import HTTPException
+            detail = {}
+            if vresult.conflicts:
+                detail["errors"] = [str(c) for c in vresult.conflicts]
+            if vresult.cycles:
+                detail["cycles"] = vresult.cycles
+            raise HTTPException(status_code=422, detail=detail)
+
+    plan_result = await _persist_plan(feature_id, slug, title, spec, plan_used_ids, spec.get("description", "") or title)
 
     return {
         "data": {
             "feature_id": feature_id,
             "feature_slug": slug,
             "slug": slug,
-            "waves_count": len(spec.get("waves", [])),
-            "packets_count": len(packets_created),
-            "packets": packets_created,
-            "packet_ids": packets_created,
-            "packet_summaries": packet_summaries,
+            "waves_count": plan_result.get("waves_count", len(spec.get("waves", []))),
+            "packets_count": len(plan_result.get("packets_created", [])),
+            "packets": plan_result.get("packets_created", []),
+            "packet_ids": plan_result.get("packets_created", []),
+            "packet_summaries": plan_result.get("packet_summaries", []),
             "context": context,
             "generated": architect_generated,
         },
@@ -152,9 +185,7 @@ async def _persist_plan(feature_id: str, slug: str, title: str, spec: dict, plan
     """Build DAG and persist Feature/Waves/Packets to DB."""
     from grace_control.db.schema import Wave as _Wave, Packet as _Packet
     from grace_control.core.uid import new_wave_uid as _nwu, new_packet_uid as _npu
-    from grace_control.core.acceptance_pipeline import generate_commands as _gen_cmds
     from grace_control.core.gate_resolver import enrich_packet as _enrich_pkt
-    from grace_control.services.merge_service import validate_dag as _validate_dag
 
     dag_packets = []
     action_to_id: dict[str, str] = {}

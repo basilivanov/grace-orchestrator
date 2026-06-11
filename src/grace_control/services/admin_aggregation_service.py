@@ -1089,7 +1089,7 @@ class AdminAggregationService:
                     .order_by(PacketRun.run_number.desc())
                     .first()
                 )
-                pipeline = self._derive_simple_pipeline(p, last_run)
+                pipeline = self._derive_simple_pipeline(p, last_run, f.status)
                 started_at = (
                     _iso(last_run.started_at)
                     if last_run and last_run.started_at else None
@@ -1150,7 +1150,7 @@ class AdminAggregationService:
         return {"features": out}
 
     def _derive_simple_pipeline(
-        self, p: Packet, last_run: PacketRun | None
+        self, p: Packet, last_run: PacketRun | None, feature_status: str = ""
     ) -> dict[str, Any]:
         """Derive an 11-stage pipeline preview from packet + last_run alone.
 
@@ -1169,9 +1169,10 @@ class AdminAggregationService:
         run_status = (last_run.status or "").lower() if last_run else ""
         executor = (last_run.executor_id or "") if last_run else ""
         has_run = last_run is not None
+        is_planning = feature_status == "PLANNING"
         stages: list[dict[str, Any]] = []
-        stages.append({"key": "architect", "label": "Architect", "status": "done", "started_at": created_iso, "finished_at": created_iso, "duration_ms": 0, "meta": "", "target_tab": "spec"})
-        stages.append({"key": "context_builder", "label": "Context Builder", "status": "done" if has_run else "pending", "started_at": created_iso, "finished_at": run_started or created_iso, "duration_ms": 0, "meta": "", "target_tab": "spec"})
+        stages.append({"key": "architect", "label": "Architect", "status": "running" if is_planning else "done", "started_at": created_iso, "finished_at": None if is_planning else created_iso, "duration_ms": 0, "meta": "", "target_tab": "spec"})
+        stages.append({"key": "context_builder", "label": "Context Builder", "status": "pending" if is_planning else ("done" if has_run else "pending"), "started_at": None if is_planning else created_iso, "finished_at": None, "duration_ms": 0, "meta": "", "target_tab": "spec"})
         stages.append({"key": "materialized", "label": "Materialize", "status": "done", "started_at": created_iso, "finished_at": created_iso, "duration_ms": 0, "meta": p.slug or "", "target_tab": "spec"})
         stages.append({"key": "executor", "label": "Executor", "status": "done" if executor else "skipped", "started_at": run_started, "finished_at": run_started, "duration_ms": 0, "meta": executor or "", "target_tab": "runs"})
         if not has_run:

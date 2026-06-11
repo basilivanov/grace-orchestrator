@@ -63,7 +63,15 @@ function renderPktDetail(p){
   if(p.wave)items.push(['W',p.wave.title||p.wave.id]);items.push(['P',p.title||p.id]);
   if(items.length>1){hier='<div style="display:flex;gap:4px;align-items:center;padding:6px 10px 0;font-size:9px;flex-wrap:wrap">';items.forEach((h,i)=>{if(i>0)hier+='<span style="color:var(--t3)">›</span>';hier+=`<span style="color:${i===items.length-1?'var(--blue)':'var(--t2)'};font-weight:${i===items.length-1?'700':'500'}"><span style="color:var(--t3);font-weight:400;margin-right:2px">${h[0]}:</span>${esc(h[1])}</span>`;});hier+='</div>';}
   const pipe=p.pipeline?.stages||[];let pb='';
-  if(pipe.length){pb='<div class="pblocks">'+pipe.map(s=>{const cls=s.status==='done'?'done':s.status==='running'?'running':s.status==='failed'?'failed':s.status==='skipped'?'skipped':'pending';const lbl=s.label?esc(s.label.split(' ').slice(0,2).join(' ')):s.key;const dur=fmtDur(Math.max(s.duration_ms||0,0));const st=s.started_at?fmtTime(s.started_at):'',et=s.finished_at?fmtTime(s.finished_at):'',tab=s.target_tab||'spec';return`<div class="pblock ${cls}" onclick="event.stopPropagation();stab('${p.id}','${tab}')" title="${esc(s.label)}"><span class="pbl-i ${cls}">${icons[cls]||'○'}</span><span class="pbl-l">${lbl}</span>${st?`<span class="pbl-st ${cls}">${st}</span>`:''}${et?`<span class="pbl-et ${cls}">${et}</span>`:''}<span class="pbl-t ${cls}">${dur}</span></div>`;}).join('')+'</div>';}
+  if(pipe.length){pb='<div class="pblocks">'+pipe.map(s=>{
+    const cls=s.status==='done'?'done':s.status==='running'?'running':s.status==='failed'?'failed':s.status==='skipped'?'skipped':'pending';
+    const lbl=s.label?esc(s.label.split(' ').slice(0,2).join(' ')):s.key;
+    // Compute live elapsed time for running stages
+    let dur;
+    if(s.status==='running'&&s.started_at){const diff=Date.now()-new Date(s.started_at).getTime();dur=fmtDur(Math.max(diff,0));}
+    else dur=fmtDur(Math.max(s.duration_ms||0,0));
+    const st=s.started_at?fmtTime(s.started_at):'',et=s.finished_at?fmtTime(s.finished_at):'',tab=s.target_tab||'spec';
+    return`<div class="pblock ${cls}" onclick="event.stopPropagation();stab('${p.id}','${tab}')" title="${esc(s.label)}"><span class="pbl-i ${cls}">${icons[cls]||'○'}</span><span class="pbl-l">${lbl}</span>${st?`<span class="pbl-st ${cls}">${st}</span>`:''}${et?`<span class="pbl-et ${cls}">${et}</span>`:''}<span class="pbl-t ${cls}">${dur}</span></div>`;}).join('')+'</div>';}
   const t=state.tab[p.id]||'spec',tabsH=TABS.map(x=>`<div class="dtab ${t===x?'on':''}" onclick="stab('${p.id}','${x}')">${TLAB[x]||x}</div>`).join('');
   return hier+pb+`<div class="dtabs">${tabsH}</div><div class="dcont" id="dcont-${p.id}">${renderTabContent(p,t)}</div>`;
 }
@@ -272,3 +280,15 @@ async function loadData(){
 }
 
 loadData();
+
+// Live timer for running pipeline stages — ticks every second
+setInterval(()=>{
+  document.querySelectorAll('.pblock.running').forEach(el=>{
+    const stEl=el.querySelector('.pbl-st');
+    const durEl=el.querySelector('.pbl-t');
+    if(stEl&&durEl&&stEl.textContent){
+      const d=new Date(stEl.textContent);
+      if(!isNaN(d.getTime()))durEl.textContent=fmtDur(Math.max(Date.now()-d.getTime(),0));
+    }
+  });
+},1000);
