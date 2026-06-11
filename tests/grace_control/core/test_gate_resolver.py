@@ -119,15 +119,22 @@ def test_t0_empty_changed_files(tmp_path):
 
 def test_t1_guardrails_normal(tmp_path):
     wt = _make_worktree(tmp_path, scripts={"guardrails.sh": "echo normal"})
-    cmds, origins = resolve_default_t1(["components/Button.tsx"], wt)
+    cmds, origins = resolve_default_t1(["components/Button.tsx"], wt, profile="NORMAL")
     assert any("guardrails.sh" in " ".join(c) for c in cmds)
     assert any("normal" in " ".join(c) for c in cmds)
     assert any("auto:t1:guardrails_normal" in o for o in origins)
 
 
+def test_t1_fast_returns_empty_even_with_guardrails(tmp_path):
+    """FAST must NOT get T1 defaults even if guardrails.sh exists."""
+    wt = _make_worktree(tmp_path, scripts={"guardrails.sh": "echo normal"})
+    cmds, origins = resolve_default_t1(["components/Button.tsx"], wt, profile="FAST")
+    assert cmds == [], f"FAST should get no T1 defaults, got {cmds}"
+
+
 def test_t1_backend_pytest(tmp_path):
     wt = _make_worktree(tmp_path)
-    cmds, origins = resolve_default_t1(["apps/api/main.py"], wt)
+    cmds, origins = resolve_default_t1(["apps/api/main.py"], wt, profile="NORMAL")
     assert any("pytest" in " ".join(c) for c in cmds)
     assert any("auto:t1:pytest" in o for o in origins)
 
@@ -136,7 +143,7 @@ def test_t1_frontend_pnpm_test(tmp_path):
     """When package.json exists and frontend changed, use pnpm test:run."""
     wt = _make_worktree(tmp_path)
     (wt / "package.json").write_text("{}")
-    cmds, origins = resolve_default_t1(["app/page.tsx"], wt)
+    cmds, origins = resolve_default_t1(["app/page.tsx"], wt, profile="NORMAL")
     assert any("pnpm" in " ".join(c) for c in cmds)
     assert any("auto:t1:pnpm_test" in o for o in origins)
 
@@ -144,13 +151,13 @@ def test_t1_frontend_pnpm_test(tmp_path):
 def test_t1_frontend_no_package_json(tmp_path):
     """When no package.json, no frontend T1 defaults."""
     wt = _make_worktree(tmp_path)
-    cmds, origins = resolve_default_t1(["app/page.tsx"], wt)
+    cmds, origins = resolve_default_t1(["app/page.tsx"], wt, profile="NORMAL")
     assert cmds == [], f"expected no defaults without package.json, got {cmds}"
 
 
 def test_t1_no_auto_defaults(tmp_path):
     wt = _make_worktree(tmp_path)
-    cmds, origins = resolve_default_t1(["random.txt"], wt)
+    cmds, origins = resolve_default_t1(["random.txt"], wt, profile="NORMAL")
     assert cmds == []
 
 

@@ -112,10 +112,16 @@ def resolve_default_t0(
 def resolve_default_t1(
     changed_files: list[str],
     worktree_path: Path,
+    profile: str = "NORMAL",
 ) -> tuple[list[list[str]], list[str]]:
     commands: list[list[str]] = []
     origins: list[str] = []
     base = worktree_path.resolve() if worktree_path else Path.cwd()
+
+    # T1 is only for NORMAL and STRICT profiles
+    if profile == "FAST":
+        return commands, origins
+
     areas = resolve_touched_areas(changed_files)
     guardrails = _detect_guardrails(base)
 
@@ -172,7 +178,7 @@ def resolve_default_gates(
     worktree_path: Path,
 ) -> dict[str, Any]:
     t0_cmds, t0_origins = resolve_default_t0(changed_files, worktree_path)
-    t1_cmds, t1_origins = resolve_default_t1(changed_files, worktree_path)
+    t1_cmds, t1_origins = resolve_default_t1(changed_files, worktree_path, profile)
     t2_cmds, t2_origins = resolve_default_t2(changed_files, worktree_path, profile)
 
     return {
