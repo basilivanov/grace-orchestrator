@@ -210,20 +210,16 @@ async function submitBiz(){
   const ta=$('#biz-input'),btn=$('#biz-btn'),status=$('#biz-status'),text=ta?.value?.trim();
   if(!text||text.length<10){if(status)status.textContent='Please write at least 10 characters';return;}
   btn.disabled=true;btn.textContent='Submitting...';if(status)status.textContent='Sending to architect (may take 30-60s)...';
-  // Add a visual timeout indicator
-  let dots=0;const dotInt=setInterval(()=>{dots=(dots+1)%4;if(status)status.textContent='Architect is thinking'+'.'.repeat(dots)+' '.repeat(3-dots);},1000);
-  const controller=new AbortController();
-  const timeout=setTimeout(()=>controller.abort(),120000);
+  let dots=0;const dotInt=setInterval(()=>{dots=(dots+1)%4;if(status&&!status.textContent.includes('submitted')&&!status.textContent.includes('Error'))status.textContent='Architect is thinking'+'.'.repeat(dots)+' '.repeat(3-dots);},2000);
   try{
-    const r=await fetch(apiUrl('/api/architect/plan'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({feature_spec:{title:text.slice(0,80),description:text,origin:'business'}}),signal:controller.signal});
-    clearInterval(dotInt);clearTimeout(timeout);
+    const r=await fetch(apiUrl('/api/architect/plan'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({feature_spec:{title:text.slice(0,80),description:text,origin:'business'}})});
+    clearInterval(dotInt);
     if(!r.ok){const e=await r.json();if(status)status.textContent='Error: '+(e.detail||e.message||r.status);btn.disabled=false;btn.textContent='Submit Feature';toast('Architect error','err');return;}
     ta.value='';btn.disabled=false;btn.textContent='Submit Feature';if(status)status.textContent='Feature submitted!';toast('Feature planned successfully!','ok');
     setTimeout(()=>switchView('dashboard'),2000);
   }catch(e){
-    clearInterval(dotInt);clearTimeout(timeout);
-    if(e.name==='AbortError'){if(status)status.textContent='Request timed out (120s). Architect may be busy.';toast('Architect timeout — try again later','err');}
-    else{if(status)status.textContent='Request failed: '+e.message;toast('Request failed','err');}
+    clearInterval(dotInt);
+    if(status)status.textContent='Request failed: '+e.message;toast('Request failed','err');
     btn.disabled=false;btn.textContent='Submit Feature';
   }
 }
