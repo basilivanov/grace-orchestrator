@@ -110,8 +110,8 @@ function runDetailRow(p,r){
   const key=p.id+'.r'+r.run_number;if(state.tabData[key]===undefined)return'';
   const data=state.tabData[key];if(!data)return'<tr><td colspan="5"><div class="empty">No data</div></td></tr>';
   const rj=data.result_json||{},leg=rj.legacy_result||{},prompt=data.prompt||rj.prompt||leg.prompt||'';
-  const stderr=state.liveLogs?.[key]?.stderr??leg.stderr||'';
-  const stdout=state.liveLogs?.[key]?.stdout??leg.stdout||'';
+  const stderr=(state.liveLogs?.[key]?.stderr)??(leg.stderr||'');
+  const stdout=(state.liveLogs?.[key]?.stdout)??(leg.stdout||'');
   const cmd=data.command_preview||rj.command_preview||[];
   const acc=rj.acceptance_report||{};const stages=acc.stages||[];
   const exitCodes=[];stages.forEach(s=>(s.commands||[]).forEach(c=>{if(c.exit_code!==undefined)exitCodes.push(c.exit_code);}));
