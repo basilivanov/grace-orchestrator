@@ -407,16 +407,18 @@ def _build_runner_for_mutation(clean_git_repo: Path, scenario_data: dict) -> any
 
 
 def test_mutation_detection_clean_agent(clean_git_repo: Path):
-    """When agent does NOT modify files, mutation detection passes."""
-    # Patch get_agent_profile so the runner gets a mock profile whose
-    # command echoes clean JSON — no opencode needed, no files touched.
+    """When agent does NOT modify files and creates bundle, mutation detection passes."""
+    bundle_path = Path(f"/tmp/grace-context/test-mutation-clean/C1/context-bundle.md")
+
     with patch(
         "grace_control.config.agent_profiles.get_agent_profile"
     ) as mock_get_profile:
         mock_prof = MagicMock()
-        # Use echo so subprocess succeeds without opencode installed
+        # Also write the bundle file so the new MISSING_BUNDLE check passes
         mock_prof.command = [
             "sh", "-c",
+            f"mkdir -p {bundle_path.parent} && "
+            f"echo '# Bundle' > {bundle_path} && "
             'echo \'{"context_bundle_summary": "Clean run", '
             '"selected_files": ["README.md"]}\'',
         ]
@@ -452,6 +454,8 @@ def test_mutation_detection_clean_agent(clean_git_repo: Path):
     assert runner.report["context_runs"] == 1
     assert runner.report["real_agent_runs"] == 1
     assert runner.report["failures"] == []
+    assert bundle_path.exists()
+    assert bundle_path.stat().st_size > 0
 
 
 def test_mutation_detection_dirty_agent(clean_git_repo: Path):
@@ -536,6 +540,51 @@ def test_mutation_detection_agent_failure(clean_git_repo: Path):
 
     assert result == []
     assert any("agent failed" in f for f in runner.report["failures"])
+
+
+def test_stage0_missing_bundle_file(clean_git_repo: Path):
+    """Agent exits 0 with JSON stdout, but does not create bundle file → fail."""
+    with patch(
+        "grace_control.config.agent_profiles.get_agent_profile"
+    ) as mock_get_profile:
+        mock_prof = MagicMock()
+        # Command echoes valid JSON but does NOT write the bundle file
+        mock_prof.command = [
+            "sh", "-c",
+            "echo '{\"context_bundle_summary\": \"Pretend success\"}'",
+        ]
+        mock_prof.model = ""
+        mock_prof.effort = ""
+        mock_prof.timeout_seconds = 30
+        mock_get_profile.return_value = mock_prof
+
+        scenario = {
+            "id": "test-missing-bundle",
+            "target_repo_worktree": True,
+            "context_builder": {"enabled": True},
+            "waves": [
+                {
+                    "id": "W0",
+                    "title": "Context",
+                    "packets": [
+                        {
+                            "id": "C1",
+                            "role": "context-builder",
+                            "prompt": "Collect context.",
+                            "scope": ["README.md"],
+                        },
+                    ],
+                },
+            ],
+        }
+        runner = _build_runner_for_mutation(clean_git_repo, scenario)
+        result = runner._run_stage0_context_builder()
+
+    assert result == []
+    assert any("CONTEXT_BUILDER_MISSING_BUNDLE" in f
+               for f in runner.report["failures"])
+    assert runner.report["context_runs"] == 1
+    assert runner.report["real_agent_runs"] == 1
 
 
 # ── Report counters ─────────────────────────────────────────────────────────

@@ -344,7 +344,9 @@ class WaveResumeRunner:
 
             # Write packet prompt to file (input: mode: file)
             packet_file = bundle_dir / "EXECUTION_PACKET.md"
-            packet_file.write_text(pkt.get("prompt", ""))
+            prompt_text = pkt.get("prompt", "")
+            prompt_text += f"\n\ncontext_bundle_output_path: {bundle_path}\n"
+            packet_file.write_text(prompt_text)
 
             # Render command template from profile
             cmd_template = list(profile.command)
@@ -480,6 +482,18 @@ class WaveResumeRunner:
                 self.report["failures"].append(
                     f"CONTEXT_BUILDER_MUTATED_WORKTREE: "
                     f"{pkt_id} modified target repo"
+                )
+                return []
+
+            # ── Bundle file existence check ────────────────────────────
+            bundle_exists = bundle_path.exists()
+            bundle_nonempty = bundle_exists and bundle_path.stat().st_size > 0
+            if not bundle_nonempty:
+                (bundle_dir / "MISSING_BUNDLE").touch()
+                self.report["failures"].append(
+                    f"CONTEXT_BUILDER_MISSING_BUNDLE: "
+                    f"{pkt_id} — {bundle_path} "
+                    f"{'not found' if not bundle_exists else 'empty'}"
                 )
                 return []
 
