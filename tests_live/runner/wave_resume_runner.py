@@ -318,12 +318,13 @@ class WaveResumeRunner:
                     "role": "context-builder",
                     "prompt": (
                         "Build a bounded context bundle for this business feature.\n"
-                        "Use only the target repo worktree.\n"
-                        "Collect relevant files, contracts, tests.\n"
+                        "Focus on the target repo frontend: components/ (especially tab navigation), "
+                        "tests (__tests__/components/), and config files.\n"
+                        "Collect short snippets from relevant source files, tests, and config.\n"
                         "Do not modify files. Do not crawl the whole repository.\n\n"
                         f"Business feature:\n{biz_text}"
                     ),
-                    "scope": [],
+                    "scope": ["components/", "__tests__/", "package.json"],
                 }
                 cb_packets = [synthetic_pkt]
             else:
