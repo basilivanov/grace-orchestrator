@@ -76,14 +76,74 @@ _FRONTEND_LINT_MISSING_CMD = [
     "(scripts/grace_front_lint.py) available'); sys.exit(1)",
 ]
 
+# ── Path exclusion patterns (generated/vendor/framework) ──────────────
+_EXCLUDED_DIRS: frozenset[str] = frozenset({
+    "node_modules", ".next", ".venv", "venv", "__pycache__",
+    ".mypy_cache", ".pytest_cache", ".ruff_cache", ".git",
+})
+_EXCLUDED_PATH_PREFIXES: tuple[str, ...] = (
+    "alembic/", "migrations/", "components/ui/",
+)
+_EXCLUDED_FILE_SUFFIXES: tuple[str, ...] = (
+    ".min.js", ".min.css",
+)
+
+
+def _path_is_excluded(path: str) -> bool:
+    """Check if a relative file path should be excluded from GRACE lint."""
+    fp = path.replace("\\", "/")
+    for part in fp.split("/"):
+        if part in _EXCLUDED_DIRS:
+            return True
+    for prefix in _EXCLUDED_PATH_PREFIXES:
+        if fp.startswith(prefix):
+            return True
+    for suffix in _EXCLUDED_FILE_SUFFIXES:
+        if fp.endswith(suffix):
+            return True
+    return False
+
 
 def _is_grace_orchestrator(base: Path) -> bool:
-    """Check if the worktree is the GRACE orchestrator itself (not a target repo).
-
-    The GRACE orchestrator has .grace/state/ and src/grace_control/.
-    Target repos like Solar Sage don't.
-    """
+    """Check if the worktree is the GRACE orchestrator itself (not a target repo)."""
     return (base / ".grace" / "state").exists() or (base / "src" / "grace_control").exists()
+
+
+def resolve_linter_mode(worktree_path: Path) -> str:
+    """Determine which linter mode applies to this worktree.
+
+    Returns one of:
+      - 'strict'      — orchestrator repo: full GRACE lint on all scoped files
+      - 'changed-files' — target repo opted in: changed files only
+      - 'disabled'      — target repo without opt-in
+    """
+    base = worktree_path.resolve() if worktree_path else Path.cwd()
+
+    # Orchestrator repo: always strict
+    if _is_grace_orchestrator(base):
+        return "strict"
+
+    # Check for explicit opt-in config
+    for config_name in ("grace/canon.yaml", ".grace/canon.yaml", "grace.toml"):
+        if (base / config_name).is_file():
+            try:
+                canon_raw = (base / config_name).read_text()
+                if config_name.endswith(".yaml"):
+                    import yaml
+                    canon = yaml.safe_load(canon_raw) or {}
+                elif config_name.endswith(".toml"):
+                    import tomllib
+                    canon = tomllib.loads(canon_raw)
+                else:
+                    canon = {}
+                gate_mode = canon.get("gate_mode", "changed-files")
+                if gate_mode in ("changed-files", "strict", "disabled"):
+                    return gate_mode
+            except Exception:
+                pass
+            return "changed-files"  # safe default even on parse error
+
+    return "disabled"
 
 
 def resolve_default_t0(
@@ -94,7 +154,7 @@ def resolve_default_t0(
     commands: list[list[str]] = []
     origins: list[str] = []
     base = worktree_path.resolve() if worktree_path else Path.cwd()
-    is_grace = _is_grace_orchestrator(base)
+    linter_mode = resolve_linter_mode(base)
 
     areas = resolve_touched_areas(changed_files)
 
@@ -102,32 +162,47 @@ def resolve_default_t0(
     fe_files = [f for f in changed_files if Path(f).suffix in _FRONTEND_EXTS
                 or any(f.startswith(p) for p in _FRONTEND_PREFIXES)]
 
-    # backend GRACE lint — only for orchestrator repo itself
-    if is_grace and "backend" in areas and (base / "scripts" / "grace_lint.py").is_file():
-        commands.append(["python3", "scripts/grace_lint.py"] + py_files)
-        origins.append("auto:t0:backend_grace_lint")
-
     # ruff on changed Python files (always, regardless of repo)
     if py_files:
         commands.append(["python3", "-m", "ruff", "check"] + py_files)
         origins.append("auto:t0:ruff")
 
+    if linter_mode == "disabled":
+        return commands, origins
+
+    # Filter out excluded paths for GRACE linting
+    lint_py = [f for f in py_files if not _path_is_excluded(f)]
+    lint_fe = [f for f in fe_files if not _path_is_excluded(f)]
+
     frontend_lint_ran = False
 
-    # frontend GRACE lint — only for orchestrator repo itself
-    if is_grace and "frontend" in areas and (base / "scripts" / "grace_front_lint.py").is_file():
-        commands.append(["python3", "scripts/grace_front_lint.py"] + fe_files)
+    # backend GRACE lint
+    if linter_mode in ("strict", "changed-files") and (base / "scripts" / "grace_lint.py").is_file():
+        if linter_mode == "strict":
+            commands.append(["python3", "scripts/grace_lint.py"] + lint_py)
+        else:
+            for f in lint_py:
+                commands.append(["python3", "scripts/grace_lint.py", f])
+        origins.append("auto:t0:backend_grace_lint")
+
+    # frontend GRACE lint
+    if linter_mode in ("strict", "changed-files") and (base / "scripts" / "grace_front_lint.py").is_file():
+        if linter_mode == "strict":
+            commands.append(["python3", "scripts/grace_front_lint.py"] + lint_fe)
+        else:
+            for f in lint_fe:
+                commands.append(["python3", "scripts/grace_front_lint.py", f])
         origins.append("auto:t0:frontend_grace_lint")
         frontend_lint_ran = True
-    elif is_grace and "frontend" in areas:
-        # legacy fallback — only for orchestrator repo
+    elif linter_mode == "strict" and "frontend" in areas:
+        # legacy fallback — orchestrator repo only
         if (base / "scripts" / "grace" / "check-markers.sh").is_file():
             commands.append(["bash", "scripts/grace/check-markers.sh"])
             origins.append("auto:t0:frontend_markers_fallback")
             frontend_lint_ran = True
 
-    # NORMAL/STRICT: fail only for orchestrator repo when frontend changed but no lint
-    if is_grace and "frontend" in areas and not frontend_lint_ran and profile in ("NORMAL", "STRICT"):
+    # NORMAL/STRICT: fail if frontend changed but no frontend lint available (strict only)
+    if linter_mode == "strict" and "frontend" in areas and not frontend_lint_ran and profile in ("NORMAL", "STRICT"):
         commands.append(_FRONTEND_LINT_MISSING_CMD)
         origins.append("auto:t0:frontend_lint_missing")
 

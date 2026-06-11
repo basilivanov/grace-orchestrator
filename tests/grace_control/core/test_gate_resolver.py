@@ -110,17 +110,110 @@ def test_t0_frontend_fallback_markers(tmp_path):
 
 def test_t0_target_repo_skips_grace_lint(tmp_path):
     """Target repo (not GRACE orchestrator) should skip grace_lint and grace_front_lint
-    even if those scripts exist, because they enforce orchestrator-specific conventions."""
+    even if those scripts exist."""
     wt = _make_worktree(tmp_path, scripts={
         "grace_lint.py": "print('backend')",
         "grace_front_lint.py": "print('frontend')",
     })
-    # No .grace/state — not a GRACE orchestrator
     cmds, origins = resolve_default_t0(["apps/api/main.py", "app/page.tsx"], wt)
     grace_cmds = [c for c in cmds if "grace_lint.py" in " ".join(c) or "grace_front_lint.py" in " ".join(c)]
     assert not grace_cmds, f"target repo should not get GRACE linters, got: {grace_cmds}"
-    # ruff should still run
     assert any("ruff" in " ".join(c) for c in cmds)
+
+
+def test_resolve_linter_mode_orchestrator(tmp_path):
+    """GRACE orchestrator repo → strict mode."""
+    from grace_control.core.gate_resolver import resolve_linter_mode
+    (tmp_path / ".grace" / "state").mkdir(parents=True)
+    assert resolve_linter_mode(tmp_path) == "strict"
+
+
+def test_resolve_linter_mode_target_disabled(tmp_path):
+    """Target repo without canon.yaml → disabled."""
+    from grace_control.core.gate_resolver import resolve_linter_mode
+    assert resolve_linter_mode(tmp_path) == "disabled"
+
+
+def test_resolve_linter_mode_target_canon(tmp_path):
+    """Target repo with grace/canon.yaml → reads gate_mode."""
+    from grace_control.core.gate_resolver import resolve_linter_mode
+    canon_dir = tmp_path / "grace"
+    canon_dir.mkdir()
+    (canon_dir / "canon.yaml").write_text("gate_mode: changed-files\n")
+    assert resolve_linter_mode(tmp_path) == "changed-files"
+
+
+def test_resolve_linter_mode_target_canon_strict(tmp_path):
+    """grace/canon.yaml with gate_mode: strict → strict."""
+    from grace_control.core.gate_resolver import resolve_linter_mode
+    canon_dir = tmp_path / "grace"
+    canon_dir.mkdir()
+    (canon_dir / "canon.yaml").write_text("gate_mode: strict\n")
+    assert resolve_linter_mode(tmp_path) == "strict"
+
+
+def test_path_is_excluded_dir(tmp_path):
+    """_path_is_excluded detects node_modules, .venv, __pycache__ dirs."""
+    from grace_control.core.gate_resolver import _path_is_excluded
+    assert _path_is_excluded("node_modules/pkg/index.js")
+    assert _path_is_excluded(".venv/lib/site-packages/pkg.py")
+    assert _path_is_excluded("src/__pycache__/module.cpython.py")
+
+
+def test_path_is_excluded_prefix(tmp_path):
+    """_path_is_excluded detects alembic/, migrations/ prefixes."""
+    from grace_control.core.gate_resolver import _path_is_excluded
+    assert _path_is_excluded("alembic/versions/001_add_table.py")
+    assert _path_is_excluded("migrations/001_initial.sql")
+    assert _path_is_excluded("components/ui/Button.tsx")
+
+
+def test_path_is_not_excluded(tmp_path):
+    """_path_is_excluded allows normal source files."""
+    from grace_control.core.gate_resolver import _path_is_excluded
+    assert not _path_is_excluded("apps/api/app/main.py")
+    assert not _path_is_excluded("components/today/tab-bar.tsx")
+    assert not _path_is_excluded("__tests__/components/TabBar.test.tsx")
+
+
+def test_t0_changed_files_mode(tmp_path):
+    """changed-files mode runs GRACE lint on each changed file individually."""
+    wt = _make_worktree(tmp_path, scripts={
+        "grace_lint.py": "print('ok')",
+        "grace_front_lint.py": "print('ok')",
+    })
+    canon_dir = tmp_path / "grace"
+    canon_dir.mkdir()
+    (canon_dir / "canon.yaml").write_text("gate_mode: changed-files\n")
+    cmds, origins = resolve_default_t0(["apps/api/main.py", "app/page.tsx"], wt)
+    # Each file should be checked individually (not combined)
+    grace_backend_calls = [c for c in cmds if "grace_lint.py" in " ".join(c)]
+    grace_frontend_calls = [c for c in cmds if "grace_front_lint.py" in " ".join(c)]
+    assert len(grace_backend_calls) == 1, f"expected 1 backend call, got {grace_backend_calls}"
+    assert len(grace_frontend_calls) == 1, f"expected 1 frontend call, got {grace_frontend_calls}"
+    assert any("apps/api/main.py" in " ".join(c) for c in grace_backend_calls)
+    assert any("app/page.tsx" in " ".join(c) for c in grace_frontend_calls)
+    assert any("ruff" in " ".join(c) for c in cmds)
+
+
+def test_t0_changed_files_excludes_noise(tmp_path):
+    """Excluded paths are not passed to GRACE linters even in changed-files mode."""
+    wt = _make_worktree(tmp_path, scripts={
+        "grace_front_lint.py": "print('ok')",
+    })
+    canon_dir = tmp_path / "grace"
+    canon_dir.mkdir()
+    (canon_dir / "canon.yaml").write_text("gate_mode: changed-files\n")
+    cmds, origins = resolve_default_t0([
+        "components/today/tab-bar.tsx",
+        "components/ui/Button.tsx",  # excluded (vendor)
+        "alembic/versions/001_add_table.py",  # excluded (generated)
+    ], wt)
+    grace_calls = [c for c in cmds if "grace_front_lint.py" in " ".join(c)]
+    call_args = " ".join(" ".join(c) for c in grace_calls)
+    assert "components/today/tab-bar.tsx" in call_args
+    assert "components/ui/Button.tsx" not in call_args, f"vendor file should be excluded: {call_args}"
+    assert "alembic/versions/" not in call_args, f"alembic should be excluded: {call_args}"
 
 
 def test_t0_frontend_missing_lint_fails_normal(tmp_path):
