@@ -227,8 +227,8 @@ function loadDetailCached(id){const d=detailCache[id];if(d&&Date.now()-d._ts<150
 let refTimer=null;
 function startRefTimer(){
   if(refTimer)clearInterval(refTimer);
-  state.refCount=15;updateRefIndicator();
-  refTimer=setInterval(()=>{if(state.paused)return;state.refCount--;updateRefIndicator();if(state.refCount<=0){state.refCount=15;if(state.view==='dashboard')loadData();}},1000);
+  state.refCount=5;updateRefIndicator();
+  refTimer=setInterval(()=>{if(state.paused)return;state.refCount--;updateRefIndicator();if(state.refCount<=0){state.refCount=5;if(state.view==='dashboard')loadData();}},1000);
 }
 function togglePause(){state.paused=!state.paused;updateRefIndicator();}
 function updateRefIndicator(){
@@ -243,9 +243,18 @@ document.addEventListener('DOMContentLoaded',()=>{
 
 async function loadData(){
   try{
+    // Preserve ALL state for selected packet across refresh
+    const savedSel=state.sel;
+    const savedTabData=state.tabData;
+    const savedTab=state.tab;
+    const savedFileView=state.fileView;
     const saved={};
-    if(state.sel&&state.data){for(const f of state.data.features||[]){for(const w of f.waves||[]){for(const p of w.packets||[]){if(p.id===state.sel){saved.state_machine=p.state_machine;saved.runs_summary=p.runs_summary;saved.packet=p.packet;}}}}}
+    if(savedSel&&state.data){for(const f of state.data.features||[]){for(const w of f.waves||[]){for(const p of w.packets||[]){if(p.id===savedSel){saved.state_machine=p.state_machine;saved.runs_summary=p.runs_summary;saved.packet=p.packet;}}}}}
     const r=await fetch(apiUrl('/api/admin/features'));state.data=await r.json();
+    state.sel=savedSel;
+    state.tabData=savedTabData;
+    state.tab=savedTab;
+    state.fileView=savedFileView;
     for(const f of state.data.features||[]){state.expFeat[f.id]=true;for(const w of f.waves||[]){state.expWave[w.id]=true;}}
     if(saved.state_machine&&state.sel){for(const f of state.data.features||[]){for(const w of f.waves||[]){for(const p of w.packets||[]){if(p.id===state.sel){p.state_machine=saved.state_machine;p.runs_summary=saved.runs_summary;if(saved.packet)Object.assign(p,saved.packet);}}}}}
     renderDashboard();
