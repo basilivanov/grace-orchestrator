@@ -301,14 +301,31 @@ class WaveResumeRunner:
 
         waves = self.scenario.get("waves", [])
         if not waves:
-            return []
-
-        w0 = waves[0]
-        cb_packets = [
-            p for p in w0.get("packets", []) if p.get("role") == "context-builder"
-        ]
-        if not cb_packets:
-            return []
+            # Business-feature mode: run context-builder as a synthetic C1 packet
+            if cb_config.get("required", False):
+                biz_text = self.scenario.get("business_feature_text", "")
+                synthetic_pkt = {
+                    "id": "C1",
+                    "role": "context-builder",
+                    "prompt": (
+                        "Build a bounded context bundle for this business feature.\n"
+                        "Use only the target repo worktree.\n"
+                        "Collect relevant files, contracts, tests.\n"
+                        "Do not modify files. Do not crawl the whole repository.\n\n"
+                        f"Business feature:\n{biz_text}"
+                    ),
+                    "scope": [],
+                }
+                cb_packets = [synthetic_pkt]
+            else:
+                return []
+        else:
+            w0 = waves[0]
+            cb_packets = [
+                p for p in w0.get("packets", []) if p.get("role") == "context-builder"
+            ]
+            if not cb_packets:
+                return []
 
         target_root = Path(self.target_repo_root or self.target_dir)
         if not target_root.exists() or not (target_root / ".git").exists():
