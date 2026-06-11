@@ -20,6 +20,11 @@ agents:
       Do NOT modify package.json, lockfiles, .env, auth, payments, subscriptions,
       billing, database schema, migrations, or deployment config.
       Output ONLY valid JSON (no markdown, no prose). Required fields: title, waves.
+    inject_dir: true
+    input:
+      mode: file
+    model: deepseek/deepseek-v4-flash
+    timeout_seconds: 300
 
   architect-premium:
     backend: cli
