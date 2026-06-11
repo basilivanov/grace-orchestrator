@@ -212,11 +212,15 @@ async function submitBiz(){
   btn.disabled=true;btn.textContent='Submitting...';if(status)status.textContent='Sending to architect (may take 30-60s)...';
   let dots=0;const dotInt=setInterval(()=>{dots=(dots+1)%4;if(status&&!status.textContent.includes('submitted')&&!status.textContent.includes('Error'))status.textContent='Architect is thinking'+'.'.repeat(dots)+' '.repeat(3-dots);},2000);
   try{
-    const r=await fetch(apiUrl('/api/architect/plan'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({feature_spec:{title:text.slice(0,80),description:text,origin:'business'}})});
+    const r=await fetch(apiUrl('/api/architect/plan'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({feature_spec:{title:text.slice(0,80),description:text,origin:'business',background:true}})});
     clearInterval(dotInt);
     if(!r.ok){const e=await r.json();if(status)status.textContent='Error: '+(e.detail||e.message||r.status);btn.disabled=false;btn.textContent='Submit Feature';toast('Architect error','err');return;}
-    ta.value='';btn.disabled=false;btn.textContent='Submit Feature';if(status)status.textContent='Feature submitted!';toast('Feature planned successfully!','ok');
-    setTimeout(()=>switchView('dashboard'),2000);
+    const result=await r.json();
+    ta.value='';btn.disabled=false;btn.textContent='Submit Feature';
+    const isPlanning=result.status==='planning'||result.immediate;
+    if(status)status.textContent=isPlanning?'Feature created! Architect planning in background.':'Feature submitted!';
+    toast(isPlanning?'Feature created! Architect is planning waves/packets.':'Feature submitted!','ok');
+    setTimeout(()=>switchView('dashboard'),1000);
   }catch(e){
     clearInterval(dotInt);
     if(status)status.textContent='Request failed: '+e.message;toast('Request failed','err');

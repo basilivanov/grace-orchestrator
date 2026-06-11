@@ -60,19 +60,64 @@ async def create_plan(request: dict) -> dict:
     slug = _slugify(title)
     has_waves = bool(spec.get("waves"))
     target_repo_root = spec.get("target_repo_root", "")
+    is_async = spec.get("background", True)  # default to background mode
+    _origin = spec.get("origin", "")
+    _session_id = spec.get("session_id", "")
+    _self_improvement = spec.get("self_improvement", False)
+
+    if not has_waves and is_async:
+        # ── Immediate mode: create feature + placeholder wave/packet, return fast ──
+        task_desc = spec.get("description", "") or title
+        from grace_control.core.uid import new_feature_uid as _nfu, new_wave_uid as _nwu, new_packet_uid as _npu
+        plan_used_ids: set[str] = set()
+        with get_db() as db:
+            feature_id = generate_unique_id(db, Feature, new_feature_uid, reserved=plan_used_ids)
+        plan_used_ids.add(feature_id)
+        with get_db() as db:
+            wave_id = generate_unique_id(db, _Wave, _new_wave_uid, reserved=plan_used_ids)
+        plan_used_ids.add(wave_id)
+        with get_db() as db:
+            pkt_id = generate_unique_id(db, _Packet, _new_pkt_uid, reserved=plan_used_ids)
+        with get_db() as db:
+            db.add(Feature(id=feature_id, slug=slug, title=title, description=task_desc[:500],
+                           spec_json={"title": title, "description": task_desc, "origin": _origin},
+                           status="PLANNING"))
+            db.add(_Wave(id=wave_id, feature_id=feature_id, slug=_slugify(title+"-wave"), title="Planning", order=1, status="PENDING"))
+            db.add(_Packet(id=pkt_id, feature_id=feature_id, wave_id=wave_id, slug="planning-pkt", title="Architect planning",
+                          state="draft", acceptance_profile="FAST", spec_json={"scope": []}))
+        _log.info("feature_created_immediate", feature_id=feature_id, title=title)
+
+        # ── Background: full architect plan ──
+        import asyncio as _asyncio
+        async def _background_plan():
+            try:
+                context = await _warm_context(spec, "planning", target_repo_root)
+                llm_spec = await _call_architect_llm(task_desc, context, slug,
+                    self_improvement=_self_improvement or _origin == "self_evolution",
+                    worktree_root=target_repo_root)
+                llm_spec["title"] = title
+                llm_spec["description"] = llm_spec.get("description", task_desc)
+                llm_spec["origin"] = _origin
+                llm_spec["session_id"] = _session_id
+                llm_spec["self_improvement"] = _self_improvement or _origin == "self_evolution"
+                # Build DAG and persist real plan
+                await _persist_plan(feature_id, slug, title, llm_spec, plan_used_ids, task_desc)
+                _log.info("architect_completed_bg", feature_id=feature_id, waves=len(llm_spec.get("waves", [])))
+            except Exception as e:
+                _log.error("architect_failed_bg", feature_id=feature_id, error=str(e)[:200])
+                with get_db() as db:
+                    feat = db.query(Feature).filter_by(id=feature_id).first()
+                    if feat: feat.status = "ARCHITECT_FAILED"
+
+        _asyncio.create_task(_background_plan())
+        return {"feature_id": feature_id, "slug": slug, "status": "planning", "immediate": True}
+
+    # ── Synchronous mode (has_waves or explicit) ──
+    context = {} if has_waves else await _warm_context(spec, "planning", target_repo_root)
     architect_generated = False
 
-    # ── Context pre-warming ──────────────────────────────────────────────
-    # Skip expensive context collection when explicit waves are provided;
-    # the caller already knows the scope and architecture.
-    context = {} if has_waves else await _warm_context(spec, "planning", target_repo_root)
-
-    # ── LLM path: business-TZ → generate waves/packets ───────────────────
     if not has_waves and not os.environ.get("GRACE_CONTEXT_DISABLED"):
         task_desc = spec.get("description", "") or title
-        _origin = spec.get("origin", "")
-        _session_id = spec.get("session_id", "")
-        _self_improvement = spec.get("self_improvement", False)
         try:
             spec = await _call_architect_llm(task_desc, context, slug,
                 self_improvement=_self_improvement or _origin == "self_evolution",
@@ -83,115 +128,18 @@ async def create_plan(request: dict) -> dict:
             spec["session_id"] = _session_id
             spec["self_improvement"] = _self_improvement or _origin == "self_evolution"
             architect_generated = True
-            _log.info("architect_generated", slug=slug,
-                waves=len(spec.get("waves", [])))
+            _log.info("architect_generated", slug=slug, waves=len(spec.get("waves", [])))
         except Exception as e:
             _log.error("architect_failed", slug=slug, error=str(e)[:200])
             from fastapi import HTTPException
-            raise HTTPException(status_code=500,
-                detail=f"Architect LLM failed to generate plan: {str(e)[:200]}")
+            raise HTTPException(status_code=500, detail=f"Architect LLM failed to generate plan: {str(e)[:200]}")
 
-    # ── Generate UIDs and build DAG ──────────────────────────────────────
-    dag_packets = []
-    action_to_id: dict[str, str] = {}
-    planned_waves = []
     plan_used_ids: set[str] = set()
-
     with get_db() as db:
         feature_id = generate_unique_id(db, Feature, new_feature_uid, reserved=plan_used_ids)
     plan_used_ids.add(feature_id)
 
-    for i, wave_spec in enumerate(spec.get("waves", []), 1):
-        with get_db() as db:
-            wave_id = generate_unique_id(db, Wave, new_wave_uid, reserved=plan_used_ids)
-        plan_used_ids.add(wave_id)
-        wave_entry = {"id": wave_id, "spec": wave_spec, "order": i, "packet_ids": []}
-        for j, pkt_spec in enumerate(wave_spec.get("packets", []), 1):
-            with get_db() as db:
-                pkt_id = generate_unique_id(db, Packet, new_packet_uid, reserved=plan_used_ids)
-            plan_used_ids.add(pkt_id)
-            action = _extract_action(pkt_spec["title"])
-            action_to_id[action] = pkt_id
-            dag_packets.append({
-                "id": pkt_id,
-                "depends_on": pkt_spec.get("depends_on", []),
-                "scope": pkt_spec.get("scope", []),
-                "wave_id": wave_id, "order": j,
-            })
-            wave_entry["packet_ids"].append(pkt_id)
-        planned_waves.append(wave_entry)
-
-    for dp in dag_packets:
-        resolved = []
-        for dep in dp["depends_on"]:
-            resolved.append(action_to_id.get(dep, dep))
-        dp["depends_on"] = resolved
-
-    dag_result = validate_dag(dag_packets)
-    if not dag_result.valid:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=422, detail={
-            "errors": dag_result.errors,
-            "cycles": dag_result.cycles,
-            "conflicts": [[c.packet_a, c.packet_b, c.overlapping_files] for c in dag_result.conflicts],
-        })
-
-    # ── Persist ──────────────────────────────────────────────────────────
-    packets_created = []
-    packet_summaries = []
-    with get_db() as db:
-        db.add(Feature(
-            id=feature_id, slug=slug, title=title,
-            description=spec.get("description", ""),
-            spec_json=spec, status="NOT_STARTED",
-        ))
-
-        for wave_entry in planned_waves:
-            wave_spec = wave_entry["spec"]
-            wave_id = wave_entry["id"]
-            wave_slug = _slugify(wave_spec["title"])
-
-            db.add(Wave(
-                id=wave_id, feature_id=feature_id, slug=wave_slug,
-                title=wave_spec["title"],
-                description=wave_spec.get("description", ""),
-                order=wave_entry["order"], status="NOT_STARTED",
-            ))
-
-            is_first_wave = (wave_entry["order"] == 1)
-            pkt_tuples = list(zip(wave_entry["packet_ids"], wave_spec.get("packets", [])))
-            for pkt_id, pkt_spec in pkt_tuples:
-                pkt_slug = _slugify(pkt_spec["title"])
-                target_state = PacketState.READY.value if is_first_wave else PacketState.DRAFT.value
-                enriched_spec = dict(pkt_spec)
-                enriched_spec["_context"] = context
-
-                root_verification = spec.get("verification", [])
-                root_constraints = spec.get("constraints", {})
-                enriched_spec.setdefault("verification", root_verification)
-                enriched_spec.setdefault("frozen_scope",
-                    root_constraints.get("frozen_scope", ["docs/archived/legacy_prefect_grace/"]))
-
-                if spec.get("self_improvement") or spec.get("origin") == "self_evolution":
-                    enriched_spec.setdefault("origin", spec.get("origin", "self_evolution"))
-                    enriched_spec.setdefault("session_id", spec.get("session_id", ""))
-                    enriched_spec["self_improvement"] = True
-                    enriched_spec["affected_subsystem"] = pkt_spec.get("affected_subsystem", "core")
-                    enriched_spec["risk_level"] = pkt_spec.get("risk_level", "medium")
-
-                db.add(Packet(
-                    id=pkt_id, feature_id=feature_id, wave_id=wave_id,
-                    slug=pkt_slug, title=pkt_spec["title"],
-                    description=pkt_spec.get("description", ""),
-                    spec_json=enriched_spec,
-                    state=target_state,
-                    acceptance_profile=pkt_spec.get("acceptance_profile", "NORMAL"),
-                ))
-                packets_created.append(pkt_id)
-                packet_summaries.append({
-                    "id": pkt_id, "slug": pkt_slug,
-                    "title": pkt_spec["title"], "wave_id": wave_id,
-                })
+    await _persist_plan(feature_id, slug, title, spec, plan_used_ids, spec.get("description", "") or title)
 
     return {
         "data": {
@@ -208,6 +156,77 @@ async def create_plan(request: dict) -> dict:
         },
         "timestamp": datetime.now(UTC).isoformat() + "Z",
     }
+
+
+async def _persist_plan(feature_id: str, slug: str, title: str, spec: dict, plan_used_ids: set, task_desc: str) -> dict:
+    """Build DAG and persist Feature/Waves/Packets to DB."""
+    from grace_control.db.schema import Wave as _Wave, Packet as _Packet
+    from grace_control.core.uid import new_wave_uid as _nwu, new_packet_uid as _npu
+    from grace_control.core.acceptance_pipeline import generate_commands as _gen_cmds
+    from grace_control.core.gate_resolver import enrich_packet as _enrich_pkt
+    from grace_control.services.merge_service import validate_dag as _validate_dag
+
+    dag_packets = []
+    action_to_id: dict[str, str] = {}
+    planned_waves = []
+
+    for i, wave_spec in enumerate(spec.get("waves", []), 1):
+        with get_db() as db:
+            wave_id = generate_unique_id(db, _Wave, _nwu, reserved=plan_used_ids)
+        plan_used_ids.add(wave_id)
+        wave_entry = {"id": wave_id, "spec": wave_spec, "order": i, "packet_ids": []}
+        for j, pkt_spec in enumerate(wave_spec.get("packets", []), 1):
+            with get_db() as db:
+                pkt_id = generate_unique_id(db, _Packet, _npu, reserved=plan_used_ids)
+            plan_used_ids.add(pkt_id)
+            action = _extract_action(pkt_spec["title"])
+            action_to_id[action] = pkt_id
+            dag_packets.append({"id": pkt_id, "depends_on": pkt_spec.get("depends_on", []), "scope": pkt_spec.get("scope", []), "wave_id": wave_id, "order": j})
+            wave_entry["packet_ids"].append(pkt_id)
+        planned_waves.append(wave_entry)
+
+    for dp in dag_packets:
+        dp["depends_on"] = [action_to_id.get(d, d) for d in dp["depends_on"]]
+
+    with get_db() as db:
+        packets_created = []
+        packet_summaries = []
+        db.query(_Packet).filter_by(feature_id=feature_id).delete()
+        db.query(_Wave).filter_by(feature_id=feature_id).delete()
+        feat = db.query(Feature).filter_by(id=feature_id).first()
+        if feat:
+            feat.status = "NOT_STARTED"
+            feat.spec_json = spec
+        for wave_entry in planned_waves:
+            wave_spec = wave_entry["spec"]
+            wave_id = wave_entry["id"]
+            wave_slug = _slugify(wave_spec["title"])
+            db.add(_Wave(id=wave_id, feature_id=feature_id, slug=wave_slug, title=wave_spec["title"],
+                        description=wave_spec.get("description", ""), order=wave_entry["order"], status="NOT_STARTED"))
+            for j, pkt_spec in enumerate(wave_spec.get("packets", []), 1):
+                pkt_id = action_to_id.get(_extract_action(pkt_spec["title"]))
+                if not pkt_id: continue
+                pkt_slug = _slugify(pkt_spec["title"])
+                is_first_wave = wave_entry["order"] == 1
+                target_state = "ready" if is_first_wave else "draft"
+                dep_ids = [action_to_id.get(d, d) for d in pkt_spec.get("depends_on", [])]
+                enriched_spec = _enrich_pkt(pkt_spec, dep_ids)
+                root_verification = spec.get("verification", [])
+                root_constraints = spec.get("constraints", {})
+                enriched_spec.setdefault("verification", root_verification)
+                enriched_spec.setdefault("frozen_scope", root_constraints.get("frozen_scope", ["docs/archived/legacy_prefect_grace/"]))
+                if spec.get("self_improvement") or spec.get("origin") == "self_evolution":
+                    enriched_spec.setdefault("origin", spec.get("origin", "self_evolution"))
+                    enriched_spec.setdefault("session_id", spec.get("session_id", ""))
+                    enriched_spec["self_improvement"] = True
+                    enriched_spec["affected_subsystem"] = pkt_spec.get("affected_subsystem", "core")
+                    enriched_spec["risk_level"] = pkt_spec.get("risk_level", "medium")
+                db.add(_Packet(id=pkt_id, feature_id=feature_id, wave_id=wave_id, slug=pkt_slug, title=pkt_spec["title"],
+                            description=pkt_spec.get("description", ""), spec_json=enriched_spec, state=target_state,
+                            acceptance_profile=pkt_spec.get("acceptance_profile", "NORMAL")))
+                packets_created.append(pkt_id)
+                packet_summaries.append({"id": pkt_id, "slug": pkt_slug, "title": pkt_spec["title"], "wave_id": wave_id})
+    return {"packets_created": packets_created, "packet_summaries": packet_summaries, "waves_count": len(planned_waves)}
 
 
 async def _warm_context(spec: dict, feature_id: str, target_repo_root: str = "") -> dict:
