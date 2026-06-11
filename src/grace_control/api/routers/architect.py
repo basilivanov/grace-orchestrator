@@ -394,7 +394,8 @@ Respond ONLY with valid JSON (no markdown, no backticks):
 
     for attempt in range(2):
         try:
-            raw = await _run_opencode(prompt, resolve_model("architect")["model"], cwd=worktree_root)
+            cli_name = "architect-business-flash" if worktree_root else "architect-premium"
+            raw = await _run_opencode(prompt, "", cwd=worktree_root, cli=cli_name)
             plan = json.loads(raw)
             if "plan" in plan and isinstance(plan["plan"], dict) and plan["plan"].get("waves"):
                 plan["waves"] = plan["plan"]["waves"]
@@ -430,9 +431,10 @@ Respond ONLY with valid JSON (no markdown, no backticks):
     raise RuntimeError("Architect LLM failed")
 
 
-async def _run_opencode(prompt: str, model: str, cwd: str = "") -> str:
+async def _run_opencode(prompt: str, model: str, cwd: str = "", cli: str = "") -> str:
     from grace_control.core.llm_runner import run_llm
-    return await run_llm(prompt, role="architect", model=model, cli="architect-premium",
+    executor_id = cli or "architect-premium"
+    return await run_llm(prompt, role="architect", model=model, cli=executor_id,
                          cwd=Path(cwd) if cwd else None)
 
 

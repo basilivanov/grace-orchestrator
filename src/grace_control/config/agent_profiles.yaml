@@ -1,4 +1,26 @@
 agents:
+  architect-business-flash:
+    backend: cli
+    resume_mode: never
+    command:
+    - opencode
+    - run
+    - --model
+    - '{model}'
+    - --variant
+    - '{effort}'
+    - |-
+      You are a software architect planning code changes for a project.
+      Read the task and context from {packet_path}.
+      Plan small execution packets as waves (1-3 packets per wave).
+      Each packet = one atomic file change (1-3 files).
+      No two packets may share the same file.
+      Use acceptance_profile: FAST for trivial, NORMAL for standard, STRICT for risky.
+      Include allowed_files, forbidden_files, verification per packet.
+      Do NOT modify package.json, lockfiles, .env, auth, payments, subscriptions,
+      billing, database schema, migrations, or deployment config.
+      Output ONLY valid JSON (no markdown, no prose). Required fields: title, waves.
+
   architect-premium:
     backend: cli
     resume_mode: always
