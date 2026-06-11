@@ -1102,6 +1102,8 @@ class AdminAggregationService:
                     "id": p.id, "slug": p.slug, "title": p.title,
                     "state": p.state, "attempt_count": p.attempt_count,
                     "max_attempts": p.max_attempts,
+                    "created_at": _iso(p.created_at),
+                    "updated_at": _iso(p.updated_at),
                     "pipeline": pipeline,
                     "stage": pipeline["stages"][-1],
                     "started_at": started_at,

@@ -85,6 +85,10 @@ function renderTabContent(p,tab){
 }
 function renderSpecTab(p){
   const pk=p.packet||{},sm=p.state_machine||{},steps=sm.steps||[];
+  // If feature is still being planned, show a planning message
+  if(p.feature?.status==='PLANNING'){
+    return`<div style="padding:12px;text-align:center"><div style="font-size:13px;color:var(--blue);margin-bottom:6px">⏳ Architect is planning this feature</div><div style="font-size:10px;color:var(--t3)">Context collection and architect LLM are running in the background.<br>Waves and packets will appear once planning completes.</div></div>`;
+  }
   const rows=[['ID',p.id],['Title',p.title],['State',p.state],['Profile',pk.acceptance_profile||p.acceptance_profile||'—'],['Attempts',`${p.attempt_count||0} / ${p.max_attempts||0}`],['Created',fmtDate(p.created_at)],['Updated',fmtDate(p.updated_at)]];
   let html='<div class="spec-grid">'+rows.map(r=>`<span class="sk">${r[0]}</span><span class="sv">${r[1]}</span>`).join('')+'</div>';
   if(steps.length){html+='<div style="margin-top:8px;font-size:10px;font-weight:700;color:var(--t3);margin-bottom:4px">State Machine</div><div style="display:flex;gap:5px;flex-wrap:wrap">'+steps.map(s=>{const c=s.state==='done'?'var(--green)':s.state==='running'?'var(--blue)':'var(--t3)';return`<div style="background:var(--bg1);border:1px solid var(--bd);border-radius:4px;padding:4px 7px;min-width:70px"><div style="font-size:9px;font-weight:700;color:${c};text-transform:uppercase">${esc(s.label)}</div><div style="font-size:8px;color:var(--t3)">${fmtTime(s.time)}</div>${s.meta?`<div style="font-size:8px;color:var(--t2)">${esc(s.meta)}</div>`:''}</div>`;}).join('')+'</div>';}

@@ -83,9 +83,9 @@ async def create_plan(request: dict) -> dict:
             db.add(Feature(id=feature_id, slug=slug, title=title, description=task_desc[:500],
                            spec_json={"title": title, "description": task_desc, "origin": _origin},
                            status="PLANNING"))
-            db.add(_Wave(id=wave_id, feature_id=feature_id, slug=_slugify(title+"-wave"), title="Initial planning", order=1, status="PENDING"))
-            db.add(_Packet(id=pkt_id, feature_id=feature_id, wave_id=wave_id, slug="initial-planning", title="Architect planning",
-                          state="draft", acceptance_profile="FAST", spec_json={"scope": []}))
+            db.add(_Wave(id=wave_id, feature_id=feature_id, slug=_slugify(title+"-wave"), title="Planning", order=1, status="PENDING"))
+            db.add(_Packet(id=pkt_id, feature_id=feature_id, wave_id=wave_id, slug="initial-planning", title="Initializing feature",
+                          state="ready", acceptance_profile="FAST", spec_json={"scope": []}))
         _log.info("feature_created_immediate", feature_id=feature_id, title=title, wave_id=wave_id, pkt_id=pkt_id)
 
         # ── Background: full architect plan ──
