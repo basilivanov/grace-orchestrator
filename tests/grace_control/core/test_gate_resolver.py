@@ -217,23 +217,25 @@ def test_t0_changed_files_excludes_noise(tmp_path):
 
 
 def test_t0_changed_files_canon_yaml_glob_exclude(tmp_path):
-    """canon.yaml exclude supports glob patterns like components/ui/**/*.tsx."""
+    """canon.yaml glob excludes paths NOT already hardcoded: generated/**/*.ts."""
     wt = _make_worktree(tmp_path, scripts={
         "grace_front_lint.py": "print('ok')",
     })
     canon_dir = tmp_path / "grace"
     canon_dir.mkdir()
     (canon_dir / "canon.yaml").write_text(
-        "gate_mode: changed-files\nexclude:\n  - 'components/ui/**/*.tsx'\n"
+        "gate_mode: changed-files\nexclude:\n  - 'generated/**/*.ts'\n"
     )
     cmds, origins = resolve_default_t0([
-        "components/ui/Button.tsx",  # excluded by glob
-        "components/today/tab-bar.tsx",  # not excluded
+        "generated/api/types.ts",     # excluded by canon.yaml glob
+        "src/handlers/controller.ts",  # not excluded
     ], wt)
     grace_calls = [c for c in cmds if "grace_front_lint.py" in " ".join(c)]
     call_args = " ".join(" ".join(c) for c in grace_calls)
-    assert "components/today/tab-bar.tsx" in call_args
-    assert "Button.tsx" not in call_args, f"glob-excluded file should be excluded: {call_args}"
+    assert "src/handlers/controller.ts" in call_args
+    assert "generated/api/types.ts" not in call_args, (
+        f"glob-excluded file should be filtered out via canon.yaml: {call_args}"
+    )
 
 
 def test_t0_changed_files_all_excluded_no_commands(tmp_path):

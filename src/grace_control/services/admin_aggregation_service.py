@@ -328,112 +328,57 @@ class AdminAggregationService:
         """Derive the GRACE operator pipeline view from real data.
 
         Stages (in order):
-          1. Materialized       — packet.created_at
-          2. Executor selected  — last_run.executor_id
-          3. Coder run          — last_run (started_at → finished_at, or running)
-          4. T0 scope/lint      — evidence.stages (T0_SCOPE_AND_LINT)
-          5. T1 tests           — evidence.stages (T1_UNIT_TESTS)
-          6. T2 smoke/e2e       — evidence.stages (T2_E2E_OR_SMOKE)
-          7. Evidence verifier  — STRICT profile / verifier_decision events
-          8. Reviewer gate      — release:rejected/accepted events
-          9. Merge / finish     — final packet state
-
-        Each stage has: key, label, status (done/running/failed/skipped/pending),
-        started_at, finished_at, duration_ms, meta (role/component),
-        target_tab (which tab to open for inspection).
+          1. Architect          — planning
+          2. Context Builder    — context collection
+          3. Materialize        — packet.created_at
+          4. Executor           — last_run.executor_id
+          5. Coder              — last_run
+          6. T0 scope/lint      — evidence.stages
+          7. T1 tests           — evidence.stages
+          8. T2 smoke/e2e       — evidence.stages
+          9. Verifier           — STRICT profile / verifier events
+          10. Reviewer          — release:rejected/accepted events
+          11. Merge             — final packet state
         """
         created_at = _iso(p.created_at)
+        updated_at = _iso(p.updated_at)
         last_run = runs[-1] if runs else None
+        run_started = _iso(last_run.started_at) if last_run else None
+        has_run = last_run is not None
+        state = (p.state or "draft").lower()
 
-        # Load all events for this packet (used for reviewer gate, verifier,
-        # coder-run boundaries, etc.)
-        events = (
-            db.query(Event)
-            .filter(Event.entity_id == p.id)
-            .order_by(Event.timestamp.asc())
-            .all()
-        )
+        events = db.query(Event).filter(Event.entity_id == p.id).order_by(Event.timestamp.asc()).all()
 
-        # 1. Materialized
-        materialized = {
-            "key": "materialized",
-            "label": "Materialized",
-            "status": "done",
-            "started_at": created_at,
-            "finished_at": created_at,
-            "duration_ms": 0,
-            "meta": p.slug or "",
-            "target_tab": "spec",
-        }
-
-        # 2. Executor selected
+        # 1. Architect
+        architect_s = {"key": "architect", "label": "Architect", "status": "done", "started_at": created_at, "finished_at": created_at, "duration_ms": 0, "meta": "", "target_tab": "spec"}
+        # 2. Context Builder
+        ctx_s = {"key": "context_builder", "label": "Context Builder", "status": "done" if has_run else "pending", "started_at": created_at, "finished_at": run_started or created_at, "duration_ms": 0, "meta": "", "target_tab": "spec"}
+        # 3. Materialized
+        mat_s = {"key": "materialized", "label": "Materialize", "status": "done", "started_at": created_at, "finished_at": created_at, "duration_ms": 0, "meta": p.slug or "", "target_tab": "spec"}
+        # 4. Executor
         if last_run and last_run.executor_id:
-            executor_stage = {
-                "key": "executor",
-                "label": "Executor selected",
-                "status": "done",
-                "started_at": _iso(last_run.started_at),
-                "finished_at": _iso(last_run.started_at),
-                "duration_ms": 0,
-                "meta": last_run.executor_id,
-                "target_tab": "attempts",
-            }
+            exec_s = {"key": "executor", "label": "Executor", "status": "done", "started_at": run_started, "finished_at": run_started, "duration_ms": 0, "meta": last_run.executor_id, "target_tab": "runs"}
         else:
-            # derive from first packet_claimed event
-            first_claim = next(
-                (e for e in events if e.event_type == "packet_claimed"), None
-            )
-            if first_claim and first_claim.payload_json:
-                executor = (first_claim.payload_json or {}).get("executor_id", "") or "executor"
-            else:
-                executor = ""
-            executor_stage = {
-                "key": "executor",
-                "label": "Executor selected",
-                "status": "done" if executor else "skipped",
-                "started_at": _iso(first_claim.timestamp) if first_claim else None,
-                "finished_at": _iso(first_claim.timestamp) if first_claim else None,
-                "duration_ms": 0,
-                "meta": executor,
-                "target_tab": "attempts",
-            }
-
-        # 3. Coder run — last attempt, derive from claim → next transition
-        coder_run_stage = self._stage_coder_run(events, last_run, p)
-
-        # 4-6. T0/T1/T2 — from evidence (if any) or "not in profile"
+            first_claim = next((e for e in events if e.event_type == "packet_claimed"), None)
+            executor = (first_claim.payload_json or {}).get("executor_id", "") if first_claim and first_claim.payload_json else ""
+            exec_s = {"key": "executor", "label": "Executor", "status": "done" if executor else "skipped", "started_at": _iso(first_claim.timestamp) if first_claim else None, "finished_at": _iso(first_claim.timestamp) if first_claim else None, "duration_ms": 0, "meta": executor, "target_tab": "runs"}
+        # 5. Coder
+        coder_s = self._stage_coder_run(events, last_run, p)
+        coder_s["target_tab"] = "runs"
+        # 6-8. T0/T1/T2
         evidence = self.get_packet_evidence(db, p.id, run_id=str(last_run.run_number)) if last_run else {"stages": []}
         ev_stages = {st.get("name", "").upper(): st for st in (evidence.get("stages") or [])}
-        acceptance_profile = p.acceptance_profile or "NORMAL"
-        t_stages = self._stage_acceptance(ev_stages, acceptance_profile)
+        t_stages = self._stage_acceptance(ev_stages, p.acceptance_profile or "NORMAL")
+        # 9. Verifier
+        verifier_s = self._stage_verifier(events, last_run, p.acceptance_profile or "NORMAL", p)
+        # 10. Reviewer
+        reviewer_s = self._stage_reviewer(events, last_run, p)
+        # 11. Merge
+        merge_s = self._stage_merge(events, last_run, p)
 
-        # 7. Evidence verifier
-        verifier_stage = self._stage_verifier(events, last_run, acceptance_profile, p)
+        stages = [architect_s, ctx_s, mat_s, exec_s, coder_s] + t_stages + [verifier_s, reviewer_s, merge_s]
 
-        # 8. Reviewer gate
-        reviewer_stage = self._stage_reviewer(events, last_run, p)
-
-        # 9. Merge / finish
-        merge_stage = self._stage_merge(events, last_run, p)
-
-        stages = [
-            materialized,
-            executor_stage,
-            coder_run_stage,
-            *t_stages,
-            verifier_stage,
-            reviewer_stage,
-            merge_stage,
-        ]
-
-        return {
-            "stages": stages,
-            "has_started": coder_run_stage["status"] != "pending",
-            "has_acceptance_data": any(
-                s["status"] in ("done", "failed", "running") for s in t_stages
-            ),
-            "has_reviewer": reviewer_stage["status"] in ("done", "failed", "running"),
-        }
+        return {"stages": stages, "has_started": coder_s["status"] != "pending", "has_acceptance_data": any(s["status"] in ("done", "failed", "running") for s in t_stages), "has_reviewer": reviewer_s["status"] in ("done", "failed", "running")}
 
     def _stage_coder_run(
         self,
@@ -457,7 +402,7 @@ class AdminAggregationService:
                 "finished_at": None,
                 "duration_ms": 0,
                 "meta": "",
-                "target_tab": "attempts",
+                "target_tab": "runs",
             }
         claim_ev = events[last_claim_idx]
         # Find next transition event (coder finished, going to ready/release/etc.)
@@ -505,7 +450,7 @@ class AdminAggregationService:
             "finished_at": finished_at,
             "duration_ms": duration_ms,
             "meta": meta,
-            "target_tab": "attempts",
+            "target_tab": "runs",
         }
 
     def _stage_acceptance(
@@ -688,7 +633,7 @@ class AdminAggregationService:
                 "finished_at": _iso(p.updated_at),
                 "duration_ms": 0,
                 "meta": p.state,
-                "target_tab": "attempts",
+                "target_tab": "runs",
             }
         if p.state in ("rejected", "failed"):
             return {
@@ -1138,7 +1083,7 @@ class AdminAggregationService:
                     .order_by(PacketRun.run_number.desc())
                     .first()
                 )
-                stage = self._derive_packet_stage(p, last_run)
+                pipeline = self._derive_simple_pipeline(p, last_run)
                 started_at = (
                     _iso(last_run.started_at)
                     if last_run and last_run.started_at else None
@@ -1151,7 +1096,8 @@ class AdminAggregationService:
                     "id": p.id, "slug": p.slug, "title": p.title,
                     "state": p.state, "attempt_count": p.attempt_count,
                     "max_attempts": p.max_attempts,
-                    "stage": stage,
+                    "pipeline": pipeline,
+                    "stage": pipeline["stages"][-1],
                     "started_at": started_at,
                     "duration_seconds": duration_seconds,
                     "size_bytes": self._size_calc.packet_runs_size(p.id),
@@ -1196,6 +1142,55 @@ class AdminAggregationService:
             })
         return {"features": out}
 
+    def _derive_simple_pipeline(
+        self, p: Packet, last_run: PacketRun | None
+    ) -> dict[str, Any]:
+        """Derive an 11-stage pipeline preview from packet + last_run alone.
+
+        Stages: Architect → Context Builder → Materialize → Executor →
+        Coder → T0 → T1 → T2 → Verifier → Reviewer → Merge.
+
+        Cheap — no events/evidence queries.
+        """
+        state = (p.state or "draft").lower()
+        profile = p.acceptance_profile or "NORMAL"
+        created_iso = _iso(p.created_at)
+        updated_iso = _iso(p.updated_at)
+        run_started = _iso(last_run.started_at) if last_run else None
+        run_finished = _iso(last_run.finished_at) if last_run else None
+        run_duration = last_run.duration_ms if last_run else 0
+        run_status = (last_run.status or "").lower() if last_run else ""
+        executor = (last_run.executor_id or "") if last_run else ""
+        has_run = last_run is not None
+        stages: list[dict[str, Any]] = []
+        stages.append({"key": "architect", "label": "Architect", "status": "done", "started_at": created_iso, "finished_at": created_iso, "duration_ms": 0, "meta": "", "target_tab": "spec"})
+        stages.append({"key": "context_builder", "label": "Context Builder", "status": "done" if has_run else "pending", "started_at": created_iso, "finished_at": run_started or created_iso, "duration_ms": 0, "meta": "", "target_tab": "spec"})
+        stages.append({"key": "materialized", "label": "Materialize", "status": "done", "started_at": created_iso, "finished_at": created_iso, "duration_ms": 0, "meta": p.slug or "", "target_tab": "spec"})
+        stages.append({"key": "executor", "label": "Executor", "status": "done" if executor else "skipped", "started_at": run_started, "finished_at": run_started, "duration_ms": 0, "meta": executor or "", "target_tab": "runs"})
+        if not has_run:
+            coder_status = "pending"
+        elif run_status == "running" or state == "running":
+            coder_status = "running"
+        elif state in ("rejected", "failed", "blocked", "blocked_recoverable", "blocked_final"):
+            coder_status = "failed"
+        elif run_status in ("accepted", "completed") or state in ("accepted", "merged"):
+            coder_status = "done"
+        else:
+            coder_status = "pending"
+        stages.append({"key": "coder_run", "label": "Coder", "status": coder_status, "started_at": run_started, "finished_at": run_finished, "duration_ms": run_duration if coder_status in ("done", "failed", "running") else 0, "meta": (last_run.worker_id or "") if last_run else "", "target_tab": "runs"})
+        for k, lbl in [("t0", "T0 Lint"), ("t1", "T1 Tests"), ("t2", "T2 E2E")]:
+            stages.append({"key": k, "label": lbl, "status": "skipped" if profile in ("FAST", "NORMAL") else "pending", "started_at": None, "finished_at": None, "duration_ms": 0, "meta": "", "target_tab": "evidence"})
+        if profile == "STRICT":
+            v_status = "running" if state == "running" else ("done" if state in ("accepted", "merged") else "pending")
+            stages.append({"key": "verifier", "label": "Verifier", "status": v_status, "started_at": None, "finished_at": None, "duration_ms": 0, "meta": "STRICT profile active", "target_tab": "evidence"})
+        else:
+            stages.append({"key": "verifier", "label": "Verifier", "status": "skipped", "started_at": None, "finished_at": None, "duration_ms": 0, "meta": "", "target_tab": "evidence"})
+        r_status = "done" if state in ("merged", "accepted") else ("failed" if state in ("rejected", "failed", "blocked", "blocked_recoverable", "blocked_final") else "pending")
+        stages.append({"key": "reviewer", "label": "Reviewer", "status": r_status, "started_at": run_finished, "finished_at": run_finished, "duration_ms": 0, "meta": "", "target_tab": "events"})
+        m_status = "done" if state in ("merged", "accepted") else ("skipped" if state in ("rejected", "failed", "blocked", "blocked_recoverable", "blocked_final") else "pending")
+        stages.append({"key": "merge", "label": "Merge", "status": m_status, "started_at": updated_iso if m_status == "done" else None, "finished_at": updated_iso if m_status == "done" else None, "duration_ms": 0, "meta": p.state if m_status == "done" else "", "target_tab": "events"})
+        return {"stages": stages, "has_started": has_run, "has_acceptance_data": False, "has_reviewer": r_status in ("done", "failed", "running")}
+
     def _derive_packet_stage(
         self, p: Packet, last_run: PacketRun | None
     ) -> dict[str, str]:
@@ -1204,15 +1199,6 @@ class AdminAggregationService:
         Returns a small dict with `label` (human stage name) and
         `key` (machine name). Used by the timeline and wave details
         to show "what stage is this packet at" without tooltips.
-
-        Heuristic (cheap; avoids the full _derive_pipeline call per packet):
-          - no run, draft/ready:        "Materialized"
-          - last_run.status == running: "Coder run"
-          - last_run.status == accepted
-            or state in accepted/merged:"Merge"
-          - last_run.status in rejected/failed
-            or state in rejected/failed/blocked: "Reviewer gate"
-          - default (no run, running):  "Coder run"
         """
         state = (p.state or "draft").lower()
         run_status = (last_run.status if last_run else "").lower() if last_run else ""
