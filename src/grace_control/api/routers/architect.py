@@ -66,26 +66,15 @@ async def create_plan(request: dict) -> dict:
     _self_improvement = spec.get("self_improvement", False)
 
     if not has_waves and is_async:
-        # ── Immediate mode: create feature + placeholder wave/packet, return fast ──
+        # ── Immediate mode: create feature, return fast, plan in background ──
         task_desc = spec.get("description", "") or title
-        from grace_control.db.schema import Wave as _Wave, Packet as _Packet
-        from grace_control.core.uid import new_feature_uid as _nfu, new_wave_uid as _nwu, new_packet_uid as _npu
         plan_used_ids: set[str] = set()
         with get_db() as db:
             feature_id = generate_unique_id(db, Feature, new_feature_uid, reserved=plan_used_ids)
-        plan_used_ids.add(feature_id)
-        with get_db() as db:
-            wave_id = generate_unique_id(db, _Wave, _nwu, reserved=plan_used_ids)
-        plan_used_ids.add(wave_id)
-        with get_db() as db:
-            pkt_id = generate_unique_id(db, _Packet, _npu, reserved=plan_used_ids)
         with get_db() as db:
             db.add(Feature(id=feature_id, slug=slug, title=title, description=task_desc[:500],
                            spec_json={"title": title, "description": task_desc, "origin": _origin},
                            status="PLANNING"))
-            db.add(_Wave(id=wave_id, feature_id=feature_id, slug=_slugify(title+"-wave"), title="Planning", order=1, status="PENDING"))
-            db.add(_Packet(id=pkt_id, feature_id=feature_id, wave_id=wave_id, slug="planning-pkt", title="Architect planning",
-                          state="draft", acceptance_profile="FAST", spec_json={"scope": []}))
         _log.info("feature_created_immediate", feature_id=feature_id, title=title)
 
         # ── Background: full architect plan ──
