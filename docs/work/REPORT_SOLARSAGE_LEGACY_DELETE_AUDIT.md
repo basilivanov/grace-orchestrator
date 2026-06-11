@@ -1,13 +1,13 @@
 # Report: Solar Sage legacy delete audit
 
-**Status:** PASS — safe to delete
+**Status:** PASS — legacy physically removed
 **Date:** 2026-06-11
 
 ## Solar Sage base SHA
 - `4372503`
 
-## Final SHA (after deletion)
-- `a211e86` (branch `chore/remove-legacy-snapshot`)
+## Final SHA (after merge to main)
+- `a211e86`
 
 ## Files deleted from `legacy/`
 **189 files** removed, including:
