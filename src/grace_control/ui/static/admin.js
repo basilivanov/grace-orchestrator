@@ -109,23 +109,50 @@ function renderRunsTab(p){
 function runDetailRow(p,r){
   const key=p.id+'.r'+r.run_number;if(state.tabData[key]===undefined)return'';
   const data=state.tabData[key];if(!data)return'<tr><td colspan="5"><div class="empty">No data</div></td></tr>';
-  const rj=data.result_json||{},leg=rj.legacy_result||{},prompt=data.prompt||rj.prompt||leg.prompt||'',stderr=leg.stderr||'',stdout=leg.stdout||'';
+  const rj=data.result_json||{},leg=rj.legacy_result||{},prompt=data.prompt||rj.prompt||leg.prompt||'';
+  const stderr=state.liveLogs?.[key]?.stderr??leg.stderr||'';
+  const stdout=state.liveLogs?.[key]?.stdout??leg.stdout||'';
   const cmd=data.command_preview||rj.command_preview||[];
   const acc=rj.acceptance_report||{};const stages=acc.stages||[];
   const exitCodes=[];stages.forEach(s=>(s.commands||[]).forEach(c=>{if(c.exit_code!==undefined)exitCodes.push(c.exit_code);}));
   const finalExit=leg.exit_code!==undefined?leg.exit_code:(exitCodes.length?Math.max(...exitCodes):null);
+  const isLive=r.is_running||false;
   let h='<td colspan="5"><div style="padding:4px;display:flex;flex-direction:column;gap:3px">';
+  if(isLive)h+=`<div style="display:flex;gap:4px;align-items:center;margin-bottom:2px"><span style="color:var(--red);font-size:8px">🔴</span><span style="color:var(--red);font-size:9px;font-weight:700">LIVE</span><span style="font-size:9px;color:var(--t3)">Agent is running — logs update every 2s</span></div>`;
   if(finalExit!==null)h+=`<div style="font-size:11px;color:var(--t3);margin-bottom:4px">Exit code: <span style="color:${finalExit===0?'var(--green)':'var(--red)'};font-weight:700;font-size:13px">${finalExit}${finalExit===0?' ✓':' ✗'}</span></div>`;
   if(cmd.length){const c=Array.isArray(cmd)?cmd.join(' '):String(cmd);h+=`<div style="font-size:11px;color:var(--t3);margin-bottom:4px">Command: <span style="color:var(--green);font-family:var(--mono);font-size:11px">${esc(c)}</span></div>`;}
   if(prompt)h+=`<details><summary style="font-size:11px;color:var(--blue);cursor:pointer;margin-bottom:2px">Prompt (${prompt.length} chars)</summary><div style="background:var(--bg1);border:1px solid var(--bd);border-radius:4px;padding:6px;margin-top:2px;font-family:var(--mono);font-size:11px;color:var(--t2);white-space:pre-wrap;max-height:250px;overflow-y:auto">${esc(prompt)}</div></details>`;
-  if(stderr)h+=`<details><summary style="font-size:11px;color:var(--red);cursor:pointer;margin-bottom:2px">Stderr</summary><div style="background:var(--bg1);border:1px solid var(--bd);border-radius:4px;padding:6px;margin-top:2px;font-family:var(--mono);font-size:11px;color:var(--red);white-space:pre-wrap;max-height:250px;overflow-y:auto">${esc(stderr.slice(0,3000))}</div></details>`;
-  if(stdout)h+=`<details><summary style="font-size:11px;color:var(--green);cursor:pointer;margin-bottom:2px">Stdout</summary><div style="background:var(--bg1);border:1px solid var(--bd);border-radius:4px;padding:6px;margin-top:2px;font-family:var(--mono);font-size:11px;color:var(--t2);white-space:pre-wrap;max-height:250px;overflow-y:auto">${esc(stdout.slice(0,3000))}</div></details>`;
+  if(stderr)h+=`<details${isLive?' open':''}><summary style="font-size:11px;color:var(--red);cursor:pointer;margin-bottom:2px">${isLive?'🔴 ':'Stderr'}Stderr${isLive?` <span style="font-weight:400;font-size:9px">(${stderr.split('\\n').length||0} lines)</span>`:''}</summary><div class="logs" style="max-height:350px;background:var(--bg0);border-color:var(--red)">${esc(stderr.slice(-5000))}</div></details>`;
+  if(stdout)h+=`<details${isLive?' open':''}><summary style="font-size:11px;color:var(--green);cursor:pointer;margin-bottom:2px">${isLive?'🔴 ':'Stdout'}Stdout${isLive?` <span style="font-weight:400;font-size:9px">(${stdout.split('\\n').length||0} lines)</span>`:''}</summary><div class="logs" style="max-height:350px;background:var(--bg0);border-color:var(--green)">${esc(stdout.slice(-5000))}</div></details>`;
   if(!h.includes('details'))h+='<div class="empty" style="padding:10px">No data</div>';h+='</div></td>';return'<tr>'+h+'</tr>';
 }
 async function runExpand(id,num,suffix){
-  const key=id+'.r'+num;if(state.tabData[key]){delete state.tabData[key];const p=getPkt(id);if(p)updateCont(id);return;}
+  const key=id+'.r'+num;
+  if(state.tabData[key]){delete state.tabData[key];stopLiveLog(key);const p=getPkt(id);if(p)updateCont(id);return;}
   state.tabData[key]=undefined;const p=getPkt(id);if(p)updateCont(id);
-  try{const r=await fetch(apiUrl(`/api/admin/packet/${id}/runs/${suffix}`));state.tabData[key]=await r.json();}catch{state.tabData[key]=null;}if(p)updateCont(id);
+  try{const r=await fetch(apiUrl(`/api/admin/packet/${id}/runs/${suffix}`));state.tabData[key]=await r.json();
+    // If run is running, start live log polling
+    const runData=state.tabData[key];
+    if(runData&&runData.run&&runData.run.is_running){
+      if(!state.liveLogs)state.liveLogs={};
+      if(!state.liveTimers)state.liveTimers={};
+      state.liveLogs[key]=state.liveLogs[key]||{stderr:'',stdout:''};
+      if(state.liveTimers[key])clearInterval(state.liveTimers[key]);
+      state.liveTimers[key]=setInterval(async()=>{
+        try{
+          const pkt=getPkt(id);if(!pkt)return;
+          const rs=await fetch(apiUrl(`/api/admin/packet/${id}/runs/${suffix}/logs?stream=stderr&tail=200`));
+          const rd=await rs.json();if(state.liveLogs)state.liveLogs[key]={stderr:(rd.lines||[]).join('\\n'),stdout:state.liveLogs[key]?.stdout||''};
+          const os=await fetch(apiUrl(`/api/admin/packet/${id}/runs/${suffix}/logs?stream=stdout&tail=200`));
+          const od=await os.json();if(state.liveLogs)state.liveLogs[key]={stderr:state.liveLogs[key]?.stderr||'',stdout:(od.lines||[]).join('\\n')};
+          const p2=getPkt(id);if(p2)updateCont(id);
+        }catch(e){/* ignore */}
+      },2000);
+    }
+  }catch{state.tabData[key]=null;}if(p)updateCont(id);
+}
+function stopLiveLog(key){
+  if(state.liveTimers&&state.liveTimers[key]){clearInterval(state.liveTimers[key]);delete state.liveTimers[key];}
 }
 function renderLogsTab(p){
   const ld=state.tabData[p.id]?.logs;if(ld===null)return'<div class="empty">No logs</div>';
