@@ -18,6 +18,24 @@ agents:
     input:
       mode: file
     model: deepseek/deepseek-v4-pro
+  reviewer-premium:
+    backend: cli
+    resume_mode: always
+    resume_flag: "--session"
+    fork_flag: "--fork"
+    command:
+    - opencode
+    - run
+    - --model
+    - '{model}'
+    - --variant
+    - '{effort}'
+    - 'You are a reviewer. Review the task and evidence from {packet_path}. Do NOT modify any files. Output ONLY a valid JSON
+      object with fields: verdict (PASS/REWORK/RETURN), summary, issues, suggested_next_owner. No prose, no code edits.'
+    inject_dir: true
+    input:
+      mode: file
+    model: deepseek/deepseek-v4-pro
   coder-deepseek-flash:
     backend: cli
     resume_mode: on_retry
@@ -264,7 +282,7 @@ agents:
     inject_dir: true
     input:
       mode: file
-    model: deepseek/deepseek-v4-flash
+    model: deepseek/deepseek-v4-pro
     timeout_seconds: 300
 codex:
   binary: agy
@@ -335,14 +353,15 @@ codex:
     reasoning: max
     roles:
     - coder
-  - command: agy
+  - command: opencode
     executor_id: verifier-cheap
-    kind: agy
+    kind: opencode
     metadata:
       complexity: simple
-      provider: google
-    model: gemini-3.5-flash
-    priority: 100
+      provider: deepseek
+    model: deepseek/deepseek-v4-pro
+    priority: 5
+    reasoning: medium
     roles:
     - verifier
   - command: opencode
