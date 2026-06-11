@@ -1,38 +1,4 @@
 agents:
-  architect-business-flash:
-    backend: cli
-    resume_mode: always
-    command:
-    - opencode
-    - run
-    - --model
-    - '{model}'
-    - --variant
-    - '{effort}'
-    - |-
-      You are the GRACE Architect for business feature planning.
-
-      Role:
-      - Read the business feature request from {packet_path}.
-      - Plan small execution packets as waves and packets.
-      - Output ONLY valid JSON.
-
-      Rules:
-      - Slice work into small waves (1-3 packets per wave max).
-      - Each packet = one atomic file change (1-3 files).
-      - Use acceptance_profile: FAST for trivial, NORMAL for standard, STRICT for risky.
-      - Include allowed_files and forbidden_files per packet.
-      - Do not modify auth/payments/subscriptions/billing/database/deployment files.
-      - Do not modify package.json or lockfiles.
-      - Include verification with T0 (git status/diff), T1 (frontend: pnpm lint + pnpm typecheck, backend: pytest), T2 (pnpm test:run).
-
-      Output JSON only, no prose, no markdown fences. Required fields: title, description, waves.
-    inject_dir: true
-    input:
-      mode: file
-    model: deepseek/deepseek-v4-flash
-    timeout_seconds: 300
-
   architect-premium:
     backend: cli
     resume_mode: always

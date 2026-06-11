@@ -571,7 +571,7 @@ class WaveResumeRunner:
                 "POST",
                 "/api/architect/plan",
                 body={"feature_spec": feature_spec},
-                timeout=360,
+                timeout=1200,
             )
             if "_error" in resp:
                 print(f"[runner] Business feature submission failed: {resp['_error']}")
