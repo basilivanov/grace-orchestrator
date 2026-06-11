@@ -1,10 +1,13 @@
 # Report: Solar Sage GRACE docs project normalization
 
-**Status:** PASS
+**Status:** PASS_WITH_KNOWN_DOC_GATES_BLOCKERS
 **Date:** 2026-06-11
 
 ## Solar Sage base SHA
 - `a211e86` (legacy deleted)
+
+## Solar Sage final SHA
+- `fa2b7db` (after review rework)
 
 ## Files changed
 
@@ -12,7 +15,14 @@
 |---|---|
 | `grace/README.md` | Rewritten — no W-2.x as active, current modules, legacy removal noted |
 | `grace/packets/archive/` | Created — W-2.0..W-2.8 + W-CANON-LOG + W-CHAT-INTAKE archived |
-| `docs/10_GRACE_Project_Agent_Guide.md` | Added `grace/README.md` as first read, updated contract paths, legacy removal note |
+| `docs/10_GRACE_Project_Agent_Guide.md` | last_review updated, numbering fixed, added scope/evidence, GRACE workflow section |
+| `grace/development-plan.xml` | Updated date to 2026-06-11 |
+
+## Rework fixes (after review)
+- Agent Guide: `last_review: 2026-06-11`, numbering (was 1,2,3,2,3... → fixed), added `allowed_write_scope`/`frozen_scope`, added GRACE workflow section (business feature → packet → gates → merge)
+- development-plan.xml: updated date
+- No product code changes
+- GRACE commit purged of accidental admin.css/admin.html changes
 
 ## Stale migration packets archived
 11 files moved from `grace/packets/` to `grace/packets/archive/`:
