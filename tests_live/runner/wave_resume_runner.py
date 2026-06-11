@@ -384,6 +384,13 @@ class WaveResumeRunner:
             self.report["real_agent_runs"] += 1
             start_t = time.time()
 
+            # Strip OPENCODE_* vars from subprocess env so opencode run
+            # doesn't try to attach to a non-existent server session.
+            clean_env = os.environ.copy()
+            for k in list(clean_env):
+                if k == "OPENCODE" or k.startswith("OPENCODE_"):
+                    del clean_env[k]
+
             try:
                 result = subprocess.run(
                     rendered_cmd,
@@ -391,6 +398,7 @@ class WaveResumeRunner:
                     capture_output=True,
                     text=True,
                     timeout=profile.timeout_seconds or 300,
+                    env=clean_env,
                 )
             except subprocess.TimeoutExpired:
                 elapsed_ms = int((time.time() - start_t) * 1000)
