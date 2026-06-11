@@ -115,50 +115,49 @@ async def get_packet(packet_id: str) -> dict:
 
 @router.post("/claim")
 async def claim_packet(request: dict) -> dict:
-    """Claim next READY packet. Delegates to PacketService.claim for all state work."""
+    """Claim next READY packet per FIFO queue discipline.
+
+    Delegates to QueueService for deterministic feature/wave/packet ordering.
+    Then delegates to PacketService.claim for the actual state transition.
+    """
     worker_id = request["worker_id"]
 
-    with get_db() as db:
-        ready = db.query(Packet).filter_by(state=PacketState.READY.value).all()
-        packet_ids = [p.id for p in ready]
+    from grace_control.services.queue_service import claim_next
+    packet_id, reason = claim_next(worker_id)
 
-    if not ready:
+    if packet_id is None:
         from grace_control.core.wave_gate import check_wave_gates
         check_wave_gates()
-        raise HTTPException(status_code=404, detail="No packets available")
+        detail = reason or "No packets available"
+        raise HTTPException(status_code=404, detail=detail)
 
     from grace_control.services.packet_service import PacketService, PacketNotFoundError, StateTransitionError
     svc = PacketService()
 
-    for pid in packet_ids:
-        try:
-            result = await svc.claim(pid, worker_id)
-        except StateTransitionError:
-            continue
-        except PacketNotFoundError:
-            continue
+    try:
+        result = await svc.claim(packet_id, worker_id)
+    except (StateTransitionError, PacketNotFoundError) as e:
+        from grace_control.core.wave_gate import check_wave_gates
+        check_wave_gates()
+        raise HTTPException(status_code=404, detail=str(e))
 
-        return {
-            "data": {
-                "packet_id": result.packet_id,
-                "spec": result.spec,
-                "lease_id": result.lease_id,
-                "expires_at": result.expires_at.isoformat() + "Z",
-                "attempt": result.attempt,
-                "feature_id": result.feature_id,
-                "wave_id": result.wave_id,
-                "slug": result.slug,
-                "title": result.title,
-                "description": result.description,
-                "acceptance_profile": result.acceptance_profile,
-                "max_attempts": result.max_attempts,
-            },
-            "timestamp": datetime.now(UTC).isoformat() + "Z",
-        }
-
-    from grace_control.core.wave_gate import check_wave_gates
-    check_wave_gates()
-    raise HTTPException(status_code=404, detail="No packets available")
+    return {
+        "data": {
+            "packet_id": result.packet_id,
+            "spec": result.spec,
+            "lease_id": result.lease_id,
+            "expires_at": result.expires_at.isoformat() + "Z",
+            "attempt": result.attempt,
+            "feature_id": result.feature_id,
+            "wave_id": result.wave_id,
+            "slug": result.slug,
+            "title": result.title,
+            "description": result.description,
+            "acceptance_profile": result.acceptance_profile,
+            "max_attempts": result.max_attempts,
+        },
+        "timestamp": datetime.now(UTC).isoformat() + "Z",
+    }
 
 
 @router.post("/{packet_id}/release")
