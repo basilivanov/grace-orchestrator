@@ -38,9 +38,11 @@ def _validate_scenario(scenario: dict[str, Any], scenario_id: str) -> None:
     if not isinstance(scenario, dict):
         errors.append("scenario must be a mapping")
     else:
-        for field in ("id", "waves"):
+        for field in ("id",):
             if field not in scenario:
                 errors.append(f"missing required field: {field}")
+        if "waves" not in scenario and not scenario.get("business_feature"):
+            errors.append("missing required field: waves (or set business_feature: true)")
         if "fixture_app" not in scenario:
             if not scenario.get("target_repo_worktree"):
                 errors.append("missing required field: fixture_app (or set target_repo_worktree: true)")
@@ -51,7 +53,11 @@ def _validate_scenario(scenario: dict[str, Any], scenario_id: str) -> None:
             )
 
         waves = scenario.get("waves", [])
-        if not isinstance(waves, list) or len(waves) == 0:
+        if not isinstance(waves, list):
+            errors.append("waves must be a list")
+        elif scenario.get("business_feature"):
+            pass  # business_feature mode: waves may be empty, architect generates them
+        elif len(waves) == 0:
             errors.append("must have at least one wave")
         else:
             for wi, wave in enumerate(waves):

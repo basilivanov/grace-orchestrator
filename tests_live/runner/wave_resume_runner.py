@@ -143,21 +143,20 @@ class WaveResumeRunner:
             self._start_api()
 
         # 4. Submit explicit waves (with context_bundle if Stage 0 ran)
+        is_business = self.scenario.get("business_feature", False)
         if context_bundle:
             feat_id = self._submit_feature(context_bundle=context_bundle)
         else:
             feat_id = self._submit_feature()
 
-        if not feat_id and not context_bundle:
-            self.report["status"] = "error"
+        if not feat_id:
+            if is_business:
+                self.report["failures"].append(
+                    "Architect failed to generate plan from business feature"
+                )
+            self.report["status"] = "error" if not is_business else "failed"
             self._write_report()
             return 1
-
-        # If all waves were consumed by Stage 0, skip worker and monitoring
-        if not feat_id and context_bundle:
-            self.report["status"] = "passed"
-            self._write_report()
-            return 0
 
         # 5. Start worker
         self._start_worker()
@@ -547,6 +546,57 @@ class WaveResumeRunner:
     def _submit_feature(
         self, context_bundle: list[dict] | None = None
     ) -> str | None:
+        is_business = self.scenario.get("business_feature", False)
+
+        if is_business:
+            # Business-feature mode: send description to API, no pre-defined waves.
+            # The architect LLM generates the wave/packet plan.
+            biz_text = self.scenario.get("business_feature_text", "")
+            description = biz_text
+            if context_bundle:
+                bundle_hint = json.dumps(
+                    context_bundle[0] if len(context_bundle) == 1 else context_bundle,
+                    indent=2,
+                )
+                description += f"\n\n## Context Bundle\n{bundle_hint}"
+
+            feature_spec = {
+                "title": f"Live: {self.scenario_id}",
+                "description": description,
+            }
+            self.report["waves_requested"] = 0
+            print("[runner] Submitting business feature to architect...")
+            resp = _api_call(
+                self.api_url,
+                "POST",
+                "/api/architect/plan",
+                body={"feature_spec": feature_spec},
+                timeout=180,
+            )
+            if "_error" in resp:
+                print(f"[runner] Business feature submission failed: {resp['_error']}")
+                self.report["failures"].append(
+                    f"Business feature submission: {resp['_error']}"
+                )
+                return None
+
+            data = resp.get("data", {})
+            feat_id = data.get("feature_id")
+            self.report["feature_id"] = feat_id
+            self.report["packet_ids"] = data.get("packet_ids", [])
+            self.report["packets_total"] = len(self.report["packet_ids"])
+            self.report["waves_requested"] = data.get("waves_count", 0)
+            self._save_artifact(
+                "01-architect-response.json", json.dumps(resp, indent=2)
+            )
+            print(
+                f"[runner] Feature: {feat_id}, "
+                f"waves: {data.get('waves_count', '?')}, "
+                f"packets: {self.report['packet_ids']}"
+            )
+            return feat_id
+
+        # Standard pre-defined waves mode
         waves = self.scenario.get("waves", [])
         if self.max_waves and self.max_waves < len(waves):
             waves = waves[: self.max_waves]

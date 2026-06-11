@@ -44,3 +44,15 @@ def test_validate_missing_fields():
 
     with pytest.raises(ValueError, match="missing required field"):
         scenario_loader._validate_scenario({}, "bad-scenario")
+
+
+def test_validate_business_feature_no_waves():
+    """business_feature: true allows scenario without waves."""
+    from tests_live.runner.scenario_loader import load_scenario
+
+    scenario = load_scenario(
+        "solarsage-pilot-005-business-feature-full-pipeline-smoke"
+    )
+    assert scenario.get("business_feature") is True
+    assert "business_feature_text" in scenario
+    assert isinstance(scenario.get("waves"), list)

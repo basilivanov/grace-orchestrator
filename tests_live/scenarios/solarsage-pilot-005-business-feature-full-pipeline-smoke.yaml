@@ -1,0 +1,41 @@
+id: solarsage-pilot-005-business-feature-full-pipeline-smoke
+tz_path: docs/work/WORKER_SOLARSAGE_PILOT_005_BUSINESS_FEATURE_FULL_PIPELINE_SMOKE.md
+target_repo_worktree: true
+target_repo_root: /opt/solarsage-astro
+workspace_mode: target_repo_worktree
+# No pre-defined waves — architect generates the plan from business_feature
+business_feature: true
+context_builder:
+  enabled: true
+  mode: bounded_bundle
+  required: true
+  min_context_runs: 1
+architect:
+  profile: architect-premium
+  require_context_bundle: true
+expected_output: waves_json
+business_feature_text: >-
+  Пользовательская фича:
+
+  В нижней навигации Solar Sage пользователь должен лучше понимать, в каком разделе он находится.
+
+  Когда вкладка активна, она должна иметь понятную accessibility-подсказку для screen reader:
+  - активная вкладка: "<Название вкладки>, текущий раздел"
+  - неактивная вкладка: "<Название вкладки>"
+
+  Это должно работать для всех пяти вкладок:
+  - Сегодня
+  - Календарь
+  - Разборы
+  - Спросить
+  - Профиль
+
+  Нужно добавить автотесты, которые подтверждают это поведение.
+  Визуально интерфейс не должен измениться.
+waves: []
+expected:
+  final_state: accepted
+  min_context_runs: 1
+  forbidden_changed_files:
+    - package.json
+    - pnpm-lock.yaml
