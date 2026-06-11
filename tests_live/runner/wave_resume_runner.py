@@ -202,6 +202,7 @@ class WaveResumeRunner:
         env["GRACE_DATABASE_URL"] = db_url
         env.setdefault("GRACE_DEV_TOOLS_ENABLED", "1")
         env.setdefault("GRACE_DEV_KEEP_FAILED_WORKTREES", "1")
+        env["GRACE_PROJECT_ROOT"] = str(self.source_dir.resolve())
         if self.workspace_mode:
             env["GRACE_WORKSPACE_MODE"] = self.workspace_mode
         if self.target_repo_root:
@@ -234,6 +235,7 @@ class WaveResumeRunner:
         env.setdefault("GRACE_WORKER_ID", f"live-wr-{os.getpid()}")
         env.setdefault("GRACE_DEV_TOOLS_ENABLED", "1")
         env.setdefault("GRACE_DEV_KEEP_FAILED_WORKTREES", "1")
+        env["GRACE_PROJECT_ROOT"] = str(self.source_dir.resolve())
         if self.workspace_mode:
             env["GRACE_WORKSPACE_MODE"] = self.workspace_mode
         if self.target_repo_root:

@@ -1,5 +1,6 @@
 id: solarsage-ui-safe-pilot-002
 target_repo_worktree: true
+lint_policy: changed_files_no_new_errors
 waves:
   - id: W1
     title: Solar Sage UI-safe pilot 002
@@ -20,7 +21,7 @@ waves:
               - git status --short
           t1:
             commands:
-              - pnpm lint
+              - python3 /tmp/grace-orchestrator-export/scripts/grace_changed_files_lint.py --repo .
               - pnpm typecheck
           t2:
             commands:

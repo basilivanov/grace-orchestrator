@@ -85,6 +85,9 @@ def run_acceptance_pipeline(
         changed_files = get_changed_files(worktree_path, base_ref=changed_base)
     except Exception:
         pass
+    # Expose base_sha to T1/T2 subprocesses (e.g. changed-file lint)
+    if base_sha:
+        os.environ["GRACE_BASE_SHA"] = base_sha
     return pipe.run(
         packet=packet,
         changed_files=changed_files,
@@ -128,6 +131,9 @@ def run_acceptance_stage_replay(
         changed_files = get_changed_files(worktree_path, base_ref=changed_base)
     except Exception:
         pass
+    # Expose base_sha to T1/T2 subprocesses (e.g. changed-file lint)
+    if base_sha:
+        os.environ["GRACE_BASE_SHA"] = base_sha
 
     if stage == "full_acceptance":
         return run_acceptance_pipeline(

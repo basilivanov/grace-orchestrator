@@ -1,5 +1,6 @@
 """Tests for acceptance pipeline — T0/T1/T2 decision table."""
 
+import os
 import sys
 from pathlib import Path
 
@@ -299,3 +300,60 @@ class TestReport:
         assert r.final_verdict == FinalVerdict.ACCEPTED
         t1_called = any("fast-t1" in c for c in runner.calls)
         assert t1_called
+
+
+class TestGraceBaseSha:
+    """GRACE_BASE_SHA env var is set before T1/T2 subprocesses."""
+
+    def test_env_var_set_in_run_acceptance_pipeline(self, monkeypatch):
+        """run_acceptance_pipeline sets os.environ['GRACE_BASE_SHA']."""
+        from grace_control.core.acceptance_pipeline import run_acceptance_pipeline
+        monkeypatch.delenv("GRACE_BASE_SHA", raising=False)
+        p = _make_packet(profile=AcceptanceProfile.FAST, t1=[])
+        r = run_acceptance_pipeline(
+            packet=p, legacy_result={"ok": True},
+            project_root=Path.cwd(), worktree_path=Path.cwd(),
+            branch_name="test", run_dir=Path("/tmp"),
+            base_ref=None, base_sha="abc123def",
+        )
+        assert os.environ.get("GRACE_BASE_SHA") == "abc123def"
+
+    def test_env_var_set_in_replay(self, monkeypatch):
+        """run_acceptance_stage_replay sets os.environ['GRACE_BASE_SHA']."""
+        from grace_control.core.acceptance_pipeline import run_acceptance_stage_replay
+        monkeypatch.delenv("GRACE_BASE_SHA", raising=False)
+        p = _make_packet(profile=AcceptanceProfile.FAST, t1=[["echo", "ok"]])
+        r = run_acceptance_stage_replay(
+            packet=p, legacy_result={"ok": True},
+            project_root=Path.cwd(), worktree_path=Path.cwd(),
+            branch_name="test", run_dir=Path("/tmp"),
+            stage="t1",
+            base_ref=None, base_sha="def456abc",
+        )
+        assert os.environ.get("GRACE_BASE_SHA") == "def456abc"
+
+    def test_env_var_persists_after_pipeline(self, monkeypatch):
+        """GRACE_BASE_SHA remains set after pipeline completes."""
+        from grace_control.core.acceptance_pipeline import run_acceptance_pipeline
+        monkeypatch.delenv("GRACE_BASE_SHA", raising=False)
+        p = _make_packet(profile=AcceptanceProfile.FAST, t1=[])
+        r = run_acceptance_pipeline(
+            packet=p, legacy_result={"ok": True},
+            project_root=Path.cwd(), worktree_path=Path.cwd(),
+            branch_name="test", run_dir=Path("/tmp"),
+            base_ref=None, base_sha="persist-sha",
+        )
+        assert os.environ["GRACE_BASE_SHA"] == "persist-sha"
+
+    def test_env_var_not_set_without_base_sha(self, monkeypatch):
+        """GRACE_BASE_SHA is not set when base_sha is None."""
+        from grace_control.core.acceptance_pipeline import run_acceptance_pipeline
+        monkeypatch.delenv("GRACE_BASE_SHA", raising=False)
+        p = _make_packet(profile=AcceptanceProfile.FAST, t1=[])
+        r = run_acceptance_pipeline(
+            packet=p, legacy_result={"ok": True},
+            project_root=Path.cwd(), worktree_path=Path.cwd(),
+            branch_name="test", run_dir=Path("/tmp"),
+            base_ref=None, base_sha=None,
+        )
+        assert "GRACE_BASE_SHA" not in os.environ
