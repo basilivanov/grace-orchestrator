@@ -1,0 +1,26 @@
+id: solarsage-target-worktree-smoke
+target_repo_worktree: true
+waves:
+  - id: W1
+    title: Solar Sage dry pilot 001
+    packets:
+      - id: P1
+        role: coder
+        acceptance_profile: FAST
+        prompt: >-
+          Create a documentation-only marker file at docs/grace/solar-sage-dry-pilot-001.md
+          with the following content:
+          "# Solar Sage GRACE dry pilot 001\n\nThis file was created by the first GRACE target_repo_worktree dry pilot.\n\nPurpose:\n- verify target_repo_worktree wiring\n- verify agent writes only inside Solar Sage target repo\n- verify GRACE repo is not exposed as agent workspace\n- verify acceptance/evidence path works on a real target repo\n"
+        verification:
+          t0:
+            commands:
+              - git status --short
+          t1:
+            commands: []
+          t2:
+            commands: []
+        scope:
+          - docs/grace/solar-sage-dry-pilot-001.md
+expected:
+  final_state: accepted
+  min_real_agent_runs: 1

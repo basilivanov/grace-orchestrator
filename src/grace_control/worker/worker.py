@@ -43,9 +43,14 @@ class Worker:
         self.running = False
         self.log = GraceLogger("worker")
 
+        effective_target_repo: str | Path = (
+            _settings.target_repo_root
+            or os.environ.get("GRACE_TARGET_REPO_ROOT", "")
+            or project_root
+        )
         self._git_context = git_context or resolve_git_execution_context(
             control_plane_root=project_root,
-            target_repo_root=project_root,
+            target_repo_root=Path(effective_target_repo) if isinstance(effective_target_repo, str) else effective_target_repo,
             runtime_state_root=state_root,
             worktree_root=worktree_root,
         )

@@ -38,9 +38,12 @@ def _validate_scenario(scenario: dict[str, Any], scenario_id: str) -> None:
     if not isinstance(scenario, dict):
         errors.append("scenario must be a mapping")
     else:
-        for field in ("id", "fixture_app", "waves"):
+        for field in ("id", "waves"):
             if field not in scenario:
                 errors.append(f"missing required field: {field}")
+        if "fixture_app" not in scenario:
+            if not scenario.get("target_repo_worktree"):
+                errors.append("missing required field: fixture_app (or set target_repo_worktree: true)")
 
         if scenario.get("id") != scenario_id:
             errors.append(

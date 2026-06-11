@@ -154,6 +154,9 @@ class WaveResumeRunner:
 
     # ---- Fixture preparation ----
     def _prepare_fixture(self, fixture_app: str) -> bool:
+        if not fixture_app:
+            print("[runner] No fixture app — using target repo directly")
+            return True
         src = FIXTURES_DIR / fixture_app
         if not src.exists():
             print(f"[runner] Fixture app not found: {src}")
@@ -277,7 +280,7 @@ class WaveResumeRunner:
                 pkt_spec = {
                     "title": pkt["id"],
                     "scope": pkt.get("scope", []),
-                    "acceptance_profile": "NORMAL",
+                    "acceptance_profile": pkt.get("acceptance_profile", "NORMAL"),
                     "prompt": pkt.get("prompt", ""),
                 }
                 if "verification" in pkt:
