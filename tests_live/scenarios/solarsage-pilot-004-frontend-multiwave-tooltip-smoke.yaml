@@ -1,0 +1,118 @@
+id: solarsage-pilot-004-frontend-multiwave-tooltip-smoke
+tz_path: docs/work/TZ_SOLARSAGE_PILOT_004_FRONTEND_MULTIWAVE_TOOLTIP_SMOKE.md
+target_repo_worktree: true
+target_repo_root: /opt/solarsage-astro
+workspace_mode: target_repo_worktree
+context_builder:
+  enabled: true
+  mode: bounded_bundle
+  required: true
+  min_context_runs: 1
+  expected_selected_files:
+    - components/today/tab-bar.tsx
+    - __tests__/components/TabBar.test.tsx
+architect:
+  profile: architect-premium
+  require_context_bundle: true
+  min_waves: 2
+expected_output: waves_json
+waves:
+  - id: W0
+    title: Bounded context bundle
+    packets:
+      - id: C1
+        role: context-builder
+        acceptance_profile: NORMAL
+        prompt: >-
+          Build a bounded context bundle for Solar Sage pilot 004 multi-wave frontend tooltip smoke.
+          Use only the target repo worktree.
+          Prefer explicit task paths, AI_HEADER/MODULE_CONTRACT/FUNCTION_CONTRACT/START_BLOCK markers when present,
+          and short snippets from components/today/tab-bar.tsx, __tests__/components/TabBar.test.tsx,
+          scripts/grace_front_lint.py, and package.json scripts relevant to lint/typecheck/test.
+          Do not modify files. Do not read outside cwd. Do not crawl the whole repository.
+        scope:
+          - components/today/tab-bar.tsx
+        expected:
+          context_bundle_path: required
+          selected_files:
+            - components/today/tab-bar.tsx
+            - __tests__/components/TabBar.test.tsx
+  - id: W1
+    title: Production frontend micro-polish — title attribute on tab links
+    packets:
+      - id: P1
+        role: coder
+        acceptance_profile: NORMAL
+        prompt: >-
+          Solar Sage pilot 004 W1: production frontend micro-polish.
+
+          In /opt/solarsage-astro target_repo_worktree only:
+          1. Modify only components/today/tab-bar.tsx.
+          2. Add title={t.label} to each Today TabBar Link.
+          3. Expected final JSX: <Link href={t.href} data-testid={`today-tab-${t.key}`} title={t.label} aria-current={isActive ? "page" : undefined}>.
+          4. Do not change labels, hrefs, icons, classes, routing, active-tab matching, styling, imports, package files, or app logic.
+          5. Run pnpm lint, pnpm typecheck, pnpm test:run.
+          6. Do not modify __tests__/components/TabBar.test.tsx or any other file.
+        verification:
+          t0:
+            commands:
+              - git status --short
+              - git diff --stat
+              - git diff --name-only
+              - python3 scripts/grace_front_lint.py components/today/tab-bar.tsx
+          t1:
+            commands:
+              - pnpm lint
+              - pnpm typecheck
+          t2:
+            commands:
+              - pnpm test:run
+        scope:
+          - components/today/tab-bar.tsx
+  - id: W2
+    title: Focused unit-test coverage — title attribute assertions
+    packets:
+      - id: P2
+        role: coder
+        acceptance_profile: NORMAL
+        prompt: >-
+          Solar Sage pilot 004 W2: focused unit-test coverage for title attribute.
+
+          In /opt/solarsage-astro target_repo_worktree only:
+          1. Modify only __tests__/components/TabBar.test.tsx.
+          2. Add a test that renders <TabBar /> and asserts every tab link exposes title equal to its visible label:
+             - today-tab-today title="Сегодня"
+             - today-tab-calendar title="Календарь"
+             - today-tab-readings title="Разборы"
+             - today-tab-chat title="Спросить"
+             - today-tab-profile title="Профиль"
+          3. Use existing data-testid selectors (today-tab-{key}).
+          4. Do not rewrite existing tests except for minimal local placement/formatting.
+          5. Do not modify components/today/tab-bar.tsx or any other file.
+          6. Run pnpm lint, pnpm typecheck, pnpm test:run.
+        verification:
+          t0:
+            commands:
+              - git status --short
+              - git diff --stat
+              - git diff --name-only
+              - python3 scripts/grace_front_lint.py __tests__/components/TabBar.test.tsx
+          t1:
+            commands:
+              - pnpm lint
+              - pnpm typecheck
+          t2:
+            commands:
+              - pnpm test:run
+        scope:
+          - __tests__/components/TabBar.test.tsx
+expected:
+  final_state: accepted
+  min_real_agent_runs: 3
+  min_context_runs: 1
+  changed_files:
+    - components/today/tab-bar.tsx
+    - __tests__/components/TabBar.test.tsx
+  forbidden_changed_files:
+    - package.json
+    - pnpm-lock.yaml
