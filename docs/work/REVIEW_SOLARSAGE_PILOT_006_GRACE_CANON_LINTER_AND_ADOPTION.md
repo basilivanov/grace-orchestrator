@@ -16,15 +16,17 @@ However, the current result should not be treated as fully PASS yet. The impleme
 
 ## Corrected GRACE marker canon decision
 
-Canonical source markers are **no-id module/map/block markers**:
+Canonical source markers distinguish **module-level singleton markers** from **named inner blocks**.
+
+### Module-level singleton markers: no id
+
+A file has one module contract and one module map, so these markers do **not** need ids:
 
 ```python
 # START_MODULE_CONTRACT
 # END_MODULE_CONTRACT
 # START_MODULE_MAP
 # END_MODULE_MAP
-# START_BLOCK
-# END_BLOCK
 ```
 
 ```ts
@@ -32,13 +34,32 @@ Canonical source markers are **no-id module/map/block markers**:
 // END_MODULE_CONTRACT
 // START_MODULE_MAP
 // END_MODULE_MAP
-// START_BLOCK
-// END_BLOCK
 ```
 
-The previous review incorrectly suggested `START_MODULE_CONTRACT: ID` as the preferred canonical form. That is not the project convention.
+### Inner START_BLOCK / END_BLOCK markers: named block required
 
-The correct requirement is: **linters must accept the no-id canonical form used across the project**, while they may remain backwards-compatible with legacy `: ID` markers where already present.
+A file may contain multiple logical blocks, so block markers need a stable block name.
+
+Preferred Python style:
+
+```python
+# START_BLOCK: DISCOVERY
+# END_BLOCK: DISCOVERY
+```
+
+Preferred TypeScript/JavaScript style:
+
+```ts
+// START_BLOCK: MOCKS
+// END_BLOCK: MOCKS
+```
+
+The linter may also accept existing legacy variants such as `START_BLOCK_MOCKS`, but generated code should use the canonical `START_BLOCK: NAME` form.
+
+The previous review incorrectly flattened this into “no-id module/map/block markers”. Correct rule:
+
+- `MODULE_CONTRACT` and `MODULE_MAP`: no id.
+- `BLOCK`: named id is required.
 
 ## Verdict
 
@@ -46,7 +67,7 @@ The correct requirement is: **linters must accept the no-id canonical form used 
 
 ## Blockers
 
-### 1. Frontend linter grammar is stale relative to the accepted no-id marker canon
+### 1. Frontend linter grammar is stale relative to the accepted marker canon
 
 `solarsage-astro/scripts/grace_front_lint.py` currently parses module/block markers with this grammar:
 
@@ -54,12 +75,7 @@ The correct requirement is: **linters must accept the no-id canonical form used 
 r"(?://|/\*|\*)\s*(?P<edge>START|END)_(?P<kind>MODULE_CONTRACT|MODULE_MAP|BLOCK)\s*:\s*(?P<id>[^\s\*\/]+)"
 ```
 
-That requires a colon and marker id, for example:
-
-```ts
-// START_MODULE_CONTRACT: TAB_BAR
-// END_MODULE_CONTRACT: TAB_BAR
-```
+That requires a colon and marker id for every marker kind, including `MODULE_CONTRACT` and `MODULE_MAP`.
 
 But the canonical project style is:
 
@@ -68,6 +84,8 @@ But the canonical project style is:
 // END_MODULE_CONTRACT
 // START_MODULE_MAP
 // END_MODULE_MAP
+// START_BLOCK: COMPONENT
+// END_BLOCK: COMPONENT
 ```
 
 This means `parse_markers()` may not recognize correctly canonicalized Solar Sage files, and `check_pairing()` may still report missing `MODULE_CONTRACT` / `MODULE_MAP` markers.
@@ -79,7 +97,12 @@ Affected examples:
 
 Required fix:
 
-Update backend and frontend GRACE linters to support no-id markers as first-class canonical syntax.
+Update backend and frontend GRACE linters to support:
+
+- no-id `MODULE_CONTRACT` markers as canonical
+- no-id `MODULE_MAP` markers as canonical
+- named `BLOCK` markers as canonical
+- backward compatibility for legacy `MODULE_CONTRACT: ID`, `MODULE_MAP: ID`, and `START_BLOCK_NAME` forms if already present
 
 Suggested parser behavior:
 
@@ -87,11 +110,13 @@ Suggested parser behavior:
 - Accept `# START_MODULE_CONTRACT: OPTIONAL_ID` for backward compatibility
 - Accept `// START_MODULE_CONTRACT`
 - Accept `// START_MODULE_CONTRACT: OPTIONAL_ID` for backward compatibility
-- Same for `MODULE_MAP` and `BLOCK`
-- Pair no-id markers by kind/stack order
-- Pair id markers by id when id exists
+- Accept `# START_BLOCK: NAME`
+- Accept `// START_BLOCK: NAME`
+- Optionally accept legacy `# START_BLOCK_NAME` / `// START_BLOCK_NAME`
+- Pair module markers by kind because they are singleton per file
+- Pair block markers by name/stack order
 
-Add tests for both spaced/no-id and legacy/id forms.
+Add tests for spaced/no-id module markers, named block markers, and legacy/id forms.
 
 ### 2. `grace/canon.yaml` include/exclude/adopt_first are mostly inert in the orchestrator policy
 
@@ -163,7 +188,8 @@ Split report-only docs commit from unrelated admin UI changes.
 - Alembic/migrations exclusion is the right default.
 - `components/ui/` as vendor/shadcn exclusion is reasonable unless explicitly owned.
 - Comment marker whitespace tolerance is the right parser behavior; canonical generated style should be spaced.
-- No-id markers are the correct project canon and should remain the generated style.
+- Module/map no-id markers are the correct project canon and should remain the generated style.
+- Named `START_BLOCK: NAME` / `END_BLOCK: NAME` markers are the correct inner-block canon.
 - Staged adoption plan is correct: policy first, then small owned frontend slice, then backend/API slice.
 
 ## Required follow-up task
@@ -172,14 +198,15 @@ Create a rework task for Pilot 006 instead of starting mass migration.
 
 Suggested rework scope:
 
-1. Update backend/frontend linter marker parser to accept no-id canonical markers.
-2. Keep backward compatibility for legacy `: ID` markers.
-3. Make `grace/canon.yaml` semantics honest: either implement include/exclude/adopt_first or document only `gate_mode` is active.
-4. Avoid empty linter invocations.
-5. Avoid false origins when all files are excluded.
-6. Apply exclusions consistently in frontend linter discovery and explicit path expansion.
-7. Split/revert unrelated `admin.html` changes from the report commit.
-8. Add tests for the above cases.
+1. Update backend/frontend linter marker parser to accept no-id module/map canonical markers.
+2. Require/accept named block markers for `START_BLOCK` / `END_BLOCK`.
+3. Keep backward compatibility for legacy `: ID` markers and legacy block-name variants.
+4. Make `grace/canon.yaml` semantics honest: either implement include/exclude/adopt_first or document only `gate_mode` is active.
+5. Avoid empty linter invocations.
+6. Avoid false origins when all files are excluded.
+7. Apply exclusions consistently in frontend linter discovery and explicit path expansion.
+8. Split/revert unrelated `admin.html` changes from the report commit.
+9. Add tests for the above cases.
 
 ## Final review decision
 
