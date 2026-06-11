@@ -59,7 +59,7 @@ async def create_plan(request: dict) -> dict:
 
     slug = _slugify(title)
     has_waves = bool(spec.get("waves"))
-    target_repo_root = spec.get("target_repo_root", "")
+    target_repo_root = spec.get("target_repo_root", "") or settings.target_repo_root
     is_async = spec.get("background", True)  # default to background mode
     _origin = spec.get("origin", "")
     _session_id = spec.get("session_id", "")
