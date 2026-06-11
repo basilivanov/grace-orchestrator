@@ -7,32 +7,28 @@
 :root{--bg0:#0c0e14;--bg1:#141720;--bg2:#1c2030;--bg3:#242838;--bd:#2a2e3e;--bd2:#363b50;--t1:#e4e7f0;--t2:#8890a8;--t3:#5c6380;--blue:#5b8def;--green:#4ade80;--red:#f87171;--yellow:#fbbf24;--purple:#a78bfa;--orange:#fb923c;--r:8px;font:14px/1.5 Inter,-apple-system,sans-serif;--mono:'JetBrains Mono','Fira Code',monospace}
 *{margin:0;padding:0;box-sizing:border-box}html,body{height:100%}body{background:var(--bg0);color:var(--t1)}
 ::-webkit-scrollbar{width:5px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--bd);border-radius:3px}
-.bar{height:48px;background:var(--bg1);border-bottom:1px solid var(--bd);display:flex;align-items:center;padding:0 16px;gap:12px;flex-shrink:0}
+.bar{height:48px;background:var(--bg1);border-bottom:1px solid var(--bd);display:flex;align-items:center;padding:0 16px;gap:8px;flex-shrink:0}
 .bar-logo{display:flex;align-items:center;gap:7px;font-weight:700;font-size:14px;white-space:nowrap}
 .bar-logo i{width:26px;height:26px;border-radius:6px;background:linear-gradient(135deg,var(--blue),var(--purple));display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;color:#fff;font-style:normal}
-.bar-div{width:1px;height:22px;background:var(--bd)}
-.chips{display:flex;gap:5px;overflow-x:auto}.chip{display:flex;align-items:center;gap:4px;padding:3px 9px;border-radius:16px;font-size:11px;font-weight:600;background:var(--bg2);border:1px solid var(--bd);color:var(--t2);cursor:pointer;user-select:none;white-space:nowrap}.chip.on{border-color:var(--blue);color:var(--blue)}.chip .d{width:6px;height:6px;border-radius:50%}
-.d-run{background:var(--blue);box-shadow:0 0 5px var(--blue)}.d-done{background:var(--green)}.d-fail{background:var(--red)}.d-block{background:var(--yellow)}.d-queue{background:var(--t3)}.d-all{background:var(--purple)}
-.bar-end{flex:1}.bar-search input{background:var(--bg2);border:1px solid var(--bd);border-radius:6px;padding:5px 10px 5px 28px;color:var(--t1);font-size:12px;width:200px;outline:none;font-family:inherit}.bar-search input:focus{border-color:var(--blue)}.bar-search{position:relative}.bar-search::before{content:'⌕';position:absolute;left:8px;top:50%;transform:translateY(-50%);color:var(--t3);font-size:13px}
-.board{height:calc(100vh - 48px);overflow-y:auto;padding:10px 14px;display:flex;flex-direction:column;gap:6px}
-.card{background:var(--bg1);border:1px solid var(--bd);border-radius:var(--r);transition:border-color .15s;cursor:pointer}.card:hover{border-color:var(--bd2)}.card.sel{border-color:var(--blue);box-shadow:0 0 0 1px #3a5a9e,0 3px 16px rgba(0,0,0,.3)}
-.card-h{display:flex;align-items:center;gap:8px;padding:8px 12px;flex-shrink:0}
-.strip{width:3px;height:28px;border-radius:2px;flex-shrink:0}.s-run{background:var(--blue);box-shadow:0 0 7px var(--blue)}.s-done{background:var(--green)}.s-fail{background:var(--red)}.s-block{background:var(--yellow)}.s-queue{background:var(--t3)}.s-merged{background:var(--purple)}.s-accepted{background:var(--green)}
-.info{flex:1;min-width:0}.info-top{display:flex;align-items:center;gap:5px;margin-bottom:1px}.pkt-id{font-size:9px;font-weight:700;font-family:var(--mono);color:var(--t3);letter-spacing:.4px}.pkt-name{font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.info-sub{font-size:10px;color:var(--t2);display:flex;gap:6px;align-items:center;flex-wrap:wrap}.info-sub span{white-space:nowrap}
-.badge{font-size:9px;font-weight:700;letter-spacing:.3px;padding:1px 6px;border-radius:3px;text-transform:uppercase;flex-shrink:0}.b-run{background:rgba(91,141,239,.14);color:var(--blue)}.b-done{background:rgba(74,222,128,.1);color:var(--green)}.b-fail{background:rgba(248,113,113,.1);color:var(--red)}.b-block{background:rgba(251,191,36,.1);color:var(--yellow)}.b-merged{background:rgba(167,139,250,.1);color:var(--purple)}.b-queue{background:rgba(92,99,128,.15);color:var(--t3)}.b-accepted{background:rgba(74,222,128,.1);color:var(--green)}.b-rejected{background:rgba(248,113,113,.1);color:var(--red)}
-.mets{display:flex;gap:8px;flex-shrink:0;margin-left:4px}.met{display:flex;flex-direction:column;align-items:flex-end;gap:0}.met-l{font-size:7px;color:var(--t3);text-transform:uppercase;letter-spacing:.3px;font-weight:600}.met-v{font-size:10px;font-weight:600;font-family:var(--mono);color:var(--t2)}
-.pblocks{display:flex;gap:5px;flex-wrap:wrap;padding:8px 10px 6px;border-bottom:1px solid var(--bd)}.pblock{display:flex;flex-direction:column;align-items:center;min-width:76px;padding:6px 8px;border-radius:6px;background:var(--bg2);border:1px solid var(--bd);cursor:pointer;flex-shrink:0;transition:all .12s;user-select:none}.pblock:hover{border-color:var(--bd2);transform:translateY(-1px)}.pblock.done{background:rgba(74,222,128,.05);border-color:rgba(74,222,128,.2)}.pblock.running{background:rgba(91,141,239,.07);border-color:rgba(91,141,239,.25)}.pblock.failed{background:rgba(248,113,113,.07);border-color:rgba(248,113,113,.25)}.pblock.skipped{opacity:.4}.pbl-i{font-size:12px;font-weight:700;line-height:1;margin-bottom:3px}.pbl-i.done{color:var(--green)}.pbl-i.running{color:var(--blue)}.pbl-i.failed{color:var(--red)}.pbl-i.skipped{color:var(--t3)}.pbl-l{font-size:8px;font-weight:600;color:var(--t2);text-transform:uppercase;letter-spacing:.3px;white-space:nowrap;margin-bottom:2px}.pbl-st{font-size:8px;font-family:var(--mono);color:var(--t3);white-space:nowrap;line-height:1.3}.pbl-et{font-size:8px;font-family:var(--mono);color:var(--t3);white-space:nowrap;line-height:1.3}.pbl-st.done,.pbl-et.done{color:var(--green)}.pbl-st.running,.pbl-et.running{color:var(--blue)}.pbl-t{font-size:8px;font-family:var(--mono);color:var(--t2);white-space:nowrap;margin-top:1px;font-weight:600}.pbl-t.done{color:var(--green)}.pbl-t.running{color:var(--blue)}.pbl-t.failed{color:var(--red)}
-.detail{display:none;border-top:1px solid var(--bd);background:var(--bg0)}.detail.open{display:block}
+.bar-nav{display:flex;gap:2px}.bar-nav a{padding:4px 10px;font-size:11px;font-weight:600;color:var(--t3);text-decoration:none;border-radius:4px;cursor:pointer}.bar-nav a:hover{color:var(--t2);background:var(--bg2)}.bar-nav a.on{color:var(--blue);background:rgba(91,141,239,.1)}
+.bar-div{width:1px;height:22px;background:var(--bd)}.bar-end{flex:1}
+.chips{display:flex;gap:5px;overflow-x:auto}.chip{display:flex;align-items:center;gap:4px;padding:3px 9px;border-radius:16px;font-size:11px;font-weight:600;background:var(--bg2);border:1px solid var(--bd);color:var(--t2);cursor:pointer;user-select:none;white-space:nowrap}.chip.on{border-color:var(--blue);color:var(--blue)}.chip .d{width:6px;height:6px;border-radius:50%}.d-run{background:var(--blue);box-shadow:0 0 5px var(--blue)}.d-done{background:var(--green)}.d-fail{background:var(--red)}.d-block{background:var(--yellow)}.d-queue{background:var(--t3)}.d-all{background:var(--purple)}
+.board{height:calc(100vh - 96px);overflow-y:auto;padding:10px 14px;display:flex;flex-direction:column;gap:8px}
+.biz-bar{height:48px;background:var(--bg1);border-bottom:1px solid var(--bd);display:flex;align-items:center;padding:0 14px;gap:8px}.biz-bar input{flex:1;background:var(--bg2);border:1px solid var(--bd);border-radius:6px;padding:6px 10px;color:var(--t1);font-size:12px;outline:none;font-family:inherit}.biz-bar input:focus{border-color:var(--blue)}.biz-bar button{padding:6px 14px;border-radius:6px;border:none;background:var(--blue);color:#fff;font-size:11px;font-weight:600;cursor:pointer}.biz-bar button:hover{opacity:.9}.biz-bar button:disabled{opacity:.4;cursor:default}
+.feat-card{background:var(--bg1);border:1px solid var(--bd);border-radius:var(--r);overflow:hidden;transition:border-color .15s}.feat-card:hover{border-color:var(--bd2)}.feat-h{display:flex;align-items:center;gap:8px;padding:8px 12px;cursor:pointer;user-select:none}.feat-h:hover{background:var(--bg2)}.feat-h .arrow{font-size:10px;color:var(--t3);transition:transform .15s;width:12px}.feat-h .arrow.open{transform:rotate(90deg)}.feat-info{flex:1;min-width:0}.feat-title{font-size:12px;font-weight:600;color:var(--t1)}.feat-sub{font-size:9px;color:var(--t3)}.feat-actions{display:flex;gap:4px}.feat-act{font-size:9px;padding:3px 7px;border-radius:4px;border:1px solid var(--bd);background:var(--bg2);color:var(--t3);cursor:pointer}.feat-act:hover{border-color:var(--bd2);color:var(--t2)}.feat-act.danger{color:var(--red);border-color:rgba(248,113,113,.2)}.feat-act.danger:hover{background:rgba(248,113,113,.1)}.feat-body{border-top:1px solid var(--bd)}
+.wave-card{margin:4px 6px;background:var(--bg0);border:1px solid var(--bd);border-radius:6px;overflow:hidden}.wave-h{display:flex;align-items:center;gap:6px;padding:5px 8px;cursor:pointer}.wave-h:hover{background:var(--bg3)}.wave-h .arrow{font-size:9px;color:var(--t3);transition:transform .15s;width:10px}.wave-h .arrow.open{transform:rotate(90deg)}.wave-info{flex:1;font-size:10px;font-weight:600;color:var(--t2)}.wave-sub{font-size:8px;color:var(--t3)}
+.pkt-card{background:var(--bg2);border:1px solid var(--bd);border-radius:5px;margin:3px 6px 3px 20px;transition:border-color .15s;cursor:pointer}.pkt-card:hover{border-color:var(--bd2)}.pkt-card.sel{border-color:var(--blue);box-shadow:0 0 0 1px #3a5a9e}
+.pkt-h{display:flex;align-items:center;gap:6px;padding:5px 8px}.pkt-strip{width:3px;height:22px;border-radius:2px;flex-shrink:0}.s-run{background:var(--blue);box-shadow:0 0 7px var(--blue)}.s-done{background:var(--green)}.s-fail{background:var(--red)}.s-block{background:var(--yellow)}.s-queue{background:var(--t3)}.s-merged{background:var(--purple)}.s-accepted{background:var(--green)}
+.pkt-info{flex:1;min-width:0}.pkt-top{display:flex;align-items:center;gap:4px;margin-bottom:1px}.pkt-id{font-size:8px;font-weight:700;font-family:var(--mono);color:var(--t3)}.pkt-name{font-size:11px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.pkt-sub{font-size:9px;color:var(--t2)}.pkt-mets{display:flex;gap:6px;flex-shrink:0}.pkt-met{display:flex;flex-direction:column;align-items:flex-end}.pkt-met-l{font-size:7px;color:var(--t3);text-transform:uppercase}.pkt-met-v{font-size:9px;font-weight:600;font-family:var(--mono);color:var(--t2)}.badge{font-size:8px;font-weight:700;padding:1px 5px;border-radius:3px;text-transform:uppercase;flex-shrink:0}.b-run{background:rgba(91,141,239,.14);color:var(--blue)}.b-done{background:rgba(74,222,128,.1);color:var(--green)}.b-fail{background:rgba(248,113,113,.1);color:var(--red)}.b-block{background:rgba(251,191,36,.1);color:var(--yellow)}.b-merged{background:rgba(167,139,250,.1);color:var(--purple)}.b-queue{background:rgba(92,99,128,.15);color:var(--t3)}.b-accepted{background:rgba(74,222,128,.1);color:var(--green)}.b-rejected{background:rgba(248,113,113,.1);color:var(--red)}
+.pkt-detail{border-top:1px solid var(--bd)}.pblocks{display:flex;gap:5px;flex-wrap:wrap;padding:8px 10px 6px;border-bottom:1px solid var(--bd)}.pblock{display:flex;flex-direction:column;align-items:center;min-width:76px;padding:6px 8px;border-radius:6px;background:var(--bg2);border:1px solid var(--bd);cursor:pointer;flex-shrink:0;transition:all .12s;user-select:none}.pblock:hover{border-color:var(--bd2);transform:translateY(-1px)}.pblock.done{background:rgba(74,222,128,.05);border-color:rgba(74,222,128,.2)}.pblock.running{background:rgba(91,141,239,.07);border-color:rgba(91,141,239,.25)}.pblock.failed{background:rgba(248,113,113,.07);border-color:rgba(248,113,113,.25)}.pblock.skipped{opacity:.4}.pbl-i{font-size:12px;font-weight:700;line-height:1;margin-bottom:3px}.pbl-i.done{color:var(--green)}.pbl-i.running{color:var(--blue)}.pbl-i.failed{color:var(--red)}.pbl-l{font-size:8px;font-weight:600;color:var(--t2);text-transform:uppercase;letter-spacing:.3px;white-space:nowrap;margin-bottom:2px}.pbl-st{font-size:8px;font-family:var(--mono);color:var(--t3);white-space:nowrap;line-height:1.3}.pbl-et{font-size:8px;font-family:var(--mono);color:var(--t3);white-space:nowrap;line-height:1.3}.pbl-st.done,.pbl-et.done{color:var(--green)}.pbl-st.running,.pbl-et.running{color:var(--blue)}.pbl-t{font-size:8px;font-family:var(--mono);color:var(--t2);white-space:nowrap;margin-top:1px;font-weight:600}.pbl-t.done{color:var(--green)}.pbl-t.running{color:var(--blue)}.pbl-t.failed{color:var(--red)}
 .dtabs{display:flex;border-bottom:1px solid var(--bd);padding:0 10px;background:var(--bg1);position:sticky;top:0;z-index:5;overflow-x:auto}.dtab{padding:5px 10px;font-size:10px;font-weight:600;color:var(--t3);cursor:pointer;border-bottom:2px solid transparent;transition:all .12s;user-select:none;white-space:nowrap}.dtab:hover{color:var(--t2)}.dtab.on{color:var(--blue);border-bottom-color:var(--blue)}
 .dcont{padding:8px 12px;max-height:400px;overflow-y:auto}
-.scards{display:flex;gap:4px;flex-wrap:wrap}.sc{flex:1;min-width:120px;max-width:180px;background:var(--bg1);border:1px solid var(--bd);border-radius:5px;padding:6px 8px}.sc.running{border-color:#3a5a9e}.sc.failed{border-color:#7f1d1d}
-.sc-h{display:flex;justify-content:space-between;align-items:center;margin-bottom:3px}.sc-n{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.3px}.sc-n.done{color:var(--green)}.sc-n.running{color:var(--blue)}.sc-n.failed{color:var(--red)}.sc-n.pending{color:var(--t3)}.sc-si{font-size:11px}.sc-rs{display:flex;flex-direction:column;gap:1px}.sc-r{display:flex;justify-content:space-between;font-size:9px}.sc-rk{color:var(--t3)}.sc-rv{color:var(--t2);font-family:var(--mono);font-size:9px}.sc-rv.err{color:var(--red);font-family:inherit}
-.logs{font-family:var(--mono);font-size:10px;line-height:1.5;background:var(--bg1);border-radius:5px;border:1px solid var(--bd);padding:6px 8px;max-height:350px;overflow-y:auto}.ll{display:flex;gap:6px}.lt{color:var(--t3);white-space:nowrap;flex-shrink:0}.lv{font-weight:700;width:30px;flex-shrink:0;font-size:9px}.lv.INFO{color:var(--blue)}.lv.WARN{color:var(--yellow)}.lv.ERROR{color:var(--red)}.lv.DEBUG{color:var(--t3)}.lm{color:var(--t2);word-break:break-all;font-size:10px}
+.scards{display:flex;gap:4px;flex-wrap:wrap}.sc{flex:1;min-width:120px;max-width:180px;background:var(--bg1);border:1px solid var(--bd);border-radius:5px;padding:6px 8px}.sc.running{border-color:#3a5a9e}.sc.failed{border-color:#7f1d1d}.sc-h{display:flex;justify-content:space-between;align-items:center;margin-bottom:3px}.sc-n{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.3px}.sc-n.done{color:var(--green)}.sc-n.running{color:var(--blue)}.sc-n.failed{color:var(--red)}.sc-si{font-size:11px}.sc-rs{display:flex;flex-direction:column;gap:1px}.sc-r{display:flex;justify-content:space-between;font-size:9px}.sc-rk{color:var(--t3)}.sc-rv{color:var(--t2);font-family:var(--mono);font-size:9px}.sc-rv.err{color:var(--red)}
+.logs{font-family:var(--mono);font-size:10px;line-height:1.5;background:var(--bg1);border-radius:5px;border:1px solid var(--bd);padding:6px 8px;max-height:350px;overflow-y:auto}.ll{display:flex;gap:6px}.lt{color:var(--t3);white-space:nowrap;flex-shrink:0}.lv{font-weight:700;width:30px;flex-shrink:0;font-size:9px}.lv.INFO{color:var(--blue)}.lv.WARN{color:var(--yellow)}.lv.ERROR{color:var(--red)}.lm{color:var(--t2);word-break:break-all;font-size:10px}
 .etbl{width:100%;border-collapse:collapse}.etbl th{text-align:left;font-size:8px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.3px;padding:3px 6px;border-bottom:1px solid var(--bd)}.etbl td{font-size:10px;padding:3px 6px;border-bottom:1px solid var(--bd);color:var(--t2)}.etbl tr:hover td{background:var(--bg3)}.ev-t{font-family:var(--mono);font-size:9px;white-space:nowrap}.ev-e{font-weight:600;color:var(--t1);font-size:10px}.ev-d{color:var(--t3);font-size:9px}
 .slist{display:flex;flex-direction:column;gap:3px}.sitem{display:flex;align-items:center;gap:8px;padding:4px 8px;background:var(--bg1);border:1px solid var(--bd);border-radius:5px;font-size:10px}.sitem .sid{font-family:var(--mono);color:var(--purple);font-weight:600;font-size:9px}.sitem .sst{font-weight:700;text-transform:uppercase;color:var(--t2);font-size:9px}.sitem .sst-active{color:var(--blue)}.sitem .sst-completed{color:var(--green)}.sitem .sst-failed{color:var(--red)}.sitem .smd{color:var(--t3);font-family:var(--mono);font-size:9px}.sitem .stk{color:var(--t3);font-family:var(--mono);margin-left:auto;font-size:9px}
 .empty{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:30px;color:var(--t3);font-size:12px}
-.loading{display:flex;align-items:center;justify-content:center;padding:30px;color:var(--t3);font-size:12px;gap:6px}
-.loading::after{content:'';width:14px;height:14px;border:2px solid var(--bd);border-top-color:var(--blue);border-radius:50%;animation:spin .8s linear infinite}
+.loading{display:flex;align-items:center;justify-content:center;padding:30px;color:var(--t3);font-size:12px;gap:6px}.loading::after{content:'';width:14px;height:14px;border:2px solid var(--bd);border-top-color:var(--blue);border-radius:50%;animation:spin .8s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 .spec-grid{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:10px}.spec-grid .sk{color:var(--t3);font-weight:600;white-space:nowrap}.spec-grid .sv{color:var(--t2);font-family:var(--mono);word-break:break-all}
 .atree{font-family:var(--mono);font-size:10px}.atree .af{display:flex;align-items:center;gap:4px;padding:2px 0;color:var(--t2)}.atree .af .an{color:var(--blue)}.atree .af .as{color:var(--t3);font-size:8px}
@@ -41,126 +37,123 @@
 </head>
 <body>
 <div class="bar">
-<div class="bar-logo"><i>G</i>GRACE Control Plane</div>
-<div class="bar-div"></div>
-<div class="chips" id="chips"></div>
-<div class="bar-end"></div>
-<div class="bar-search"><input id="search" placeholder="Search packets..."></div>
+<div class="bar-logo"><i>G</i>GRACE CP</div>
+<div class="bar-nav" id="topnav">
+<a class="on" onclick="switchView('dashboard')">Dashboard</a>
+<a onclick="switchView('archive')">Archive</a>
+<a onclick="switchView('new')">+ New Feature</a>
 </div>
-<div class="board" id="board"><div class="loading">Loading pipeline data...</div></div>
+<div class="bar-end"></div>
+<div class="chips" id="chips"></div>
+</div>
+<div id="bizbar"></div>
+<div class="board" id="board"><div class="loading">Loading...</div></div>
 <script>
-let state={sel:null,filter:'all',q:'',tab:{},tabData:{},expandedRun:{},data:null};
+let state={view:'dashboard',filter:'all',expFeat:{},expWave:{},tab:{},tabData:{},data:null};
 const $=s=>document.querySelector(s);
 const SC={running:'run',merged:'done',done:'done',failed:'fail',rejected:'fail',blocked:'block',blocked_recoverable:'block',blocked_final:'block',ready:'queue',draft:'queue',queued:'queue',accepted:'done',cancelled:'queue'};
-const SL={running:'Running',merged:'Merged',done:'Done',failed:'Failed',rejected:'Rejected',blocked:'Blocked',blocked_recoverable:'Blocked (recov.)',blocked_final:'Blocked (final)',ready:'Ready',draft:'Draft',queued:'Queued',accepted:'Accepted',cancelled:'Cancelled'};
-const TABS=['events','spec','sessions','runs','logs','artifacts','evidence'];
-const TLAB={events:'Events',spec:'Spec',sessions:'Sessions',runs:'Runs',logs:'Logs',artifacts:'Artifacts',evidence:'Evidence'};
-const fmtDur=ms=>{if(ms==null||ms===undefined)return'—';if(ms<0)ms=0;if(ms<1000)return ms+'ms';if(ms<60000)return(ms/1000).toFixed(0)+'s';const m=Math.floor(ms/60000),s=Math.floor((ms%60000)/1000);return m+'m'+(s?' '+s+'s':'')};
+const SL={running:'Running',merged:'Merged',done:'Done',failed:'Failed',rejected:'Rejected',blocked:'Blocked',ready:'Ready',draft:'Draft',queued:'Queued',accepted:'Accepted',cancelled:'Cancelled'};
+const TABS=['spec','events','sessions','runs','logs','artifacts','evidence'];
+const TLAB={spec:'Spec',events:'Events',sessions:'Sessions',runs:'Runs',logs:'Logs',artifacts:'Artifacts',evidence:'Evidence'};
+const fmtDur=ms=>{if(ms==null)return'—';if(ms<0)ms=0;if(ms<1000)return ms+'ms';if(ms<60000)return(ms/1000).toFixed(0)+'s';const m=Math.floor(ms/60000),s=Math.floor((ms%60000)/1000);return m+'m'+(s?' '+s+'s':'')};
 const fmtTime=iso=>{if(!iso)return'—';try{return new Date(iso).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}catch{return'—'}};
 const fmtDate=iso=>{if(!iso)return'—';try{const d=new Date(iso);return d.toLocaleDateString('en-GB',{month:'short',day:'numeric'})+' '+fmtTime(iso)}catch{return'—'}};
 const esc=s=>{if(!s)return'';const d=document.createElement('div');d.appendChild(document.createTextNode(String(s)));return d.innerHTML};
 const icons={done:'✓',running:'⟳',failed:'✗',skipped:'—',pending:'○'};
 
-function getAllPackets(data){
-  if(!data||!data.features)return[];
-  const pkts=[];
-  data.features.forEach(f=>{(f.waves||[]).forEach(w=>{(w.packets||[]).forEach(p=>{pkts.push({...p,feature:f,wave:w})})})});
-  return pkts;
-}
-function filtered(pkts){
-  let list=pkts;
-  if(state.filter!=='all'){
-    if(state.filter==='attention')list=list.filter(p=>['failed','blocked','blocked_recoverable','blocked_final','rejected'].includes(p.state));
-    else list=list.filter(p=>SC[p.state]===state.filter);
-  }
-  if(state.q){const q=state.q.toLowerCase();list=list.filter(p=>(p.id+p.title+p.feature.title+p.slug).toLowerCase().includes(q));}
-  return list;
-}
-function renderChips(pkts){
-  const c={all:pkts.length,run:0,done:0,fail:0,block:0,queue:0};
-  pkts.forEach(p=>{const s=SC[p.state]||'queue';if(s==='run')c.run++;else if(s==='done')c.done++;else if(s==='fail')c.fail++;else if(s==='block')c.block++;else c.queue++});
-  const chips=[{k:'all',l:'All',n:c.all,d:'d-all'},{k:'run',l:'Running',n:c.run,d:'d-run'},{k:'done',l:'Done',n:c.done,d:'d-done'},{k:'fail',l:'Failed',n:c.fail,d:'d-fail'},{k:'block',l:'Blocked',n:c.block,d:'d-block'},{k:'attention',l:'Attention',n:c.fail+c.block,d:'d-fail'}];
-  $('#chips').innerHTML=chips.map(c=>`<div class="chip ${state.filter===c.k?'on':''}" data-f="${c.k}"><span class="d ${c.d}"></span>${c.l} <b>${c.n}</b></div>`).join('');
+function switchView(v){
+  state.view=v;$('#topnav').querySelectorAll('a').forEach(a=>a.classList.toggle('on',a.textContent.trim().toLowerCase().includes(v==='dashboard'?'dashboard':v==='archive'?'archive':'new')));
+  if(v==='dashboard'){$('#bizbar').innerHTML='';loadData();}
+  else if(v==='archive'){$('#bizbar').innerHTML='';loadArchived();}
+  else if(v==='new'){$('#bizbar').innerHTML='<div class="biz-bar"><input id="biz-input" placeholder="Describe the feature you want..." onkeydown="if(event.key===\'Enter\')submitBiz()"><button id="biz-btn" onclick="submitBiz()">Submit Feature</button></div>';$('#board').innerHTML='<div class="empty" style="padding:20px;font-size:11px">Describe your feature above and click Submit. The architect will plan and create the pipeline.</div>';}
 }
 
-// ── Card ──
-function renderBoard(pkts){
-  const list=filtered(pkts);
-  if(!list.length){$('#board').innerHTML='<div class="empty">No packets match your filter</div>';return;}
-  $('#board').innerHTML=list.map(p=>renderCard(p)).join('');
+// ── Dashboard ──
+function renderDashboard(){
+  const fs=(state.data?.features||[]).filter(f=>!f.is_archived);
+  if(!fs.length){$('#board').innerHTML='<div class="empty">No features</div>';return;}
+  let html='';
+  fs.forEach(f=>{
+    const expF=state.expFeat[f.id];
+    let waveHtml='';
+    if(expF){
+      (f.waves||[]).forEach(w=>{
+        const expW=state.expWave[w.id];
+        let pktHtml='';
+        if(expW){
+          (w.packets||[]).forEach(p=>{pktHtml+=renderPktCard(p);});
+        }
+        const wAttn=(w.packets||[]).filter(p=>['failed','blocked','rejected'].includes(p.state)).length;
+        waveHtml+=`<div class="wave-card"><div class="wave-h" onclick="togWave('${w.id}')"><span class="arrow ${expW?'open':''}">›</span><span class="wave-info">${esc(w.title||w.id)}</span><span class="wave-sub">${w.packets?.length||0} packets${wAttn?` · ${wAttn} attention`:''}</span></div>${expW?pktHtml:''}</div>`;
+      });
+    }
+    const fAttn=f.attention_count||0;
+    html+=`<div class="feat-card"><div class="feat-h" onclick="togFeat('${f.id}')"><span class="arrow ${expF?'open':''}">›</span><div class="feat-info"><div class="feat-title">${esc(f.title||f.id)}</div><div class="feat-sub">${f.wave_count||0} waves · ${f.total_packets||0} packets${fAttn?` · ${fAttn} attention`:''} · ${esc(f.id)}</div></div><div class="feat-actions"><button class="feat-act danger" onclick="event.stopPropagation();archiveFeat('${f.id}')" title="Archive">✕</button></div></div>${expF?`<div class="feat-body">${waveHtml}</div>`:''}</div>`;
+  });
+  $('#board').innerHTML=html;
 }
-function renderCard(p){
+
+function togFeat(id){state.expFeat[id]=!state.expFeat[id];renderDashboard();}
+function togWave(id){state.expWave[id]=!state.expWave[id];renderDashboard();}
+
+function renderPktCard(p){
   const sc=SC[p.state]||'queue',sel=state.sel===p.id;
-  const cur=p.pipeline?.stages?.find(s=>s.status==='running')||p.pipeline?.stages?.find(s=>s.status==='failed');
-  const sub=`<span>${p.feature?.title||''}</span><span>·</span><span>${p.wave?.title||''}</span>${cur?`<span>·</span><span style="color:var(--blue)">at ${cur.key}</span>`:''}${p.attempt_count>1?`<span>·</span><span style="color:var(--orange)">attempt ${p.attempt_count}/${p.max_attempts}</span>`:''}`;
+  const pipe=p.pipeline?.stages||[];
+  const cur=pipe.find(s=>s.status==='running')||pipe.find(s=>s.status==='failed');
   const dur=p.duration_seconds?fmtDur(p.duration_seconds*1000):'—';
   const stime=p.started_at?fmtTime(p.started_at):'';
-  const mets=`${stime?`<div class="met"><span class="met-l">Start</span><span class="met-v" style="font-size:9px">${stime}</span></div>`:''}<div class="met"><span class="met-l">Duration</span><span class="met-v">${dur}</span></div>${p.model?`<div class="met"><span class="met-l">Model</span><span class="met-v">${p.model}</span></div>`:''}`;
-  const detHtml=sel?renderDetail(p):'';
-  return`<div class="card ${sel?'sel':''}" data-p="${p.id}"><div class="card-h" onclick="toggle('${p.id}')"><div class="strip s-${sc}"></div><div class="info"><div class="info-top"><span class="pkt-id">${p.id}</span><span class="pkt-name">${p.title}</span><span class="badge b-${sc}">${SL[p.state]||p.state}</span></div><div class="info-sub">${sub}</div></div><div class="mets">${mets}</div></div><div class="detail ${sel?'open':''}">${detHtml}</div></div>`;
+  const detHtml=sel?renderPktDetail(p):'';
+  const sub=[p.state,cur?`at ${cur.key}`:'',p.attempt_count>1?`attempt ${p.attempt_count}/${p.max_attempts}`:''].filter(Boolean).join(' · ');
+  return`<div class="pkt-card ${sel?'sel':''}"><div class="pkt-h" onclick="selPkt('${p.id}')"><div class="pkt-strip s-${sc}"></div><div class="pkt-info"><div class="pkt-top"><span class="pkt-id">${p.id}</span><span class="pkt-name">${esc(p.title)}</span><span class="badge b-${sc}">${SL[p.state]||p.state}</span></div><div class="pkt-sub">${sub}</div></div><div class="pkt-mets">${stime?`<div class="pkt-met"><span class="pkt-met-l">Start</span><span class="pkt-met-v">${stime}</span></div>`:''}<div class="pkt-met"><span class="pkt-met-l">Dur</span><span class="pkt-met-v">${dur}</span></div></div></div><div class="pkt-detail">${detHtml}</div></div>`;
 }
 
-// ── Detail ──
-function renderDetail(p){
+function selPkt(id){
+  if(state.sel===id){state.sel=null;delete state.tabData[id];renderDashboard();return;}
+  state.sel=id;delete state.tabData[id];delete state.tab[id];renderDashboard();
+  loadDetail(id).then(d=>{if(d&&state.sel===id)mergeDetail(id,d);});
+  const cached=loadDetailCached(id);if(cached)mergeDetail(id,cached);
+}
+
+function renderPktDetail(p){
   // hierarchy
   let hier='';
-  const items=[];if(p.feature)items.push(['F',p.feature.title||p.feature.id]);if(p.wave)items.push(['W',p.wave.title||p.wave.id]);items.push(['P',p.title||p.id]);
+  const items=[];
+  if(p.feature)items.push(['F',p.feature.title||p.feature.id]);
+  if(p.wave)items.push(['W',p.wave.title||p.wave.id]);
+  items.push(['P',p.title||p.id]);
   if(items.length>1){
     hier='<div style="display:flex;gap:4px;align-items:center;padding:6px 10px 0;font-size:9px;flex-wrap:wrap">';
     items.forEach((h,i)=>{if(i>0)hier+='<span style="color:var(--t3)">›</span>';hier+=`<span style="color:${i===items.length-1?'var(--blue)':'var(--t2)'};font-weight:${i===items.length-1?'700':'500'}"><span style="color:var(--t3);font-weight:400;margin-right:2px">${h[0]}:</span>${esc(h[1])}</span>`;});
     hier+='</div>';
   }
   // pipeline blocks
-  const pipe=p.pipeline?.stages||[];
-  let pb='';
+  const pipe=p.pipeline?.stages||[];let pb='';
   if(pipe.length){
     pb='<div class="pblocks">'+pipe.map(s=>{
       const cls=s.status==='done'?'done':s.status==='running'?'running':s.status==='failed'?'failed':s.status==='skipped'?'skipped':'pending';
       const lbl=s.label?esc(s.label.split(' ').slice(0,2).join(' ')):s.key;
       const dur=fmtDur(Math.max(s.duration_ms||0,0));
-      const st=s.started_at?fmtTime(s.started_at):'';
-      const et=s.finished_at?fmtTime(s.finished_at):'';
-      const tab=s.target_tab||'events';
-      return`<div class="pblock ${cls}" onclick="event.stopPropagation();stab('${p.id}','${tab}')" title="${esc(s.label)} · ${st}→${et} · ${dur}"><span class="pbl-i ${cls}">${icons[cls]||'○'}</span><span class="pbl-l">${lbl}</span>${st?`<span class="pbl-st ${cls}">${st}</span>`:''}${et?`<span class="pbl-et ${cls}">${et}</span>`:''}<span class="pbl-t ${cls}">${dur}</span></div>`;
+      const st=s.started_at?fmtTime(s.started_at):'';const et=s.finished_at?fmtTime(s.finished_at):'';
+      const tab=s.target_tab||'spec';
+      return`<div class="pblock ${cls}" onclick="event.stopPropagation();stab('${p.id}','${tab}')" title="${esc(s.label)}"><span class="pbl-i ${cls}">${icons[cls]||'○'}</span><span class="pbl-l">${lbl}</span>${st?`<span class="pbl-st ${cls}">${st}</span>`:''}${et?`<span class="pbl-et ${cls}">${et}</span>`:''}<span class="pbl-t ${cls}">${dur}</span></div>`;
     }).join('')+'</div>';
   }
-  // tabs
-  const t=state.tab[p.id]||'events';
+  const t=state.tab[p.id]||'spec';
   const tabsH=TABS.map(x=>`<div class="dtab ${t===x?'on':''}" onclick="stab('${p.id}','${x}')">${TLAB[x]||x}</div>`).join('');
   const cont=renderTabContent(p,t);
   return hier+pb+`<div class="dtabs">${tabsH}</div><div class="dcont" id="dcont-${p.id}">${cont}</div>`;
 }
 
 function renderTabContent(p,tab){
-  if(tab==='events')return renderEventsTab(p);
-  if(tab==='spec')return renderSpecTab(p);
-  if(tab==='sessions')return renderSessionsTab(p);
-  if(tab==='runs')return renderRunsTab(p);
-  if(tab==='logs')return renderLogsTab(p);
-  if(tab==='artifacts')return renderArtifactsTab(p);
-  if(tab==='evidence')return renderEvidenceTab(p);
-  return'<div class="empty">Unknown tab</div>';
+  if(tab==='spec')return renderSpecTab(p);if(tab==='events')return renderEventsTab(p);
+  if(tab==='sessions')return renderSessionsTab(p);if(tab==='runs')return renderRunsTab(p);
+  if(tab==='logs')return renderLogsTab(p);if(tab==='artifacts')return renderArtifactsTab(p);
+  if(tab==='evidence')return renderEvidenceTab(p);return'<div class="empty">Unknown tab</div>';
 }
 
-// ── Events tab ──
-function renderEventsTab(p){
-  const ev=state.tabData[p.id]?.events;
-  if(ev===null)return'<div class="empty">No events</div>';
-  if(ev===undefined){loadTabData(p.id,'events');return'<div class="loading">Loading events</div>';}
-  const events=ev.events||[];if(!events.length)return'<div class="empty">No events</div>';
-  return'<table class="etbl"><thead><tr><th>Time</th><th>Event</th><th>Detail</th></tr></thead><tbody>'+events.map(e=>{
-    const p=e.payload||{},extra=p.from?`${p.from}→${p.to}`:e.reason||'';
-    return`<tr><td class="ev-t">${fmtTime(e.timestamp)}</td><td class="ev-e">${esc(e.event_type)}</td><td class="ev-d">${esc(extra)}</td></tr>`;
-  }).join('')+'</tbody></table>';
-}
-
-// ── Spec tab ──
 function renderSpecTab(p){
   const pk=p.packet||{},sm=p.state_machine||{},steps=sm.steps||[];
-  const rows=[['ID',p.id],['Title',p.title],['Slug',p.slug],['State',p.state],
-    ['Profile',pk.acceptance_profile||p.acceptance_profile||'—'],
-    ['Attempts',`${p.attempt_count||0} / ${p.max_attempts||0}`],
-    ['Created',fmtDate(pk.created_at||p.created_at)],['Updated',fmtDate(pk.updated_at||p.updated_at)]];
+  const rows=[['ID',p.id],['Title',p.title],['State',p.state],['Profile',pk.acceptance_profile||p.acceptance_profile||'—'],['Attempts',`${p.attempt_count||0} / ${p.max_attempts||0}`],['Created',fmtDate(p.created_at)],['Updated',fmtDate(p.updated_at)]];
   let html='<div class="spec-grid">'+rows.map(r=>`<span class="sk">${r[0]}</span><span class="sv">${r[1]}</span>`).join('')+'</div>';
   if(steps.length){
     html+='<div style="margin-top:8px;font-size:10px;font-weight:700;color:var(--t3);margin-bottom:4px">State Machine</div>';
@@ -171,152 +164,148 @@ function renderSpecTab(p){
   }
   return html;
 }
-
-// ── Sessions tab ──
+function renderEventsTab(p){
+  const ev=state.tabData[p.id]?.events;if(ev===null)return'<div class="empty">No events</div>';
+  if(ev===undefined){loadTabData(p.id,'events');return'<div class="loading">Loading events</div>';}
+  const events=ev.events||[];if(!events.length)return'<div class="empty">No events</div>';
+  return'<table class="etbl"><thead><tr><th>Time</th><th>Event</th><th>Detail</th></tr></thead><tbody>'+events.map(e=>{const p=e.payload||{},extra=p.from?`${p.from}→${p.to}`:e.reason||'';return`<tr><td class="ev-t">${fmtTime(e.timestamp)}</td><td class="ev-e">${esc(e.event_type)}</td><td class="ev-d">${esc(extra)}</td></tr>`;}).join('')+'</tbody></table>';
+}
 function renderSessionsTab(p){
-  const ss=state.tabData[p.id]?.sessions;
-  if(ss===null)return'<div class="empty">No sessions</div>';
+  const ss=state.tabData[p.id]?.sessions;if(ss===null)return'<div class="empty">No sessions</div>';
   if(ss===undefined){loadTabData(p.id,'sessions');return'<div class="loading">Loading sessions</div>';}
   const list=ss.sessions||ss||[];if(!list.length)return'<div class="empty">No sessions</div>';
-  return'<div class="slist">'+list.map(s=>{
-    const sid=s.id||s.session_id||'—',status=s.status||'—',model=s.model||s.agent||'—';
-    const ti=s.tokens_in||s.tokensUsed||s.input_tokens||0,to=s.tokens_out||s.output_tokens||0;
-    return`<div class="sitem"><span class="sid">${esc(sid)}</span><span class="sst sst-${status}">${status}</span><span class="smd">${esc(model)}</span><span class="stk">${ti}→${to}</span></div>`;
-  }).join('')+'</div>';
+  return'<div class="slist">'+list.map(s=>{const sid=s.id||s.session_id||'—',st=s.status||'—',md=s.model||s.agent||'—',ti=s.tokens_in||s.tokensUsed||0,to=s.tokens_out||0;return`<div class="sitem"><span class="sid">${esc(sid)}</span><span class="sst sst-${st}">${st}</span><span class="smd">${esc(md)}</span><span class="stk">${ti}→${to}</span></div>`;}).join('')+'</div>';
 }
-
-// ── Runs tab ──
 function renderRunsTab(p){
   const rs=p.runs_summary||[];if(!rs.length)return'<div class="empty">No runs</div>';
-  return'<table class="etbl"><thead><tr><th>Run</th><th>Status</th><th>Executor</th><th>Model</th><th>Duration</th><th>Started</th></tr></thead><tbody>'+rs.map(r=>`<tr style="cursor:pointer" onclick="runExpand('${p.id}',${r.run_number},'${esc(r.run_id.replace(p.id+'-',''))}')"><td class="ev-t" style="font-family:var(--mono);color:var(--purple);font-weight:600">#${r.run_number}</td><td><span class="badge b-${SC[r.status]||'queue'}">${r.status||'?'}</span></td><td class="ev-d">${r.executor_id||'—'}</td><td class="ev-d" style="font-size:9px">${r.model||'—'}</td><td class="ev-t">${fmtDur(r.duration_ms)}</td><td class="ev-t">${fmtTime(r.started_at)}</td></tr>`+renderRunDetailRow(p,r)).join('')+'</tbody></table>';
+  return'<table class="etbl"><thead><tr><th>Run</th><th>Status</th><th>Executor</th><th>Model</th><th>Duration</th></tr></thead><tbody>'+rs.map(r=>`<tr style="cursor:pointer" onclick="runExpand('${p.id}',${r.run_number},'${esc(r.run_id.replace(p.id+'-',''))}')"><td class="ev-t" style="font-family:var(--mono);color:var(--purple);font-weight:600">#${r.run_number}</td><td><span class="badge b-${SC[r.status]||'queue'}">${r.status||'?'}</span></td><td class="ev-d">${r.executor_id||'—'}</td><td class="ev-d" style="font-size:9px">${r.model||'—'}</td><td class="ev-t">${fmtDur(r.duration_ms)}</td></tr>`+runDetailRow(p,r)).join('')+'</tbody></table>';
 }
-function renderRunDetailRow(p,r){
-  const key=p.id+'.r'+r.run_number;
-  if(state.tabData[key]===undefined)return'';
-  const data=state.tabData[key];if(!data)return'<tr><td colspan="6"><div class="empty">No data</div></td></tr>';
-  const rj=data.result_json||{},leg=rj.legacy_result||{};
-  const prompt=data.prompt||rj.prompt||leg.prompt||'';
-  const cmd=data.command_preview||rj.command_preview||leg.command_preview||[];
-  const stderr=leg.stderr||'',stdout=leg.stdout||'';
-  const evidence_path=data.evidence_path||leg.evidence_path||'';
-  let h='<td colspan="6"><div style="padding:4px;display:flex;flex-direction:column;gap:3px">';
-  if(cmd.length){const c=Array.isArray(cmd)?cmd.join(' '):String(cmd);h+=`<div style="font-size:9px;color:var(--t3)">Command: <span style="color:var(--green);font-family:var(--mono)">${esc(c)}</span></div>`;}
-  if(prompt)h+=`<details><summary style="font-size:9px;color:var(--blue);cursor:pointer">Prompt (${prompt.length} chars)</summary><div style="background:var(--bg1);border:1px solid var(--bd);border-radius:4px;padding:4px;margin-top:2px;font-family:var(--mono);font-size:9px;color:var(--t2);white-space:pre-wrap;max-height:200px;overflow-y:auto;word-break:break-all">${esc(prompt)}</div></details>`;
+function runDetailRow(p,r){
+  const key=p.id+'.r'+r.run_number;if(state.tabData[key]===undefined)return'';
+  const data=state.tabData[key];if(!data)return'<tr><td colspan="5"><div class="empty">No data</div></td></tr>';
+  const rj=data.result_json||{},leg=rj.legacy_result||{},prompt=data.prompt||rj.prompt||leg.prompt||'',stderr=leg.stderr||'',stdout=leg.stdout||'';
+  const cmd=data.command_preview||rj.command_preview||[];
+  let h='<td colspan="5"><div style="padding:4px;display:flex;flex-direction:column;gap:3px">';
+  if(cmd.length){const c=Array.isArray(cmd)?cmd.join(' '):String(cmd);h+=`<div style="font-size:9px;color:var(--t3)">Command: <span style="color:var(--green)">${esc(c)}</span></div>`;}
+  if(prompt)h+=`<details><summary style="font-size:9px;color:var(--blue);cursor:pointer">Prompt (${prompt.length} chars)</summary><div style="background:var(--bg1);border:1px solid var(--bd);border-radius:4px;padding:4px;margin-top:2px;font-family:var(--mono);font-size:9px;color:var(--t2);white-space:pre-wrap;max-height:200px;overflow-y:auto">${esc(prompt)}</div></details>`;
   if(stderr)h+=`<details><summary style="font-size:9px;color:var(--red);cursor:pointer">Stderr</summary><div style="background:var(--bg1);border:1px solid var(--bd);border-radius:4px;padding:4px;margin-top:2px;font-family:var(--mono);font-size:9px;color:var(--red);white-space:pre-wrap;max-height:200px;overflow-y:auto">${esc(stderr.slice(0,3000))}</div></details>`;
   if(stdout)h+=`<details><summary style="font-size:9px;color:var(--green);cursor:pointer">Stdout</summary><div style="background:var(--bg1);border:1px solid var(--bd);border-radius:4px;padding:4px;margin-top:2px;font-family:var(--mono);font-size:9px;color:var(--t2);white-space:pre-wrap;max-height:200px;overflow-y:auto">${esc(stdout.slice(0,3000))}</div></details>`;
-  if(!h.includes('details'))h+='<div class="empty" style="padding:10px">No run data available</div>';
-  h+='</div></td>';return'<tr>'+h+'</tr>';
+  if(!h.includes('details'))h+='<div class="empty" style="padding:10px">No data</div>';h+='</div></td>';return'<tr>'+h+'</tr>';
 }
 async function runExpand(id,num,suffix){
-  const key=id+'.r'+num;
-  if(state.tabData[key]){delete state.tabData[key];const p=getAllPackets(state.data).find(x=>x.id===id);if(p)updateTabContent(id);return;}
-  state.tabData[key]=undefined;const p=getAllPackets(state.data).find(x=>x.id===id);if(p)updateTabContent(id);
-  try{const r=await fetch(apiUrl(`/api/admin/packet/${id}/runs/${suffix}`));state.tabData[key]=await r.json();}catch{state.tabData[key]=null;}
-  if(p)updateTabContent(id);
+  const key=id+'.r'+num;if(state.tabData[key]){delete state.tabData[key];const p=getPkt(id);if(p)updateCont(id);return;}
+  state.tabData[key]=undefined;const p=getPkt(id);if(p)updateCont(id);
+  try{const r=await fetch(apiUrl(`/api/admin/packet/${id}/runs/${suffix}`));state.tabData[key]=await r.json();}catch{state.tabData[key]=null;}if(p)updateCont(id);
 }
-
-// ── Logs tab ──
 function renderLogsTab(p){
-  const ld=state.tabData[p.id]?.logs;
-  if(ld===null)return'<div class="empty">No logs available</div>';
+  const ld=state.tabData[p.id]?.logs;if(ld===null)return'<div class="empty">No logs</div>';
   if(ld===undefined){loadTabData(p.id,'logs');return'<div class="loading">Loading logs</div>';}
-  const lines=ld.lines||[];if(!lines.length)return'<div class="empty">No log lines</div>';
-  return'<div class="logs">'+lines.map(l=>{
-    if(typeof l==='string')return`<div class="ll"><span class="lm">${esc(l)}</span></div>`;
-    return`<div class="ll"><span class="lt">${l.timestamp||''}</span><span class="lv ${l.level||''}">${l.level||''}</span><span class="lm">${esc(l.message||l.text||'')}</span></div>`;
-  }).join('')+'</div>';
+  const lines=ld.lines||[];if(!lines.length)return'<div class="empty">No logs</div>';
+  return'<div class="logs">'+lines.map(l=>{if(typeof l==='string')return`<div class="ll"><span class="lm">${esc(l)}</span></div>`;return`<div class="ll"><span class="lt">${l.timestamp||''}</span><span class="lv ${l.level||''}">${l.level||''}</span><span class="lm">${esc(l.message||l.text||'')}</span></div>`;}).join('')+'</div>';
 }
-
-// ── Artifacts tab ──
 function renderArtifactsTab(p){
-  const ad=state.tabData[p.id]?.artifacts;
-  if(ad===null)return'<div class="empty">No artifacts</div>';
+  const ad=state.tabData[p.id]?.artifacts;if(ad===null)return'<div class="empty">No artifacts</div>';
   if(ad===undefined){loadTabData(p.id,'artifacts');return'<div class="loading">Loading artifacts</div>';}
   const tree=ad.tree||[];if(!tree.length)return'<div class="empty">No artifacts</div>';
-  function rt(nodes,d){let h='';nodes.forEach(n=>{
-    const pad='padding-left:'+(d*16)+'px';
-    if(n.type==='dir'){h+=`<div class="af" style="${pad}"><span style="color:var(--yellow)">▸</span><span class="an">${esc(n.name)}/</span></div>`;if(n.children)h+=rt(n.children,d+1);}
-    else{h+=`<div class="af" style="${pad}"><span style="color:var(--t3)">·</span><span>${esc(n.name)}</span><span class="as">${fmtSize(n.size)}</span></div>`;}
-  });return h;}
+  function rt(n,d){let h='';n.forEach(e=>{const p='padding-left:'+(d*16)+'px';if(e.type==='dir'){h+=`<div class="af" style="${p}"><span style="color:var(--yellow)">▸</span><span class="an">${esc(e.name)}/</span></div>`;if(e.children)h+=rt(e.children,d+1);}else{h+=`<div class="af" style="${p}"><span style="color:var(--t3)">·</span><span>${esc(e.name)}</span><span class="as">${fmtSize(e.size)}</span></div>`;}});return h;}
   return'<div class="atree">'+rt(tree,0)+'</div>';
 }
-
-// ── Evidence tab ──
 function renderEvidenceTab(p){
-  const ed=state.tabData[p.id]?.evidence;
-  if(ed===null)return'<div class="empty">No evidence</div>';
+  const ed=state.tabData[p.id]?.evidence;if(ed===null)return'<div class="empty">No evidence</div>';
   if(ed===undefined){loadTabData(p.id,'evidence');return'<div class="loading">Loading evidence</div>';}
   const stages=ed.stages||[];let html='';
   if(ed.verdict)html+=`<div style="font-size:11px;margin-bottom:6px"><span style="color:var(--t3);font-weight:600">Verdict:</span> <span style="color:${ed.verdict==='pass'||ed.verdict==='passed'?'var(--green)':'var(--red)'}">${esc(ed.verdict)}</span></div>`;
   if(ed.summary)html+=`<div style="font-size:10px;color:var(--t2);margin-bottom:6px">${esc(ed.summary)}</div>`;
-  if(stages.length){
-    html+='<div class="scards">'+stages.map(s=>{
-      const cls=s.status==='passed'?'done':s.status==='failed'?'failed':'pending';
-      const icon=s.status==='passed'?'✓':s.status==='failed'?'✗':'—';
-      let r='';if(s.summary)r+=`<div class="sc-r"><span class="sc-rk">Summary</span><span class="sc-rv">${esc(s.summary).slice(0,60)}</span></div>`;
-      if(s.commands_summary)r+=`<div class="sc-r"><span class="sc-rk">Cmds</span><span class="sc-rv">${s.commands_summary.passed||0}✓ ${s.commands_summary.failed||0}✗</span></div>`;
-      if(s.blocking_issues?.length)r+=`<div class="sc-r"><span class="sc-rk">Blocking</span><span class="sc-rv err">${s.blocking_issues.length}</span></div>`;
-      return`<div class="sc ${cls}"><div class="sc-h"><span class="sc-n ${cls}">${esc(s.name||s.stage||'?')}</span><span class="sc-si">${icon}</span></div><div class="sc-rs">${r}</div></div>`;
-    }).join('')+'</div>';
-  }
+  if(stages.length)html+='<div class="scards">'+stages.map(s=>{const cls=s.status==='passed'?'done':s.status==='failed'?'failed':'pending',icon=s.status==='passed'?'✓':s.status==='failed'?'✗':'—';let r='';if(s.summary)r+=`<div class="sc-r"><span class="sc-rk">Summary</span><span class="sc-rv">${esc(s.summary).slice(0,60)}</span></div>`;if(s.blocking_issues?.length)r+=`<div class="sc-r"><span class="sc-rk">Blocking</span><span class="sc-rv err">${s.blocking_issues.length}</span></div>`;return`<div class="sc ${cls}"><div class="sc-h"><span class="sc-n ${cls}">${esc(s.name||'?')}</span><span class="sc-si">${icon}</span></div><div class="sc-rs">${r}</div></div>`;}).join('')+'</div>';
   if(!html)html='<div class="empty">No evidence data</div>';return html;
 }
+function fmtSize(b){if(!b)return'';if(b<1024)return b+'B';if(b<1048576)return(b/1024).toFixed(0)+'KB';return(b/1048576).toFixed(1)+'MB';}
 
-function fmtSize(bytes){if(!bytes)return'';if(bytes<1024)return bytes+'B';if(bytes<1048576)return(bytes/1024).toFixed(0)+'KB';return(bytes/1048576).toFixed(1)+'MB';}
-
-// ── Tab data loading ──
+// ── Tab loading ──
 function getLastRunSuffix(p){const rs=p.runs_summary||[];if(!rs.length)return null;return rs[rs.length-1].run_id.replace(p.id+'-','');}
+function getPkt(id){if(!state.data)return null;for(const f of state.data.features||[]){for(const w of f.waves||[]){for(const p of w.packets||[]){if(p.id===id)return p;}}}return null;}
 async function loadTabData(id,tab){
   if(!state.tabData[id])state.tabData[id]={};state.tabData[id][tab]=undefined;
-  try{
-    const p=getAllPackets(state.data).find(x=>x.id===id);let data=null;
+  try{const p=getPkt(id);let data=null;
     if(tab==='events'){const r=await fetch(apiUrl(`/api/admin/packet/${id}/timeline?limit=200`));data=await r.json();}
     else if(tab==='sessions'){const r=await fetch(apiUrl(`/api/admin/packet/${id}/sessions`));data=await r.json();}
-    else if(tab==='logs'){const suff=getLastRunSuffix(p);if(!suff||!p){state.tabData[id][tab]=null;updateTabContent(id);return;}const r=await fetch(apiUrl(`/api/admin/packet/${id}/runs/${suff}/logs?tail=200`));data=await r.json();}
-    else if(tab==='evidence'){const suff=getLastRunSuffix(p);if(!suff||!p){state.tabData[id][tab]=null;updateTabContent(id);return;}const r=await fetch(apiUrl(`/api/admin/packet/${id}/runs/${suff}/evidence`));data=await r.json();}
-    else if(tab==='artifacts'){const suff=getLastRunSuffix(p);if(!suff||!p){state.tabData[id][tab]=null;updateTabContent(id);return;}const r=await fetch(apiUrl(`/api/admin/packet/${id}/runs/${suff}/artifacts`));data=await r.json();}
+    else if(tab==='logs'){const s=getLastRunSuffix(p);if(!s||!p){state.tabData[id][tab]=null;updateCont(id);return;}const r=await fetch(apiUrl(`/api/admin/packet/${id}/runs/${s}/logs?tail=200`));data=await r.json();}
+    else if(tab==='evidence'){const s=getLastRunSuffix(p);if(!s||!p){state.tabData[id][tab]=null;updateCont(id);return;}const r=await fetch(apiUrl(`/api/admin/packet/${id}/runs/${s}/evidence`));data=await r.json();}
+    else if(tab==='artifacts'){const s=getLastRunSuffix(p);if(!s||!p){state.tabData[id][tab]=null;updateCont(id);return;}const r=await fetch(apiUrl(`/api/admin/packet/${id}/runs/${s}/artifacts`));data=await r.json();}
     state.tabData[id][tab]=data;
-  }catch(e){state.tabData[id][tab]=null;}updateTabContent(id);
+  }catch(e){state.tabData[id][tab]=null;}updateCont(id);
 }
-function updateTabContent(id){
+function updateCont(id){
   const dcont=document.getElementById('dcont-'+id);if(!dcont)return;
-  const p=getAllPackets(state.data).find(x=>x.id===id);if(!p)return;
-  const t=state.tab[p.id]||'events';dcont.innerHTML=renderTabContent(p,t);
-  const dtabs=dcont.parentElement?.querySelector('.dtabs');
-  if(dtabs)dtabs.querySelectorAll('.dtab').forEach(el=>el.classList.toggle('on',el.textContent.trim()===TLAB[t]));
-}
-
-// ── Toggle / Stab / Render ──
-function toggle(id){
-  if(state.sel===id){state.sel=null;delete state.tabData[id];delete state.tab[id];render();return;}
-  state.sel=id;delete state.tabData[id];delete state.tab[id];render();
-  loadDetail(id).then(d=>{if(d&&state.sel===id)mergeDetail(id,d);});
-  const cached=loadDetailCached(id);if(cached)mergeDetail(id,cached);
+  const p=getPkt(id);if(!p)return;
+  const t=state.tab[p.id]||'spec';dcont.innerHTML=renderTabContent(p,t);
+  const dt=dcont.parentElement?.querySelector('.dtabs');if(dt)dt.querySelectorAll('.dtab').forEach(el=>el.classList.toggle('on',el.textContent.trim()===TLAB[t]));
 }
 function mergeDetail(id,detail){
-  const p=getAllPackets(state.data).find(x=>x.id===id);if(!p)return;
+  const p=getPkt(id);if(!p)return;
   if(detail.pipeline)p.pipeline=detail.pipeline;
   if(detail.state_machine)p.state_machine=detail.state_machine;
   if(detail.runs_summary)p.runs_summary=detail.runs_summary;
   if(detail.sessions_summary)p.sessions=detail.sessions_summary.sessions||[];
-  Object.assign(p,detail.packet||{});
+  if(detail.packet)Object.assign(p,detail.packet);
   const dcont=document.getElementById('dcont-'+id);
-  if(dcont){const t=state.tab[id]||'events';dcont.innerHTML=renderTabContent(p,t);}
+  if(dcont){const t=state.tab[id]||'spec';dcont.innerHTML=renderTabContent(p,t);}
 }
-function stab(id,t){state.tab[id]=t;updateTabContent(id);}
-function render(){const pkts=getAllPackets(state.data);renderChips(pkts);renderBoard(pkts);}
+function stab(id,t){state.tab[id]=t;updateCont(id);}
+
+// ── Archive ──
+async function archiveFeat(id){
+  if(!confirm('Archive this feature?'))return;
+  try{await fetch(apiUrl(`/api/admin/feature/${id}/archive`),{method:'POST'});loadData();}catch(e){alert('Archive failed');}
+}
+function loadArchived(){
+  fetch(apiUrl('/api/admin/features?include_archived=true')).then(r=>r.json()).then(d=>{
+    const fs=(d.features||[]).filter(f=>f.is_archived);
+    if(!fs.length){$('#board').innerHTML='<div class="empty">No archived features</div>';return;}
+    let html='';fs.forEach(f=>{
+      html+=`<div class="feat-card"><div class="feat-h"><div class="feat-info"><div class="feat-title" style="opacity:.6">${esc(f.title||f.id)}</div><div class="feat-sub">${esc(f.id)} · ${f.total_packets||0} packets</div></div><div class="feat-actions"><button class="feat-act" onclick="event.stopPropagation();unarchiveFeat('${f.id}')" title="Restore">↩</button></div></div></div>`;
+    });
+    $('#board').innerHTML=html;
+  }).catch(()=>{$('#board').innerHTML='<div class="empty">Failed to load archive</div>';});
+}
+async function unarchiveFeat(id){
+  try{await fetch(apiUrl(`/api/admin/feature/${id}/unarchive`),{method:'POST'});loadArchived();}catch(e){alert('Restore failed');}
+}
+
+// ── Business feature ──
+async function submitBiz(){
+  const input=$('#biz-input');const btn=$('#biz-btn');const text=input?.value?.trim();
+  if(!text)return;btn.disabled=true;btn.textContent='Submitting...';
+  try{
+    const r=await fetch(apiUrl('/api/architect/plan'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({feature_spec:{title:text,description:text}})});
+    if(!r.ok){const e=await r.json();alert('Error: '+(e.detail||e.message||r.status));btn.disabled=false;btn.textContent='Submit Feature';return;}
+    const result=await r.json();
+    input.value='';btn.disabled=false;btn.textContent='Submit Feature';
+    switchView('dashboard');
+    loadData();
+  }catch(e){alert('Request failed: '+e.message);btn.disabled=false;btn.textContent='Submit Feature';}
+}
 
 // ── API ──
 const _qp=new URLSearchParams(location.search),_xtp=_qp.get('XTransformPort');
-function apiUrl(path){if(_xtp){const sep=path.includes('?')?'&':'?';return path+sep+'XTransformPort='+_xtp;}return path;}
+function apiUrl(p){if(_xtp){const s=p.includes('?')?'&':'?';return p+s+'XTransformPort='+_xtp;}return p;}
 const detailCache={};
 async function loadDetail(id){try{const r=await fetch(apiUrl(`/api/admin/packet/${id}/detail`));const d=await r.json();d._ts=Date.now();detailCache[id]=d;return d;}catch{return null;}}
 function loadDetailCached(id){const d=detailCache[id];if(d&&Date.now()-d._ts<15000)return d;return null;}
-async function loadData(){try{const r=await fetch(apiUrl('/api/admin/features'));state.data=await r.json();render();}catch(e){$('#board').innerHTML='<div class="empty">Failed to load data. Retrying...</div>';setTimeout(loadData,5000);}}
 
-$('#chips').addEventListener('click',e=>{const c=e.target.closest('.chip');if(!c)return;state.filter=c.dataset.f;state.sel=null;state.tabData={};render();});
-$('#search').addEventListener('input',e=>{state.q=e.target.value.trim();renderBoard(getAllPackets(state.data));});
-setInterval(loadData,15000);
+async function loadData(){
+  try{
+    const saved={};
+    if(state.sel&&state.data){for(const f of state.data.features||[]){for(const w of f.waves||[]){for(const p of w.packets||[]){if(p.id===state.sel){saved.state_machine=p.state_machine;saved.runs_summary=p.runs_summary;saved.packet=p.packet;}}}}}
+    const r=await fetch(apiUrl('/api/admin/features'));
+    state.data=await r.json();
+    if(saved.state_machine&&state.sel){for(const f of state.data.features||[]){for(const w of f.waves||[]){for(const p of w.packets||[]){if(p.id===state.sel){p.state_machine=saved.state_machine;p.runs_summary=saved.runs_summary;if(saved.packet)Object.assign(p,saved.packet);}}}}}
+    renderDashboard();
+  }catch(e){$('#board').innerHTML='<div class="empty">Failed to load. Retrying...</div>';setTimeout(loadData,5000);}
+}
+
+// ── Init ──
 loadData();
+setInterval(loadData,15000);
 </script>
 </body></html>

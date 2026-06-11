@@ -48,6 +48,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse, Response
 
 from grace_control.db import get_db
+from grace_control.db.schema import Feature
 from grace_control.services.admin_aggregation_service import AdminAggregationService
 
 router = APIRouter()
@@ -64,10 +65,10 @@ def overview() -> dict:
 
 
 @router.get("/api/admin/features")
-def features_tree() -> dict:
+def features_tree(include_archived: bool = Query(False)) -> dict:
     """All features with nested waves → packets. Powers the main Overview."""
     with get_db() as db:
-        return _svc.get_features_tree(db)
+        return _svc.get_features_tree(db, include_archived=include_archived)
 
 
 # ── Packet detail ──────────────────────────────────────────────────────────
@@ -205,6 +206,30 @@ def system_health() -> dict:
 def system_workers() -> dict:
     with get_db() as db:
         return _svc.get_workers(db)
+
+
+@router.post("/api/admin/feature/{feature_id}/archive")
+def archive_feature(feature_id: str) -> dict:
+    """Mark a feature as ARCHIVED."""
+    with get_db() as db:
+        feat = db.query(Feature).filter_by(id=feature_id).first()
+        if not feat:
+            raise HTTPException(status_code=404, detail="feature not found")
+        feat.status = "ARCHIVED"
+        db.commit()
+        return {"ok": True, "feature_id": feature_id, "status": "ARCHIVED"}
+
+
+@router.post("/api/admin/feature/{feature_id}/unarchive")
+def unarchive_feature(feature_id: str) -> dict:
+    """Restore an archived feature."""
+    with get_db() as db:
+        feat = db.query(Feature).filter_by(id=feature_id).first()
+        if not feat:
+            raise HTTPException(status_code=404, detail="feature not found")
+        feat.status = "NOT_STARTED"
+        db.commit()
+        return {"ok": True, "feature_id": feature_id, "status": "NOT_STARTED"}
 
 
 # ── Planned control stubs (v2) ─────────────────────────────────────────────

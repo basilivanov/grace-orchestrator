@@ -1062,9 +1062,15 @@ class AdminAggregationService:
             "waves": wave_rows,
         }
 
-    def get_features_tree(self, db: Session) -> dict[str, Any]:
-        """Return all features with nested waves → packets. Used by Overview."""
-        features = db.query(Feature).order_by(Feature.created_at).all()
+    def get_features_tree(self, db: Session, include_archived: bool = False) -> dict[str, Any]:
+        """Return all features with nested waves → packets.
+
+        Excludes archived features (status='ARCHIVED') unless include_archived=True.
+        """
+        q = db.query(Feature)
+        if not include_archived:
+            q = q.filter(Feature.status != "ARCHIVED")
+        features = q.order_by(Feature.created_at).all()
         out: list[dict[str, Any]] = []
         for f in features:
             waves = (
@@ -1137,6 +1143,7 @@ class AdminAggregationService:
                 "created_at": _iso(f.created_at), "updated_at": _iso(f.updated_at),
                 "wave_count": len(wave_rows),
                 "total_packets": len(all_packets),
+                "is_archived": f.status == "ARCHIVED",
                 "attention_count": f_attn,
                 "waves": wave_rows,
             })
