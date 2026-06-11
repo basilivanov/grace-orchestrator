@@ -181,3 +181,38 @@ def test_agent_profile_minimal_repo_fields():
         prof = profiles["coder-opencode"]
         assert prof.minimal_repo is False
         assert prof.skip_context_builder is False
+
+
+def test_agent_profile_prompt_content():
+    """Architect and context-builder prompts contain expected instructions (TZ v0.02)."""
+    from grace_control.config.agent_profiles import get_agent_profile, reset_cache
+    reset_cache()
+
+    # --- architect-premium ---
+    arch = get_agent_profile("architect-premium")
+    assert arch is not None, "architect-premium profile not found"
+    arch_text = "\n".join(arch.command)
+    for text in [
+        "GRACE Architect",
+        "Do not crawl the whole repository",
+        "contract-first",
+        "context_bundle_path",
+        "knowledge-plan.xml",
+        "verification-matrix.xml",
+    ]:
+        assert text in arch_text, f"architect-premium missing: {text!r}"
+
+    # --- context-collector-flash ---
+    col = get_agent_profile("context-collector-flash")
+    assert col is not None, "context-collector-flash profile not found"
+    col_text = "\n".join(col.command)
+    for text in [
+        "bounded GRACE Context Builder",
+        "Do not read outside cwd",
+        "Do not crawl the whole repository",
+        "AI_HEADER",
+        "START_MODULE_CONTRACT",
+        "START_FUNCTION_CONTRACT",
+        "context_bundle_path",
+    ]:
+        assert text in col_text, f"context-collector-flash missing: {text!r}"
