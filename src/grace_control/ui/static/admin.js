@@ -13,10 +13,11 @@ const icons={done:'✓',running:'⟳',failed:'✗',skipped:'—',pending:'○'};
 function toast(msg,type='info'){const c=$('#toast-cont')||(()=>{const d=document.createElement('div');d.id='toast-cont';d.className='toast';document.body.appendChild(d);return d;})();const e=document.createElement('div');e.className='toast-item '+type;e.textContent=msg;c.appendChild(e);setTimeout(()=>{e.style.opacity='0';e.style.transition='opacity .3s';setTimeout(()=>e.remove(),300)},2500);}
 
 function switchView(v){
-  state.view=v;$('#topnav').querySelectorAll('a').forEach(a=>a.classList.toggle('on',a.textContent.trim().toLowerCase().includes(v==='dashboard'?'dashboard':v==='archive'?'archive':'new')));
-  if(v==='dashboard'){$('#bizbar').innerHTML='';loadData();}
-  else if(v==='archive'){$('#bizbar').innerHTML='';loadArchived();}
-  else if(v==='new'){$('#bizbar').innerHTML='';$('#board').innerHTML=`<div style="padding:16px;display:flex;flex-direction:column;gap:10px;max-width:700px"><textarea id="biz-input" style="width:100%;min-height:180px;padding:10px;background:var(--bg1);border:1px solid var(--bd);border-radius:6px;color:var(--t1);font-size:13px;font-family:inherit;resize:vertical;outline:none" placeholder="Describe your business feature in detail..."></textarea><div style="display:flex;gap:8px;align-items:center"><button id="biz-btn" onclick="submitBiz()" style="padding:8px 20px;border-radius:6px;border:none;background:var(--blue);color:#fff;font-size:13px;font-weight:600;cursor:pointer">Submit Feature</button><span id="biz-status" style="font-size:11px;color:var(--t3)"></span></div></div>`;}
+  state.view=v;$('#topnav').querySelectorAll('a').forEach(a=>a.classList.toggle('on',a.textContent.trim().toLowerCase().includes(v)));
+  if(v==='dashboard'){$('#bizbar').innerHTML='';loadData();if(window.logInt){clearInterval(window.logInt);window.logInt=null;}}
+  else if(v==='archive'){$('#bizbar').innerHTML='';loadArchived();if(window.logInt){clearInterval(window.logInt);window.logInt=null;}}
+  else if(v==='logs'){$('#bizbar').innerHTML='';initLogViewer();}
+  else if(v==='new'){$('#bizbar').innerHTML='';$('#board').innerHTML=`<div style="padding:16px;display:flex;flex-direction:column;gap:10px;max-width:700px"><textarea id="biz-input" style="width:100%;min-height:180px;padding:10px;background:var(--bg1);border:1px solid var(--bd);border-radius:6px;color:var(--t1);font-size:13px;font-family:inherit;resize:vertical;outline:none" placeholder="Describe your business feature in detail..."></textarea><div style="display:flex;gap:8px;align-items:center"><button id="biz-btn" onclick="submitBiz()" style="padding:8px 20px;border-radius:6px;border:none;background:var(--blue);color:#fff;font-size:13px;font-weight:600;cursor:pointer">Submit Feature</button><span id="biz-status" style="font-size:11px;color:var(--t3)"></span></div></div>`;if(window.logInt){clearInterval(window.logInt);window.logInt=null;}}
 }
 function toggleDetail(){state.detailMode=!state.detailMode;renderDashboard();}
 
@@ -277,6 +278,47 @@ async function loadData(){
     if(saved.state_machine&&state.sel){for(const f of state.data.features||[]){for(const w of f.waves||[]){for(const p of w.packets||[]){if(p.id===state.sel){p.state_machine=saved.state_machine;p.runs_summary=saved.runs_summary;if(saved.packet)Object.assign(p,saved.packet);}}}}}
     renderDashboard();
   }catch(e){$('#board').innerHTML='<div class="empty">Failed to load. Retrying...</div>';setTimeout(loadData,5000);}
+}
+
+// ── Log viewer ──
+let logState={lines:[],source:'',paused:false};
+function initLogViewer(){
+  logState={lines:[],source:'',paused:false};
+  fetchLogs();
+  if(window.logInt)clearInterval(window.logInt);
+  window.logInt=setInterval(fetchLogs,2000);
+}
+function toggleLogPause(){logState.paused=!logState.paused;if(!logState.paused)fetchLogs();}
+async function fetchLogs(){
+  if(logState.paused||state.view!=='logs')return;
+  try{
+    const r=await fetch(apiUrl('/api/admin/system/logs?tail=200'));
+    const d=await r.json();
+    logState.lines=d.lines||[];
+    logState.source=d.source||'';
+    renderLogs();
+  }catch(e){/* ignore */}
+}
+function renderLogs(){
+  const lines=logState.lines;
+  let html=`<div style="display:flex;gap:6px;align-items:center;padding:6px 10px;flex-shrink:0;border-bottom:1px solid var(--bd);background:var(--bg1)">
+    <span style="font-size:10px;font-weight:600;color:var(--t2)">Server Logs</span>
+    <span style="font-size:8px;color:var(--t3);font-family:var(--mono)">${logState.source}</span>
+    <span style="font-size:8px;color:var(--t3)">${lines.length} lines</span>
+    <span style="flex:1"></span>
+    <button class="chip ${logState.paused?'on':''}" onclick="toggleLogPause()" style="font-size:9px;padding:2px 8px">${logState.paused?'⏵ Resume':'⏸ Pause'}</button>
+    <button class="chip" onclick="fetchLogs()" style="font-size:9px;padding:2px 8px">↻</button>
+  </div>`;
+  html+=`<div style="flex:1;overflow-y:auto;padding:4px 8px;font-family:var(--mono);font-size:9px;line-height:1.6;background:var(--bg0)">`;
+  lines.forEach(l=>{
+    let cls='';
+    if(l.startsWith('{')){try{const j=JSON.parse(l);cls=j.level==='ERROR'?'color:var(--red)':j.level==='WARN'?'color:var(--yellow)':'color:var(--t2)';l=j.msg||l;}catch{}}
+    else if(l.includes('ERROR')||l.includes('error'))cls='color:var(--red)';
+    else if(l.includes('WARNING')||l.includes('warn'))cls='color:var(--yellow)';
+    html+=`<div style="${cls};white-space:pre-wrap;word-break:break-all">${esc(l.slice(0,2000))}</div>`;
+  });
+  html+='</div>';
+  $('#board').innerHTML=html;
 }
 
 loadData();
