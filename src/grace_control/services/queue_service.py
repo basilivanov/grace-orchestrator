@@ -45,7 +45,6 @@ NON_TERMINAL_DONE = {
 TERMINAL_SUCCESS = {
     PacketState.MERGED.value,
     PacketState.CANCELLED.value,
-    PacketState.ACCEPTED.value,
 }
 
 # Legacy statuses that mean "queued, not yet started"
@@ -114,24 +113,9 @@ def claim_next(worker_id: str) -> tuple[str | None, str]:
         # 3. Run wave gate (promotes DRAFT→READY for completed waves)
         _run_wave_gate()
 
-        # 4. Check for degraded packets in the feature
-        degraded = (
-            db.query(Packet)
-            .filter(
-                Packet.feature_id == feat.id,
-                Packet.state.in_(DEGRADED_STATES),
-            )
-            .count()
-        )
-        if degraded > 0:
-            feat.status = "degraded"
-            feat.updated_at = datetime.now(UTC)
-            db.commit()
-            _log.warn("queue_degraded", feature_id=feat.id,
-                      degraded_count=degraded)
-            return None, "feature_degraded"
-
-        # 5. Find earliest wave with READY packets
+        # 5. Find earliest claimable wave with READY packets.
+        #    Waves must be processed in order: later waves are not claimable
+        #    until all packets in earlier waves are MERGED or CANCELLED.
         waves = (
             db.query(Wave)
             .filter(Wave.feature_id == feat.id)
@@ -139,20 +123,52 @@ def claim_next(worker_id: str) -> tuple[str | None, str]:
             .all()
         )
 
-        for wave in waves:
-            packet = (
-                db.query(Packet)
-                .filter(
-                    Packet.wave_id == wave.id,
-                    Packet.state == PacketState.READY.value,
-                )
-                .order_by(Packet.created_at.asc(), Packet.id.asc())
-                .first()
-            )
-            if packet:
-                return packet.id, "ok"
+        claimable_packet = None
+        wave_complete = True  # tracks whether all preceding waves are done
 
-        # 6. Check if feature is fully done
+        for wave in waves:
+            wave_packets = (
+                db.query(Packet)
+                .filter(Packet.wave_id == wave.id)
+                .all()
+            )
+
+            if not wave_packets:
+                continue
+
+            # Check if this wave has a READY packet
+            ready = [p for p in wave_packets if p.state == PacketState.READY.value]
+            # Check if this wave has degraded packets
+            degraded_wave = [p for p in wave_packets if p.state in DEGRADED_STATES]
+            # Check if all packets in this wave are in terminal success states
+            all_done = all(p.state in TERMINAL_SUCCESS for p in wave_packets)
+
+            if degraded_wave:
+                feat.status = "degraded"
+                feat.updated_at = datetime.now(UTC)
+                db.commit()
+                _log.warn("queue_degraded", feature_id=feat.id, wave_id=wave.id)
+                return None, "feature_degraded"
+
+            if not wave_complete and ready:
+                # Earlier wave has non-terminal packets — cannot skip ahead
+                return None, "waiting_for_wave_completion"
+
+            if ready:
+                # This is the earliest claimable wave
+                wave_complete = False
+                ready.sort(key=lambda p: (p.created_at, p.id))
+                claimable_packet = ready[0]
+                break
+            elif not all_done:
+                # Wave is not fully done — wait
+                return None, "waiting_for_wave_completion"
+            # else all_done: wave is complete, proceed to next wave
+
+        if claimable_packet:
+            return claimable_packet.id, "ok"
+
+        # All waves processed — check if feature is fully done
         remaining = (
             db.query(Packet)
             .filter(Packet.feature_id == feat.id)

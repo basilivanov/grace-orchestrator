@@ -232,3 +232,60 @@ def test_all_merged_makes_feature_done(_db):
     pid, reason = claim_next("worker")
     assert pid is None
     assert reason == "feature_done"
+
+
+# ── Wave gating: earlier waves block later ones ────────────────────────
+
+
+def test_wave1_draft_wave2_ready_no_claim(_db):
+    """Wave 1 DRAFT + Wave 2 READY → Wave 2 cannot be claimed."""
+    with get_db() as s:
+        _add_feature(s, "feat_WG")
+        _add_wave(s, "wave_WG1", "feat_WG", order=1)
+        _add_wave(s, "wave_WG2", "feat_WG", order=2)
+        _add_packet(s, "pkt_WG1_1", "feat_WG", "wave_WG1", state="draft")
+        _add_packet(s, "pkt_WG2_1", "feat_WG", "wave_WG2")
+    from grace_control.services.queue_service import claim_next
+    pid, reason = claim_next("worker")
+    assert pid is None, f"Wave 2 should not be claimable before Wave 1, got {pid}"
+    assert "waiting_for_wave_completion" in reason
+
+
+def test_wave1_accepted_wave2_ready_no_claim(_db):
+    """Wave 1 ACCEPTED (not merged) + Wave 2 READY → no claim."""
+    with get_db() as s:
+        _add_feature(s, "feat_WA")
+        _add_wave(s, "wave_WA1", "feat_WA", order=1)
+        _add_wave(s, "wave_WA2", "feat_WA", order=2)
+        _add_packet(s, "pkt_WA1_1", "feat_WA", "wave_WA1", state=PacketState.ACCEPTED.value)
+        _add_packet(s, "pkt_WA2_1", "feat_WA", "wave_WA2")
+    from grace_control.services.queue_service import claim_next
+    pid, reason = claim_next("worker")
+    assert pid is None, f"Wave 2 should not be claimable until Wave 1 is merged, got {pid}"
+    assert "waiting_for_wave_completion" in reason
+
+
+def test_wave1_merged_wave2_ready_claim_wave2(_db):
+    """Wave 1 MERGED + Wave 2 READY → Wave 2 packet is claimable."""
+    with get_db() as s:
+        _add_feature(s, "feat_WM")
+        _add_wave(s, "wave_WM1", "feat_WM", order=1)
+        _add_wave(s, "wave_WM2", "feat_WM", order=2)
+        _add_packet(s, "pkt_WM1_1", "feat_WM", "wave_WM1", state=PacketState.MERGED.value)
+        _add_packet(s, "pkt_WM2_1", "feat_WM", "wave_WM2")
+    from grace_control.services.queue_service import claim_next
+    pid, reason = claim_next("worker")
+    assert pid == "pkt_WM2_1", f"Expected Wave 2 packet, got {pid}"
+    assert reason == "ok"
+
+
+def test_all_accepted_feature_not_done(_db):
+    """All packets ACCEPTED (not merged) → feature is NOT done."""
+    with get_db() as s:
+        _add_feature(s, "feat_AC2")
+        _add_wave(s, "wave_AC2_1", "feat_AC2")
+        _add_packet(s, "pkt_AC2_1", "feat_AC2", "wave_AC2_1", state=PacketState.ACCEPTED.value)
+    from grace_control.services.queue_service import claim_next
+    pid, reason = claim_next("worker")
+    assert pid is None, "No READY packets, so no claim"
+    assert reason != "feature_done", "ACCEPTED should not trigger feature_done"

@@ -53,6 +53,10 @@
 | `test_not_started_treated_as_queued` | Legacy NOT_STARTED works |
 | `test_feature_marked_active_after_claim` | Status → active |
 | `test_all_merged_makes_feature_done` | All merged → done |
+| `test_wave1_draft_wave2_ready_no_claim` | Wave 1 DRAFT blocks Wave 2 |
+| `test_wave1_accepted_wave2_ready_no_claim` | Wave 1 ACCEPTED blocks Wave 2 (only MERGED counts) |
+| `test_wave1_merged_wave2_ready_claim_wave2` | Wave 1 MERGED → Wave 2 claimable |
+| `test_all_accepted_feature_not_done` | ACCEPTED packets don't trigger feature_done |
 
 ## Known limitations
 - `check_wave_gates` runs for ALL features, not just the active one (minor, not a correctness issue)
