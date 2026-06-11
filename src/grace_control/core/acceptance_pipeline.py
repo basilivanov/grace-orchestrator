@@ -545,17 +545,19 @@ class AcceptancePipeline:
                 *, run_dir: Path | None = None, cwd: Path | None = None) -> StageResult:
         base_path = (cwd or self._root).resolve()
 
-        # Default commands from gate resolver
-        defaults = resolve_default_gates(changed_files, packet.acceptance_profile.value, base_path)
-        t1_defaults = defaults["t1"]["commands"]
-        t1_default_origins = defaults["t1"]["origins"]
-
-        # Explicit commands from architect
+        # Explicit commands from architect (complete, not extra)
         explicit = packet.verification.get("t1", [])
 
-        # Merge: defaults first, then explicit
-        all_cmds = list(t1_defaults) + [c.split() if isinstance(c, str) else c for c in explicit]
-        all_origins = list(t1_default_origins) + ["architect:extra_verification"] * len(explicit)
+        if explicit:
+            # When architect provides explicit T1, use ONLY those commands.
+            all_cmds = [c.split() if isinstance(c, str) else c for c in explicit]
+            all_origins = ["architect:verification"] * len(explicit)
+        else:
+            # No explicit T1 — use auto defaults from gate resolver
+            defaults = resolve_default_gates(changed_files, packet.acceptance_profile.value, base_path)
+            all_cmds = defaults["t1"]["commands"]
+            all_origins = defaults["t1"]["origins"]
+
         commands = [self._runner.run(cmd, output_dir=run_dir, cwd=cwd) for cmd in all_cmds]
 
         if not all_cmds:
@@ -591,17 +593,18 @@ class AcceptancePipeline:
                 *, run_dir: Path | None = None, cwd: Path | None = None) -> StageResult:
         base_path = (cwd or self._root).resolve()
 
-        # Default commands from gate resolver
-        defaults = resolve_default_gates(changed_files, packet.acceptance_profile.value, base_path)
-        t2_defaults = defaults["t2"]["commands"]
-        t2_default_origins = defaults["t2"]["origins"]
-
-        # Explicit commands from architect
+        # Explicit commands from architect (complete, not extra)
         explicit = packet.verification.get("t2", [])
 
-        # Merge
-        all_cmds = list(t2_defaults) + [c.split() if isinstance(c, str) else c for c in explicit]
-        all_origins = list(t2_default_origins) + ["architect:extra_verification"] * len(explicit)
+        if explicit:
+            # When architect provides explicit T2, use ONLY those commands.
+            all_cmds = [c.split() if isinstance(c, str) else c for c in explicit]
+            all_origins = ["architect:verification"] * len(explicit)
+        else:
+            # No explicit T2 — use auto defaults from gate resolver
+            defaults = resolve_default_gates(changed_files, packet.acceptance_profile.value, base_path)
+            all_cmds = defaults["t2"]["commands"]
+            all_origins = defaults["t2"]["origins"]
 
         if not all_cmds:
             if packet.acceptance_profile == AcceptanceProfile.STRICT:
