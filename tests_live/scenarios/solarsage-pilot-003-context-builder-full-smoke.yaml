@@ -30,7 +30,6 @@ waves:
           Do not modify files. Do not read outside cwd. Do not crawl the whole repository.
         scope:
           - components/today/tab-bar.tsx
-          - __tests__/components/TabBar.test.tsx
         expected:
           context_bundle_path: required
           selected_files:

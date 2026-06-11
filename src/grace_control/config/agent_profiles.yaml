@@ -423,6 +423,7 @@ codex:
     priority: 100
     roles:
     - context_collector
+    - context-builder
   roles:
     architect:
       approval: never

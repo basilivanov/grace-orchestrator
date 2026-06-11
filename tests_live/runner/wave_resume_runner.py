@@ -104,11 +104,14 @@ class WaveResumeRunner:
             "verifier_replays": 0,
             "reviewer_replays": 0,
             "agent_session_resumes": 0,
+            "watchdog_restarts": 0,
             "packet_state_changed_by_replay": False,
             "artifacts_dir": str(self.run_dir),
             "feature_id": None,
             "packet_ids": [],
             "failures": [],
+            "live_log_path": str(self.run_dir / "runner.log"),
+            "runner_pid": os.getpid(),
         }
 
     # ---- Public API ----
@@ -127,25 +130,42 @@ class WaveResumeRunner:
             self._write_report()
             return 1
 
-        # 2. Connect to API
+        # 2. Stage 0: context-builder (built-in, runs before API submission)
+        context_bundle = self._run_stage0_context_builder()
+        if self.report.get("failures"):
+            self.report["status"] = "failed"
+            self._write_report()
+            return 1
+
+        # 3. Connect to API
         if not self._check_api():
             print("[runner] API not reachable, starting supervisor...")
             self._start_api()
 
-        # 3. Submit explicit waves
-        feat_id = self._submit_feature()
-        if not feat_id:
+        # 4. Submit explicit waves (with context_bundle if Stage 0 ran)
+        if context_bundle:
+            feat_id = self._submit_feature(context_bundle=context_bundle)
+        else:
+            feat_id = self._submit_feature()
+
+        if not feat_id and not context_bundle:
             self.report["status"] = "error"
             self._write_report()
             return 1
 
-        # 4. Start worker
+        # If all waves were consumed by Stage 0, skip worker and monitoring
+        if not feat_id and context_bundle:
+            self.report["status"] = "passed"
+            self._write_report()
+            return 0
+
+        # 5. Start worker
         self._start_worker()
 
-        # 5. Run waves/packets
+        # 6. Run waves/packets
         success = self._run_waves()
 
-        # 6. Cleanup
+        # 7. Cleanup
         self._stop_worker()
 
         self.report["status"] = "passed" if success else "failed"
@@ -260,25 +280,268 @@ class WaveResumeRunner:
                 self.worker_proc.kill()
                 self.worker_proc.wait()
 
+    # ---- Stage 0: Context builder (built-in, runs before API submission) ----
+    def _run_stage0_context_builder(self) -> list[dict[str, Any]]:
+        """Run Stage 0 context-builder: local, read-only, no branch/commit/acceptance.
+
+        Returns list of context bundle info dicts (one per context-builder packet).
+        On mutation or agent failure, records failure in self.report and returns [].
+        """
+        cb_config = self.scenario.get("context_builder", {})
+        if not cb_config.get("enabled", False):
+            return []
+
+        waves = self.scenario.get("waves", [])
+        if not waves:
+            return []
+
+        w0 = waves[0]
+        cb_packets = [
+            p for p in w0.get("packets", []) if p.get("role") == "context-builder"
+        ]
+        if not cb_packets:
+            return []
+
+        target_root = Path(self.target_repo_root or self.target_dir)
+        if not target_root.exists() or not (target_root / ".git").exists():
+            self.report["failures"].append(
+                f"Stage 0: target repo not found or not a git repo: {target_root}"
+            )
+            return []
+
+        from grace_control.config.agent_profiles import get_agent_profile
+
+        profile = get_agent_profile("context-collector-flash")
+        if not profile:
+            self.report["failures"].append(
+                "Stage 0: context-collector-flash profile not found"
+            )
+            return []
+
+        # Pre-check: target repo must be clean before Stage 0
+        status_check = subprocess.run(
+            ["git", "status", "--short"],
+            cwd=str(target_root),
+            capture_output=True,
+            text=True,
+            timeout=10,
+        ).stdout.strip()
+        if status_check:
+            self.report["failures"].append(
+                f"Stage 0: target repo is dirty before context-builder: {status_check[:200]}"
+            )
+            return []
+
+        bundle_infos: list[dict[str, Any]] = []
+
+        for pkt in cb_packets:
+            pkt_id = pkt["id"]
+            bundle_dir = Path(
+                f"/tmp/grace-context/{self.scenario_id}/{pkt_id}"
+            )
+            bundle_dir.mkdir(parents=True, exist_ok=True)
+            bundle_path = bundle_dir / "context-bundle.md"
+
+            # Write packet prompt to file (input: mode: file)
+            packet_file = bundle_dir / "EXECUTION_PACKET.md"
+            packet_file.write_text(pkt.get("prompt", ""))
+
+            # Render command template from profile
+            cmd_template = list(profile.command)
+            rendered_cmd = []
+            for part in cmd_template:
+                part = part.replace(
+                    "{model}", profile.model or "deepseek/deepseek-v4-flash"
+                )
+                part = part.replace("{effort}", profile.effort or "low")
+                part = part.replace("{packet_path}", str(packet_file))
+                rendered_cmd.append(part)
+
+            # Inject --dir <worktree_path> (AgentRunService inject_dir logic)
+            for i, part in enumerate(rendered_cmd):
+                if part == "run":
+                    rendered_cmd = (
+                        rendered_cmd[: i + 1 ]
+                        + ["--dir", str(target_root)]
+                        + rendered_cmd[i + 1 :]
+                    )
+                    break
+
+            # Save git baseline
+            head_before = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=str(target_root),
+                capture_output=True,
+                text=True,
+                timeout=10,
+            ).stdout.strip()
+
+            # Run agent
+            print(f"[runner] Stage 0: running {pkt_id}...")
+            self.report["context_runs"] += 1
+            self.report["real_agent_runs"] += 1
+            start_t = time.time()
+
+            try:
+                result = subprocess.run(
+                    rendered_cmd,
+                    cwd=str(target_root),
+                    capture_output=True,
+                    text=True,
+                    timeout=profile.timeout_seconds or 300,
+                )
+            except subprocess.TimeoutExpired:
+                elapsed_ms = int((time.time() - start_t) * 1000)
+                print(
+                    f"[runner] Stage 0: {pkt_id} timed out after "
+                    f"{profile.timeout_seconds}s ({elapsed_ms}ms)"
+                )
+                self.report["failures"].append(
+                    f"Stage 0: {pkt_id} timed out ({profile.timeout_seconds}s)"
+                )
+                return []
+
+            elapsed_ms = int((time.time() - start_t) * 1000)
+            stdout = result.stdout or ""
+            stderr = result.stderr or ""
+
+            # Save agent outputs as artifacts
+            (bundle_dir / "agent.stdout").write_text(stdout)
+            if stderr:
+                (bundle_dir / "agent.stderr").write_text(stderr)
+
+            # Early-failure detection: non-zero exit code
+            if result.returncode != 0:
+                err_preview = (stderr[:500] if stderr else "exit code non-zero")
+                print(
+                    f"[runner] Stage 0: {pkt_id} agent failed "
+                    f"(exit={result.returncode}): {err_preview[:120]}"
+                )
+                self.report["failures"].append(
+                    f"Stage 0: {pkt_id} agent failed (exit={result.returncode})"
+                )
+                return []
+
+            # ── Mutation detection ─────────────────────────────────────
+            status_after = subprocess.run(
+                ["git", "status", "--short"],
+                cwd=str(target_root),
+                capture_output=True,
+                text=True,
+                timeout=10,
+            ).stdout.strip()
+
+            head_after = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=str(target_root),
+                capture_output=True,
+                text=True,
+                timeout=10,
+            ).stdout.strip()
+
+            diff_failed = (
+                subprocess.run(
+                    ["git", "diff", "--exit-code"],
+                    cwd=str(target_root),
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                ).returncode
+                != 0
+            )
+
+            has_mutations = bool(status_after) or (head_after != head_before) or diff_failed
+
+            if has_mutations:
+                # Save diff evidence
+                diff_text = subprocess.run(
+                    ["git", "diff"],
+                    cwd=str(target_root),
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                ).stdout
+                (bundle_dir / "diff-evidence.txt").write_text(diff_text)
+
+                # Cleanup: reset hard + clean untracked
+                subprocess.run(
+                    ["git", "reset", "--hard", "HEAD"],
+                    cwd=str(target_root),
+                    capture_output=True,
+                    timeout=10,
+                )
+                subprocess.run(
+                    ["git", "clean", "-fd"],
+                    cwd=str(target_root),
+                    capture_output=True,
+                    timeout=10,
+                )
+
+                self.report["failures"].append(
+                    f"CONTEXT_BUILDER_MUTATED_WORKTREE: "
+                    f"{pkt_id} modified target repo"
+                )
+                return []
+
+            # ── Parse bundle info from agent JSON output ───────────────
+            bundle_info: dict[str, Any] = {
+                "context_bundle_path": str(bundle_path),
+                "context_bundle_url": f"file://{bundle_path}",
+                "context_bundle_summary": "",
+                "selected_files": pkt.get("scope", []),
+                "truncated": False,
+                "missing_context": False,
+            }
+
+            lines = [l for l in stdout.strip().split("\n") if l.strip()]
+            if lines:
+                last = lines[-1]
+                try:
+                    parsed = json.loads(last)
+                    if isinstance(parsed, dict):
+                        for key in (
+                            "context_bundle_path",
+                            "context_bundle_url",
+                            "context_bundle_summary",
+                            "selected_files",
+                            "truncated",
+                            "missing_context",
+                            "warnings",
+                        ):
+                            if key in parsed:
+                                bundle_info[key] = parsed[key]
+                except (json.JSONDecodeError, ValueError):
+                    pass
+
+            print(
+                f"[runner] Stage 0: {pkt_id} done ({elapsed_ms}ms, "
+                f"selected={len(bundle_info.get('selected_files', []))} files)"
+            )
+            bundle_infos.append(bundle_info)
+
+        return bundle_infos
+
     # ---- Feature submission ----
-    def _submit_feature(self) -> str | None:
+    def _submit_feature(
+        self, context_bundle: list[dict] | None = None
+    ) -> str | None:
         waves = self.scenario.get("waves", [])
         if self.max_waves and self.max_waves < len(waves):
             waves = waves[: self.max_waves]
 
-        self.report["waves_requested"] = len(waves)
-
-        # Build explicit feature spec
-        feature_spec = {
-            "title": f"Live: {self.scenario_id}",
-            "waves": [],
-        }
+        # Filter out context-builder packets (handled by Stage 0)
+        cb_enabled = (
+            self.scenario.get("context_builder", {}).get("enabled", False)
+        )
+        filtered_waves = []
         for wave in waves:
             wave_spec = {
                 "title": wave["title"],
                 "packets": [],
             }
             for pkt in wave.get("packets", []):
+                if cb_enabled and pkt.get("role") == "context-builder":
+                    continue
                 pkt_spec = {
                     "title": pkt["id"],
                     "scope": pkt.get("scope", []),
@@ -288,7 +551,38 @@ class WaveResumeRunner:
                 if "verification" in pkt:
                     pkt_spec["verification"] = pkt["verification"]
                 wave_spec["packets"].append(pkt_spec)
-            feature_spec["waves"].append(wave_spec)
+            if wave_spec["packets"]:
+                filtered_waves.append(wave_spec)
+        waves = filtered_waves
+
+        self.report["waves_requested"] = len(waves)
+
+        # Build explicit feature spec
+        feature_spec = {
+            "title": f"Live: {self.scenario_id}",
+            "waves": waves,
+        }
+
+        # Inject context_bundle into first remaining packet prompt
+        if context_bundle and waves:
+            first_wave = waves[0]
+            if first_wave["packets"]:
+                bundle_hint = json.dumps(
+                    context_bundle[0]
+                    if len(context_bundle) == 1
+                    else context_bundle,
+                    indent=2,
+                )
+                first_wave["packets"][0]["prompt"] += (
+                    f"\n\n## Context Bundle\n{bundle_hint}"
+                )
+            feature_spec["context_bundle"] = context_bundle
+
+        if not waves:
+            print("[runner] All waves consumed by Stage 0 — nothing to submit")
+            self.report["status"] = "passed"
+            self._write_report()
+            return None
 
         print(f"[runner] Submitting {len(waves)} wave(s)...")
         resp = _api_call(
@@ -354,10 +648,16 @@ class WaveResumeRunner:
                 else:
                     print("[runner] API down, restarting...")
                     self._start_api()
+                    self.report["watchdog_restarts"] = (
+                        self.report.get("watchdog_restarts", 0) + 1
+                    )
                     # Worker may have died too — restart if needed
                     if self.worker_proc and self.worker_proc.poll() is not None:
                         print("[runner] Worker also died, restarting...")
                         self._start_worker()
+                        self.report["watchdog_restarts"] = (
+                            self.report.get("watchdog_restarts", 0) + 1
+                        )
 
             if not remaining:
                 print("[runner] All packets in terminal state")
@@ -433,15 +733,19 @@ class WaveResumeRunner:
 
 **Status:** {self.report['status']}
 **Timestamp:** {self.run_ts}
+**Runner PID:** {self.report.get('runner_pid', 'N/A')}
 
 | Metric | Value |
 |--------|-------|
 | Waves | {self.report['waves_requested']} |
 | Packets | {self.report['packets_total']} |
 | Feature ID | {self.report.get('feature_id', 'N/A')} |
+| Context runs | {self.report['context_runs']} |
 | Coder runs | {self.report['coder_runs']} |
+| Real agent runs | {self.report['real_agent_runs']} |
 | Replays | acc={self.report['acceptance_replays']} ver={self.report['verifier_replays']} rev={self.report['reviewer_replays']} |
 | Agent resumes | {self.report['agent_session_resumes']} |
+| Watchdog restarts | {self.report.get('watchdog_restarts', 0)} |
 
 ## Failures
 """
@@ -452,7 +756,9 @@ class WaveResumeRunner:
             md += "None\n"
 
         md += "\n## Artifacts\n"
-        md += f"`{self.run_dir}`\n"
+        md += f"- Report: `{self.run_dir}`\n"
+        md += f"- Live log: `{self.report.get('live_log_path', 'N/A')}`\n"
+        md += f"- Context bundles: `/tmp/grace-context/{self.scenario_id}/`\n"
         md_path.write_text(md)
 
 
