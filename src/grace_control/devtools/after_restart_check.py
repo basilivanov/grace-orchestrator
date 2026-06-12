@@ -149,8 +149,16 @@ class AfterRestartReport:
 
 #START_BLOCK_RESOLUTION
 
-def _resolve_api_url(api_url: str | None) -> str:
-    """Pick API URL: explicit arg > GRACE_API_URL env > settings.api_url."""
+def _resolve_api_url(api_url: str | None) -> str | None:
+    """Pick API URL: explicit arg > GRACE_API_URL env > settings.api_url.
+
+    Returns None when no source is available. The API check handles
+    None as `api_url_unresolved` (skipped). We deliberately do NOT
+    fall back to a hardcoded host:port — the central source of truth
+    is settings.api_url (which itself reads from env /
+    .grace/config.yaml). Without it the operator must provide one
+    explicitly via --api-url or GRACE_API_URL.
+    """
     if api_url:
         return api_url
     env = os.environ.get("GRACE_API_URL")
@@ -160,7 +168,7 @@ def _resolve_api_url(api_url: str | None) -> str:
         from grace_control.config.settings import settings
         return settings.api_url
     except Exception:
-        return "http://127.0.0.1:8042"
+        return None
 
 
 def _resolve_state_root(state_root: Path | str | None) -> Path:
@@ -203,16 +211,27 @@ def _parse_host_port(api_url: str) -> tuple[str, int]:
 
 #START_BLOCK_CHECKS
 
-async def _check_api_health(api_url: str, timeout_sec: int) -> ComponentResult:
+async def _check_api_health(api_url: str | None, timeout_sec: int) -> ComponentResult:
     """Try a real /health endpoint first, fall back to TCP port probe.
 
-    Distinguishes three outcomes (TZ §5.6):
+    Distinguishes four outcomes (TZ §5.6 + follow-up):
       - api_health_http_ok: /health endpoint returned 2xx;
       - api_health_tcp_only_ok: HTTP failed but TCP socket connected;
-      - api_health_failed: nothing reachable.
+      - api_health_failed: nothing reachable;
+      - api_url_unresolved: api_url is None (no explicit arg, no env,
+        no settings). Reported as status=\"skipped\" so the absence of
+        a central source does not silently degrade to a hard failure.
     """
     import time
     start = time.monotonic()
+    if not api_url:
+        dur = (time.monotonic() - start) * 1000
+        return ComponentResult(
+            name="api_health",
+            status="skipped",
+            detail="api_url_unresolved (no --api-url, no GRACE_API_URL, no settings.api_url)",
+            duration_ms=dur,
+        )
     host, port = _parse_host_port(api_url)
     health_url = api_url.rstrip("/") + "/health"
     # Try HTTP /health first
@@ -268,6 +287,11 @@ async def _check_state_files(state_root: Path) -> ComponentResult:
 
     Legacy `.grace_state` is reported as a separate component status
     detail so operators can clean it up, not as a hard failure.
+
+    State values are normalized to UPPER before comparison because real
+    PacketState values are lowercase in the system (running, ready,
+    failed, merged, etc.). Uppercase RUNNING/CLAIMED here are the
+    canonical reference, not assumptions about input casing.
     """
     import time
     start = time.monotonic()
@@ -299,9 +323,9 @@ async def _check_state_files(state_root: Path) -> ComponentResult:
         except Exception as e:
             errors.append(f"{f.relative_to(state_root)}: unreadable ({e})")
             continue
-        state = data.get("state", data.get("status", ""))
-        if state in ("RUNNING", "CLAIMED"):
-            errors.append(f"{f.relative_to(state_root)}: stuck in {state}")
+        state_norm = str(data.get("state", data.get("status", ""))).upper()
+        if state_norm in ("RUNNING", "CLAIMED"):
+            errors.append(f"{f.relative_to(state_root)}: stuck in {state_norm}")
     dur = (time.monotonic() - start) * 1000
     if errors:
         return ComponentResult(
@@ -352,19 +376,19 @@ async def _check_packet_operations(state_root: Path,
             duration_ms=dur,
             error=str(e),
         )
-    state = data.get("state", data.get("status", "unknown"))
+    state_norm = str(data.get("state", data.get("status", "unknown"))).upper()
     dur = (time.monotonic() - start) * 1000
-    if state in ("FAILED", "REJECTED", "MERGED", "CANCELLED"):
+    if state_norm in ("FAILED", "REJECTED", "MERGED", "CANCELLED"):
         return ComponentResult(
             name="packet_operations",
             status="passed",
-            detail=f"packet {packet_id} terminal ({state})",
+            detail=f"packet {packet_id} terminal ({state_norm})",
             duration_ms=dur,
         )
     return ComponentResult(
         name="packet_operations",
         status="passed",
-        detail=f"packet {packet_id} state={state}",
+        detail=f"packet {packet_id} state={state_norm}",
         duration_ms=dur,
     )
 

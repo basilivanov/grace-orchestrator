@@ -119,6 +119,44 @@ def test_state_files_detects_stuck_running(tmp_path):
     assert "stuck in RUNNING" in result.detail
 
 
+def test_state_files_detects_lowercase_running(tmp_path):
+    """Real PacketState values are lowercase (running, ready, failed,
+    merged). The checker must detect stuck states regardless of case."""
+    state_root = tmp_path / "state"
+    state_root.mkdir()
+    (state_root / "pkt_running.json").write_text(
+        json.dumps({"state": "running"})
+    )
+    result = asyncio.run(_check_state_files(state_root))
+    assert result.status == "failed"
+    # Detail should mention the normalized state (UPPER), or at least
+    # include the file name. We assert the file is named in the detail.
+    assert "pkt_running.json" in result.detail
+
+
+def test_state_files_detects_lowercase_claimed(tmp_path):
+    state_root = tmp_path / "state"
+    state_root.mkdir()
+    (state_root / "pkt_claimed.json").write_text(
+        json.dumps({"status": "claimed"})  # status key, lowercase
+    )
+    result = asyncio.run(_check_state_files(state_root))
+    assert result.status == "failed"
+    assert "pkt_claimed.json" in result.detail
+
+
+def test_state_files_lowercase_terminal_does_not_fail(tmp_path):
+    """A packet in lowercase 'merged' state is terminal — should not
+    be flagged as stuck."""
+    state_root = tmp_path / "state"
+    state_root.mkdir()
+    (state_root / "pkt_done.json").write_text(
+        json.dumps({"state": "merged"})
+    )
+    result = asyncio.run(_check_state_files(state_root))
+    assert result.status == "passed"
+
+
 def test_state_files_detects_unreadable_json(tmp_path):
     state_root = tmp_path / "state"
     state_root.mkdir()
@@ -156,6 +194,56 @@ def test_api_health_uses_configured_url(monkeypatch):
     # Detail should mention the port from our URL, not 8042.
     assert "9999" in result.detail or "no-such-host" in result.detail
     assert "8042" not in result.detail
+
+
+def test_api_health_skipped_when_url_unresolved(monkeypatch):
+    """When api_url is None (no explicit arg, no env, no settings),
+    the API check must be `skipped` with `api_url_unresolved` reason
+    — NOT fall back to a hardcoded host:port and fail."""
+    # Make settings import fail so the resolver returns None.
+    import builtins
+    real_import = builtins.__import__
+    def _guarded(name, *args, **kwargs):
+        if name == "grace_control.config.settings":
+            raise ImportError("simulated settings unavailable")
+        return real_import(name, *args, **kwargs)
+    monkeypatch.setattr(builtins, "__import__", _guarded)
+    monkeypatch.delenv("GRACE_API_URL", raising=False)
+    # Confirm the resolver returns None.
+    assert _resolve_api_url(None) is None
+    result = asyncio.run(_check_api_health(None, timeout_sec=1))
+    assert result.status == "skipped"
+    assert "api_url_unresolved" in result.detail
+    # Defensive: no hardcoded port should appear in detail.
+    assert "8042" not in result.detail
+
+
+def test_resolve_api_url_returns_none_when_settings_unavailable(monkeypatch):
+    """When settings cannot be imported AND no env override is set,
+    _resolve_api_url returns None (no hardcoded fallback)."""
+    import builtins
+    real_import = builtins.__import__
+    def _guarded(name, *args, **kwargs):
+        if name == "grace_control.config.settings":
+            raise ImportError("simulated")
+        return real_import(name, *args, **kwargs)
+    monkeypatch.setattr(builtins, "__import__", _guarded)
+    monkeypatch.delenv("GRACE_API_URL", raising=False)
+    assert _resolve_api_url(None) is None
+
+
+def test_resolve_api_url_no_8042_literal(monkeypatch):
+    """Defensive: the resolver source itself must not contain 8042 as
+    a fallback. We check the source code string to prevent a future
+    regression where someone re-adds a hardcoded port."""
+    import inspect
+    from grace_control.devtools import after_restart_check
+    src = inspect.getsource(after_restart_check._resolve_api_url)
+    # Only exception path / sentinel may use 8042; we forbid it entirely.
+    assert "8042" not in src, (
+        f"_resolve_api_url contains hardcoded 8042 — must rely on "
+        f"settings/env only:\n{src}"
+    )
 
 
 def test_api_health_distinguishes_http_ok_from_tcp_only(monkeypatch):
@@ -208,6 +296,22 @@ def test_packet_operations_passes_for_terminal_state(tmp_path):
     result = asyncio.run(_check_packet_operations(tmp_path, "pkt_T"))
     assert result.status == "passed"
     assert "MERGED" in result.detail
+
+
+def test_packet_operations_passes_for_lowercase_terminal_state(tmp_path):
+    """Real PacketState values are lowercase. 'merged' must still be
+    recognised as a terminal state."""
+    (tmp_path / "pkt_T.json").write_text(json.dumps({"state": "merged"}))
+    result = asyncio.run(_check_packet_operations(tmp_path, "pkt_T"))
+    assert result.status == "passed"
+    assert "MERGED" in result.detail  # normalised to UPPER in detail
+
+
+def test_packet_operations_lowercase_failed_is_terminal(tmp_path):
+    (tmp_path / "pkt_F.json").write_text(json.dumps({"state": "failed"}))
+    result = asyncio.run(_check_packet_operations(tmp_path, "pkt_F"))
+    assert result.status == "passed"
+    assert "FAILED" in result.detail
 
 
 def test_packet_operations_failed_for_unreadable_state(tmp_path):
