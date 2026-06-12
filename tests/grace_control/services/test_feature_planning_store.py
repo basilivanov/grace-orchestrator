@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import pytest
+from unittest.mock import AsyncMock, patch
 from datetime import UTC, datetime
 
 from grace_control.db.schema import Feature, FeaturePlanningRun, Packet, PacketState, Wave, Event
@@ -207,3 +208,138 @@ class TestFeaturePlanningStore:
             feat = s.query(Feature).filter_by(id=fid).first()
             spec = feat.spec_json or {}
             assert spec.get("target_repo_root") == "/opt/test-repo"
+
+    @pytest.mark.asyncio
+    async def test_context_builder_sets_stdout_stderr_paths(self):
+        """Wave 4: planning run stores log paths."""
+        from grace_control.services.feature_intake_service import FeatureIntakeService
+        from grace_control.services.feature_planning_service import FeaturePlanningService
+        from grace_control.db import get_db
+
+        with get_db() as s:
+            intake = FeatureIntakeService(s)
+            result = intake.create_feature(title="Log Paths Test", mode="draft_plan")
+            fid = result["feature_id"]
+
+            planning = FeaturePlanningService(s)
+            # GRACE_CONTEXT_DISABLED means log dir is created but not used
+            context = await planning.run_context_builder(fid)
+
+            runs = s.query(FeaturePlanningRun).filter_by(
+                feature_id=fid, stage="context_builder"
+            ).all()
+            assert len(runs) >= 1
+            r = runs[-1]
+            assert r.stdout_path is not None
+            assert r.stderr_path is not None
+            assert "/tmp/grace_planning_logs/" in r.stdout_path
+            assert "/tmp/grace_planning_logs/" in r.stderr_path
+
+    @pytest.mark.asyncio
+    async def test_architect_sets_stdout_stderr_paths(self):
+        """Wave 4: architect run stores log paths."""
+        from grace_control.services.feature_intake_service import FeatureIntakeService
+        from grace_control.services.feature_planning_service import FeaturePlanningService
+        from grace_control.db import get_db
+
+        with get_db() as s:
+            intake = FeatureIntakeService(s)
+            result = intake.create_feature(title="Arch Log Paths", mode="draft_plan")
+            fid = result["feature_id"]
+
+            planning = FeaturePlanningService(s)
+            context = await planning.run_context_builder(fid)
+            await planning.run_architect(fid, context)
+
+            runs = s.query(FeaturePlanningRun).filter_by(
+                feature_id=fid, stage="architect"
+            ).all()
+            assert len(runs) >= 1
+            r = runs[-1]
+            assert r.stdout_path is not None
+            assert r.stderr_path is not None
+            assert "/tmp/grace_planning_logs/" in r.stdout_path
+
+    @pytest.mark.asyncio
+    async def test_approve_blocked_on_plan_failed(self):
+        """Approve raises 409 when feature is PLAN_FAILED."""
+        from grace_control.services.feature_intake_service import FeatureIntakeService
+        from grace_control.services.feature_planning_service import FeaturePlanningService
+        from grace_control.db import get_db
+
+        with get_db() as s:
+            intake = FeatureIntakeService(s)
+            result = intake.create_feature(title="Fail Approve2", mode="draft_plan")
+            fid = result["feature_id"]
+            feat = s.query(Feature).filter_by(id=fid).first()
+            feat.status = "PLAN_FAILED"
+            s.commit()
+
+            planning = FeaturePlanningService(s)
+            with pytest.raises(ValueError, match="PLAN_READY"):
+                planning.approve_plan(fid)
+
+    @pytest.mark.asyncio
+    async def test_approve_creates_ready_first_wave_draft_rest(self):
+        """After approve, exact state assertions on multi-wave plan."""
+        from grace_control.services.feature_intake_service import FeatureIntakeService
+        from grace_control.services.feature_planning_service import FeaturePlanningService
+        from grace_control.db import get_db
+
+        with get_db() as s:
+            intake = FeatureIntakeService(s)
+            result = intake.create_feature(title="MultiWave Q", mode="draft_plan")
+            fid = result["feature_id"]
+
+            planning = FeaturePlanningService(s)
+            context = await planning.run_context_builder(fid)
+            await planning.run_architect(fid, context)
+            approval = planning.approve_plan(fid)
+
+            assert approval["status"] == "queued"
+            assert approval["waves_count"] >= 1
+
+            waves = s.query(Wave).filter_by(feature_id=fid).order_by(Wave.order).all()
+            for i, wave in enumerate(waves):
+                packets = s.query(Packet).filter_by(
+                    feature_id=fid, wave_id=wave.id
+                ).all()
+                for p in packets:
+                    if i == 0:
+                        assert p.state == "ready", f"first-wave pkt {p.id} not ready: {p.state}"
+                    else:
+                        assert p.state == "draft", f"later-wave pkt {p.id} not draft: {p.state}"
+
+    @pytest.mark.asyncio
+    async def test_feature_id_uses_canonical_uid_format(self):
+        """Feature IDs use canonical feat_ format from uid.py."""
+        from grace_control.services.feature_intake_service import FeatureIntakeService
+        from grace_control.db import get_db
+
+        with get_db() as s:
+            intake = FeatureIntakeService(s)
+            result = intake.create_feature(title="UID Format", mode="draft_plan")
+            fid = result["feature_id"]
+            assert fid.startswith("feat_")
+            assert len(fid) == 15  # feat_ + 10 nanoid chars
+
+    @pytest.mark.asyncio
+    async def test_packets_use_canonical_pkt_uid(self):
+        """After approve, packet IDs start with pkt_."""
+        from grace_control.services.feature_intake_service import FeatureIntakeService
+        from grace_control.services.feature_planning_service import FeaturePlanningService
+        from grace_control.db import get_db
+
+        with get_db() as s:
+            intake = FeatureIntakeService(s)
+            result = intake.create_feature(title="Pkt UID", mode="draft_plan")
+            fid = result["feature_id"]
+
+            planning = FeaturePlanningService(s)
+            context = await planning.run_context_builder(fid)
+            await planning.run_architect(fid, context)
+            approval = planning.approve_plan(fid)
+
+            for pid in approval.get("packet_ids", []):
+                assert pid.startswith("pkt_")
+                assert len(pid) == 14  # pkt_ + 10 nanoid chars

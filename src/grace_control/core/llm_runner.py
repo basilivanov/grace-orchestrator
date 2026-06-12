@@ -36,6 +36,8 @@ async def run_llm(
     cwd: Path | None = None,
     session_dir: Path | None = None,
     extract_json: bool = True,
+    stdout_log_path: Path | str | None = None,
+    stderr_log_path: Path | str | None = None,
 ) -> str:
     project_root = cwd or Path.cwd()
     executor_id = cli or f"llm_{role}"
@@ -57,7 +59,10 @@ async def run_llm(
         session_dir=session_dir,
     )
 
-    backend = UniversalCliAgentBackend()
+    backend = UniversalCliAgentBackend(
+        stdout_log_path=stdout_log_path,
+        stderr_log_path=stderr_log_path,
+    )
     result = await backend.run(req)
 
     out = result.stdout.strip() if result.stdout else ""

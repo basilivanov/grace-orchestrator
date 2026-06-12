@@ -172,7 +172,24 @@ async def regenerate_plan(feature_id: str) -> dict:
             if "not found" in msg.lower():
                 raise HTTPException(status_code=404, detail=msg)
             raise HTTPException(status_code=409, detail=msg)
-        return {"data": state}
+
+    # Start background planning (same as create_feature draft_plan)
+    async def _bg_regenerate():
+        try:
+            with get_db() as bg_db:
+                planning = FeaturePlanningService(bg_db)
+                context = await planning.run_context_builder(feature_id)
+                await planning.run_architect(feature_id, context)
+                _log.info("regenerate_completed", feature_id=feature_id)
+        except Exception as e:
+            _log.error("regenerate_failed", feature_id=feature_id, error=str(e)[:200])
+            with get_db() as err_db:
+                feat = err_db.query(Feature).filter_by(id=feature_id).first()
+                if feat:
+                    feat.status = "PLAN_FAILED"
+
+    asyncio.create_task(_bg_regenerate())
+    return {"data": state}
 
 
 # ── Planning logs ──────────────────────────────────────────────────────────

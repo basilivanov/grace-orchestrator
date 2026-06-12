@@ -45,8 +45,12 @@ def _profile_references_env(executor: dict, env_name: str) -> bool:
 
 
 class UniversalCliAgentBackend(ExecutionBackend):
-    def __init__(self, run_service: AgentRunService | None = None) -> None:
+    def __init__(self, run_service: AgentRunService | None = None,
+                 stdout_log_path: Path | str | None = None,
+                 stderr_log_path: Path | str | None = None) -> None:
         self._run_service = run_service or AgentRunService()
+        self._stdout_log_path = stdout_log_path
+        self._stderr_log_path = stderr_log_path
 
     async def run(self, request: ExecutionRequest) -> ExecutionResult:
         executor = request.executor or {}
@@ -82,6 +86,8 @@ class UniversalCliAgentBackend(ExecutionBackend):
             run_dir=request.evidence_dir,
             resume_session_id=request.resume_session_id,
             fork=request.fork_session,
+            stdout_log_path=self._stdout_log_path,
+            stderr_log_path=self._stderr_log_path,
         )
 
         accepted = bool(out.get("accepted"))

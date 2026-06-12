@@ -11,6 +11,7 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
+from grace_control.core.uid import generate_unique_id, new_wave_uid, new_packet_uid, new_run_uid
 from grace_control.db.schema import Feature, FeaturePlanningRun, Wave, Packet, Event
 from grace_control.db.schema import PacketState
 
@@ -73,7 +74,7 @@ class FeaturePlanningService:
         ).order_by(FeaturePlanningRun.created_at.desc()).first()
 
         now = datetime.now(UTC)
-        run_id = cb_run.id if cb_run else f"fpr_{uuid.uuid4().hex[:24]}"
+        run_id = cb_run.id if cb_run else generate_unique_id(self.db, FeaturePlanningRun, new_run_uid)
         if not cb_run:
             cb_run = FeaturePlanningRun(id=run_id, feature_id=feature_id, stage="context_builder", status="pending")
             self.db.add(cb_run)
@@ -81,6 +82,14 @@ class FeaturePlanningService:
         cb_run.status = "running"
         cb_run.started_at = now
         cb_run.executor_id = "context_collector"
+
+        # Set up live log paths
+        log_dir = Path(f"/tmp/grace_planning_logs/{feature_id}/{run_id}")
+        log_dir.mkdir(parents=True, exist_ok=True)
+        stdout_path = str(log_dir / "stdout.log")
+        stderr_path = str(log_dir / "stderr.log")
+        cb_run.stdout_path = stdout_path
+        cb_run.stderr_path = stderr_path
         self.db.commit()
 
         feature = self.db.query(Feature).filter_by(id=feature_id).first()
@@ -120,6 +129,8 @@ class FeaturePlanningService:
                 project_root=root,
                 model=ctx_model.get("model"),
                 cli=ctx_model.get("command", "opencode"),
+                stdout_log_path=stdout_path,
+                stderr_log_path=stderr_path,
             )
             code_ctx = await collector.collect(
                 task_description=task_desc,
@@ -172,7 +183,7 @@ class FeaturePlanningService:
         ).order_by(FeaturePlanningRun.created_at.desc()).first()
 
         now = datetime.now(UTC)
-        run_id = arch_run.id if arch_run else f"fpr_{uuid.uuid4().hex[:24]}"
+        run_id = arch_run.id if arch_run else generate_unique_id(self.db, FeaturePlanningRun, new_run_uid)
         if not arch_run:
             arch_run = FeaturePlanningRun(id=run_id, feature_id=feature_id, stage="architect", status="pending")
             self.db.add(arch_run)
@@ -184,6 +195,14 @@ class FeaturePlanningService:
         arch_run.started_at = now
         arch_run.executor_id = "architect-business-flash"
         arch_run.prompt = task_desc[:2000]
+
+        # Set up live log paths
+        log_dir = Path(f"/tmp/grace_planning_logs/{feature_id}/{run_id}")
+        log_dir.mkdir(parents=True, exist_ok=True)
+        stdout_path = str(log_dir / "stdout.log")
+        stderr_path = str(log_dir / "stderr.log")
+        arch_run.stdout_path = stdout_path
+        arch_run.stderr_path = stderr_path
         self.db.commit()
 
         # If context is disabled (test mode), use fallback plan
@@ -211,6 +230,8 @@ class FeaturePlanningService:
                         model="",
                         cli=cli_name,
                         cwd=Path(worktree_root) if worktree_root else None,
+                        stdout_log_path=arch_run.stdout_path,
+                        stderr_log_path=arch_run.stderr_path,
                     )
                     plan = json.loads(raw)
 
@@ -402,9 +423,11 @@ Respond ONLY with valid JSON (no markdown, no backticks):
         plan = spec.get("plan_json", {}) if isinstance(spec, dict) else {}
         waves = plan.get("waves", []) if isinstance(plan, dict) else []
 
+        from grace_control.core.gate_resolver import enrich_packet
+
         now = datetime.now(UTC)
         materialize_run = FeaturePlanningRun(
-            id=f"fpr_{uuid.uuid4().hex[:24]}",
+            id=generate_unique_id(self.db, FeaturePlanningRun, new_run_uid),
             feature_id=feature_id,
             stage="materialize",
             status="running",
@@ -413,9 +436,14 @@ Respond ONLY with valid JSON (no markdown, no backticks):
         )
         self.db.add(materialize_run)
 
+        root_verification = spec.get("verification", plan.get("verification", {}))
+        root_constraints = spec.get("constraints", plan.get("constraints", {}))
+
         packet_ids = []
+        reserved: set[str] = set()
         for i, w in enumerate(waves):
-            wave_id = w.get("id", f"wave_{uuid.uuid4().hex[:12]}")
+            wave_id = generate_unique_id(self.db, Wave, new_wave_uid, reserved=reserved)
+            reserved.add(wave_id)
             wave_obj = Wave(
                 id=wave_id,
                 feature_id=feature_id,
@@ -428,14 +456,19 @@ Respond ONLY with valid JSON (no markdown, no backticks):
 
             is_first_wave = i == 0
             for pkt in w.get("packets", []):
-                pkt_id = pkt.get("id", f"pkt_{uuid.uuid4().hex[:12]}")
+                pkt_id = generate_unique_id(self.db, Packet, new_packet_uid, reserved=reserved)
+                reserved.add(pkt_id)
+                enriched_spec = enrich_packet(pkt, pkt.get("depends_on", []))
+                enriched_spec.setdefault("verification", root_verification)
+                if root_constraints.get("frozen_scope"):
+                    enriched_spec.setdefault("frozen_scope", root_constraints["frozen_scope"])
                 packet = Packet(
                     id=pkt_id,
                     feature_id=feature_id,
                     wave_id=wave_id,
                     slug=pkt.get("title", f"pkt-{i}").lower().replace(" ", "-"),
                     title=pkt.get("title", f"Packet {i}"),
-                    spec_json=pkt,
+                    spec_json=enriched_spec,
                     state=PacketState.READY.value if is_first_wave else PacketState.DRAFT.value,
                 )
                 self.db.add(packet)
@@ -466,7 +499,7 @@ Respond ONLY with valid JSON (no markdown, no backticks):
         feature.status = "PLANNING"
 
         cb_run = FeaturePlanningRun(
-            id=f"fpr_{uuid.uuid4().hex[:24]}",
+            id=generate_unique_id(self.db, FeaturePlanningRun, new_run_uid),
             feature_id=feature_id,
             stage="context_builder",
             status="pending",

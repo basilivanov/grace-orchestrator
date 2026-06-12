@@ -1,26 +1,18 @@
 # ############################################################################
 # AI_HEADER: architect_router
-# ROLE: FastAPI router for /api/architect/plan — context-warmed feature planning.
-#       Two modes: YAML with waves (legacy) or business-TZ (LLM generates plan).
+# ROLE: FastAPI compatibility wrapper — delegates to FeatureIntakeService +
+#       FeaturePlanningService. No duplicate planning implementation.
 # ############################################################################
 
 # START_MODULE_CONTRACT
-# purpose: Accept feature spec (YAML or business description), collect context,
-#          optionally call Architect LLM to generate waves/packets, persist in DB.
+# purpose: Thin compatibility wrapper for old /api/architect/plan callers.
+#          For pre-defined waves: creates feature, validates DAG, materializes.
+#          For business text: creates feature, starts background planning.
 # inputs: HTTP POST with feature_spec dict.
 # returns: JSON with feature_id, waves/packets, context.
-# side_effects: DB inserts, 2 LLM calls (context + architect).
-# emitted_logs: context_collected, architect_generated, architect_retry.
-# error_behavior: 422 on DAG failure, 500 on LLM timeout (retried once).
+# side_effects: DB inserts via FeatureIntakeService / FeaturePlanningService.
+# error_behavior: 422 on DAG failure, 500 on service error.
 # END_MODULE_CONTRACT
-
-# START_MODULE_MAP
-# mapping:
-#   - function: create_plan
-#   - function: _call_architect_llm
-#   - function: _slugify
-#   - function: _extract_action
-# END_MODULE_MAP
 
 from __future__ import annotations
 
@@ -33,20 +25,17 @@ from pathlib import Path
 
 from fastapi import APIRouter
 
-from grace_control.core.context_collector import ContextCollector
 from grace_control.core.dag_validator import validate_dag
 from grace_control.core.structured_logger import GraceLogger
 from grace_control.db import get_db
-from grace_control.core.uid import generate_unique_id, new_feature_uid, new_wave_uid, new_packet_uid
-from grace_control.db.schema import Feature, Packet, PacketState, Wave
+from grace_control.db.schema import Feature, Packet, Wave
+from grace_control.services.feature_intake_service import FeatureIntakeService
+from grace_control.services.feature_planning_service import FeaturePlanningService
 
 router = APIRouter()
 _log = GraceLogger("architect")
 
-from grace_control.core.executor_selector import resolve_model
 from grace_control.config.settings import settings
-ARCHITECT_TIMEOUT = int(os.environ.get(
-    "GRACE_ARCHITECT_TIMEOUT", str(settings.architect_timeout_seconds)))
 
 
 @router.post("/plan")
@@ -57,125 +46,162 @@ async def create_plan(request: dict) -> dict:
         from fastapi import HTTPException
         raise HTTPException(status_code=400, detail="title is required")
 
-    slug = _slugify(title)
     has_waves = bool(spec.get("waves"))
     target_repo_root = spec.get("target_repo_root", "") or settings.target_repo_root
-    is_async = spec.get("background", True)  # default to background mode
+    is_async = spec.get("background", True)
     _origin = spec.get("origin", "")
     _session_id = spec.get("session_id", "")
     _self_improvement = spec.get("self_improvement", False)
 
-    if not has_waves and is_async:
-        # ── Immediate mode: create feature + placeholder wave/packet, return fast ──
-        task_desc = spec.get("description", "") or title
-        from grace_control.db.schema import Wave as _Wave, Packet as _Packet
-        from grace_control.core.uid import new_wave_uid as _nwu, new_packet_uid as _npu
-        plan_used_ids: set[str] = set()
-        with get_db() as db:
-            feature_id = generate_unique_id(db, Feature, new_feature_uid, reserved=plan_used_ids)
-        plan_used_ids.add(feature_id)
-        with get_db() as db:
-            wave_id = generate_unique_id(db, _Wave, _nwu, reserved=plan_used_ids)
-        plan_used_ids.add(wave_id)
-        with get_db() as db:
-            pkt_id = generate_unique_id(db, _Packet, _npu, reserved=plan_used_ids)
-        with get_db() as db:
-            db.add(Feature(id=feature_id, slug=slug, title=title, description=task_desc[:500],
-                           spec_json={"title": title, "description": task_desc, "origin": _origin},
-                           status="PLANNING"))
-            db.add(_Wave(id=wave_id, feature_id=feature_id, slug=_slugify(title+"-wave"), title="Planning", order=1, status="PENDING"))
-            db.add(_Packet(id=pkt_id, feature_id=feature_id, wave_id=wave_id, slug="initial-planning", title="Initializing feature",
-                          state="ready", acceptance_profile="FAST", spec_json={"scope": []}))
-        _log.info("feature_created_immediate", feature_id=feature_id, title=title, wave_id=wave_id, pkt_id=pkt_id)
+    slug = _slugify(title)
 
-        # ── Background: full architect plan ──
-        import asyncio as _asyncio
-        async def _background_plan():
-            try:
-                context = await _warm_context(spec, "planning", target_repo_root)
-                llm_spec = await _call_architect_llm(task_desc, context, slug,
-                    self_improvement=_self_improvement or _origin == "self_evolution",
-                    worktree_root=target_repo_root)
-                llm_spec["title"] = title
-                llm_spec["description"] = llm_spec.get("description", task_desc)
-                llm_spec["origin"] = _origin
-                llm_spec["session_id"] = _session_id
-                llm_spec["self_improvement"] = _self_improvement or _origin == "self_evolution"
-                # Build DAG and persist real plan
-                await _persist_plan(feature_id, slug, title, llm_spec, plan_used_ids, task_desc)
-                _log.info("architect_completed_bg", feature_id=feature_id, waves=len(llm_spec.get("waves", [])))
-            except Exception as e:
-                _log.error("architect_failed_bg", feature_id=feature_id, error=str(e)[:200])
-                with get_db() as db:
-                    feat = db.query(Feature).filter_by(id=feature_id).first()
-                    if feat: feat.status = "ARCHITECT_FAILED"
+    # FeatureIntakeService + FeaturePlanningService path
+    with get_db() as db:
+        intake = FeatureIntakeService(db)
+        mode = "draft_plan" if not has_waves else "draft_plan"
+        result = intake.create_feature(
+            title=title,
+            description=spec.get("description", ""),
+            target_repo_root=target_repo_root,
+            mode=mode,
+            origin=_origin or "business",
+            self_improvement=_self_improvement or _origin == "self_evolution",
+            trace_id=_session_id,
+        )
+        feature_id = result["feature_id"]
 
-        _asyncio.create_task(_background_plan())
+    if has_waves:
+        # ── Pre-defined waves: validate DAG, store as plan, approve ──
+        plan = {
+            "waves": spec.get("waves", []),
+            "constraints": spec.get("constraints", {}),
+            "verification": spec.get("verification", {"t0": [], "t1": [], "t2": []}),
+        }
+
+        # Validate DAG
+        dag_packets = []
+        for wave_spec in plan["waves"]:
+            for pkt_spec in wave_spec.get("packets", []):
+                action = _extract_action(pkt_spec["title"])
+                dag_packets.append({
+                    "id": action,
+                    "depends_on": pkt_spec.get("depends_on", []),
+                    "scope": pkt_spec.get("scope", []),
+                })
+        if dag_packets:
+            vresult = validate_dag(dag_packets)
+            if not vresult.valid:
+                from fastapi import HTTPException
+                detail = {}
+                if vresult.conflicts:
+                    detail["errors"] = [str(c) for c in vresult.conflicts]
+                if vresult.cycles:
+                    detail["cycles"] = vresult.cycles
+                raise HTTPException(status_code=422, detail=detail)
+
+        with get_db() as db:
+            feat = db.query(Feature).filter_by(id=feature_id).first()
+            spec_json = dict(feat.spec_json) if feat.spec_json else {}
+            spec_json["plan_json"] = plan
+            feat.spec_json = spec_json
+            feat.status = "PLAN_READY"
+            db.commit()
+
+            planning = FeaturePlanningService(db)
+            approval = planning.approve_plan(feature_id)
+
+        # Build packet_summaries and packet_ids from approval
+        wave_ids = []
+        with get_db() as db:
+            waves = db.query(Wave).filter_by(feature_id=feature_id).order_by(Wave.order).all()
+            wave_ids = [w.id for w in waves]
+
+        packet_ids = list(approval.get("packet_ids", []))
+        packet_summaries = []
+        if packet_ids:
+            with get_db() as db:
+                pkts = db.query(Packet).filter(Packet.id.in_(packet_ids)).all()
+                pkt_map = {p.id: p for p in pkts}
+                for pid in packet_ids:
+                    pkt = pkt_map.get(pid)
+                    if pkt:
+                        packet_summaries.append({
+                            "id": pkt.id,
+                            "slug": pkt.slug,
+                            "title": pkt.title,
+                            "wave_id": pkt.wave_id,
+                        })
+
+        return {
+            "data": {
+                "feature_id": feature_id,
+                "feature_slug": slug,
+                "slug": slug,
+                "waves_count": approval.get("waves_count", len(plan["waves"])),
+                "packets_count": len(packet_ids),
+                "packets": packet_ids,
+                "packet_ids": packet_ids,
+                "packet_summaries": packet_summaries,
+                "context": {},
+                "generated": False,
+            },
+            "timestamp": datetime.now(UTC).isoformat() + "Z",
+        }
+
+    # ── Business text: background or sync planning ──
+    async def _background_planning():
+        try:
+            with get_db() as bg_db:
+                planning = FeaturePlanningService(bg_db)
+                context = await planning.run_context_builder(feature_id, target_repo_root)
+                await planning.run_architect(feature_id, context, target_repo_root)
+                _log.info("architect_bg_completed", feature_id=feature_id)
+        except Exception as e:
+            _log.error("architect_bg_failed", feature_id=feature_id, error=str(e)[:200])
+            with get_db() as err_db:
+                feat = err_db.query(Feature).filter_by(id=feature_id).first()
+                if feat:
+                    feat.status = "PLAN_FAILED"
+
+    if is_async:
+        asyncio.create_task(_background_planning())
         return {"feature_id": feature_id, "slug": slug, "status": "planning", "immediate": True}
 
-    # ── Synchronous mode (has_waves or explicit) ──
-    context = {} if has_waves else await _warm_context(spec, "planning", target_repo_root)
-    architect_generated = False
-
-    if not has_waves and not os.environ.get("GRACE_CONTEXT_DISABLED"):
-        task_desc = spec.get("description", "") or title
-        try:
-            spec = await _call_architect_llm(task_desc, context, slug,
-                self_improvement=_self_improvement or _origin == "self_evolution",
-                worktree_root=target_repo_root)
-            spec["title"] = title
-            spec["description"] = spec.get("description", task_desc)
-            spec["origin"] = _origin
-            spec["session_id"] = _session_id
-            spec["self_improvement"] = _self_improvement or _origin == "self_evolution"
-            architect_generated = True
-            _log.info("architect_generated", slug=slug, waves=len(spec.get("waves", [])))
-        except Exception as e:
-            _log.error("architect_failed", slug=slug, error=str(e)[:200])
-            from fastapi import HTTPException
-            raise HTTPException(status_code=500, detail=f"Architect LLM failed to generate plan: {str(e)[:200]}")
-
-    plan_used_ids: set[str] = set()
+    # Synchronous: run context + architect now
     with get_db() as db:
-        feature_id = generate_unique_id(db, Feature, new_feature_uid, reserved=plan_used_ids)
-    plan_used_ids.add(feature_id)
+        planning = FeaturePlanningService(db)
+        context = await planning.run_context_builder(feature_id, target_repo_root)
+        plan = await planning.run_architect(feature_id, context, target_repo_root)
+        approval = planning.approve_plan(feature_id)
 
-    # Validate DAG before persisting
-    dag_packets = []
-    for wave_spec in spec.get("waves", []):
-        for pkt_spec in wave_spec.get("packets", []):
-            action = _extract_action(pkt_spec["title"])
-            dag_packets.append({
-                "id": action,
-                "depends_on": pkt_spec.get("depends_on", []),
-                "scope": pkt_spec.get("scope", []),
-            })
-    if dag_packets:
-        from grace_control.core.dag_validator import validate_dag as _validate_dag
-        vresult = _validate_dag(dag_packets)
-        if not vresult.valid:
-            from fastapi import HTTPException
-            detail = {}
-            if vresult.conflicts:
-                detail["errors"] = [str(c) for c in vresult.conflicts]
-            if vresult.cycles:
-                detail["cycles"] = vresult.cycles
-            raise HTTPException(status_code=422, detail=detail)
-
-    plan_result = await _persist_plan(feature_id, slug, title, spec, plan_used_ids, spec.get("description", "") or title)
+    packet_ids = list(approval.get("packet_ids", []))
+    packet_summaries = []
+    if packet_ids:
+        with get_db() as db:
+            pkts = db.query(Packet).filter(Packet.id.in_(packet_ids)).all()
+            pkt_map = {p.id: p for p in pkts}
+            for pid in packet_ids:
+                pkt = pkt_map.get(pid)
+                if pkt:
+                    packet_summaries.append({
+                        "id": pkt.id,
+                        "slug": pkt.slug,
+                        "title": pkt.title,
+                        "wave_id": pkt.wave_id,
+                    })
 
     return {
         "data": {
             "feature_id": feature_id,
             "feature_slug": slug,
             "slug": slug,
-            "waves_count": plan_result.get("waves_count", len(spec.get("waves", []))),
-            "packets_count": len(plan_result.get("packets_created", [])),
-            "packets": plan_result.get("packets_created", []),
-            "packet_ids": plan_result.get("packets_created", []),
-            "packet_summaries": plan_result.get("packet_summaries", []),
+            "waves_count": approval.get("waves_count", len(plan.get("waves", []))),
+            "packets_count": len(packet_ids),
+            "packets": packet_ids,
+            "packet_ids": packet_ids,
+            "packet_summaries": packet_summaries,
             "context": context,
-            "generated": architect_generated,
+            "generated": True,
         },
         "timestamp": datetime.now(UTC).isoformat() + "Z",
     }

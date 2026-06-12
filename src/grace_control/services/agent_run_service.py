@@ -87,7 +87,9 @@ class AgentRunService:
     async def run(self, executor: dict, *, packet_id: str, worktree_path: Path, state_root: Path,
                   packet_markdown: str, timeout_seconds: int = 600, run_dir: Path | None = None,
                   resume_session_id: str | None = None,
-                  fork: bool = False) -> dict[str, Any]:
+                  fork: bool = False,
+                  stdout_log_path: Path | str | None = None,
+                  stderr_log_path: Path | str | None = None) -> dict[str, Any]:
         ctx = {
             "packet_id": packet_id,
             "model": executor.get("model", ""),
@@ -191,6 +193,7 @@ class AgentRunService:
 
         result = await self._supervisor.run(
             command, cwd=cwd, env=env, timeout_seconds=timeout_seconds, stdin_text=stdin_text,
+            stdout_log_path=stdout_log_path, stderr_log_path=stderr_log_path,
         )
 
         accepted = (not result.timed_out and result.exit_code == 0)

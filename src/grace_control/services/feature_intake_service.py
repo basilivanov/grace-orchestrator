@@ -9,6 +9,7 @@ import json
 import uuid
 from datetime import UTC, datetime
 
+from grace_control.core.uid import generate_unique_id, new_feature_uid, new_run_uid
 from grace_control.db.schema import Feature, FeaturePlanningRun, Event
 
 
@@ -28,7 +29,7 @@ class FeatureIntakeService:
         self_improvement: bool = False,
         trace_id: str = "",
     ) -> dict:
-        feature_id = f"feat_{uuid.uuid4().hex[:24]}"
+        feature_id = generate_unique_id(self.db, Feature, new_feature_uid)
         slug = title.lower().replace(" ", "-")[:64]
         now = datetime.now(UTC)
 
@@ -51,7 +52,7 @@ class FeatureIntakeService:
         self.db.add(feature)
 
         submit_run = FeaturePlanningRun(
-            id=f"fpr_{uuid.uuid4().hex[:24]}",
+            id=generate_unique_id(self.db, FeaturePlanningRun, new_run_uid),
             feature_id=feature_id,
             stage="submit",
             status="done",
@@ -64,7 +65,7 @@ class FeatureIntakeService:
         self.db.add(submit_run)
 
         cb_run = FeaturePlanningRun(
-            id=f"fpr_{uuid.uuid4().hex[:24]}",
+            id=generate_unique_id(self.db, FeaturePlanningRun, new_run_uid),
             feature_id=feature_id,
             stage="context_builder",
             status="pending",
