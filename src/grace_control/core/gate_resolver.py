@@ -135,10 +135,25 @@ def resolve_linter_mode(worktree_path: Path) -> str:
     return "disabled"
 
 
+def enrich_packet(pkt_spec: dict, dep_ids: list[str] | None = None) -> dict:
+    """Enrich a packet spec with auto-resolved defaults.
+
+    Sets depends_on from resolved dep_ids, ensures scope/default fields exist.
+    Used by architect router _persist_plan after DAG id resolution.
+    """
+    enriched = dict(pkt_spec)
+    if dep_ids:
+        enriched["depends_on"] = dep_ids
+    enriched.setdefault("scope", [])
+    enriched.setdefault("depends_on", [])
+    enriched.setdefault("acceptance_profile", "NORMAL")
+    return enriched
+
+
 def resolve_default_t0(
     changed_files: list[str],
     worktree_path: Path,
-    profile: str = "FAST",
+    profile: str = "NORMAL",
 ) -> tuple[list[list[str]], list[str]]:
     commands: list[list[str]] = []
     origins: list[str] = []

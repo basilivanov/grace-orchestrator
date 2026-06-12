@@ -5,16 +5,20 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from grace_control.core.structured_logger import GraceLogger
 from grace_control.db import get_db
 from grace_control.db.schema import Feature, FeaturePlanningRun
 from grace_control.services.feature_intake_service import FeatureIntakeService
 from grace_control.services.feature_planning_service import FeaturePlanningService
+
+_log = GraceLogger("features_router")
 
 router = APIRouter()
 
@@ -91,13 +95,34 @@ async def create_feature(request: FeatureCreateRequest) -> dict:
             self_improvement=request.self_improvement,
         )
 
+        feature_id = result["feature_id"]
+
+        if request.mode == "draft_plan":
+            # Background: run context builder + architect
+            async def _background_planning():
+                try:
+                    with get_db() as bg_db:
+                        planning = FeaturePlanningService(bg_db)
+                        context = planning.run_context_builder(feature_id)
+                        planning.run_architect(feature_id, context)
+                        _log.info("draft_plan_completed", feature_id=feature_id)
+                except Exception as e:
+                    _log.error("draft_plan_failed", feature_id=feature_id, error=str(e)[:200])
+                    with get_db() as err_db:
+                        feat = err_db.query(Feature).filter_by(id=feature_id).first()
+                        if feat:
+                            feat.status = "PLAN_FAILED"
+
+            asyncio.create_task(_background_planning())
+            return {"data": result}
+
         if request.mode == "auto_queue":
             planning = FeaturePlanningService(db)
-            context = planning.run_context_builder(result["feature_id"])
-            planning.run_architect(result["feature_id"], context)
-            approval = planning.approve_plan(result["feature_id"])
+            context = planning.run_context_builder(feature_id)
+            planning.run_architect(feature_id, context)
+            approval = planning.approve_plan(feature_id)
             return {"data": {
-                "feature_id": result["feature_id"],
+                "feature_id": feature_id,
                 "status": approval["status"],
                 "mode": request.mode,
             }}

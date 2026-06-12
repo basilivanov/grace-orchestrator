@@ -249,17 +249,18 @@ function loadArchived(){
 async function submitBiz(){
   const ta=$('#biz-input'),btn=$('#biz-btn'),status=$('#biz-status'),text=ta?.value?.trim();
   if(!text||text.length<10){if(status)status.textContent='Please write at least 10 characters';return;}
-  btn.disabled=true;btn.textContent='Submitting...';if(status)status.textContent='Sending to architect (may take 30-60s)...';
-  let dots=0;const dotInt=setInterval(()=>{dots=(dots+1)%4;if(status&&!status.textContent.includes('submitted')&&!status.textContent.includes('Error'))status.textContent='Architect is thinking'+'.'.repeat(dots)+' '.repeat(3-dots);},2000);
+  btn.disabled=true;btn.textContent='Submitting...';if(status)status.textContent='Creating feature with planning...';
+  let dots=0;const dotInt=setInterval(()=>{dots=(dots+1)%4;if(status&&!status.textContent.includes('created')&&!status.textContent.includes('Error'))status.textContent='Planning in progress'+'.'.repeat(dots)+' '.repeat(3-dots);},2000);
   try{
-    const r=await fetch(apiUrl('/api/architect/plan'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({feature_spec:{title:text.slice(0,80),description:text,origin:'business',background:true}})});
+    const r=await fetch(apiUrl('/api/features'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:text.slice(0,80),description:text,mode:'draft_plan',origin:'business'})});
     clearInterval(dotInt);
-    if(!r.ok){const e=await r.json();if(status)status.textContent='Error: '+(e.detail||e.message||r.status);btn.disabled=false;btn.textContent='Submit Feature';toast('Architect error','err');return;}
+    if(!r.ok){const e=await r.json();if(status)status.textContent='Error: '+(e.detail||e.message||r.status);btn.disabled=false;btn.textContent='Submit Feature';toast('Feature creation error','err');return;}
     const result=await r.json();
     ta.value='';btn.disabled=false;btn.textContent='Submit Feature';
-    const isPlanning=result.status==='planning'||result.immediate;
-    if(status)status.textContent=isPlanning?'Feature created! Architect planning in background.':'Feature submitted!';
-    toast(isPlanning?'Feature created! Architect is planning waves/packets.':'Feature submitted!','ok');
+    const featureId=result.data?.feature_id||'';
+    if(status)status.textContent='Feature created! Planning in background.';
+    toast('Feature created! Context builder + architect planning in background.','ok');
+    if(featureId){state.selectedPlanningFeature=featureId;}
     setTimeout(()=>switchView('dashboard'),1000);
   }catch(e){
     clearInterval(dotInt);

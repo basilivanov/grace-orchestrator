@@ -82,6 +82,8 @@ class FeatureIntakeService:
             "current_stage": "context_builder",
         }, trace_id)
 
+        self.db.commit()
+
         return {
             "feature_id": feature_id,
             "status": "PLANNING",

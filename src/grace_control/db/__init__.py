@@ -82,6 +82,10 @@ _SQLITE_COLUMN_MIGRATIONS: list[tuple[str, str, str]] = [
     ("packet_runs", "command_preview", "ALTER TABLE packet_runs ADD COLUMN command_preview JSON"),
     ("packet_runs", "prompt", "ALTER TABLE packet_runs ADD COLUMN prompt TEXT"),
 ]
+# Tables that may be missing on existing DBs (added after initial create_all).
+_SQLITE_TABLE_CREATIONS: list[str] = [
+    "CREATE TABLE IF NOT EXISTS feature_planning_runs (id VARCHAR PRIMARY KEY, feature_id VARCHAR NOT NULL, stage VARCHAR NOT NULL, status VARCHAR NOT NULL, started_at DATETIME, finished_at DATETIME, duration_ms INTEGER, executor_id VARCHAR, model VARCHAR, prompt TEXT, stdout_path VARCHAR, stderr_path VARCHAR, result_json JSON, error TEXT, trace_id VARCHAR, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)",
+]
 
 
 def _run_sqlite_column_migrations(eng) -> None:
@@ -94,6 +98,10 @@ def _run_sqlite_column_migrations(eng) -> None:
         return
     insp = inspect(eng)
     with eng.begin() as conn:
+        # Create missing tables first
+        for ddl in _SQLITE_TABLE_CREATIONS:
+            conn.execute(text(ddl))
+        # Then apply column migrations
         for table, column, ddl in _SQLITE_COLUMN_MIGRATIONS:
             if not insp.has_table(table):
                 continue

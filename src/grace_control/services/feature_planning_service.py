@@ -93,6 +93,7 @@ class FeaturePlanningService:
             "run_id": run_id, "duration_ms": cb_run.duration_ms,
         })
 
+        self.db.commit()
         return context
 
     def run_architect(self, feature_id: str, context: dict) -> dict:
@@ -148,6 +149,7 @@ class FeaturePlanningService:
             "waves_count": len(plan["waves"]),
         })
 
+        self.db.commit()
         return plan
 
     def approve_plan(self, feature_id: str) -> dict:
@@ -185,6 +187,7 @@ class FeaturePlanningService:
             )
             self.db.add(wave_obj)
 
+            is_first_wave = i == 0
             for pkt in w.get("packets", []):
                 pkt_id = pkt.get("id", f"pkt_{uuid.uuid4().hex[:12]}")
                 packet = Packet(
@@ -194,7 +197,7 @@ class FeaturePlanningService:
                     slug=pkt.get("title", f"pkt-{i}").lower().replace(" ", "-"),
                     title=pkt.get("title", f"Packet {i}"),
                     spec_json=pkt,
-                    state=PacketState.DRAFT.value,
+                    state=PacketState.READY.value if is_first_wave else PacketState.DRAFT.value,
                 )
                 self.db.add(packet)
                 packet_ids.append(pkt_id)
@@ -204,14 +207,15 @@ class FeaturePlanningService:
         materialize_run.duration_ms = int((materialize_run.finished_at - materialize_run.started_at).total_seconds() * 1000)
         materialize_run.result_json = {"waves_count": len(waves), "packets_count": len(packet_ids), "packet_ids": packet_ids}
 
-        feature.status = "QUEUED"
+        feature.status = "queued"
 
         self._emit_event(feature_id, "plan_materialized", {
             "waves_count": len(waves), "packets_count": len(packet_ids),
         })
         self._emit_event(feature_id, "feature_queued", {})
 
-        return {"status": "QUEUED", "waves_count": len(waves), "packets_count": len(packet_ids), "packet_ids": packet_ids}
+        self.db.commit()
+        return {"status": "queued", "waves_count": len(waves), "packets_count": len(packet_ids), "packet_ids": packet_ids}
 
     def regenerate_plan(self, feature_id: str) -> dict:
         feature = self.db.query(Feature).filter_by(id=feature_id).first()
@@ -235,6 +239,7 @@ class FeaturePlanningService:
         spec.pop("plan_json", None)
         feature.spec_json = spec
 
+        self.db.commit()
         return self.get_planning_state(feature_id)
 
     def _emit_event(self, feature_id: str, event_type: str, payload: dict, trace_id: str = "") -> None:
