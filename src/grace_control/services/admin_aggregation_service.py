@@ -1139,9 +1139,12 @@ class AdminAggregationService:
                     "blocked_recoverable", "blocked_final",
                 )
             )
+            _spec = f.spec_json or {}
+            _approval_mode = _spec.get("approval_mode", "auto") if isinstance(_spec, dict) else "auto"
             out.append({
                 "id": f.id, "slug": f.slug, "title": f.title,
                 "status": f.status, "description": f.description or "",
+                "approval_mode": _approval_mode,
                 "created_at": _iso(f.created_at), "updated_at": _iso(f.updated_at),
                 "wave_count": len(wave_rows),
                 "total_packets": len(all_packets),

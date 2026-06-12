@@ -177,7 +177,10 @@ async def create_plan(request: dict) -> dict:
         planning = FeaturePlanningService(db)
         context = await planning.run_context_builder(feature_id, target_repo_root)
         plan = await planning.run_architect(feature_id, context, target_repo_root)
-        approval = planning.approve_plan(feature_id)
+        if _approval_mode == "auto":
+            approval = planning.approve_plan(feature_id)
+        else:
+            approval = {"status": "PLAN_READY", "waves_count": len(plan.get("waves", [])), "packet_ids": []}
 
     packet_ids = list(approval.get("packet_ids", []))
     packet_summaries = []

@@ -73,6 +73,8 @@ async def get_feature(feature_id: str) -> dict:
         f = db.query(Feature).filter_by(id=feature_id).first()
         if not f:
             raise HTTPException(status_code=404, detail="Feature not found")
+        _spec = f.spec_json or {}
+        _approval_mode = _spec.get("approval_mode", "auto") if isinstance(_spec, dict) else "auto"
         return {
             "data": {
                 "id": f.id,
@@ -80,6 +82,7 @@ async def get_feature(feature_id: str) -> dict:
                 "title": f.title,
                 "description": f.description or "",
                 "status": f.status,
+                "approval_mode": _approval_mode,
                 "spec_json": f.spec_json,
                 "created_at": f.created_at.isoformat() + "Z",
                 "updated_at": f.updated_at.isoformat() + "Z",
