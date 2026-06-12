@@ -206,6 +206,32 @@ class SelfEvolutionSession(Base):
     prompt = Column(Text, nullable=True)
 
 
+class FeaturePlanningRun(Base):
+    """Observable planning run stage for a feature."""
+
+    __tablename__ = "feature_planning_runs"
+
+    id = Column(String, primary_key=True)
+    feature_id = Column(String, nullable=False, index=True)
+    stage = Column(String, nullable=False, index=True)
+    # submit | context_builder | architect | materialize
+    status = Column(String, nullable=False, index=True)
+    # pending | running | done | failed | skipped
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+    duration_ms = Column(Integer, nullable=True)
+    executor_id = Column(String, nullable=True)
+    model = Column(String, nullable=True)
+    prompt = Column(Text, nullable=True)
+    stdout_path = Column(String, nullable=True)
+    stderr_path = Column(String, nullable=True)
+    result_json = Column(JSON, nullable=True)
+    error = Column(Text, nullable=True)
+    trace_id = Column(String, nullable=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
 class AgentSession(Base):
     """Tracks LLM sessions for resume/fork across attempts.
 
