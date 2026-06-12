@@ -103,3 +103,51 @@ async def test_non_streaming_still_works(tmp_path: Path) -> None:
     )
     assert result.stdout.strip() == "hello"
     assert result.exit_code == 0
+
+
+@pytest.mark.asyncio
+async def test_log_content_visible_mid_run(tmp_path: Path) -> None:
+    """Log file has content before the process finishes (mid-run streaming)."""
+    sup = ProcessSupervisor()
+    stdout_log = tmp_path / "stdout.log"
+
+    # Write 5 lines over 0.5s, check during execution
+    script = """
+import sys, time
+for i in range(5):
+    print(f"MID-RUN-{i}", flush=True)
+    time.sleep(0.15)
+"""
+    # Start but don't await yet
+    task = asyncio.create_task(sup.run(
+        [sys.executable, "-c", script],
+        cwd=tmp_path,
+        timeout_seconds=10,
+        stdout_log_path=stdout_log,
+    ))
+
+    # Wait for first line to appear, then check partial content
+    for _ in range(30):
+        if stdout_log.exists() and stdout_log.read_text().strip():
+            break
+        await asyncio.sleep(0.05)
+
+    partial = stdout_log.read_text()
+    assert "MID-RUN-0" in partial, "First line should appear before process ends"
+
+    # Wait for at least 3 lines to appear
+    for _ in range(30):
+        content = stdout_log.read_text()
+        if content.count("MID-RUN") >= 3:
+            break
+        await asyncio.sleep(0.05)
+
+    mid_content = stdout_log.read_text()
+    assert mid_content.count("MID-RUN") >= 3, (
+        f"Expected >=3 mid-run lines, got: {mid_content.strip()!r}"
+    )
+
+    result = await task
+    assert result.exit_code == 0
+    final = stdout_log.read_text()
+    assert final.count("MID-RUN") == 5

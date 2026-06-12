@@ -13,13 +13,14 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from grace_control.config.settings import settings
 from grace_control.core.structured_logger import GraceLogger
 from grace_control.db import get_db
 from grace_control.db.schema import Feature, FeaturePlanningRun
 from grace_control.services.feature_intake_service import FeatureIntakeService
 from grace_control.services.feature_planning_service import FeaturePlanningService
 
-_LOG_ROOT = Path("/tmp/grace_planning_logs")
+_LOG_ROOT = Path(settings.planning_logs_root)
 _TAIL_MIN = 10
 _TAIL_MAX = 10000
 

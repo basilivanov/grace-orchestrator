@@ -232,8 +232,9 @@ class TestFeaturePlanningStore:
             r = runs[-1]
             assert r.stdout_path is not None
             assert r.stderr_path is not None
-            assert "/tmp/grace_planning_logs/" in r.stdout_path
-            assert "/tmp/grace_planning_logs/" in r.stderr_path
+            from grace_control.config.settings import settings
+            assert settings.planning_logs_root in r.stdout_path
+            assert settings.planning_logs_root in r.stderr_path
 
     @pytest.mark.asyncio
     async def test_architect_sets_stdout_stderr_paths(self):
@@ -241,6 +242,7 @@ class TestFeaturePlanningStore:
         from grace_control.services.feature_intake_service import FeatureIntakeService
         from grace_control.services.feature_planning_service import FeaturePlanningService
         from grace_control.db import get_db
+        from grace_control.config.settings import settings
 
         with get_db() as s:
             intake = FeatureIntakeService(s)
@@ -258,7 +260,7 @@ class TestFeaturePlanningStore:
             r = runs[-1]
             assert r.stdout_path is not None
             assert r.stderr_path is not None
-            assert "/tmp/grace_planning_logs/" in r.stdout_path
+            assert settings.planning_logs_root in r.stdout_path
 
     @pytest.mark.asyncio
     async def test_approve_blocked_on_plan_failed(self):

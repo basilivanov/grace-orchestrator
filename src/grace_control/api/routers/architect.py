@@ -55,12 +55,11 @@ async def create_plan(request: dict) -> dict:
     # FeatureIntakeService + FeaturePlanningService path
     with get_db() as db:
         intake = FeatureIntakeService(db)
-        mode = "draft_plan" if not has_waves else "draft_plan"
         result = intake.create_feature(
             title=title,
             description=spec.get("description", ""),
             target_repo_root=target_repo_root,
-            mode=mode,
+            mode="draft_plan",
             origin=_origin or "business",
             self_improvement=_self_improvement or _origin == "self_evolution",
             trace_id=_session_id,

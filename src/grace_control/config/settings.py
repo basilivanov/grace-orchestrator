@@ -89,6 +89,7 @@ class GraceSettings(BaseSettings):
     agent_profiles_path_override: str = ""  # empty = use packaged default
     context_model: str = "deepseek/deepseek-v4-flash"
     session_dir: str = ""
+    planning_logs_root: str = "/tmp/grace_planning_logs"
 
     # ── Profiles ──
     @property

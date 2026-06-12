@@ -84,7 +84,9 @@ class FeaturePlanningService:
         cb_run.executor_id = "context_collector"
 
         # Set up live log paths
-        log_dir = Path(f"/tmp/grace_planning_logs/{feature_id}/{run_id}")
+        from grace_control.config.settings import settings as _ctx_settings
+        _log_root = Path(_ctx_settings.planning_logs_root)
+        log_dir = _log_root / feature_id / run_id
         log_dir.mkdir(parents=True, exist_ok=True)
         stdout_path = str(log_dir / "stdout.log")
         stderr_path = str(log_dir / "stderr.log")
@@ -113,8 +115,7 @@ class FeaturePlanningService:
             return context
 
         try:
-            from grace_control.config.settings import settings
-            worktree_root = target_repo_root or settings.target_repo_root or "."
+            worktree_root = target_repo_root or _ctx_settings.target_repo_root or "."
             root = Path(worktree_root)
 
             # Determine scope from feature spec_json
@@ -197,7 +198,9 @@ class FeaturePlanningService:
         arch_run.prompt = task_desc[:2000]
 
         # Set up live log paths
-        log_dir = Path(f"/tmp/grace_planning_logs/{feature_id}/{run_id}")
+        from grace_control.config.settings import settings as _arch_settings
+        _log_root = Path(_arch_settings.planning_logs_root)
+        log_dir = _log_root / feature_id / run_id
         log_dir.mkdir(parents=True, exist_ok=True)
         stdout_path = str(log_dir / "stdout.log")
         stderr_path = str(log_dir / "stderr.log")
@@ -218,8 +221,7 @@ class FeaturePlanningService:
             # Build prompt — reuses the same prompt structure as _call_architect_llm
             prompt = self._build_architect_prompt(task_desc, context)
 
-            from grace_control.config.settings import settings
-            worktree_root = target_repo_root or settings.target_repo_root or ""
+            worktree_root = target_repo_root or _arch_settings.target_repo_root or ""
 
             for attempt in range(2):
                 try:
