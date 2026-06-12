@@ -233,17 +233,18 @@ class AgentRunService:
                           resume_mode=resume_mode)
 
         # Persist resume decision in evidence so admin/debug can see it.
-        # We attach it after the run via a side-channel; but for now we add it
-        # to the stdin/cmd preview by appending a comment? No — keep cmd clean.
-        # Use env or temp file. Simplest: stash on the result via a helper.
-        # (Will be attached by caller after run completes.)
-        # Stash in a thread-local-like attribute on self.
-        self._last_session_resume = {
+        # Keep a snapshot on self (for back-compat with anything reading the
+        # side-channel) AND include it in the returned dict so it lands in
+        # ExecutionResult.evidence — that's the canonical path. Packet
+        # diagnostics surface (`_extract_diagnostics`) lifts it from
+        # result.evidence.session_resume into result_json.diagnostics.
+        session_resume_decision = {
             "requested": bool(resume_session_id and resume_mode != "never"),
             "session_id": resume_session_id,
             "used": session_resume_used,
             "reason": session_resume_reason,
         }
+        self._last_session_resume = session_resume_decision
 
         preview_env = self._env_builder.preview(env)
 
@@ -303,4 +304,7 @@ class AgentRunService:
             "reason": "" if result.exit_code == 0 else f"exit_code={result.exit_code}",
             "artifacts": list(artifacts.values()),
             "session_id": result_session_id,
+            # TZ §6.4: surface session-resume decision so the executor can
+            # lift it into result_json.diagnostics.top-level.
+            "session_resume": dict(session_resume_decision),
         }

@@ -909,18 +909,15 @@ class PacketExecutionAdapter:
         # evidence_service.update_run_result). This makes UI / admin /
         # trace read the same shape regardless of which code path called
         # the persistence layer.
+        #
+        # session_resume is included here too: AgentRunService.run() writes
+        # the resume decision into the returned dict, UniversalCliAgentBackend
+        # stores that dict in ExecutionResult.evidence, and _extract_diagnostics
+        # lifts it to the top-level result_json.diagnostics.session_resume.
         try:
             self._last_diagnostics = _extract_diagnostics(result)
         except Exception:
             self._last_diagnostics = {}
-
-        # TZ §6.4: persist session_resume evidence (whether injected or skipped).
-        try:
-            _last_session_resume = getattr(self, "_last_session_resume", None)
-            if _last_session_resume:
-                result.evidence["session_resume"] = _last_session_resume
-        except Exception:
-            pass
 
         _log.info("run_diagnostics_persisted",
                   packet_id=pid,

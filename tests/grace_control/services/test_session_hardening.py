@@ -290,3 +290,190 @@ def test_find_for_fork_returns_usable_session(_db):
         result = store.find_for_fork(db, "pkt_F3", "coder")
         assert result is not None
         assert result.external_id == "ses_alive0001"
+
+
+# ── session_resume in returned dict (TZ §6.4 follow-up) ────────────────────
+# Reviewer found that AgentRunService.run() used to stash the resume
+# decision on self._last_session_resume (a side-channel that the
+# executor never actually read). The fix: include the decision in the
+# returned dict so it lands in ExecutionResult.evidence and is lifted
+# into result_json.diagnostics.session_resume.
+
+
+class _FakeSupervisorResult:
+    def __init__(self, stdout="", stderr="", exit_code=0, timed_out=False, duration_ms=0):
+        self.stdout = stdout
+        self.stderr = stderr
+        self.exit_code = exit_code
+        self.timed_out = timed_out
+        self.duration_ms = duration_ms
+
+
+def _stub_supervisor(monkeypatch, out: _FakeSupervisorResult):
+    """Replace ProcessSupervisor on a fresh AgentRunService instance."""
+    from grace_control.services.agent_run_service import AgentRunService
+    svc = AgentRunService()
+    monkeypatch.setattr(svc._supervisor, "run", _async_return(out))
+    return svc
+
+
+def _async_return(value):
+    async def _coro(*args, **kwargs):
+        return value
+    return _coro
+
+
+def test_session_resume_used_false_when_resume_safe_false(monkeypatch, tmp_path):
+    """resume_mode=on_retry + resume_safe=false + sid set =>
+    result["session_resume"]["used"] == False and reason indicates
+    why resume was skipped."""
+    import asyncio
+    out = _FakeSupervisorResult(exit_code=0, stdout="ok", duration_ms=10)
+    svc = _stub_supervisor(monkeypatch, out)
+    executor = {
+        "executor_id": "coder-opencode-fixture",
+        "backend": "opencode",
+        "command": ["opencode", "run"],
+        "extras": [],
+        "env": {},
+        "model": "opencode/gpt-5",
+        "effort": "low",
+        "cwd": "{worktree_path}",
+        "input_mode": "none",
+        "input_template": "",
+        "resume_mode": "on_retry",
+        "resume_flag": "--session",
+        "fork_flag": "--fork",
+        "resume_safe": False,
+        "validate_session_before_use": True,
+        "inject_dir": False,
+    }
+    result = asyncio.run(svc.run(
+        executor,
+        packet_id="pkt_SR1",
+        worktree_path=tmp_path,
+        state_root=tmp_path,
+        packet_markdown="# task",
+        resume_session_id="ses_deadbeef01",
+        fork=False,
+    ))
+    assert "session_resume" in result
+    decision = result["session_resume"]
+    assert decision["used"] is False
+    assert decision["session_id"] == "ses_deadbeef01"
+    assert decision["reason"] == "profile_not_resume_safe"
+
+
+def test_session_resume_used_true_when_all_gates_pass(monkeypatch, tmp_path):
+    import asyncio
+    out = _FakeSupervisorResult(exit_code=0, stdout="ok", duration_ms=10)
+    svc = _stub_supervisor(monkeypatch, out)
+    executor = {
+        "executor_id": "coder-opencode-fixture",
+        "backend": "opencode",
+        "command": ["opencode", "run"],
+        "extras": [],
+        "env": {},
+        "model": "opencode/gpt-5",
+        "effort": "low",
+        "cwd": "{worktree_path}",
+        "input_mode": "none",
+        "input_template": "",
+        "resume_mode": "on_retry",
+        "resume_flag": "--session",
+        "fork_flag": "--fork",
+        "resume_safe": True,
+        "validate_session_before_use": True,
+        "inject_dir": False,
+    }
+    result = asyncio.run(svc.run(
+        executor,
+        packet_id="pkt_SR2",
+        worktree_path=tmp_path,
+        state_root=tmp_path,
+        packet_markdown="# task",
+        resume_session_id="ses_alivecafe01",
+        fork=False,
+    ))
+    decision = result["session_resume"]
+    assert decision["used"] is True
+    assert decision["reason"] == "injected"
+
+
+def test_session_resume_used_false_when_resume_mode_never(monkeypatch, tmp_path):
+    import asyncio
+    out = _FakeSupervisorResult(exit_code=0, stdout="ok", duration_ms=10)
+    svc = _stub_supervisor(monkeypatch, out)
+    executor = {
+        "executor_id": "coder-deepseek-flash",
+        "backend": "cli",
+        "command": ["ds", "run"],
+        "extras": [],
+        "env": {},
+        "model": "deepseek/deepseek-v4-flash",
+        "effort": "low",
+        "cwd": "{worktree_path}",
+        "input_mode": "none",
+        "input_template": "",
+        "resume_mode": "never",
+        "resume_safe": True,
+        "validate_session_before_use": True,
+        "inject_dir": False,
+    }
+    result = asyncio.run(svc.run(
+        executor,
+        packet_id="pkt_SR3",
+        worktree_path=tmp_path,
+        state_root=tmp_path,
+        packet_markdown="# task",
+        resume_session_id="ses_shouldnotbeused",
+        fork=False,
+    ))
+    decision = result["session_resume"]
+    assert decision["used"] is False
+    assert decision["reason"] == "disabled_for_profile"
+    assert decision["requested"] is False
+
+
+# ── Diagnostics surface lifts session_resume (TZ §6.4) ─────────────────────
+
+
+def test_extract_diagnostics_lifts_session_resume_from_evidence():
+    """If a backend stores session_resume in result.evidence (the
+    canonical path now), _extract_diagnostics must lift it to the
+    top-level diagnostics surface."""
+    from pathlib import Path
+    from grace_control.adapters.packet_executor import _extract_diagnostics
+    from grace_control.agent.backend import ExecutionResult
+
+    er = ExecutionResult(
+        accepted=True,
+        domain_status="completed",
+        worktree_path=Path("/tmp"),
+        branch_name="",
+        commit_sha="",
+        stdout="",
+        stderr="",
+        duration_ms=10,
+        evidence={
+            "stdout_tail": "ok",
+            "stderr_tail": "",
+            "exit_code": 0,
+            "duration_ms": 10,
+            "failure_class": "unknown",
+            "failure_stage": "agent_run",
+            "session_resume": {
+                "requested": True,
+                "session_id": "ses_deadbeef01",
+                "used": False,
+                "reason": "profile_not_resume_safe",
+            },
+        },
+    )
+    diag = _extract_diagnostics(er)
+    assert "session_resume" in diag
+    assert diag["session_resume"]["used"] is False
+    assert diag["session_resume"]["reason"] == "profile_not_resume_safe"
+    # Other keys lifted too
+    assert diag["stderr_tail"] == ""
+    assert diag["failure_class"] == "unknown"
