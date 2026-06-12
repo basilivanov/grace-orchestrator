@@ -28,7 +28,8 @@ async def test_background_creates_feature_in_planning(api, db):
     from grace_control.db.schema import Feature
 
     r = await api.post("/api/architect/plan", json={
-        "feature_spec": {"title": "Bg Planning Check", "description": "Test planning state"}})
+        "feature_spec": {"title": "Bg Planning Check", "description": "Test planning state",
+                         "approval_mode": "manual"}})
     fid = r.json()["feature_id"]
 
     with get_db() as s:
@@ -46,7 +47,8 @@ async def test_background_completes_and_creates_runs(api):
     from grace_control.db.schema import Feature, FeaturePlanningRun
 
     r = await api.post("/api/architect/plan", json={
-        "feature_spec": {"title": "Bg Complete", "description": "Build auth system"}})
+        "feature_spec": {"title": "Bg Complete", "description": "Build auth system",
+                         "approval_mode": "manual"}})
     fid = r.json()["feature_id"]
 
     for _ in range(10):
@@ -74,7 +76,8 @@ async def test_background_sets_plan_failed_on_architect_error(api):
     from grace_control.db.schema import Feature
 
     r = await api.post("/api/architect/plan", json={
-        "feature_spec": {"title": "Bg Fail", "description": "Will fail"}})
+        "feature_spec": {"title": "Bg Fail", "description": "Will fail",
+                         "approval_mode": "manual"}})
     fid = r.json()["feature_id"]
 
     for _ in  range(10):
@@ -99,7 +102,8 @@ async def test_background_feature_has_plan_runs(api):
     from grace_control.services.feature_planning_service import FeaturePlanningService
 
     r = await api.post("/api/architect/plan", json={
-        "feature_spec": {"title": "Bg Runs", "description": "Test runs"}})
+        "feature_spec": {"title": "Bg Runs", "description": "Test runs",
+                         "approval_mode": "manual"}})
     fid = r.json()["feature_id"]
 
     for _ in range(10):

@@ -50,6 +50,8 @@ async def create_plan(request: dict) -> dict:
     _session_id = spec.get("session_id", "")
     _self_improvement = spec.get("self_improvement", False)
 
+    _approval_mode = spec.get("approval_mode", "auto")
+
     slug = _slugify(title)
 
     # FeatureIntakeService + FeaturePlanningService path
@@ -63,6 +65,7 @@ async def create_plan(request: dict) -> dict:
             origin=_origin or "business",
             self_improvement=_self_improvement or _origin == "self_evolution",
             trace_id=_session_id,
+            approval_mode=_approval_mode,
         )
         feature_id = result["feature_id"]
 
@@ -152,6 +155,12 @@ async def create_plan(request: dict) -> dict:
                 context = await planning.run_context_builder(feature_id, target_repo_root)
                 await planning.run_architect(feature_id, context, target_repo_root)
                 _log.info("architect_bg_completed", feature_id=feature_id)
+            if _approval_mode == "auto":
+                with get_db() as auto_db:
+                    auto_planning = FeaturePlanningService(auto_db)
+                    result = auto_planning.approve_plan(feature_id)
+                    _log.info("architect_bg_auto_approved", feature_id=feature_id,
+                              approval_mode="auto", status=result.get("status"))
         except Exception as e:
             _log.error("architect_bg_failed", feature_id=feature_id, error=str(e)[:200])
             with get_db() as err_db:

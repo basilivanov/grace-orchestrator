@@ -28,6 +28,7 @@ class FeatureIntakeService:
         origin: str = "business",
         self_improvement: bool = False,
         trace_id: str = "",
+        approval_mode: str = "auto",
     ) -> dict:
         feature_id = generate_unique_id(self.db, Feature, new_feature_uid)
         slug = title.lower().replace(" ", "-")[:64]
@@ -38,6 +39,7 @@ class FeatureIntakeService:
             "description": description,
             "target_repo_root": target_repo_root,
             "mode": mode,
+            "approval_mode": approval_mode,
             "origin": origin,
         }
 
@@ -76,6 +78,7 @@ class FeatureIntakeService:
 
         self._emit_event(feature_id, "feature_submitted", {
             "mode": mode,
+            "approval_mode": approval_mode,
             "origin": origin,
             "title": title,
         }, trace_id)
@@ -89,6 +92,7 @@ class FeatureIntakeService:
             "feature_id": feature_id,
             "status": "PLANNING",
             "mode": mode,
+            "approval_mode": approval_mode,
             "planning": {
                 "current_stage": "context_builder",
                 "runs": [

@@ -51,7 +51,7 @@ async def test_get_planning_state_empty(api):
     assert r2.status_code == 200
     d = r2.json()["data"]
     assert d["feature_id"] == fid
-    assert d["status"] in ("PLANNING", "PLAN_READY", "PLAN_FAILED")
+    assert d["status"] in ("PLANNING", "PLAN_READY", "PLAN_FAILED", "queued")
     assert len(d["runs"]) >= 2
 
 
@@ -152,7 +152,7 @@ async def test_get_single_feature(api):
     d = r2.json()["data"]
     assert d["id"] == fid
     assert d["title"] == "Single Feature"
-    assert d["status"] in ("PLANNING", "PLAN_READY")
+    assert d["status"] in ("PLANNING", "PLAN_READY", "queued")
 
 
 @pytest.mark.asyncio
@@ -203,3 +203,133 @@ async def test_planning_runs_persisted(api):
         stages = [run.stage for run in runs]
         assert "submit" in stages
         assert "context_builder" in stages
+
+
+# ── approval_mode tests ──────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_approval_mode_defaults_to_auto(api):
+    r = await api.post("/api/features/", json={
+        "title": "Default Approval",
+        "description": "Defaults to auto",
+        "mode": "draft_plan",
+    })
+    assert r.status_code == 200
+    d = r.json()["data"]
+    assert d.get("approval_mode") == "auto"
+
+    from grace_control.db import get_db
+    from grace_control.db.schema import Feature
+    with get_db() as s:
+        feat = s.query(Feature).filter_by(id=d["feature_id"]).first()
+        spec = feat.spec_json or {}
+        assert spec.get("approval_mode") == "auto"
+
+
+@pytest.mark.asyncio
+async def test_approval_mode_manual_persists(api):
+    r = await api.post("/api/features/", json={
+        "title": "Manual Approval",
+        "description": "Manual mode",
+        "mode": "draft_plan",
+        "approval_mode": "manual",
+    })
+    assert r.status_code == 200
+    d = r.json()["data"]
+    assert d.get("approval_mode") == "manual"
+
+    from grace_control.db import get_db
+    from grace_control.db.schema import Feature
+    with get_db() as s:
+        feat = s.query(Feature).filter_by(id=d["feature_id"]).first()
+        spec = feat.spec_json or {}
+        assert spec.get("approval_mode") == "manual"
+        # Background may complete before assert; manual means no auto-approve
+        assert feat.status in ("PLANNING", "PLAN_READY")
+
+
+@pytest.mark.asyncio
+async def test_approval_mode_invalid_returns_422(api):
+    r = await api.post("/api/features/", json={
+        "title": "Bad Approval",
+        "description": "Invalid mode",
+        "approval_mode": "invalid",
+    })
+    assert r.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_auto_mode_materializes_after_planning(api):
+    import asyncio
+
+    r = await api.post("/api/features/", json={
+        "title": "Auto Materialize",
+        "description": "Should auto queue",
+        "mode": "draft_plan",
+        "approval_mode": "auto",
+    })
+    assert r.status_code == 200
+    fid = r.json()["data"]["feature_id"]
+
+    # Wait for background planning + auto-approve to complete
+    from grace_control.db import get_db
+    from grace_control.db.schema import Feature
+    for _ in range(20):
+        await asyncio.sleep(0.05)
+        with get_db() as s:
+            feat = s.query(Feature).filter_by(id=fid).first()
+            if feat and feat.status == "queued":
+                break
+
+    with get_db() as s:
+        feat = s.query(Feature).filter_by(id=fid).first()
+    assert feat is not None
+    assert feat.status == "queued", f"Expected queued, got {feat.status}"
+
+
+@pytest.mark.asyncio
+async def test_manual_mode_leaves_plan_ready(api):
+    import asyncio
+
+    r = await api.post("/api/features/", json={
+        "title": "Manual Stay Ready",
+        "description": "Should stay PLAN_READY",
+        "mode": "draft_plan",
+        "approval_mode": "manual",
+    })
+    assert r.status_code == 200
+    fid = r.json()["data"]["feature_id"]
+
+    from grace_control.db import get_db
+    from grace_control.db.schema import Feature, Packet
+    for _ in range(20):
+        await asyncio.sleep(0.05)
+        with get_db() as s:
+            feat = s.query(Feature).filter_by(id=fid).first()
+            if feat and feat.status == "PLAN_READY":
+                break
+
+    with get_db() as s:
+        feat = s.query(Feature).filter_by(id=fid).first()
+        packets = s.query(Packet).filter_by(feature_id=fid).all()
+    assert feat is not None
+    assert feat.status == "PLAN_READY", f"Expected PLAN_READY, got {feat.status}"
+    assert len(packets) == 0, "Manual mode should not materialize packets"
+
+
+@pytest.mark.asyncio
+async def test_list_features_exposes_approval_mode(api):
+    await api.post("/api/features/", json={
+        "title": "Approval In List",
+        "description": "Check list",
+        "mode": "draft_plan",
+        "approval_mode": "manual",
+    })
+
+    r = await api.get("/api/features/")
+    assert r.status_code == 200
+    items = r.json()["data"]
+    found = [f for f in items if f["title"] == "Approval In List"]
+    assert len(found) == 1
+    assert found[0].get("approval_mode") == "manual"

@@ -483,8 +483,10 @@ Respond ONLY with valid JSON (no markdown, no backticks):
 
         feature.status = "queued"
 
+        approval_mode = spec.get("approval_mode", "auto") if isinstance(spec, dict) else "auto"
         self._emit_event(feature_id, "plan_materialized", {
             "waves_count": len(waves), "packets_count": len(packet_ids),
+            "approval_mode": approval_mode,
         })
         self._emit_event(feature_id, "feature_queued", {})
 

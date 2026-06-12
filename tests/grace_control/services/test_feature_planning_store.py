@@ -345,3 +345,64 @@ class TestFeaturePlanningStore:
             for pid in approval.get("packet_ids", []):
                 assert pid.startswith("pkt_")
                 assert len(pid) == 14  # pkt_ + 10 nanoid chars
+
+    def test_create_feature_persists_approval_mode(self):
+        """FeatureIntakeService persists approval_mode in spec_json."""
+        from grace_control.services.feature_intake_service import FeatureIntakeService
+        from grace_control.db import get_db
+
+        with get_db() as s:
+            svc = FeatureIntakeService(s)
+            result = svc.create_feature(
+                title="Approval Mode Test", mode="draft_plan",
+                approval_mode="manual",
+            )
+            fid = result["feature_id"]
+
+            feat = s.query(Feature).filter_by(id=fid).first()
+            spec = feat.spec_json or {}
+            assert spec.get("approval_mode") == "manual"
+
+    def test_create_feature_default_approval_mode_is_auto(self):
+        """FeatureIntakeService defaults approval_mode to auto."""
+        from grace_control.services.feature_intake_service import FeatureIntakeService
+        from grace_control.db import get_db
+
+        with get_db() as s:
+            svc = FeatureIntakeService(s)
+            result = svc.create_feature(
+                title="Default Approval Mode", mode="draft_plan",
+            )
+            fid = result["feature_id"]
+
+            feat = s.query(Feature).filter_by(id=fid).first()
+            spec = feat.spec_json or {}
+            assert spec.get("approval_mode") == "auto"
+
+    @pytest.mark.asyncio
+    async def test_approve_plan_event_includes_approval_mode(self):
+        """plan_materialized event carries approval_mode field."""
+        from grace_control.services.feature_intake_service import FeatureIntakeService
+        from grace_control.services.feature_planning_service import FeaturePlanningService
+        from grace_control.db import get_db
+
+        with get_db() as s:
+            intake = FeatureIntakeService(s)
+            result = intake.create_feature(
+                title="Approval Event", mode="draft_plan",
+                approval_mode="manual",
+            )
+            fid = result["feature_id"]
+
+            planning = FeaturePlanningService(s)
+            context = await planning.run_context_builder(fid)
+            await planning.run_architect(fid, context)
+            planning.approve_plan(fid)
+
+            events = s.query(Event).filter_by(
+                entity_type="feature", entity_id=fid
+            ).all()
+            materialized = [e for e in events if e.event_type == "plan_materialized"]
+            assert len(materialized) >= 1
+            payload = materialized[-1].payload_json or {}
+            assert payload.get("approval_mode") == "manual"

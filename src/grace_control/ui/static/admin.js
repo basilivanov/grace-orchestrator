@@ -17,7 +17,7 @@ function switchView(v){
   if(v==='dashboard'){$('#bizbar').innerHTML='';loadData();if(window.logInt){clearInterval(window.logInt);window.logInt=null;}}
   else if(v==='archive'){$('#bizbar').innerHTML='';loadArchived();if(window.logInt){clearInterval(window.logInt);window.logInt=null;}}
   else if(v==='logs'){$('#bizbar').innerHTML='';initLogViewer();}
-  else if(v==='new'){$('#bizbar').innerHTML='';$('#board').innerHTML=`<div style="padding:16px;display:flex;flex-direction:column;gap:10px;max-width:700px"><textarea id="biz-input" style="width:100%;min-height:180px;padding:10px;background:var(--bg1);border:1px solid var(--bd);border-radius:6px;color:var(--t1);font-size:13px;font-family:inherit;resize:vertical;outline:none" placeholder="Describe your business feature in detail..."></textarea><div style="display:flex;gap:8px;align-items:center"><button id="biz-btn" onclick="submitBiz()" style="padding:8px 20px;border-radius:6px;border:none;background:var(--blue);color:#fff;font-size:13px;font-weight:600;cursor:pointer">Submit Feature</button><span id="biz-status" style="font-size:11px;color:var(--t3)"></span></div></div>`;if(window.logInt){clearInterval(window.logInt);window.logInt=null;}}
+  else if(v==='new'){$('#bizbar').innerHTML='';$('#board').innerHTML=`<div style="padding:16px;display:flex;flex-direction:column;gap:10px;max-width:700px"><textarea id="biz-input" style="width:100%;min-height:180px;padding:10px;background:var(--bg1);border:1px solid var(--bd);border-radius:6px;color:var(--t1);font-size:13px;font-family:inherit;resize:vertical;outline:none" placeholder="Describe your business feature in detail..."></textarea><label style="font-size:12px;color:var(--t2);display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="biz-auto-approve" checked> Auto-approve architect plan</label><div style="font-size:10px;color:var(--t3);margin:-4px 0 4px 20px">If enabled, GRACE will queue the generated plan automatically after Architect finishes.</div><div style="display:flex;gap:8px;align-items:center"><button id="biz-btn" onclick="submitBiz()" style="padding:8px 20px;border-radius:6px;border:none;background:var(--blue);color:#fff;font-size:13px;font-weight:600;cursor:pointer">Submit Feature</button><span id="biz-status" style="font-size:11px;color:var(--t3)"></span></div></div>`;if(window.logInt){clearInterval(window.logInt);window.logInt=null;}}
 }
 function toggleDetail(){state.detailMode=!state.detailMode;renderDashboard();}
 
@@ -249,10 +249,12 @@ function loadArchived(){
 async function submitBiz(){
   const ta=$('#biz-input'),btn=$('#biz-btn'),status=$('#biz-status'),text=ta?.value?.trim();
   if(!text||text.length<10){if(status)status.textContent='Please write at least 10 characters';return;}
+  const autoApprove=$('#biz-auto-approve')?.checked??true;
+  const approvalMode=autoApprove?'auto':'manual';
   btn.disabled=true;btn.textContent='Submitting...';if(status)status.textContent='Creating feature with planning...';
   let dots=0;const dotInt=setInterval(()=>{dots=(dots+1)%4;if(status&&!status.textContent.includes('created')&&!status.textContent.includes('Error'))status.textContent='Planning in progress'+'.'.repeat(dots)+' '.repeat(3-dots);},2000);
   try{
-    const r=await fetch(apiUrl('/api/features'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:text.slice(0,80),description:text,mode:'draft_plan',origin:'business'})});
+    const r=await fetch(apiUrl('/api/features'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:text.slice(0,80),description:text,mode:'draft_plan',origin:'business',approval_mode:approvalMode})});
     clearInterval(dotInt);
     if(!r.ok){const e=await r.json();if(status)status.textContent='Error: '+(e.detail||e.message||r.status);btn.disabled=false;btn.textContent='Submit Feature';toast('Feature creation error','err');return;}
     const result=await r.json();

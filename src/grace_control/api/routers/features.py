@@ -36,6 +36,7 @@ class FeatureCreateRequest(BaseModel):
     mode: Literal["draft_plan", "auto_queue"] = "draft_plan"
     origin: str = "business"
     self_improvement: bool = False
+    approval_mode: Literal["auto", "manual"] = "auto"
 
 
 # ── List ───────────────────────────────────────────────────────────────────
@@ -53,6 +54,7 @@ async def list_features() -> dict:
                     "description": f.description or "",
                     "status": f.status,
                     "mode": f.spec_json.get("mode", "draft_plan") if isinstance(f.spec_json, dict) else "draft_plan",
+                    "approval_mode": f.spec_json.get("approval_mode", "auto") if isinstance(f.spec_json, dict) else "auto",
                     "origin": f.spec_json.get("origin", "business") if isinstance(f.spec_json, dict) else "business",
                     "created_at": f.created_at.isoformat() + "Z",
                     "updated_at": f.updated_at.isoformat() + "Z",
@@ -99,11 +101,13 @@ async def create_feature(request: FeatureCreateRequest) -> dict:
             mode=request.mode,
             origin=request.origin,
             self_improvement=request.self_improvement,
+            approval_mode=request.approval_mode,
         )
 
         feature_id = result["feature_id"]
 
         if request.mode == "draft_plan":
+            _approval_mode = request.approval_mode
             # Background: run context builder + architect
             async def _background_planning():
                 try:
@@ -112,6 +116,12 @@ async def create_feature(request: FeatureCreateRequest) -> dict:
                         context = await planning.run_context_builder(feature_id, request.target_repo_root)
                         await planning.run_architect(feature_id, context, request.target_repo_root)
                         _log.info("draft_plan_completed", feature_id=feature_id)
+                    if _approval_mode == "auto":
+                        with get_db() as auto_db:
+                            auto_planning = FeaturePlanningService(auto_db)
+                            result = auto_planning.approve_plan(feature_id)
+                            _log.info("plan_auto_approved", feature_id=feature_id,
+                                      approval_mode="auto", status=result.get("status"))
                 except Exception as e:
                     _log.error("draft_plan_failed", feature_id=feature_id, error=str(e)[:200])
                     with get_db() as err_db:
@@ -177,6 +187,12 @@ async def regenerate_plan(feature_id: str) -> dict:
                 raise HTTPException(status_code=404, detail=msg)
             raise HTTPException(status_code=409, detail=msg)
 
+    # Read approval_mode from feature spec for regenerate
+    with get_db() as _reg_db:
+        _reg_feat = _reg_db.query(Feature).filter_by(id=feature_id).first()
+        _reg_spec = _reg_feat.spec_json or {} if _reg_feat else {}
+        _reg_approval_mode = _reg_spec.get("approval_mode", "auto") if isinstance(_reg_spec, dict) else "auto"
+
     # Start background planning (same as create_feature draft_plan)
     async def _bg_regenerate():
         try:
@@ -185,6 +201,12 @@ async def regenerate_plan(feature_id: str) -> dict:
                 context = await planning.run_context_builder(feature_id)
                 await planning.run_architect(feature_id, context)
                 _log.info("regenerate_completed", feature_id=feature_id)
+            if _reg_approval_mode == "auto":
+                with get_db() as auto_db:
+                    auto_planning = FeaturePlanningService(auto_db)
+                    result = auto_planning.approve_plan(feature_id)
+                    _log.info("regenerate_auto_approved", feature_id=feature_id,
+                              approval_mode="auto", status=result.get("status"))
         except Exception as e:
             _log.error("regenerate_failed", feature_id=feature_id, error=str(e)[:200])
             with get_db() as err_db:
