@@ -256,7 +256,7 @@ async function submitBiz(){
   btn.disabled=true;btn.textContent='Submitting...';if(status)status.textContent='Creating feature with planning...';
   let dots=0;const dotInt=setInterval(()=>{dots=(dots+1)%4;if(status&&!status.textContent.includes('created')&&!status.textContent.includes('Error'))status.textContent='Planning in progress'+'.'.repeat(dots)+' '.repeat(3-dots);},2000);
   try{
-    const r=await fetch(apiUrl('/api/features'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:text.slice(0,80),description:text,mode:'draft_plan',origin:'business',approval_mode:approvalMode})});
+    const r=await fetch(apiUrl('/api/features/'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:text.slice(0,80),description:text,mode:'draft_plan',origin:'business',approval_mode:approvalMode})});
     clearInterval(dotInt);
     if(!r.ok){const e=await r.json();if(status)status.textContent='Error: '+(e.detail||e.message||r.status);btn.disabled=false;btn.textContent='Submit Feature';toast('Feature creation error','err');return;}
     const result=await r.json();
