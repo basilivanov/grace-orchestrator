@@ -220,6 +220,7 @@ class FeaturePlanningRun(Base):
     started_at = Column(DateTime, nullable=True)
     finished_at = Column(DateTime, nullable=True)
     duration_ms = Column(Integer, nullable=True)
+    last_heartbeat = Column(DateTime, nullable=True)
     executor_id = Column(String, nullable=True)
     model = Column(String, nullable=True)
     prompt = Column(Text, nullable=True)

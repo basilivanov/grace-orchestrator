@@ -119,26 +119,45 @@ def test_packet_order_by_id_tiebreaker(_db):
 
 
 def test_degraded_packet_blocks_feature(_db):
+    """REJECTED with attempts exhausted → feature degraded, no claim."""
     with get_db() as s:
         _add_feature(s, "feat_D")
         _add_wave(s, "wave_D1", "feat_D")
-        _add_packet(s, "pkt_D1", "feat_D", "wave_D1", state=PacketState.REJECTED.value)
+        _add_packet_with_attempts(
+            s, "pkt_D1", "feat_D", "wave_D1",
+            state=PacketState.REJECTED.value, attempt=3, max_attempts=3,
+        )
     from grace_control.services.queue_service import claim_next
     pid, reason = claim_next("worker")
     assert pid is None
-    assert "degraded" in reason
+    assert reason == "feature_degraded"
+    with get_db() as s:
+        feat = s.query(Feature).filter_by(id="feat_D").first()
+        assert feat.status == "degraded"
 
 
 def test_degraded_feature_does_not_block_activation_of_another(_db):
+    """Terminal-failed feature does not block activation of a different queued feature."""
     with get_db() as s:
         _add_feature(s, "feat_D2", created_at=datetime(2026, 1, 1))
-        _add_feature(s, "feat_D2_B", created_at=datetime(2026, 1, 2))
+        _add_feature(s, "feat_D2_B", created_at=datetime(2026, 1, 2), status="queued")
         _add_wave(s, "wave_D2", "feat_D2")
-        _add_packet(s, "pkt_D2", "feat_D2", "wave_D2", state=PacketState.REJECTED.value)
+        _add_packet_with_attempts(
+            s, "pkt_D2", "feat_D2", "wave_D2",
+            state=PacketState.REJECTED.value, attempt=3, max_attempts=3,
+        )
+        _add_wave(s, "wave_D2_B", "feat_D2_B")
+        _add_packet(s, "pkt_D2_B_1", "feat_D2_B", "wave_D2_B")
     from grace_control.services.queue_service import claim_next
     pid, reason = claim_next("worker")
-    assert pid is None
-    assert "degraded" in reason
+    with get_db() as s:
+        feat_D2 = s.query(Feature).filter_by(id="feat_D2").first()
+        feat_D2_B = s.query(Feature).filter_by(id="feat_D2_B").first()
+    assert feat_D2.status == "degraded"
+    # Second feature should have been activated (or was already queued).
+    assert feat_D2_B.status in ("active", "queued")
+    if pid is not None:
+        assert pid == "pkt_D2_B_1", f"Expected pkt_D2_B_1, got {pid}"
 
 
 # ── Concurrency ────────────────────────────────────────────────────────
@@ -289,3 +308,126 @@ def test_all_accepted_feature_not_done(_db):
     pid, reason = claim_next("worker")
     assert pid is None, "No READY packets, so no claim"
     assert reason != "feature_done", "ACCEPTED should not trigger feature_done"
+
+
+# ── TZ §6.1: Retry semantics — retryable vs terminal failures ────────────
+
+
+def _add_packet_with_attempts(s, pid: str, fid: str, wid: str, state: str,
+                              attempt: int, max_attempts: int):
+    s.add(Packet(id=pid, feature_id=fid, wave_id=wid,
+                 slug=pid, title=pid, description="",
+                 spec_json={}, state=state,
+                 attempt_count=attempt, max_attempts=max_attempts))
+    s.commit()
+
+
+def test_rejected_packet_with_attempts_left_does_not_degrade_feature(_db):
+    """REJECTED packet with attempts left → feature stays active, reason waiting_for_retry."""
+    with get_db() as s:
+        _add_feature(s, "feat_RJ1", status="active")
+        _add_wave(s, "wave_RJ1_1", "feat_RJ1")
+        _add_packet_with_attempts(
+            s, "pkt_RJ1_1", "feat_RJ1", "wave_RJ1_1",
+            state=PacketState.REJECTED.value, attempt=1, max_attempts=3,
+        )
+    from grace_control.services.queue_service import claim_next
+    pid, reason = claim_next("worker")
+    assert pid is None, f"Expected no claim (REJECTED not claimable), got {pid}"
+    assert reason == "waiting_for_retry", f"Expected waiting_for_retry, got {reason}"
+    # Feature must NOT be degraded
+    with get_db() as s:
+        feat = s.query(Feature).filter_by(id="feat_RJ1").first()
+        assert feat.status != "degraded", f"Feature must not be degraded, got {feat.status}"
+
+
+def test_failed_packet_with_attempts_left_does_not_degrade_feature(_db):
+    """FAILED packet with attempts left → feature stays active."""
+    with get_db() as s:
+        _add_feature(s, "feat_FL1", status="active")
+        _add_wave(s, "wave_FL1_1", "feat_FL1")
+        _add_packet_with_attempts(
+            s, "pkt_FL1_1", "feat_FL1", "wave_FL1_1",
+            state=PacketState.FAILED.value, attempt=1, max_attempts=3,
+        )
+    from grace_control.services.queue_service import claim_next
+    pid, reason = claim_next("worker")
+    assert pid is None
+    assert reason == "waiting_for_retry"
+    with get_db() as s:
+        feat = s.query(Feature).filter_by(id="feat_FL1").first()
+        assert feat.status != "degraded"
+
+
+def test_rejected_packet_with_attempts_exhausted_degrades_feature(_db):
+    """REJECTED packet with attempt == max → feature must be degraded."""
+    with get_db() as s:
+        _add_feature(s, "feat_RJ2", status="active")
+        _add_wave(s, "wave_RJ2_1", "feat_RJ2")
+        _add_packet_with_attempts(
+            s, "pkt_RJ2_1", "feat_RJ2", "wave_RJ2_1",
+            state=PacketState.REJECTED.value, attempt=3, max_attempts=3,
+        )
+    from grace_control.services.queue_service import claim_next
+    pid, reason = claim_next("worker")
+    assert pid is None
+    assert reason == "feature_degraded"
+    with get_db() as s:
+        feat = s.query(Feature).filter_by(id="feat_RJ2").first()
+        assert feat.status == "degraded"
+
+
+def test_blocked_final_degrades_feature(_db):
+    """BLOCKED_FINAL is terminal and degrades feature immediately."""
+    with get_db() as s:
+        _add_feature(s, "feat_BF", status="active")
+        _add_wave(s, "wave_BF_1", "feat_BF")
+        _add_packet_with_attempts(
+            s, "pkt_BF_1", "feat_BF", "wave_BF_1",
+            state=PacketState.BLOCKED_FINAL.value, attempt=1, max_attempts=3,
+        )
+    from grace_control.services.queue_service import claim_next
+    pid, reason = claim_next("worker")
+    assert pid is None
+    assert reason == "feature_degraded"
+    with get_db() as s:
+        feat = s.query(Feature).filter_by(id="feat_BF").first()
+        assert feat.status == "degraded"
+
+
+def test_retryable_failure_does_not_block_later_wave_claim(_db):
+    """Wave 1 REJECTED (retryable) + Wave 2 READY → Wave 2 not claimable (wave order)."""
+    with get_db() as s:
+        _add_feature(s, "feat_RW", status="active")
+        _add_wave(s, "wave_RW1", "feat_RW", order=1)
+        _add_wave(s, "wave_RW2", "feat_RW", order=2)
+        _add_packet_with_attempts(
+            s, "pkt_RW1_1", "feat_RW", "wave_RW1",
+            state=PacketState.REJECTED.value, attempt=1, max_attempts=3,
+        )
+        _add_packet(s, "pkt_RW2_1", "feat_RW", "wave_RW2")
+    from grace_control.services.queue_service import claim_next
+    pid, reason = claim_next("worker")
+    assert pid is None, "Wave 2 must not be claimable while Wave 1 has retryable"
+    assert reason in ("waiting_for_retry", "waiting_for_wave_completion")
+
+
+def test_helper_is_retryable_failure(_db):
+    """Pure helper: state machine for is_retryable_failure."""
+    from grace_control.services.queue_service import is_retryable_failure
+    from grace_control.db.schema import Packet
+    p_running = Packet(id="x", state=PacketState.RUNNING.value,
+                        attempt_count=1, max_attempts=3)
+    assert not is_retryable_failure(p_running)
+    p_ready = Packet(id="x", state=PacketState.READY.value,
+                      attempt_count=1, max_attempts=3)
+    assert not is_retryable_failure(p_ready)
+    p_rej_low = Packet(id="x", state=PacketState.REJECTED.value,
+                       attempt_count=1, max_attempts=3)
+    assert is_retryable_failure(p_rej_low)
+    p_rej_max = Packet(id="x", state=PacketState.REJECTED.value,
+                       attempt_count=3, max_attempts=3)
+    assert not is_retryable_failure(p_rej_max)
+    p_blocked = Packet(id="x", state=PacketState.BLOCKED_RECOVERABLE.value,
+                       attempt_count=1, max_attempts=3)
+    assert not is_retryable_failure(p_blocked)

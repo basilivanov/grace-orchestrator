@@ -42,6 +42,170 @@ def _attempt_branch(packet_id: str, attempt: int) -> str:
     return f"agent/{_attempt_slug(packet_id, attempt)}"
 
 
+# ── Failure classification (TZ §6.7) ─────────────────────────────────────────
+
+import re as _re_classify
+
+
+def _redact_secrets(text: str) -> str:
+    """Redact obvious secrets from log tails. Never expose API keys.
+
+    Conservative: redact long token-like substrings, bearer-style auth
+    headers, and URLs with embedded credentials.
+    """
+    if not text:
+        return text
+    # Bearer / Authorization headers.
+    text = _re_classify.sub(
+        r"(?i)(authorization\s*:\s*bearer\s+)[A-Za-z0-9._\-]+",
+        r"\1***REDACTED***", text)
+    # ENV_VAR=value where value is long and token-like.
+    text = _re_classify.sub(
+        r"(?i)(\b[A-Z][A-Z0-9_]*(?:_KEY|_TOKEN|_SECRET|_PASSWORD|_URL))\s*=\s*([^\s\"']{12,})",
+        r"\1***REDACTED***", text)
+    # URL with embedded user:pass@.
+    text = _re_classify.sub(
+        r"([A-Za-z][A-Za-z0-9+\-.]*://)([^\s/@:]+):([^\s/@]+)@",
+        r"\1***:***@", text)
+    # Long opaque tokens (40+ alnum/dash/underscore).
+    text = _re_classify.sub(
+        r"\b[A-Za-z0-9_\-]{40,}\b", "***REDACTED***", text)
+    return text
+
+
+_STDOUT_TAIL_LIMIT = 4000
+_STDERR_TAIL_LIMIT = 4000
+
+
+def _tail(s: str, limit: int) -> str:
+    if not s:
+        return ""
+    if len(s) <= limit:
+        return s
+    return s[-limit:]
+
+
+def classify_failure(
+    stdout: str,
+    stderr: str,
+    exit_code: int | None,
+    stage: str,
+) -> str:
+    """Deterministic failure classification (TZ §6.7).
+
+    Returns one of: session_not_found, auth_error, timeout, no_changes,
+    scope_violation, t1_failed, agent_commit_failed,
+    worktree_preflight_failed, unknown.
+    """
+    blob = ((stdout or "") + "\n" + (stderr or "")).lower()
+    if exit_code is None or exit_code != 0:
+        if "timed_out" in stage or "timeout" in stage:
+            return "timeout"
+    if "session not found" in blob:
+        return "session_not_found"
+    if any(t in blob for t in ("401", "403", "unauthorized", "api key", "missing key", "authentication")):
+        return "auth_error"
+    if "timed_out" in stage or "timeout" in stage:
+        return "timeout"
+    if "no changes" in stage or "no_changes" in stage:
+        return "no_changes"
+    if "scope_violation" in stage or "scope violation" in blob:
+        return "scope_violation"
+    if "t1" in stage and "fail" in stage:
+        return "t1_failed"
+    if "git commit" in blob and "fail" in blob:
+        return "agent_commit_failed"
+    if "preflight" in stage and "fail" in stage:
+        return "worktree_preflight_failed"
+    if "worktree" in stage and "issue" in stage:
+        return "worktree_issue"
+    return "unknown"
+
+
+# Commands that need broader repo context (cannot run in scoped_copy).
+# Conservative list: include anything that walks the test tree or imports
+# sibling modules not in the packet scope.
+_BROAD_REPO_VERIFICATION_PATTERNS = (
+    "pytest",
+    "py.test",
+    "py.test",
+    "ruff",
+    "mypy",
+    "pnpm test",
+    "pnpm lint",
+    "pnpm typecheck",
+    "pnpm exec",
+    "npm test",
+    "npm run",
+    "vitest",
+    "playwright",
+    "jest",
+    "tsc",
+    "pnpm guardrails",
+    "guardrails",
+    "go test",
+    "go vet",
+    "go build",
+    "cargo test",
+    "cargo build",
+)
+
+
+def _flatten_verification_for_safety(packet_contract) -> list:
+    """Best-effort flatten of all verification command tokens.
+
+    Verification can be structured as t0/t1/t2 lists of [cmd, arg, ...]
+    or as flat strings. We flatten everything to a list of strings and
+    nested lists (so _verification_unsafe_for_scoped can re-flatten).
+    """
+    out: list = []
+    try:
+        v = getattr(packet_contract, "verification", None) or {}
+    except Exception:
+        v = {}
+    if not isinstance(v, dict):
+        return out
+    for tier in ("t0", "t1", "t2"):
+        for cmd in v.get(tier) or []:
+            if isinstance(cmd, str):
+                out.append(cmd)
+            elif isinstance(cmd, (list, tuple)):
+                # Keep nested — _verification_unsafe_for_scoped flattens.
+                out.append([tok for tok in cmd if isinstance(tok, str)])
+            else:
+                out.append(str(cmd))
+    return out
+
+
+def _verification_unsafe_for_scoped(verification_tokens: list, scope: list[str]) -> bool:
+    """True when verification likely needs files outside packet scope.
+
+    Heuristic: if verification contains a broad-repo command (pytest, tsc,
+    etc.) AND the test/config files are not all in scope, scoped_copy
+    workspace will fail.
+
+    Accepts flat list of strings OR nested list of strings (verification
+    commands can be [cmd, arg, ...] or [cmd, arg, ...] sublists).
+    """
+    flat: list[str] = []
+    for item in verification_tokens or []:
+        if isinstance(item, str):
+            flat.append(item)
+        elif isinstance(item, (list, tuple)):
+            for tok in item:
+                if isinstance(tok, str):
+                    flat.append(tok)
+    if not flat:
+        return False
+    blob = " ".join(flat).lower()
+    has_broad = any(p in blob for p in _BROAD_REPO_VERIFICATION_PATTERNS)
+    if not has_broad:
+        return False
+    # If pytest/tsc etc. is in verification, scoped_copy is unsafe unless
+    # the user explicitly opted in via workspace_scope_safety.
+    return True
+
+
 class ExecutionResult(BaseModel):
     accepted: bool; reason: str | None = None; evidence_path: str = ""; duration_ms: int = 0
     domain_status: str = ""; worktree_path: str = ""; branch_name: str = ""
@@ -401,6 +565,30 @@ class PacketExecutionAdapter:
         from grace_control.config.settings import settings as _s
         workspace_mode = executor.get("workspace_mode") or _s.workspace_mode or "full_git_worktree"
         is_minimal = executor.get("minimal_repo", False)
+        # TZ §6.3: auto-upgrade scoped_copy to full_git_worktree if verification
+        # contains commands that need broader repo context (pytest, tsc, etc.).
+        _workspace_evidence: dict = {}
+        if workspace_mode == "scoped_copy":
+            try:
+                _verification = _flatten_verification_for_safety(packet_contract)
+            except Exception:
+                _verification = []
+            if _verification_unsafe_for_scoped(_verification, eff or []):
+                if executor.get("workspace_scope_safety") == "unsafe_allowed_for_fixture":
+                    _log.warn("workspace_scope_unsafe",
+                              packet_id=pid, reason="verification_requires_repo_context")
+                else:
+                    _log.warn("workspace_mode_auto_upgraded",
+                              packet_id=pid,
+                              from_mode="scoped_copy",
+                              to_mode="full_git_worktree",
+                              reason="verification_requires_repo_context")
+                    workspace_mode = "full_git_worktree"
+                    is_minimal = False
+                    _workspace_evidence = {
+                        "workspace_mode": "full_git_worktree",
+                        "reason": "verification_requires_repo_context",
+                    }
         if is_minimal:
             workspace_mode = "scoped_copy"
 
@@ -624,10 +812,64 @@ class PacketExecutionAdapter:
                 "prev_internal_id": prev_internal_id,
             }
         # Persist workspace report in evidence
-        if _workspace_result is not None:
+        if _workspace_evidence:
+            result.evidence["workspace"] = _workspace_evidence
+        elif _workspace_result is not None:
             result.evidence["workspace"] = _workspace_result.to_dict()
         elif workspace_mode == "full_git_worktree":
             result.evidence["workspace"] = {"workspace_mode": "full_git_worktree"}
+
+        # TZ §6.6: persist diagnostics contract in evidence for every
+        # terminal run. Use fields already on the ExecutionResult.
+        try:
+            _stdout = getattr(result, "stdout", "") or ""
+            _stderr = getattr(result, "stderr", "") or ""
+            _stage = "agent_run"
+            if not result.accepted:
+                # Best-effort stage detection.
+                if "agent_commit_failed" in _stderr or "cannot commit" in _stderr:
+                    _stage = "agent_commit"
+                elif "worktree" in _stderr.lower() and "missing" in _stderr.lower():
+                    _stage = "worktree_inspection"
+            result.evidence["stdout_tail"] = _redact_secrets(_tail(_stdout, _STDOUT_TAIL_LIMIT))
+            result.evidence["stderr_tail"] = _redact_secrets(_tail(_stderr, _STDERR_TAIL_LIMIT))
+            result.evidence["exit_code"] = getattr(result, "exit_code", None)
+            result.evidence["duration_ms"] = getattr(result, "duration_ms", None)
+            result.evidence["failure_stage"] = _stage
+            result.evidence["failure_class"] = classify_failure(
+                _stdout, _stderr, result.evidence["exit_code"], _stage)
+            if result.evidence["failure_class"] != "unknown":
+                _log.warn(
+                    "failure_classified",
+                    packet_id=pid,
+                    failure_class=result.evidence["failure_class"],
+                    failure_stage=_stage,
+                    exit_code=result.evidence["exit_code"],
+                )
+            else:
+                _log.debug("failure_classified",
+                           packet_id=pid,
+                           failure_class="unknown",
+                           failure_stage=_stage)
+        except Exception as _e:
+            _log.warn("diagnostics_persist_failed", packet_id=pid, reason=str(_e))
+
+        # TZ §6.4: persist session_resume evidence (whether injected or skipped).
+        try:
+            _last_session_resume = getattr(self, "_last_session_resume", None)
+            if _last_session_resume:
+                result.evidence["session_resume"] = _last_session_resume
+        except Exception:
+            pass
+
+        _log.info("run_diagnostics_persisted",
+                  packet_id=pid,
+                  accepted=result.accepted,
+                  failure_class=result.evidence.get("failure_class"),
+                  failure_stage=result.evidence.get("failure_stage"),
+                  exit_code=result.evidence.get("exit_code"),
+                  has_stderr_tail=bool(result.evidence.get("stderr_tail")),
+                  has_stdout_tail=bool(result.evidence.get("stdout_tail")))
         # Persist preflight report if it exists
         if _preflight_result is not None:
             result.evidence["target_repo_preflight"] = _preflight_result.to_dict()

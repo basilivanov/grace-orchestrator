@@ -28,6 +28,7 @@ import os
 import re
 import subprocess
 from datetime import datetime, timezone
+UTC = timezone.utc
 from pathlib import Path
 from typing import Any
 
@@ -349,10 +350,43 @@ class AdminAggregationService:
 
         events = db.query(Event).filter(Event.entity_id == p.id).order_by(Event.timestamp.asc()).all()
 
+        # Look up planning run durations and last_heartbeat from feature_planning_runs
+        from grace_control.db.schema import FeaturePlanningRun
+        plan_runs = db.query(FeaturePlanningRun).filter(
+            FeaturePlanningRun.feature_id == p.feature_id,
+            FeaturePlanningRun.stage.in_(["architect", "context_builder"]),
+        ).all()
+        arch_run = next((r for r in plan_runs if r.stage == "architect"), None)
+        cb_run = next((r for r in plan_runs if r.stage == "context_builder"), None)
+        # Architect: derive live status from last_heartbeat if still running
+        _arch_live = False
+        if arch_run and arch_run.status == "running":
+            if arch_run.last_heartbeat:
+                _age = (datetime.now(UTC) - arch_run.last_heartbeat).total_seconds()
+                _arch_live = _age < 30
+            else:
+                _arch_live = True  # Just started, assume live
         # 1. Architect
-        architect_s = {"key": "architect", "label": "Architect", "status": "done", "started_at": created_at, "finished_at": created_at, "duration_ms": 0, "meta": "", "target_tab": "spec"}
+        arch_dur = (arch_run.duration_ms or 0) if arch_run else 0
+        arch_start = _iso(arch_run.started_at) if arch_run and arch_run.started_at else created_at
+        arch_finish = _iso(arch_run.finished_at) if arch_run and arch_run.finished_at else created_at
+        arch_status = "running" if _arch_live else (arch_run.status if arch_run else "done")
+        arch_meta = "🟢 LIVE" if _arch_live else ""
+        architect_s = {"key": "architect", "label": "Architect", "status": arch_status, "started_at": arch_start, "finished_at": arch_finish, "duration_ms": arch_dur, "meta": arch_meta, "target_tab": "spec"}
         # 2. Context Builder
-        ctx_s = {"key": "context_builder", "label": "Context Builder", "status": "done" if has_run else "pending", "started_at": created_at, "finished_at": run_started or created_at, "duration_ms": 0, "meta": "", "target_tab": "spec"}
+        _cb_live = False
+        if cb_run and cb_run.status == "running":
+            if cb_run.last_heartbeat:
+                _age = (datetime.now(UTC) - cb_run.last_heartbeat).total_seconds()
+                _cb_live = _age < 30
+            else:
+                _cb_live = True
+        cb_dur = (cb_run.duration_ms or 0) if cb_run else 0
+        cb_start = _iso(cb_run.started_at) if cb_run and cb_run.started_at else created_at
+        cb_finish = _iso(cb_run.finished_at) if cb_run and cb_run.finished_at else (run_started or created_at)
+        cb_status = "running" if _cb_live else (cb_run.status if cb_run else ("done" if has_run else "pending"))
+        cb_meta = "🟢 LIVE" if _cb_live else ""
+        ctx_s = {"key": "context_builder", "label": "Context Builder", "status": cb_status, "started_at": cb_start, "finished_at": cb_finish, "duration_ms": cb_dur, "meta": cb_meta, "target_tab": "spec"}
         # 3. Materialized
         mat_s = {"key": "materialized", "label": "Materialize", "status": "done", "started_at": created_at, "finished_at": created_at, "duration_ms": 0, "meta": p.slug or "", "target_tab": "spec"}
         # 4. Executor
@@ -1089,7 +1123,7 @@ class AdminAggregationService:
                     .order_by(PacketRun.run_number.desc())
                     .first()
                 )
-                pipeline = self._derive_simple_pipeline(p, last_run, f.status)
+                pipeline = self._derive_simple_pipeline(p, last_run, f.status, db)
                 started_at = (
                     _iso(last_run.started_at)
                     if last_run and last_run.started_at else None
@@ -1100,6 +1134,7 @@ class AdminAggregationService:
                 )
                 packets_by_wave.setdefault(p.wave_id, []).append({
                     "id": p.id, "slug": p.slug, "title": p.title,
+                    "feature_id": p.feature_id,
                     "state": p.state, "attempt_count": p.attempt_count,
                     "max_attempts": p.max_attempts,
                     "created_at": _iso(p.created_at),
@@ -1155,7 +1190,8 @@ class AdminAggregationService:
         return {"features": out}
 
     def _derive_simple_pipeline(
-        self, p: Packet, last_run: PacketRun | None, feature_status: str = ""
+        self, p: Packet, last_run: PacketRun | None, feature_status: str = "",
+        db: Session | None = None,
     ) -> dict[str, Any]:
         """Derive an 11-stage pipeline preview from packet + last_run alone.
 
@@ -1176,8 +1212,44 @@ class AdminAggregationService:
         has_run = last_run is not None
         is_planning = feature_status == "PLANNING"
         stages: list[dict[str, Any]] = []
-        stages.append({"key": "context_builder", "label": "Context Builder", "status": "pending" if is_planning else ("done" if has_run else "pending"), "started_at": None if is_planning else created_iso, "finished_at": None, "duration_ms": 0, "meta": "", "target_tab": "spec"})
-        stages.append({"key": "architect", "label": "Architect", "status": "running" if is_planning else "done", "started_at": created_iso, "finished_at": None if is_planning else created_iso, "duration_ms": 0, "meta": "", "target_tab": "spec"})
+        # Look up planning run durations and last_heartbeat from feature_planning_runs
+        from grace_control.db.schema import FeaturePlanningRun
+        _arch_dur = 0; _cb_dur = 0
+        _arch_start = created_iso; _arch_finish = created_iso
+        _cb_start = created_iso; _cb_finish = created_iso
+        _arch_live = False; _cb_live = False
+        _arch_status = None; _cb_status = None
+        if db is not None:
+            _plan_runs = db.query(FeaturePlanningRun).filter(
+                FeaturePlanningRun.feature_id == p.feature_id,
+                FeaturePlanningRun.stage.in_(["architect", "context_builder"]),
+            ).all()
+            _cb = next((r for r in _plan_runs if r.stage == "context_builder"), None)
+            if _cb:
+                _cb_dur = _cb.duration_ms or 0
+                _cb_start = _iso(_cb.started_at) if _cb.started_at else created_iso
+                _cb_finish = _iso(_cb.finished_at) if _cb.finished_at else created_iso
+                if _cb.status == "running":
+                    if _cb.last_heartbeat:
+                        _cb_live = (datetime.now(UTC) - _cb.last_heartbeat).total_seconds() < 30
+                    else:
+                        _cb_live = True
+                _cb_status = "running" if _cb_live else _cb.status
+            _ar = next((r for r in _plan_runs if r.stage == "architect"), None)
+            if _ar:
+                _arch_dur = _ar.duration_ms or 0
+                _arch_start = _iso(_ar.started_at) if _ar.started_at else created_iso
+                _arch_finish = _iso(_ar.finished_at) if _ar.finished_at else created_iso
+                if _ar.status == "running":
+                    if _ar.last_heartbeat:
+                        _arch_live = (datetime.now(UTC) - _ar.last_heartbeat).total_seconds() < 30
+                    else:
+                        _arch_live = True
+                _arch_status = "running" if _arch_live else _ar.status
+        _arch_meta = "🟢 LIVE" if _arch_live else ""
+        _cb_meta = "🟢 LIVE" if _cb_live else ""
+        stages.append({"key": "context_builder", "label": "Context Builder", "status": _cb_status or ("pending" if is_planning else ("done" if has_run else "pending")), "started_at": _cb_start, "finished_at": _cb_finish, "duration_ms": _cb_dur, "meta": _cb_meta, "target_tab": "spec"})
+        stages.append({"key": "architect", "label": "Architect", "status": _arch_status or ("running" if is_planning else "done"), "started_at": _arch_start, "finished_at": _arch_finish, "duration_ms": _arch_dur, "meta": _arch_meta, "target_tab": "spec"})
         stages.append({"key": "materialized", "label": "Materialize", "status": "done", "started_at": created_iso, "finished_at": created_iso, "duration_ms": 0, "meta": p.slug or "", "target_tab": "spec"})
         stages.append({"key": "executor", "label": "Executor", "status": "done" if executor else "skipped", "started_at": run_started, "finished_at": run_started, "duration_ms": 0, "meta": executor or "", "target_tab": "runs"})
         if not has_run:

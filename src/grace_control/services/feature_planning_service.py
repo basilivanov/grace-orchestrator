@@ -5,13 +5,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
-import os
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
 from grace_control.core.uid import generate_unique_id, new_wave_uid, new_packet_uid, new_run_uid
+from grace_control.db import get_db
 from grace_control.db.schema import Feature, FeaturePlanningRun, Wave, Packet, Event
 from grace_control.db.schema import PacketState
 
@@ -97,23 +98,6 @@ class FeaturePlanningService:
         feature = self.db.query(Feature).filter_by(id=feature_id).first()
         task_desc = (feature.description or feature.title or "") if feature else ""
 
-        if os.environ.get("GRACE_CONTEXT_DISABLED"):
-            context = {
-                "summary": f"Context collection disabled for: {task_desc[:200]}",
-                "file_count": 0,
-                "files": [],
-                "disabled": True,
-            }
-            cb_run.status = "done"
-            cb_run.finished_at = datetime.now(UTC)
-            cb_run.duration_ms = 0
-            cb_run.result_json = context
-            self._emit_event(feature_id, "context_builder_completed", {
-                "run_id": run_id, "duration_ms": 0, "status": "done",
-            })
-            self.db.commit()
-            return context
-
         try:
             worktree_root = target_repo_root or _ctx_settings.target_repo_root or "."
             root = Path(worktree_root)
@@ -133,11 +117,19 @@ class FeaturePlanningService:
                 stdout_log_path=stdout_path,
                 stderr_log_path=stderr_path,
             )
-            code_ctx = await collector.collect(
-                task_description=task_desc,
-                target_scope=scope,
-                project_root=root,
-            )
+            _hb_task = asyncio.create_task(self._heartbeat_worker(run_id, interval_s=5.0))
+            try:
+                code_ctx = await collector.collect(
+                    task_description=task_desc,
+                    target_scope=scope,
+                    project_root=root,
+                )
+            finally:
+                _hb_task.cancel()
+                try:
+                    await _hb_task
+                except (asyncio.CancelledError, Exception):
+                    pass
 
             context = {
                 "summary": code_ctx.summary,
@@ -194,7 +186,7 @@ class FeaturePlanningService:
 
         arch_run.status = "running"
         arch_run.started_at = now
-        arch_run.executor_id = "architect-business-flash"
+        arch_run.executor_id = "deepseek-v4-pro"
         arch_run.prompt = task_desc[:2000]
 
         # Set up live log paths
@@ -208,61 +200,60 @@ class FeaturePlanningService:
         arch_run.stderr_path = stderr_path
         self.db.commit()
 
-        # If context is disabled (test mode), use fallback plan
-        if os.environ.get("GRACE_CONTEXT_DISABLED"):
-            plan = self._fallback_plan(feature_id, task_desc)
-            arch_run.status = "done"
-            arch_run.model = "disabled"
-            arch_run.result_json = plan
-            self._finalize_plan(feature_id, plan, arch_run, run_id)
-            return plan
-
         try:
             # Build prompt — reuses the same prompt structure as _call_architect_llm
             prompt = self._build_architect_prompt(task_desc, context)
 
             worktree_root = target_repo_root or _arch_settings.target_repo_root or ""
 
-            for attempt in range(2):
+            _hb_task = asyncio.create_task(self._heartbeat_worker(run_id, interval_s=5.0))
+            try:
+                for attempt in range(2):
+                    try:
+                        from grace_control.core.llm_runner import run_llm
+                        cli_name = "deepseek-v4-pro" if worktree_root else "architect-premium"
+                        raw = await run_llm(
+                            prompt, role="architect",
+                            model="",
+                            cli=cli_name,
+                            cwd=Path(worktree_root) if worktree_root else None,
+                            stdout_log_path=arch_run.stdout_path,
+                            stderr_log_path=arch_run.stderr_path,
+                        )
+                        plan = json.loads(raw)
+
+                        # Normalize plan structure
+                        if "plan" in plan and isinstance(plan["plan"], dict) and plan["plan"].get("waves"):
+                            plan["waves"] = plan["plan"]["waves"]
+                        if "packets" in plan and not plan.get("waves"):
+                            plan["waves"] = [{"title": "Phase 1", "packets": plan["packets"]}]
+                        if "waves" not in plan:
+                            plan["waves"] = []
+                        for w in plan.get("waves", []):
+                            if "packets" not in w:
+                                w["packets"] = []
+                            for pkt in w["packets"]:
+                                pkt.setdefault("scope", [])
+                                pkt.setdefault("acceptance_profile", "NORMAL")
+                                pkt.setdefault("depends_on", [])
+
+                        plan.setdefault("constraints", {})
+                        plan.setdefault("verification", {"t0": [], "t1": [], "t2": []})
+
+                        arch_run.status = "done"
+                        arch_run.model = cli_name
+                        arch_run.result_json = plan
+                        break
+                    except Exception as e:
+                        if attempt == 1:
+                            raise
+                        prompt += f"\n\n[Previous attempt failed with invalid JSON: {str(e)[:200]}. Ensure valid JSON output.]"
+            finally:
+                _hb_task.cancel()
                 try:
-                    from grace_control.core.llm_runner import run_llm
-                    cli_name = "architect-business-flash" if worktree_root else "architect-premium"
-                    raw = await run_llm(
-                        prompt, role="architect",
-                        model="",
-                        cli=cli_name,
-                        cwd=Path(worktree_root) if worktree_root else None,
-                        stdout_log_path=arch_run.stdout_path,
-                        stderr_log_path=arch_run.stderr_path,
-                    )
-                    plan = json.loads(raw)
-
-                    # Normalize plan structure
-                    if "plan" in plan and isinstance(plan["plan"], dict) and plan["plan"].get("waves"):
-                        plan["waves"] = plan["plan"]["waves"]
-                    if "packets" in plan and not plan.get("waves"):
-                        plan["waves"] = [{"title": "Phase 1", "packets": plan["packets"]}]
-                    if "waves" not in plan:
-                        plan["waves"] = []
-                    for w in plan.get("waves", []):
-                        if "packets" not in w:
-                            w["packets"] = []
-                        for pkt in w["packets"]:
-                            pkt.setdefault("scope", [])
-                            pkt.setdefault("acceptance_profile", "NORMAL")
-                            pkt.setdefault("depends_on", [])
-
-                    plan.setdefault("constraints", {})
-                    plan.setdefault("verification", {"t0": [], "t1": [], "t2": []})
-
-                    arch_run.status = "done"
-                    arch_run.model = cli_name
-                    arch_run.result_json = plan
-                    break
-                except Exception as e:
-                    if attempt == 1:
-                        raise
-                    prompt += f"\n\n[Previous attempt failed with invalid JSON: {str(e)[:200]}. Ensure valid JSON output.]"
+                    await _hb_task
+                except (asyncio.CancelledError, Exception):
+                    pass
 
         except Exception as e:
             plan = self._fallback_plan(feature_id, task_desc)
@@ -272,6 +263,32 @@ class FeaturePlanningService:
 
         self._finalize_plan(feature_id, plan, arch_run, run_id)
         return plan
+
+    async def _heartbeat_worker(self, run_id: str, interval_s: float = 5.0) -> None:
+        """Update run.last_heartbeat every `interval_s` while planning LLM runs.
+
+        The presence of a recent `last_heartbeat` proves the agent is alive —
+        distinguishes "actively running" from "stuck / zombie".
+        """
+        from grace_control.core.structured_logger import GraceLogger
+        _log = GraceLogger("planning_heartbeat")
+        try:
+            while True:
+                await asyncio.sleep(interval_s)
+                try:
+                    with get_db() as db:
+                        run = db.query(FeaturePlanningRun).filter_by(id=run_id).first()
+                        if not run:
+                            break
+                        if run.status != "running":
+                            break
+                        run.last_heartbeat = datetime.now(UTC)
+                        db.commit()
+                except Exception as e:
+                    _log.warn("heartbeat_update_failed", run_id=run_id, error=str(e)[:200])
+                    break
+        except asyncio.CancelledError:
+            pass
 
     def _finalize_plan(self, feature_id: str, plan: dict, arch_run: FeaturePlanningRun, run_id: str) -> None:
         arch_run.finished_at = datetime.now(UTC)

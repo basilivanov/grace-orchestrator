@@ -43,6 +43,72 @@ from grace_control.db.schema import AgentSession
 _log = GraceLogger("session_store")
 
 
+def _session_run_status_usable(db: Session, external_id: str) -> bool:
+    """Conservative usability check for a stored opencode session.
+
+    Returns False (skip resume) when:
+    * session external_id is empty or malformed;
+    * the most recent packet run referencing this session ended with
+      exit_code != 0, was timed out, or had a session/auth error in stderr.
+
+    This is intentionally conservative: when we cannot prove the session is
+    healthy, we skip it. Stale opencode session ids cause
+    `Session not found` exit_code=1 which is the most common coder failure
+    we observed.
+    """
+    if not external_id:
+        return False
+    sid = external_id.strip()
+    if not sid.startswith("ses_") or len(sid) < 6:
+        return False
+    # Inspect the most recent packet run that recorded this session id.
+    try:
+        from grace_control.db.schema import PacketRun
+        # Try result_json->>session_id via JSON_EXTRACT (sqlite has json_extract).
+        # Fallback: load recent runs and check Python-side.
+        runs = (
+            db.query(PacketRun)
+            .order_by(PacketRun.run_number.desc())
+            .limit(20)
+            .all()
+        )
+        for r in runs:
+            rj = r.result_json or {}
+            # Some adapters store session id under different keys.
+            sid_candidates = [
+                rj.get("session_id") if isinstance(rj, dict) else None,
+                (rj.get("evidence", {}) or {}).get("session_id")
+                if isinstance(rj, dict)
+                else None,
+            ]
+            sid_candidates = [s for s in sid_candidates if s]
+            if not sid_candidates:
+                continue
+            if external_id not in sid_candidates:
+                continue
+            # Found the latest run for this session. Check health.
+            if r.status in ("rejected", "failed", "timeout"):
+                return False
+            if r.exit_code is not None and r.exit_code != 0:
+                return False
+            stderr = (rj.get("stderr") or "") if isinstance(rj, dict) else ""
+            stderr_tail = (rj.get("stderr_tail") or "") if isinstance(rj, dict) else ""
+            for blob in (stderr, stderr_tail):
+                if not blob:
+                    continue
+                if "Session not found" in blob:
+                    return False
+                if "401" in blob or "403" in blob or "unauthorized" in blob.lower():
+                    return False
+            return True
+        # No matching recent run found — refuse to resume conservatively.
+        return False
+    except Exception as e:
+        _log.warn("session_usability_check_failed",
+                  external_id=external_id, reason=str(e))
+        return False
+
+
 class SessionStore:
     """CRUD for the agent_sessions table.
 
@@ -130,7 +196,19 @@ class SessionStore:
             )
             if executor_id:
                 q = q.filter(AgentSession.executor_id == executor_id)
-            return q.order_by(AgentSession.created_at.desc()).first()
+            q = q.order_by(AgentSession.created_at.desc())
+            # Filter out sessions whose latest run failed/timed-out (TZ §6.5).
+            # Conservative: if we cannot determine status, skip the session.
+            for s in q.all():
+                if not _session_run_status_usable(db, s.external_id):
+                    _log.info("session_resume_skipped_invalid",
+                              packet_id=packet_id,
+                              role=role,
+                              session_id=s.external_id,
+                              reason="latest_run_failed_or_timeout")
+                    continue
+                return s
+            return None
         except Exception as e:
             _log.warn("session_find_latest_failed",
                       packet_id=packet_id,

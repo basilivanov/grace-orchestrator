@@ -77,6 +77,28 @@ def _extract_session_id(stdout: str, backend: str) -> str | None:
     return None
 
 
+def _opencode_session_usable(session_id: str) -> bool:
+    """Best-effort check whether an opencode session id is still usable.
+
+    Conservative default: returns False (skip resume) when we cannot
+    prove the session is valid. Stale opencode sessions cause
+    `Session not found` exit_code=1 — never blindly resume.
+
+    This is intentionally simple and CLI-free. A future iteration may
+    inspect `~/.local/share/opencode/storage/session/<id>` or call
+    `opencode session list`. For now: trust the format prefix only.
+    """
+    if not session_id:
+        return False
+    sid = session_id.strip()
+    # opencode session ids look like `ses_<8 hex>` or longer base32.
+    if not sid.startswith("ses_"):
+        return False
+    if len(sid) < 6:
+        return False
+    return True
+
+
 class AgentRunService:
     def __init__(self) -> None:
         self._renderer = CommandTemplateRenderer()
@@ -168,21 +190,60 @@ class AgentRunService:
                 rendered_extras.append(pending_flag)
         command = command + rendered_extras
 
-        # TZ_SESSION_RESUME.md Phase 2: inject session resume/fork flags
+        # TZ_SESSION_RESUME.md Phase 2: inject session resume/fork flags.
+        # Hardened: never inject stale session id when profile is not
+        # explicitly marked safe, when validation is required and not feasible,
+        # or when the session id looks empty/invalid.
         resume_mode = executor.get("resume_mode", "never")
+        resume_safe = bool(executor.get("resume_safe", False))
+        validate_before_use = bool(executor.get("validate_session_before_use", False))
+        session_resume_used = False
+        session_resume_reason = "disabled_for_profile"
         if resume_session_id and resume_mode != "never":
-            resume_flag = executor.get("resume_flag", "--session")
-            command.append(resume_flag)
-            command.append(resume_session_id)
-            if fork:
-                fork_flag = executor.get("fork_flag")
-                if fork_flag:
-                    command.append(fork_flag)
-            _log.info("session_resume_injected",
-                      packet_id=packet_id,
-                      resume_session_id=resume_session_id,
-                      fork=fork,
-                      resume_mode=resume_mode)
+            # Empty / placeholder session ids are never safe.
+            sid = (resume_session_id or "").strip()
+            sid_valid = bool(sid) and len(sid) >= 4
+            if not sid_valid:
+                session_resume_reason = "invalid_or_empty"
+            elif not resume_safe:
+                session_resume_reason = "profile_not_resume_safe"
+            elif validate_before_use and not _opencode_session_usable(sid):
+                # Conservative: if we cannot validate, skip resume.
+                session_resume_reason = "invalid_or_stale"
+            else:
+                resume_flag = executor.get("resume_flag", "--session")
+                command.append(resume_flag)
+                command.append(sid)
+                if fork:
+                    fork_flag = executor.get("fork_flag")
+                    if fork_flag:
+                        command.append(fork_flag)
+                session_resume_used = True
+                session_resume_reason = "injected"
+                _log.info("session_resume_injected",
+                          packet_id=packet_id,
+                          resume_session_id=sid,
+                          fork=fork,
+                          resume_mode=resume_mode)
+            if not session_resume_used:
+                _log.warn("session_resume_skipped_invalid",
+                          packet_id=packet_id,
+                          resume_session_id=resume_session_id,
+                          reason=session_resume_reason,
+                          resume_mode=resume_mode)
+
+        # Persist resume decision in evidence so admin/debug can see it.
+        # We attach it after the run via a side-channel; but for now we add it
+        # to the stdin/cmd preview by appending a comment? No — keep cmd clean.
+        # Use env or temp file. Simplest: stash on the result via a helper.
+        # (Will be attached by caller after run completes.)
+        # Stash in a thread-local-like attribute on self.
+        self._last_session_resume = {
+            "requested": bool(resume_session_id and resume_mode != "never"),
+            "session_id": resume_session_id,
+            "used": session_resume_used,
+            "reason": session_resume_reason,
+        }
 
         preview_env = self._env_builder.preview(env)
 

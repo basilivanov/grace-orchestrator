@@ -9,11 +9,16 @@
 #          - Only one feature active at a time under GRACE_MAX_CONCURRENCY=1.
 #          - Inside a feature, waves are processed by Wave.order.
 #          - Inside a wave, packets are processed by Packet.created_at, id.
-#          - Failed/rejected/blocked packets set feature to degraded, blocking later features.
+#          - Retryable failed/rejected packets do NOT degrade feature — they wait
+#            for retry path (worker or admin).
+#          - Only terminal exhausted failures degrade feature.
 # inputs: worker_id, GRACE_MAX_CONCURRENCY env (default "1").
 # returns: packet_id for claiming, or None with reason.
 # side_effects: Updates Feature.status (queued→active→done/degraded).
-# emitted_logs: queue_candidate, queue_activated, queue_degraded, queue_done, queue_noop.
+# emitted_logs: queue_candidate, queue_activated, queue_degraded, queue_done,
+#                queue_noop, queue_retryable_failure_wait,
+#                queue_terminal_failure_degraded, queue_blocked_recoverable_wait,
+#                queue_waiting_for_retry, queue_ready_claimable.
 # error_behavior: Never raises — returns (packet_id, reason) tuple.
 # END_MODULE_CONTRACT
 
@@ -30,6 +35,9 @@ from grace_control.db.schema import Feature, Packet, PacketState, Wave
 
 _log = GraceLogger("queue_service")
 
+# Legacy broad set kept for read-only diagnostic / wave-gate use.
+# Use is_terminal_failure / is_retryable_failure / is_feature_degrading_packet
+# in queue logic to avoid premature feature degradation.
 DEGRADED_STATES = {
     PacketState.REJECTED.value,
     PacketState.FAILED.value,
@@ -82,6 +90,44 @@ def _run_wave_gate():
         return 0
 
 
+# ── Packet failure classification (TZ §6.1) ──────────────────────────────────
+
+def is_retryable_failure(p: Packet) -> bool:
+    """True if packet is in REJECTED/FAILED state with attempts remaining.
+
+    Retryable failures must NOT trigger feature degradation — they wait
+    for the worker retry path or admin retry endpoint.
+    """
+    if p.state not in (PacketState.REJECTED.value, PacketState.FAILED.value):
+        return False
+    return (p.attempt_count or 0) < (p.max_attempts or 0)
+
+
+def is_terminal_failure(p: Packet) -> bool:
+    """True if packet is in REJECTED/FAILED state with attempts exhausted.
+
+    Terminal failures DO trigger feature degradation.
+    """
+    if p.state not in (PacketState.REJECTED.value, PacketState.FAILED.value):
+        return False
+    return (p.attempt_count or 0) >= (p.max_attempts or 0)
+
+
+def is_feature_degrading_packet(p: Packet) -> bool:
+    """True if packet failure should set feature to degraded.
+
+    Conservative rule: only terminal failures and BLOCKED_FINAL degrade.
+    BLOCKED_RECOVERABLE / BLOCKED keep feature alive to allow recovery.
+    """
+    if p.state == PacketState.BLOCKED_FINAL.value:
+        return True
+    return is_terminal_failure(p)
+
+
+def _attempts_remaining(p: Packet) -> int:
+    return max(0, (p.max_attempts or 0) - (p.attempt_count or 0))
+
+
 def claim_next(worker_id: str) -> tuple[str | None, str]:
     """Determine the next claimable packet per FIFO queue discipline.
 
@@ -115,7 +161,8 @@ def claim_next(worker_id: str) -> tuple[str | None, str]:
 
         # 5. Find earliest claimable wave with READY packets.
         #    Waves must be processed in order: later waves are not claimable
-        #    until all packets in earlier waves are MERGED or CANCELLED.
+        #    until all packets in earlier waves are MERGED, CANCELLED, or in
+        #    a state waiting for retry/recovery.
         waves = (
             db.query(Wave)
             .filter(Wave.feature_id == feat.id)
@@ -136,32 +183,78 @@ def claim_next(worker_id: str) -> tuple[str | None, str]:
             if not wave_packets:
                 continue
 
-            # Check if this wave has a READY packet
+            # Classify packets
             ready = [p for p in wave_packets if p.state == PacketState.READY.value]
-            # Check if this wave has degraded packets
-            degraded_wave = [p for p in wave_packets if p.state in DEGRADED_STATES]
-            # Check if all packets in this wave are in terminal success states
+            retryable = [p for p in wave_packets if is_retryable_failure(p)]
+            degrading = [p for p in wave_packets if is_feature_degrading_packet(p)]
             all_done = all(p.state in TERMINAL_SUCCESS for p in wave_packets)
 
-            if degraded_wave:
+            # 5a. Degrading packets: feature must become degraded.
+            if degrading:
                 feat.status = "degraded"
                 feat.updated_at = datetime.now(UTC)
                 db.commit()
-                _log.warn("queue_degraded", feature_id=feat.id, wave_id=wave.id)
+                _log.warn(
+                    "queue_terminal_failure_degraded",
+                    feature_id=feat.id,
+                    wave_id=wave.id,
+                    packet_ids=[p.id for p in degrading],
+                    reason="terminal_exhausted_or_blocked_final",
+                )
                 return None, "feature_degraded"
 
+            # 5b. Retryable failures: feature stays active, no claim of later
+            # wave packets, but do NOT claim this packet again (worker has
+            # already released it as rejected; waiting for retry path).
+            if retryable and not ready:
+                _log.info(
+                    "queue_retryable_failure_wait",
+                    feature_id=feat.id,
+                    wave_id=wave.id,
+                    packet_ids=[p.id for p in retryable],
+                    attempts_used=[p.attempt_count for p in retryable],
+                    max_attempts=[p.max_attempts for p in retryable],
+                )
+                return None, "waiting_for_retry"
+
+            # 5c. Non-wave-complete: do not skip ahead.
             if not wave_complete and ready:
-                # Earlier wave has non-terminal packets — cannot skip ahead
                 return None, "waiting_for_wave_completion"
 
+            # 5d. Wave has READY packet and is claimable.
             if ready:
-                # This is the earliest claimable wave
                 wave_complete = False
                 ready.sort(key=lambda p: (p.created_at, p.id))
                 claimable_packet = ready[0]
+                _log.info(
+                    "queue_ready_claimable",
+                    feature_id=feat.id,
+                    wave_id=wave.id,
+                    packet_id=claimable_packet.id,
+                )
                 break
-            elif not all_done:
-                # Wave is not fully done — wait
+
+            # 5e. No READY, no retryable, no degrading — wave has blocked_recoverable
+            # or similar. Wait for recovery controller.
+            if not all_done and not retryable and not degrading:
+                # If every remaining packet is BLOCKED_RECOVERABLE / BLOCKED
+                # we still don't degrade — wait for recovery.
+                if any(
+                    p.state in (
+                        PacketState.BLOCKED.value,
+                        PacketState.BLOCKED_RECOVERABLE.value,
+                    )
+                    for p in wave_packets
+                ):
+                    _log.info(
+                        "queue_blocked_recoverable_wait",
+                        feature_id=feat.id,
+                        wave_id=wave.id,
+                    )
+                    return None, "waiting_for_recovery"
+
+            # 5f. Wave not fully done but no actionable state.
+            if not all_done:
                 return None, "waiting_for_wave_completion"
             # else all_done: wave is complete, proceed to next wave
 
@@ -169,32 +262,39 @@ def claim_next(worker_id: str) -> tuple[str | None, str]:
             return claimable_packet.id, "ok"
 
         # All waves processed — check if feature is fully done
-        remaining = (
-            db.query(Packet)
-            .filter(Packet.feature_id == feat.id)
-            .count()
+        all_feature_packets = (
+            db.query(Packet).filter(Packet.feature_id == feat.id).all()
         )
-        done_count = (
-            db.query(Packet)
-            .filter(
-                Packet.feature_id == feat.id,
-                Packet.state.in_(TERMINAL_SUCCESS),
-            )
-            .count()
+        remaining = len(all_feature_packets)
+        if remaining == 0:
+            return None, "no_packets"
+
+        # Retryable / blocked still pending: keep feature active.
+        if any(is_retryable_failure(p) for p in all_feature_packets):
+            return None, "waiting_for_retry"
+        if any(
+            p.state in (PacketState.BLOCKED.value, PacketState.BLOCKED_RECOVERABLE.value)
+            for p in all_feature_packets
+        ):
+            return None, "waiting_for_recovery"
+
+        done_count = sum(1 for p in all_feature_packets if p.state in TERMINAL_SUCCESS)
+        non_terminal = sum(
+            1 for p in all_feature_packets
+            if p.state in (PacketState.DRAFT.value, PacketState.READY.value, PacketState.RUNNING.value)
         )
 
-        if remaining > 0 and done_count == remaining:
+        if non_terminal > 0:
+            # wave_gate should promote DRAFT→READY; wait for it.
+            return None, "waiting_for_wave_completion"
+
+        if done_count == remaining:
             feat.status = "done"
             feat.updated_at = datetime.now(UTC)
             db.commit()
             _log.info("queue_done", feature_id=feat.id)
             return None, "feature_done"
 
-        # 7. Check if remaining packets are all blocked (not simply none)
-        # If there are remaining non-terminal, non-READY packets, the feature
-        # has non-degraded non-done packets (e.g. DRAFT packets in later waves
-        # that wave_gate hasn't promoted). Return no-op, the wave_gate timer
-        # will promote them when the current wave completes.
         return None, "waiting_for_wave_completion"
 
     return None, "no_queued_features"

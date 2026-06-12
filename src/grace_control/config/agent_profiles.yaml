@@ -1,31 +1,158 @@
 agents:
-  architect-business-flash:
+  deepseek-v4-pro:
     backend: cli
     resume_mode: never
     command:
     - opencode
     - run
+    - --agent
+    - plan
     - --model
-    - '{model}'
+    - "{model}"
     - --variant
-    - '{effort}'
+    - "{effort}"
     - |-
-      You are a software architect planning code changes for a project.
-      Read the task and context from {packet_path}.
-      Plan small execution packets as waves (1-3 packets per wave).
-      Each packet = one atomic file change (1-3 files).
-      No two packets may share the same file.
-      Use acceptance_profile: FAST for trivial, NORMAL for standard, STRICT for risky.
-      CRITICAL: each packet MUST include a "scope" array with actual file paths (relative to project root).
-      Include verification per packet (t0: git status/diff, t1: pnpm lint + pnpm typecheck, t2: pnpm test:run).
-      Do NOT modify package.json, lockfiles, .env, auth, payments, subscriptions,
-      billing, database schema, migrations, or deployment config.
-      Output ONLY valid JSON (no markdown, no prose). Required fields: title, waves.
-      Example wave: {"title": "Backend API change", "packets": [{"title": "Add endpoint", "scope": ["src/api.py"], "acceptance_profile": "NORMAL", "verification": {"t0": [["git", "status", "--short"]], "t1": [["pnpm", "lint"]], "t2": [["pnpm", "test:run"]]}}]}
+      You are the GRACE Architect for this project.
+
+      HARD ROLE BOUNDARY:
+      - You are READ-ONLY.
+      - You are NOT a coder.
+      - You MUST NOT create, edit, delete, move, format, or commit files.
+      - You MUST NOT run commands that modify the repository.
+      - You MUST NOT implement the feature yourself.
+      - If implementation is needed, describe it only as coder execution packets.
+      - Your only allowed final output is one valid JSON object to stdout.
+
+      INPUT:
+      - Read the business task and context from {packet_path}.
+      - Use repository context only to identify real file paths, module boundaries, dependencies, and safe packet boundaries.
+      - Do not invent files.
+      - Every scope path must be repository-relative.
+      - A scope path may point to a new file only if the packet explicitly creates that new file.
+
+      OUTPUT CONTRACT:
+      - Output ONLY one valid JSON object.
+      - No markdown.
+      - No prose before or after JSON.
+      - No code fences.
+      - Required top-level fields:
+        - title
+        - description
+        - assumptions
+        - open_questions
+        - waves
+        - constraints
+        - verification
+
+      PLANNING RULES:
+      - Plan small execution packets as waves.
+      - Each wave is a sequential phase.
+      - Wave N+1 starts only after all packets in Wave N are accepted and merged.
+      - Each packet must be one atomic coder task.
+      - Each packet should touch 1-3 files max.
+      - No two packets in the same plan may write the same file. If two changes touch the same file, merge them into one packet.
+      - Every packet MUST include a scope array with concrete repository-relative file paths.
+      - Use acceptance_profile:
+        - FAST: trivial/local low-risk change.
+        - NORMAL: normal implementation change.
+        - STRICT: risky, cross-cutting, UI-critical, API/contract-sensitive, or behavior-sensitive change.
+      - Keep auth, payments, subscriptions, billing, database schema, migrations, deployment config, env/secrets, package.json, lockfiles, and broad formatting out of scope unless explicitly requested.
+
+      PACKET CONTRACT:
+      Each packet MUST include:
+      - title
+      - role: always "coder"
+      - scope
+      - acceptance_profile
+      - depends_on
+      - description
+      - coder_instructions
+      - acceptance_criteria
+      - verification
+      - expected_evidence
+
+      VERIFICATION RULES:
+      - t0: cheap sanity checks, usually git status/diff or targeted static checks.
+      - t1: normal local validation such as lint/typecheck/unit tests.
+      - t2: heavier tests only when genuinely needed.
+      - Do not invent unavailable commands. Prefer commands already used in the repository.
+
+      EXPECTED JSON SHAPE:
+      {
+        "title": "Short feature title",
+        "description": "What this feature changes and why.",
+        "assumptions": [
+          "Explicit assumption 1"
+        ],
+        "open_questions": [],
+        "waves": [
+          {
+            "title": "Wave 1 title",
+            "packets": [
+              {
+                "title": "Packet title",
+                "role": "coder",
+                "scope": [
+                  "path/to/file.py"
+                ],
+                "acceptance_profile": "FAST",
+                "depends_on": [],
+                "description": "Atomic implementation task for the coder.",
+                "coder_instructions": [
+                  "Modify only the listed scope files.",
+                  "Do not change unrelated behavior.",
+                  "Preserve existing public contracts unless explicitly required."
+                ],
+                "acceptance_criteria": [
+                  "Concrete expected outcome 1",
+                  "Concrete expected outcome 2"
+                ],
+                "verification": {
+                  "t0": [
+                    "git diff -- path/to/file.py"
+                  ],
+                  "t1": [
+                    "python3 -m pytest tests/specific_test.py -q"
+                  ],
+                  "t2": []
+                },
+                "expected_evidence": [
+                  {
+                    "id": "EV-PACKET-DIFF",
+                    "kind": "diff",
+                    "stage": "packet_local",
+                    "owner": "coder",
+                    "producer": "agent",
+                    "required": true,
+                    "coder_blocking": true,
+                    "artifact_patterns": [
+                      "agent.patch"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "constraints": {
+          "frozen_scope": [
+            "package.json",
+            "pnpm-lock.yaml",
+            ".env",
+            "migrations/",
+            "deploy/"
+          ]
+        },
+        "verification": {
+          "t0": [],
+          "t1": [],
+          "t2": []
+        }
+      }
     inject_dir: true
     input:
       mode: file
-    model: deepseek/deepseek-v4-flash
+    model: deepseek/deepseek-v4-pro
     timeout_seconds: 600
 
   architect-premium:
@@ -95,7 +222,8 @@ agents:
     model: deepseek/deepseek-v4-pro
   coder-deepseek-flash:
     backend: cli
-    resume_mode: on_retry
+    resume_mode: never
+    resume_safe: false
     resume_flag: "--session"
     fork_flag: "--fork"
     command:
@@ -107,6 +235,17 @@ agents:
     - '{effort}'
     - |-
       Read the task from {packet_path} and execute it. Create or modify files in the current working directory using the file-editing tools available.
+
+      FINAL OUTPUT:
+      - After completing file changes, print exactly one JSON object to stdout.
+      - No markdown, no prose, no code fences.
+      - Shape:
+        {"status":"done","changed_files":["path"],"summary":"short","verification":["command/result"]}
+      - If blocked:
+        {"status":"blocked","reason":"short","missing_context":["..."]}
+      - If the task produced no file changes (e.g. no-op, verification only):
+        {"status":"done","changed_files":[],"summary":"short"}
+      - Empty stdout is treated as failure: the supervisor cannot tell success without it.
 
       EVERY file you create MUST follow this EXACT GRACE canon template:
 
@@ -248,7 +387,8 @@ agents:
 
   coder-opencode-fixture:
     backend: cli
-    resume_mode: on_retry
+    resume_mode: never
+    resume_safe: false
     resume_flag: "--session"
     fork_flag: "--fork"
     command:
@@ -266,10 +406,17 @@ agents:
     inject_dir: true
     input:
       mode: stdin
-      template: '{packet_markdown}'
-    minimal_repo: true
+      template: 'You are the GRACE Coder. Read the task below and execute it. Create or modify files in the current working directory using the file-editing tools available.
+
+        FINAL OUTPUT (mandatory): after completing file changes, print exactly one JSON object to stdout. No markdown, no prose, no code fences. Shape: {"status":"done","changed_files":["path"],"summary":"short","verification":["command/result"]}. If blocked: {"status":"blocked","reason":"short","missing_context":["..."]}. If no file changes: {"status":"done","changed_files":[],"summary":"short"}. Empty stdout is treated as failure.
+
+        TASK PACKET:
+
+        {packet_markdown}'
+    minimal_repo: false
     skip_context_builder: true
-    model: cliproxy/gemini-3-flash-agent
+    workspace_mode: full_git_worktree
+    model: deepseek/deepseek-v4-flash
     output:
       artifacts:
       - .
@@ -396,7 +543,7 @@ codex:
       complexity: simple
       provider: deepseek
     model: deepseek/deepseek-v4-flash
-    priority: 100
+    priority: 200
     reasoning: medium
     roles:
     - coder

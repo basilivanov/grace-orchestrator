@@ -70,6 +70,7 @@ class PacketStateMachine:
         ],
         PacketState.REJECTED: [
             PacketState.READY,
+            PacketState.FAILED,
             PacketState.BLOCKED_RECOVERABLE,
             PacketState.BLOCKED_FINAL,
             PacketState.CANCELLED,
@@ -83,7 +84,7 @@ class PacketStateMachine:
         PacketState.BLOCKED_FINAL: [],
         PacketState.ACCEPTED: [PacketState.MERGED],
         PacketState.MERGED: [],
-        PacketState.FAILED: [],
+        PacketState.FAILED: [PacketState.CANCELLED],
         PacketState.CANCELLED: [],
     }
 
