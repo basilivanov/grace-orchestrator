@@ -6,10 +6,11 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from datetime import UTC, datetime
+from pathlib import Path
+from typing import Literal
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from grace_control.core.structured_logger import GraceLogger
@@ -17,6 +18,10 @@ from grace_control.db import get_db
 from grace_control.db.schema import Feature, FeaturePlanningRun
 from grace_control.services.feature_intake_service import FeatureIntakeService
 from grace_control.services.feature_planning_service import FeaturePlanningService
+
+_LOG_ROOT = Path("/tmp/grace_planning_logs")
+_TAIL_MIN = 10
+_TAIL_MAX = 10000
 
 _log = GraceLogger("features_router")
 
@@ -27,7 +32,7 @@ class FeatureCreateRequest(BaseModel):
     title: str = Field(..., min_length=1, max_length=255)
     description: str | None = None
     target_repo_root: str | None = None
-    mode: str = "draft_plan"
+    mode: Literal["draft_plan", "auto_queue"] = "draft_plan"
     origin: str = "business"
     self_improvement: bool = False
 
@@ -116,18 +121,16 @@ async def create_feature(request: FeatureCreateRequest) -> dict:
             asyncio.create_task(_background_planning())
             return {"data": result}
 
-        if request.mode == "auto_queue":
-            planning = FeaturePlanningService(db)
-            context = await planning.run_context_builder(feature_id, request.target_repo_root)
-            await planning.run_architect(feature_id, context, request.target_repo_root)
-            approval = planning.approve_plan(feature_id)
-            return {"data": {
-                "feature_id": feature_id,
-                "status": approval["status"],
-                "mode": request.mode,
-            }}
-
-        return {"data": result}
+        # auto_queue is the only other valid mode (Literal enforces this)
+        planning = FeaturePlanningService(db)
+        context = await planning.run_context_builder(feature_id, request.target_repo_root)
+        await planning.run_architect(feature_id, context, request.target_repo_root)
+        approval = planning.approve_plan(feature_id)
+        return {"data": {
+            "feature_id": feature_id,
+            "status": approval["status"],
+            "mode": request.mode,
+        }}
 
 
 # ── Planning state ─────────────────────────────────────────────────────────
@@ -195,7 +198,12 @@ async def regenerate_plan(feature_id: str) -> dict:
 # ── Planning logs ──────────────────────────────────────────────────────────
 
 @router.get("/{feature_id}/planning/{run_id}/logs")
-async def get_planning_logs(feature_id: str, run_id: str, stream: str = "stdout", tail: int = 200) -> dict:
+async def get_planning_logs(
+    feature_id: str,
+    run_id: str,
+    stream: Literal["stdout", "stderr"] = Query("stdout"),
+    tail: int = Query(200, ge=_TAIL_MIN, le=_TAIL_MAX),
+) -> dict:
     with get_db() as db:
         service = FeaturePlanningService(db)
         try:
@@ -209,13 +217,19 @@ async def get_planning_logs(feature_id: str, run_id: str, stream: str = "stdout"
         raise HTTPException(status_code=404, detail=f"Run not found: {run_id}")
 
     path_str = run.get("stdout_path") if stream == "stdout" else run.get("stderr_path")
-    if not path_str or not os.path.exists(path_str):
-        return {"lines": [], "total": 0, "source_file": path_str, "truncated": False}
+    if not path_str:
+        return {"lines": [], "total": 0, "source_file": None, "truncated": False}
 
-    tail = min(tail, 10000)
-    with open(path_str, "r", encoding="utf-8", errors="replace") as f:
+    resolved = Path(path_str).resolve()
+    if not str(resolved).startswith(str(_LOG_ROOT)):
+        raise HTTPException(status_code=403, detail="Log path outside allowed root")
+
+    if not resolved.exists():
+        return {"lines": [], "total": 0, "source_file": str(resolved), "truncated": False}
+
+    with open(resolved, "r", encoding="utf-8", errors="replace") as f:
         all_lines = f.readlines()
         total = len(all_lines)
         lines = all_lines[-tail:]
 
-    return {"lines": lines, "total": total, "source_file": path_str, "truncated": total > tail}
+    return {"lines": lines, "total": total, "source_file": str(resolved), "truncated": total > tail}

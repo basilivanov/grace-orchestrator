@@ -106,6 +106,12 @@ class ProcessSupervisor:
                                 with open(log_path, "ab") as f:
                                     f.write(line)
 
+                    # Write stdin_text before reading stdout/stderr
+                    if stdin_text and proc.stdin:
+                        proc.stdin.write(in_data)
+                        await proc.stdin.drain()
+                        proc.stdin.close()
+
                     readers = []
                     if proc.stdout:
                         readers.append(_read_stream(proc.stdout, _stdout_buf,
