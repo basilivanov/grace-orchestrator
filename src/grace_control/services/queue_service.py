@@ -9,9 +9,11 @@
 #          - Only one feature active at a time under GRACE_MAX_CONCURRENCY=1.
 #          - Inside a feature, waves are processed by Wave.order.
 #          - Inside a wave, packets are processed by Packet.created_at, id.
-#          - Retryable failed/rejected packets do NOT degrade feature — they wait
-#            for retry path (worker or admin).
-#          - Only terminal exhausted failures degrade feature.
+#          - REJECTED with attempts remaining is retryable — does NOT degrade
+#            feature; waits for the retry path (worker or admin).
+#          - FAILED is terminal/exhausted ONLY. FAILED → FAILED only via
+#            BLOCKED_FINAL or exhausted attempt. No FAILED → READY transition.
+#          - Only REJECTED-at-max and BLOCKED_FINAL degrade feature.
 # inputs: worker_id, GRACE_MAX_CONCURRENCY env (default "1").
 # returns: packet_id for claiming, or None with reason.
 # side_effects: Updates Feature.status (queued→active→done/degraded).
@@ -93,24 +95,31 @@ def _run_wave_gate():
 # ── Packet failure classification (TZ §6.1) ──────────────────────────────────
 
 def is_retryable_failure(p: Packet) -> bool:
-    """True if packet is in REJECTED/FAILED state with attempts remaining.
+    """True if packet is in REJECTED state with attempts remaining.
 
     Retryable failures must NOT trigger feature degradation — they wait
     for the worker retry path or admin retry endpoint.
+
+    NOTE: FAILED is NEVER retryable. FAILED is terminal-only (see state
+    machine: FAILED -> CANCELLED is the only transition out). Runtime
+    errors with attempts remaining must release as REJECTED, not FAILED.
     """
-    if p.state not in (PacketState.REJECTED.value, PacketState.FAILED.value):
+    if p.state != PacketState.REJECTED.value:
         return False
     return (p.attempt_count or 0) < (p.max_attempts or 0)
 
 
 def is_terminal_failure(p: Packet) -> bool:
-    """True if packet is in REJECTED/FAILED state with attempts exhausted.
+    """True if packet is in REJECTED-exhausted or FAILED state.
 
-    Terminal failures DO trigger feature degradation.
+    Terminal failures DO trigger feature degradation. FAILED is always
+    terminal. REJECTED becomes terminal only when attempt_count >= max_attempts.
     """
-    if p.state not in (PacketState.REJECTED.value, PacketState.FAILED.value):
-        return False
-    return (p.attempt_count or 0) >= (p.max_attempts or 0)
+    if p.state == PacketState.FAILED.value:
+        return True
+    if p.state == PacketState.REJECTED.value:
+        return (p.attempt_count or 0) >= (p.max_attempts or 0)
+    return False
 
 
 def is_feature_degrading_packet(p: Packet) -> bool:

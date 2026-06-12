@@ -108,6 +108,7 @@ class EvidenceService:
         command_preview: list | None = None,
         prompt: str = "",
         dev_replay: dict | None = None,
+        diagnostics: dict | None = None,
     ) -> None:
         try:
             with self._db() as db:
@@ -136,6 +137,10 @@ class EvidenceService:
                     }
                     if dev_replay:
                         res_json["dev_replay"] = dev_replay
+                    # TZ §6.6: top-level diagnostics surface for UI/admin
+                    # to consume without traversing legacy_result.evidence.
+                    if diagnostics:
+                        res_json["diagnostics"] = dict(diagnostics)
                     existing.result_json = res_json
                     existing.evidence_path = evidence_path
                     existing.finished_at = datetime.now(timezone.utc)

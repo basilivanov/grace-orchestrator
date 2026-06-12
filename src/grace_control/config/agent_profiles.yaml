@@ -245,7 +245,8 @@ agents:
         {"status":"blocked","reason":"short","missing_context":["..."]}
       - If the task produced no file changes (e.g. no-op, verification only):
         {"status":"done","changed_files":[],"summary":"short"}
-      - Empty stdout is treated as failure: the supervisor cannot tell success without it.
+      - Final JSON is recommended for diagnostics, but pipeline success is
+        determined by file changes and verification, not stdout alone.
 
       EVERY file you create MUST follow this EXACT GRACE canon template:
 
@@ -408,7 +409,7 @@ agents:
       mode: stdin
       template: 'You are the GRACE Coder. Read the task below and execute it. Create or modify files in the current working directory using the file-editing tools available.
 
-        FINAL OUTPUT (mandatory): after completing file changes, print exactly one JSON object to stdout. No markdown, no prose, no code fences. Shape: {"status":"done","changed_files":["path"],"summary":"short","verification":["command/result"]}. If blocked: {"status":"blocked","reason":"short","missing_context":["..."]}. If no file changes: {"status":"done","changed_files":[],"summary":"short"}. Empty stdout is treated as failure.
+        FINAL OUTPUT (mandatory): after completing file changes, print exactly one JSON object to stdout. No markdown, no prose, no code fences. Shape: {"status":"done","changed_files":["path"],"summary":"short","verification":["command/result"]}. If blocked: {"status":"blocked","reason":"short","missing_context":["..."]}. If no file changes: {"status":"done","changed_files":[],"summary":"short"}. Final JSON is recommended for diagnostics, but pipeline success is determined by file changes and verification, not stdout alone.
 
         TASK PACKET:
 

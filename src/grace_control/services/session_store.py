@@ -55,6 +55,17 @@ def _session_run_status_usable(db: Session, external_id: str) -> bool:
     healthy, we skip it. Stale opencode session ids cause
     `Session not found` exit_code=1 which is the most common coder failure
     we observed.
+
+    Layout expected on PacketRun.result_json (TZ §6.5):
+      {
+        "legacy_result": {
+          "exit_code": int | None,
+          "stderr": "...",
+          "stderr_tail": "...",
+          "evidence": {"session_id": "ses_..."}
+        },
+        "diagnostics": {"session_id": "ses_...", "stderr_tail": "..."}
+      }
     """
     if not external_id:
         return False
@@ -64,8 +75,9 @@ def _session_run_status_usable(db: Session, external_id: str) -> bool:
     # Inspect the most recent packet run that recorded this session id.
     try:
         from grace_control.db.schema import PacketRun
-        # Try result_json->>session_id via JSON_EXTRACT (sqlite has json_extract).
-        # Fallback: load recent runs and check Python-side.
+        # Look back through the most recent runs. Limit is small to keep
+        # this conservative and cheap; sessions older than ~20 runs are
+        # already stale by definition.
         runs = (
             db.query(PacketRun)
             .order_by(PacketRun.run_number.desc())
@@ -74,12 +86,22 @@ def _session_run_status_usable(db: Session, external_id: str) -> bool:
         )
         for r in runs:
             rj = r.result_json or {}
-            # Some adapters store session id under different keys.
+            if not isinstance(rj, dict):
+                continue
+            legacy = rj.get("legacy_result") or {}
+            diagnostics = rj.get("diagnostics") or {}
+            if not isinstance(legacy, dict):
+                legacy = {}
+            if not isinstance(diagnostics, dict):
+                diagnostics = {}
+            # Some adapters store session id under different keys; the
+            # actual production path puts it under legacy_result.evidence
+            # or top-level diagnostics (after TZ §6.6).
             sid_candidates = [
-                rj.get("session_id") if isinstance(rj, dict) else None,
-                (rj.get("evidence", {}) or {}).get("session_id")
-                if isinstance(rj, dict)
-                else None,
+                legacy.get("evidence", {}).get("session_id") if isinstance(legacy.get("evidence"), dict) else None,
+                diagnostics.get("session_id"),
+                rj.get("session_id"),
+                (rj.get("evidence", {}) or {}).get("session_id") if isinstance(rj.get("evidence"), dict) else None,
             ]
             sid_candidates = [s for s in sid_candidates if s]
             if not sid_candidates:
@@ -89,10 +111,18 @@ def _session_run_status_usable(db: Session, external_id: str) -> bool:
             # Found the latest run for this session. Check health.
             if r.status in ("rejected", "failed", "timeout"):
                 return False
-            if r.exit_code is not None and r.exit_code != 0:
+            # PacketRun has no exit_code column — read from legacy_result.
+            ec = legacy.get("exit_code")
+            if ec is not None and ec != 0:
                 return False
-            stderr = (rj.get("stderr") or "") if isinstance(rj, dict) else ""
-            stderr_tail = (rj.get("stderr_tail") or "") if isinstance(rj, dict) else ""
+            # Check stderr / stderr_tail from legacy_result AND diagnostics
+            # (TZ §6.6 may have moved tails to top-level).
+            stderr = legacy.get("stderr") or ""
+            stderr_tail = (
+                legacy.get("stderr_tail")
+                or diagnostics.get("stderr_tail")
+                or ""
+            )
             for blob in (stderr, stderr_tail):
                 if not blob:
                     continue
@@ -222,9 +252,13 @@ class SessionStore:
 
         Used for SWITCH_CODER — the new coder forks a readonly copy
         of the previous coder's session.
+
+        TZ §6.5: skip sessions whose latest run failed/timed-out, same as
+        find_latest(). Forking a stale session can cascade the same error
+        into the new executor.
         """
         try:
-            return (
+            q = (
                 db.query(AgentSession)
                 .filter(
                     AgentSession.packet_id == packet_id,
@@ -232,8 +266,17 @@ class SessionStore:
                     AgentSession.status.in_(["active", "completed"]),
                 )
                 .order_by(AgentSession.created_at.desc())
-                .first()
             )
+            for s in q.all():
+                if not _session_run_status_usable(db, s.external_id):
+                    _log.info("session_fork_skipped_invalid",
+                              packet_id=packet_id,
+                              role=role,
+                              session_id=s.external_id,
+                              reason="latest_run_failed_or_timeout")
+                    continue
+                return s
+            return None
         except Exception as e:
             _log.warn("session_find_for_fork_failed",
                       packet_id=packet_id,

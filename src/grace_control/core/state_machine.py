@@ -36,16 +36,22 @@ class PacketStateMachine:
 
     Valid transitions:
       DRAFT → READY
-      READY → RUNNING
-      RUNNING → ACCEPTED | REJECTED | BLOCKED_RECOVERABLE | BLOCKED_FINAL | FAILED
-      REJECTED → READY (retry) | BLOCKED_FINAL | BLOCKED_RECOVERABLE | CANCELLED
+      READY → RUNNING | CANCELLED
+      RUNNING → ACCEPTED | REJECTED | BLOCKED_RECOVERABLE | BLOCKED_FINAL | FAILED | CANCELLED
+      REJECTED → READY (retry) | FAILED (attempts exhausted) | BLOCKED_RECOVERABLE
+                 | BLOCKED_FINAL | CANCELLED
       BLOCKED_RECOVERABLE → READY (recovery) | BLOCKED_FINAL | CANCELLED
       BLOCKED_FINAL → (terminal)
       BLOCKED → READY (back-compat alias, deprecated)
       ACCEPTED → MERGED
       MERGED → (terminal)
-      FAILED → (terminal)
+      FAILED → CANCELLED  (FAILED is terminal; only manual cancel allowed)
       CANCELLED → (terminal)
+
+    Semantics (TZ §6.1):
+      FAILED is terminal/exhausted. Runtime errors with attempts remaining
+      release as REJECTED, not FAILED. PacketService.retry() handles
+      REJECTED → FAILED transition when attempt_count == max_attempts.
     """
 
     # START_FUNCTION_CONTRACT

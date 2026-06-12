@@ -341,8 +341,15 @@ def test_rejected_packet_with_attempts_left_does_not_degrade_feature(_db):
         assert feat.status != "degraded", f"Feature must not be degraded, got {feat.status}"
 
 
-def test_failed_packet_with_attempts_left_does_not_degrade_feature(_db):
-    """FAILED packet with attempts left → feature stays active."""
+def test_failed_packet_is_terminal_always_degrades_feature(_db):
+    """FAILED is terminal/exhausted ONLY (TZ §6.1).
+
+    Unlike REJECTED, FAILED never waits for retry. Any FAILED packet in
+    an active feature must set the feature to degraded immediately. This
+    prevents the legacy bug where a FAILED packet with attempts left
+    sat in `waiting_for_retry` forever because PacketService.retry()
+    only accepts REJECTED / BLOCKED_RECOVERABLE.
+    """
     with get_db() as s:
         _add_feature(s, "feat_FL1", status="active")
         _add_wave(s, "wave_FL1_1", "feat_FL1")
@@ -353,10 +360,28 @@ def test_failed_packet_with_attempts_left_does_not_degrade_feature(_db):
     from grace_control.services.queue_service import claim_next
     pid, reason = claim_next("worker")
     assert pid is None
-    assert reason == "waiting_for_retry"
+    assert reason == "feature_degraded"
     with get_db() as s:
         feat = s.query(Feature).filter_by(id="feat_FL1").first()
-        assert feat.status != "degraded"
+        assert feat.status == "degraded"
+
+
+def test_failed_packet_helper_always_terminal(_db):
+    """is_retryable_failure(FAILED) is always False; is_terminal_failure is True."""
+    from grace_control.db.schema import Packet
+    from grace_control.services.queue_service import (
+        is_retryable_failure,
+        is_terminal_failure,
+    )
+    p = Packet(id="x", state=PacketState.FAILED.value,
+               attempt_count=1, max_attempts=3)
+    assert not is_retryable_failure(p)
+    assert is_terminal_failure(p)
+    # Even when attempts remaining
+    p_low = Packet(id="x", state=PacketState.FAILED.value,
+                    attempt_count=0, max_attempts=3)
+    assert not is_retryable_failure(p_low)
+    assert is_terminal_failure(p_low)
 
 
 def test_rejected_packet_with_attempts_exhausted_degrades_feature(_db):

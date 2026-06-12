@@ -81,10 +81,16 @@ _SQLITE_COLUMN_MIGRATIONS: list[tuple[str, str, str]] = [
     ("packet_runs", "model", "ALTER TABLE packet_runs ADD COLUMN model VARCHAR"),
     ("packet_runs", "command_preview", "ALTER TABLE packet_runs ADD COLUMN command_preview JSON"),
     ("packet_runs", "prompt", "ALTER TABLE packet_runs ADD COLUMN prompt TEXT"),
+    # TZ §6: heartbeat updater writes run.last_heartbeat every 5s for live
+    # status in admin. Add column to existing DBs.
+    ("feature_planning_runs", "last_heartbeat",
+     "ALTER TABLE feature_planning_runs ADD COLUMN last_heartbeat DATETIME"),
 ]
 # Tables that may be missing on existing DBs (added after initial create_all).
 _SQLITE_TABLE_CREATIONS: list[str] = [
-    "CREATE TABLE IF NOT EXISTS feature_planning_runs (id VARCHAR PRIMARY KEY, feature_id VARCHAR NOT NULL, stage VARCHAR NOT NULL, status VARCHAR NOT NULL, started_at DATETIME, finished_at DATETIME, duration_ms INTEGER, executor_id VARCHAR, model VARCHAR, prompt TEXT, stdout_path VARCHAR, stderr_path VARCHAR, result_json JSON, error TEXT, trace_id VARCHAR, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)",
+    # Note: must include last_heartbeat for brand-new DBs (CREATE TABLE has
+    # no separate column-migration step).
+    "CREATE TABLE IF NOT EXISTS feature_planning_runs (id VARCHAR PRIMARY KEY, feature_id VARCHAR NOT NULL, stage VARCHAR NOT NULL, status VARCHAR NOT NULL, started_at DATETIME, finished_at DATETIME, duration_ms INTEGER, last_heartbeat DATETIME, executor_id VARCHAR, model VARCHAR, prompt TEXT, stdout_path VARCHAR, stderr_path VARCHAR, result_json JSON, error TEXT, trace_id VARCHAR, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)",
 ]
 
 

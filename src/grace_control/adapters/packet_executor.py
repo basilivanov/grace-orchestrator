@@ -85,6 +85,39 @@ def _tail(s: str, limit: int) -> str:
     return s[-limit:]
 
 
+# Diagnostics contract surface (TZ §6.6). Keys persisted at top-level of
+# result_json["diagnostics"] for UI/admin/trace to consume without traversing
+# legacy_result.evidence.
+_DIAGNOSTICS_KEYS = (
+    "stdout_tail",
+    "stderr_tail",
+    "exit_code",
+    "duration_ms",
+    "failure_stage",
+    "failure_class",
+    "workspace",
+    "session_resume",
+)
+
+
+def _extract_diagnostics(result) -> dict:
+    """Pull TZ §6.6 diagnostics out of result.evidence into a top-level dict.
+
+    Always returns a dict; missing keys are simply absent. The legacy
+    evidence sub-dict is still kept for back-compat with anything reading
+    result_json.legacy_result.evidence.
+    """
+    out: dict = {}
+    try:
+        ev = getattr(result, "evidence", {}) or {}
+    except Exception:
+        ev = {}
+    for k in _DIAGNOSTICS_KEYS:
+        if k in ev:
+            out[k] = ev[k]
+    return out
+
+
 def classify_failure(
     stdout: str,
     stderr: str,
@@ -427,7 +460,8 @@ class PacketExecutionAdapter:
                 evidence_path=ep, duration_ms=er.duration_ms, executor_id=ex_id, commit_sha=sha,
                 model=getattr(result, "model", "") or executor.get("model",""),
                 command_preview=getattr(result, "command_preview", None),
-                prompt=getattr(result, "prompt", ""), dev_replay=dev_rep)
+                prompt=getattr(result, "prompt", ""), dev_replay=dev_rep,
+                diagnostics=getattr(self, "_last_diagnostics", None))
             _log.info("adapter_execute_done", packet_id=packet_id, accepted=True, duration_ms=er.duration_ms); return er
         def _rej(domain, reason, evr, rvr):
             dev_rep = self._build_dev_replay_metadata(
@@ -444,7 +478,8 @@ class PacketExecutionAdapter:
                 evidence_path="", duration_ms=er.duration_ms, executor_id=ex_id,
                 model=getattr(result, "model", "") or executor.get("model",""),
                 command_preview=getattr(result, "command_preview", None),
-                prompt=getattr(result, "prompt", ""), commit_sha=sha, dev_replay=dev_rep)
+                prompt=getattr(result, "prompt", ""), commit_sha=sha, dev_replay=dev_rep,
+                diagnostics=getattr(self, "_last_diagnostics", None))
             # TZ_RETENTION_POLICY Phase 1: on REJECTED / BLOCKED, clean up
             # worktree + all attempt-branches for this packet. Run artifacts
             # in .grace/state/.../runs/R0X/ are NOT touched.
@@ -498,7 +533,8 @@ class PacketExecutionAdapter:
         self._evidence.update_run_result(run_id=run_id, status=status, legacy_result=safe_data,
             acceptance_report=accept_report, evidence_verifier_report=evr, reviewer_report=rvr,
             evidence_path=er.evidence_path, duration_ms=er.duration_ms, executor_id=executor.get("executor_id",""),
-            commit_sha=commit_sha, dev_replay=dev_rep)
+            commit_sha=commit_sha, dev_replay=dev_rep,
+            diagnostics=getattr(self, "_last_diagnostics", None))
         # TZ_RETENTION_POLICY Phase 1: on REJECTED (acceptance failure), clean
         # up worktree + all attempt-branches for this packet. Run artifacts
         # in .grace/state/ are NOT touched.
@@ -532,9 +568,22 @@ class PacketExecutionAdapter:
 
     def _fast_reject(self, reason, executor_id, run_id, start):
         er = ExecutionResult(accepted=False, domain_status="rejected", reason=reason, evidence_path="", duration_ms=int((time.time()-start)*1000))
+        # Synthesize a minimal diagnostics surface so result_json["diagnostics"]
+        # has the same shape as terminal runs (failure_class, failure_stage,
+        # stderr_tail). Redact secrets defensively.
+        try:
+            _diag = {
+                "failure_stage": "pre_acceptance",
+                "failure_class": classify_failure("", reason, None, "pre_acceptance"),
+                "stderr_tail": _redact_secrets(_tail(reason or "", _STDERR_TAIL_LIMIT)),
+                "exit_code": None,
+                "duration_ms": er.duration_ms,
+            }
+        except Exception:
+            _diag = {"failure_stage": "pre_acceptance", "failure_class": "unknown"}
         try: self._evidence.update_run_result(run_id=run_id, status="rejected", legacy_result={"error":"pre-acceptance failure","reason":reason},
             acceptance_report=None, evidence_verifier_report=skipped_evidence_report(reason), reviewer_report=skipped_reviewer_report(reason),
-            evidence_path="", duration_ms=er.duration_ms, executor_id=executor_id)
+            evidence_path="", duration_ms=er.duration_ms, executor_id=executor_id, diagnostics=_diag)
         except: pass
         # Clean up worktree + agent/* branches for terminal rejection.
         # Extract packet_id and run_number from run_id (e.g. "pkt_xxx-R01").
@@ -853,6 +902,17 @@ class PacketExecutionAdapter:
                            failure_stage=_stage)
         except Exception as _e:
             _log.warn("diagnostics_persist_failed", packet_id=pid, reason=str(_e))
+
+        # TZ §6.6: snapshot top-level diagnostics for the upcoming
+        # update_run_result call. Anything in result.evidence under one of
+        # _DIAGNOSTICS_KEYS is lifted to result_json["diagnostics"] (see
+        # evidence_service.update_run_result). This makes UI / admin /
+        # trace read the same shape regardless of which code path called
+        # the persistence layer.
+        try:
+            self._last_diagnostics = _extract_diagnostics(result)
+        except Exception:
+            self._last_diagnostics = {}
 
         # TZ §6.4: persist session_resume evidence (whether injected or skipped).
         try:
