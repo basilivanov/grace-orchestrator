@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import pytest
 from datetime import UTC, datetime
 
@@ -10,7 +11,7 @@ from grace_control.db.schema import Feature, FeaturePlanningRun, Packet, PacketS
 class TestFeaturePlanningStore:
     """Service-layer tests for FeaturePlanningService and FeatureIntakeService."""
 
-    def test_create_feature_creates_planning_runs(self, db):
+    def test_create_feature_creates_planning_runs(self):
         from grace_control.services.feature_intake_service import FeatureIntakeService
         from grace_control.db import get_db
 
@@ -35,7 +36,7 @@ class TestFeaturePlanningStore:
             assert feat.status == "PLANNING"
             assert feat.title == "Test Feature"
 
-    def test_get_planning_state(self, db):
+    def test_get_planning_state(self):
         from grace_control.services.feature_intake_service import FeatureIntakeService
         from grace_control.services.feature_planning_service import FeaturePlanningService
         from grace_control.db import get_db
@@ -53,7 +54,8 @@ class TestFeaturePlanningStore:
             assert state["current_stage"] is not None
             assert len(state["runs"]) >= 2
 
-    def test_run_context_builder(self, db):
+    @pytest.mark.asyncio
+    async def test_run_context_builder(self):
         from grace_control.services.feature_intake_service import FeatureIntakeService
         from grace_control.services.feature_planning_service import FeaturePlanningService
         from grace_control.db import get_db
@@ -64,11 +66,10 @@ class TestFeaturePlanningStore:
             fid = result["feature_id"]
 
             planning = FeaturePlanningService(s)
-            context = planning.run_context_builder(fid)
+            context = await planning.run_context_builder(fid)
 
             assert isinstance(context, dict)
-            assert "feature_id" in context
-            assert context["feature_id"] == fid
+            assert context.get("summary") is not None
 
             # Verify run is marked done
             runs = s.query(FeaturePlanningRun).filter_by(
@@ -78,7 +79,8 @@ class TestFeaturePlanningStore:
             assert runs[-1].status == "done"
             assert runs[-1].duration_ms is not None
 
-    def test_run_architect(self, db):
+    @pytest.mark.asyncio
+    async def test_run_architect(self):
         from grace_control.services.feature_intake_service import FeatureIntakeService
         from grace_control.services.feature_planning_service import FeaturePlanningService
         from grace_control.db import get_db
@@ -89,18 +91,19 @@ class TestFeaturePlanningStore:
             fid = result["feature_id"]
 
             planning = FeaturePlanningService(s)
-            context = planning.run_context_builder(fid)
-            plan = planning.run_architect(fid, context)
+            context = await planning.run_context_builder(fid)
+            plan = await planning.run_architect(fid, context)
 
             assert isinstance(plan, dict)
             assert "waves" in plan
-            assert plan["summary"] is not None
+            assert len(plan.get("waves", [])) > 0
 
             # Verify feature is PLAN_READY
             feat = s.query(Feature).filter_by(id=fid).first()
             assert feat.status == "PLAN_READY"
 
-    def test_approve_plan_sets_queued_and_readies_first_wave(self, db):
+    @pytest.mark.asyncio
+    async def test_approve_plan_sets_queued_and_readies_first_wave(self):
         from grace_control.services.feature_intake_service import FeatureIntakeService
         from grace_control.services.feature_planning_service import FeaturePlanningService
         from grace_control.db import get_db
@@ -111,8 +114,8 @@ class TestFeaturePlanningStore:
             fid = result["feature_id"]
 
             planning = FeaturePlanningService(s)
-            context = planning.run_context_builder(fid)
-            planning.run_architect(fid, context)
+            context = await planning.run_context_builder(fid)
+            await planning.run_architect(fid, context)
             approval = planning.approve_plan(fid)
 
             assert approval["status"] == "queued"
@@ -133,7 +136,7 @@ class TestFeaturePlanningStore:
                 for p in first_packets:
                     assert p.state == "ready", f"packet {p.id} should be READY, got {p.state}"
 
-    def test_approve_fails_if_not_plan_ready(self, db):
+    def test_approve_fails_if_not_plan_ready(self):
         from grace_control.services.feature_intake_service import FeatureIntakeService
         from grace_control.services.feature_planning_service import FeaturePlanningService
         from grace_control.db import get_db
@@ -144,11 +147,11 @@ class TestFeaturePlanningStore:
             fid = result["feature_id"]
 
             planning = FeaturePlanningService(s)
-            import pytest as _pt
-            with _pt.raises(ValueError, match="PLAN_READY"):
+            with pytest.raises(ValueError, match="PLAN_READY"):
                 planning.approve_plan(fid)
 
-    def test_regenerate_plan_resets_state(self, db):
+    @pytest.mark.asyncio
+    async def test_regenerate_plan_resets_state(self):
         from grace_control.services.feature_intake_service import FeatureIntakeService
         from grace_control.services.feature_planning_service import FeaturePlanningService
         from grace_control.db import get_db
@@ -159,8 +162,8 @@ class TestFeaturePlanningStore:
             fid = result["feature_id"]
 
             planning = FeaturePlanningService(s)
-            context = planning.run_context_builder(fid)
-            planning.run_architect(fid, context)
+            context = await planning.run_context_builder(fid)
+            await planning.run_architect(fid, context)
 
             state = planning.regenerate_plan(fid)
             assert state["status"] == "PLANNING"
@@ -171,7 +174,7 @@ class TestFeaturePlanningStore:
             ).all()
             assert len(runs) >= 2
 
-    def test_events_emitted_for_feature(self, db):
+    def test_events_emitted_for_feature(self):
         from grace_control.services.feature_intake_service import FeatureIntakeService
         from grace_control.services.feature_planning_service import FeaturePlanningService
         from grace_control.db import get_db
@@ -188,7 +191,7 @@ class TestFeaturePlanningStore:
             assert "feature_submitted" in event_types
             assert "planning_started" in event_types
 
-    def test_intake_service_includes_target_repo(self, db):
+    def test_intake_service_includes_target_repo(self):
         from grace_control.services.feature_intake_service import FeatureIntakeService
         from grace_control.db import get_db
 

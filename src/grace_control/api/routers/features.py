@@ -103,8 +103,8 @@ async def create_feature(request: FeatureCreateRequest) -> dict:
                 try:
                     with get_db() as bg_db:
                         planning = FeaturePlanningService(bg_db)
-                        context = planning.run_context_builder(feature_id)
-                        planning.run_architect(feature_id, context)
+                        context = await planning.run_context_builder(feature_id, request.target_repo_root)
+                        await planning.run_architect(feature_id, context, request.target_repo_root)
                         _log.info("draft_plan_completed", feature_id=feature_id)
                 except Exception as e:
                     _log.error("draft_plan_failed", feature_id=feature_id, error=str(e)[:200])
@@ -118,8 +118,8 @@ async def create_feature(request: FeatureCreateRequest) -> dict:
 
         if request.mode == "auto_queue":
             planning = FeaturePlanningService(db)
-            context = planning.run_context_builder(feature_id)
-            planning.run_architect(feature_id, context)
+            context = await planning.run_context_builder(feature_id, request.target_repo_root)
+            await planning.run_architect(feature_id, context, request.target_repo_root)
             approval = planning.approve_plan(feature_id)
             return {"data": {
                 "feature_id": feature_id,
