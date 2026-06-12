@@ -65,6 +65,11 @@ async def list_features() -> dict:
         }
 
 
+@router.get("", include_in_schema=False)
+async def list_features_no_slash() -> dict:
+    return await list_features()
+
+
 # ── Get single ─────────────────────────────────────────────────────────────
 
 @router.get("/{feature_id}")
@@ -145,6 +150,11 @@ async def create_feature(request: FeatureCreateRequest) -> dict:
             "status": approval["status"],
             "mode": request.mode,
         }}
+
+
+@router.post("", include_in_schema=False)
+async def create_feature_no_slash(request: FeatureCreateRequest) -> dict:
+    return await create_feature(request)
 
 
 # ── Planning state ─────────────────────────────────────────────────────────
