@@ -11,103 +11,78 @@
 
 ## Summary
 
-The rework fixes some previously cited examples (`lib/date.ts`, `components/app-shell.tsx`) and reportedly restores green tests, but the packet still fails the meaningful-contract acceptance bar.
+Rework fixed part of the previously reported problems, but the packet is still not acceptable.
 
-The main remaining issue is not cosmetic: shell scripts contain TypeScript-style `//` markers and malformed joined marker lines, and `lib/env/production-guard.mjs` still contains placeholder `Library module` / `varies` boilerplate.
+The most serious issue is that shell scripts now contain `//` comments, which are not valid shell comments and can break runtime script execution.
 
 ## Positive findings
 
-### `lib/date.ts` improved
-
-The file now has a meaningful role and module contract for date serialization/parsing/formatting. It no longer claims to be tests, and the module contract describes pure Date/string utilities.
-
-### `components/app-shell.tsx` improved
-
-The file now describes app shell layout, `TabBar`, onboarding hook dependency, and render debug logging. This addresses the previous sampled blocker.
+- `lib/date.ts` now has a meaningful role and purpose for date utilities instead of being mislabeled as tests.
+- `components/app-shell.tsx` now has a meaningful module contract for app shell layout, TabBar, render output, dependencies, and logging.
+- The previous joined-marker issue is fixed in sampled TS files such as `lib/date.ts`, `components/app-shell.tsx`, and `__tests__/lib/date.test.ts`.
 
 ## Blocking findings
 
-### 1. Shell scripts have invalid comment syntax and malformed markers
+### 1. Shell scripts contain invalid `//` comments
 
-Example: `scripts/deploy.sh` starts with bash shebang, then contains TypeScript-style `//` comments:
-
-```sh
-// ############################################################################
-// AI_HEADER: MODULE_SCRIPTS_DEPLOY
-...
-// #########################################// START_MODULE_CONTRACT
-```
-
-This is invalid shell-comment style and keeps the exact malformed marker pattern that the rework claimed to fix.
+Example: `scripts/alert.sh` contains TypeScript-style `//` marker comments inside a bash script. This is not a comment in bash. It is parsed as command/path text and can break execution.
 
 Required fix:
 
-- For `.sh` files, use `#` comments only.
-- Make `START_MODULE_CONTRACT` a standalone line.
-- Do not put `//` markers into shell files.
-- Scan all shell scripts, especially files returned by search for `#####// START_MODULE_CONTRACT`.
+- use `#` comments in all `.sh` files;
+- fix all malformed shell marker joins;
+- run at least `bash -n` for touched shell scripts.
 
-### 2. `production-guard.mjs` still contains placeholder boilerplate
+### 2. Placeholder content still remains
 
-`lib/env/production-guard.mjs` still has:
+Example: `lib/env/production-guard.mjs` still contains placeholder contract text:
 
 - `purpose: Library module — lib/env/production-guard.mjs`
 - `inputs: varies`
 - `outputs: varies`
 - `side_effects: varies`
-- `emitted_logs: n/a`
 - `invariants: n/a`
 
-This directly violates the meaningful contracts acceptance criteria.
-
-It should describe the actual behavior: reads env vars, throws on unsafe preview/production demo-mode configurations, emits console warning when demo mode is enabled.
-
-### 3. Report is stale and contradicts the submitted rework
-
-`docs/work/REPORT_SOLARSAGE_GRACE_MEANINGFUL_CONTRACTS_REWORK.md` still says:
-
-- final SHA: `9049638`, not `336350d`;
-- tests: `725 passed, 2 failed, 1 skipped`, despite the user reporting `756 passed, 1 skipped`;
-- function contracts still need manual review;
-- placeholders removed from all in-scope files, which is false because `production-guard.mjs` still contains `varies` and `Library module`.
+This directly violates the acceptance criterion that placeholder content must be removed from in-scope files.
 
 Required fix:
 
-- Update report to the actual reviewed SHA.
-- Include exact gate output for `grace_lint`, backend tests, frontend tests, and coverage audit.
-- Include remaining placeholder scan output.
-- Do not mark PASS while acceptance criteria remain open.
+- scan all in-scope files for `Library module`, `varies`, `TBD`, `purpose: Module`, `invariants: n/a`;
+- replace with file-specific contracts or document a real skip reason.
 
-### 4. Function contracts are still not fully accepted
+### 3. Report is stale and does not represent `336350d`
 
-`lib/date.ts` has a meaningful module contract, but exported functions still have only ordinary comments, not `START_FUNCTION_CONTRACT` blocks. The original acceptance criteria required public/exported/impure function contracts or documented skip reasons.
+`REPORT_SOLARSAGE_GRACE_MEANINGFUL_CONTRACTS_REWORK.md` still says final SHA `9049638` and tests `725 passed, 2 failed, 1 skipped`.
 
-This may be acceptable for tiny pure helpers only if explicitly documented, but the report does not document skipped helpers.
+The user reports `336350d` and `756 passed, 1 skipped`, but the required final report was not updated to prove that.
 
 Required fix:
 
-- Either add function contracts for exported public helpers, or explicitly list them as skipped and justify that the module/block contract covers tiny pure helpers.
+- update final SHA to the actual head;
+- include exact gate outputs for `336350d`;
+- include exact before/after placeholder counts;
+- list remaining placeholders or state zero with the grep command used.
+
+### 4. Function contracts are still not fully closed
+
+`lib/date.ts` has exported functions but no `START_FUNCTION_CONTRACT` blocks for them. The previous report already admitted function contracts still needed manual review. This is still not resolved for at least the sampled utility file.
+
+Required fix:
+
+- either add function contracts to exported/public/impure functions;
+- or document why specific tiny helpers are covered by a block/module contract.
 
 ## Required rework
 
-1. Scan and fix all malformed marker joins:
-   - `#####// START_MODULE_CONTRACT`
-   - `#####// START_MODULE_MAP`
-   - `END_MODULE_CONTRACTexport`
-   - any `// START_` in `.sh` files.
-2. Fix all shell files to use `#` comments only.
-3. Fix `lib/env/production-guard.mjs` contract semantics.
-4. Re-run placeholder scan and include output in report.
-5. Update final report to the actual final SHA and actual gates.
-6. Document skipped public helper function contracts or add them.
-7. Re-run gates:
-   - `python3 scripts/grace/coverage_audit.py --check`
-   - `pnpm test:run`
-   - backend tests
-   - `grace_lint` / marker lint
+1. Fix shell scripts to use `#` comments and valid standalone markers.
+2. Run a repository-wide placeholder scan and remove remaining `Library module`, `varies`, and wrong generic text.
+3. Fix `lib/env/production-guard.mjs` and any similar files.
+4. Add or explicitly justify missing function contracts for exported utilities/components/hooks.
+5. Update the final report to match `336350d` or the new head.
+6. Run and report `coverage_audit.py --check`, `pnpm test:run`, and `bash -n` on touched shell scripts.
 
 ## Final decision
 
 **NEEDS_REWORK.**
 
-The sampled runtime TS files improved, but the rework still leaves malformed markers, invalid shell comment syntax, placeholder contracts, and a stale report. It is not safe to mark this PASS yet.
+The semantic quality improved in some sampled files, but the current head still contains runtime-breaking shell comment syntax, unresolved placeholders, stale report evidence, and incomplete function-contract coverage.
