@@ -133,15 +133,35 @@ def create_app(settings: GraceSettings | None = None) -> FastAPI:
         """Root URL → /admin.html (new flat dashboard)."""
         return RedirectResponse(url="/admin.html", status_code=307)
 
+    # Build ID from git HEAD
+    _build_id = ""
+    try:
+        _proc = __import__("subprocess").run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, timeout=3,
+        )
+        if _proc.returncode == 0:
+            _build_id = _proc.stdout.strip()
+    except Exception:
+        pass
+
+    @app.get("/api/debug/version")
+    async def _version_endpoint():
+        return {"build_id": _build_id, "app": "GRACE Control Plane"}
+
     # Serve the new flat admin dashboard as a standalone HTML page
     _new_admin_html = _admin_static / "admin.html"
 
     @app.get("/admin.html", include_in_schema=False, response_class=HTMLResponse)
     async def _new_admin_dashboard():
         """New flat at-a-glance GRACE Control Plane dashboard."""
-        if _new_admin_html.exists():
-            return HTMLResponse(content=_new_admin_html.read_text())
-        return HTMLResponse(content="<h1>admin.html not found</h1>", status_code=404)
+        if not _new_admin_html.exists():
+            return HTMLResponse(content="<h1>admin.html not found</h1>", status_code=404)
+        html = _new_admin_html.read_text()
+        # Inject build ID
+        build_script = f'<script>window.BUILD_ID="{_build_id}";</script>'
+        html = html.replace("<head>", "<head>" + build_script)
+        return HTMLResponse(content=html)
 
     # Keep old HTMX console at /admin/old
     @app.get("/admin/old", include_in_schema=False, response_class=HTMLResponse)

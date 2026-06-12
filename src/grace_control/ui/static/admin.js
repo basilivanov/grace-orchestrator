@@ -256,9 +256,20 @@ async function submitBiz(){
   btn.disabled=true;btn.textContent='Submitting...';if(status)status.textContent='Creating feature with planning...';
   let dots=0;const dotInt=setInterval(()=>{dots=(dots+1)%4;if(status&&!status.textContent.includes('created')&&!status.textContent.includes('Error'))status.textContent='Planning in progress'+'.'.repeat(dots)+' '.repeat(3-dots);},2000);
   try{
-    const r=await fetch(apiUrl('/api/features/'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:text.slice(0,80),description:text,mode:'draft_plan',origin:'business',approval_mode:approvalMode})});
+    const url=apiUrl('/api/features/');
+    const bodyStr=JSON.stringify({title:text.slice(0,80),description:text,mode:'draft_plan',origin:'business',approval_mode:approvalMode});
+    const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:bodyStr});
     clearInterval(dotInt);
-    if(!r.ok){const e=await r.json();if(status)status.textContent='Error: '+(e.detail||e.message||r.status);btn.disabled=false;btn.textContent='Submit Feature';toast('Feature creation error','err');return;}
+    if(!r.ok){
+      let detail='';
+      try{const e=await r.json();detail=e.detail||e.message||JSON.stringify(e);}catch{detail='(no JSON body)';}
+      const short=detail.slice(0,300);
+      if(status)status.textContent='Error: '+r.status+' '+short;
+      console.error('FEATURE_CREATE_ERROR',{url,method:'POST',status:r.status,body:bodyStr,response:detail,build:window.BUILD_ID||'?'});
+      btn.disabled=false;btn.textContent='Submit Feature';
+      toast('Feature creation error ('+r.status+')','err');
+      return;
+    }
     const result=await r.json();
     ta.value='';btn.disabled=false;btn.textContent='Submit Feature';
     const featureId=result.data?.feature_id||'';
@@ -269,6 +280,7 @@ async function submitBiz(){
   }catch(e){
     clearInterval(dotInt);
     if(status)status.textContent='Request failed: '+e.message;toast('Request failed','err');
+    console.error('FEATURE_CREATE_EXCEPTION',{error:e.message,build:window.BUILD_ID||'?'});
     btn.disabled=false;btn.textContent='Submit Feature';
   }
 }
@@ -315,6 +327,16 @@ async function loadData(){
     renderDashboard();
   }catch(e){$('#board').innerHTML='<div class="empty">Failed to load. Retrying...</div>';setTimeout(loadData,5000);}
 }
+
+// ── Build ID display ──
+(function showBuild(){
+  if(window.BUILD_ID){
+    const el=document.createElement('span');
+    el.style.cssText='position:fixed;bottom:4px;right:8px;font-size:8px;color:var(--t3);font-family:var(--mono);z-index:9999;pointer-events:none';
+    el.textContent='build: '+window.BUILD_ID;
+    document.body.appendChild(el);
+  }
+})();
 
 // ── Log viewer ──
 let logState={lines:[],source:'',paused:false};
