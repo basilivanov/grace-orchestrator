@@ -706,6 +706,11 @@ Respond ONLY with valid JSON (no markdown, no backticks):
                     started_at=datetime.now(UTC),
                     executor_id="plan_materializer",
                 )
+                self.db.add(materialize_run)
+                feature.status = "PLAN_FAILED"
+                # Do NOT raise ValueError — get_db() rolls back on exception,
+                # which would undo the spec_json update above.
+                return {"status": "PLAN_FAILED", "compiler_errors": len(compiled.errors)}
                 materialize_run.error = f"plan compiler rejected: {len(compiled.errors)} errors"
                 self.db.add(materialize_run)
                 feature.status = "PLAN_FAILED"
