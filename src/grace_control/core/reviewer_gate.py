@@ -275,7 +275,7 @@ async def run_reviewer_gate(
     except Exception:
         prompt_template = "You are final Reviewer. Return JSON verdict."
 
-    full_prompt = f"{prompt_template}\n\n## Evidence\n\n{evidence_block}"
+    full_prompt = f"{prompt_template}\n\n## Context\n\n" + "\n".join(prompt_parts)
 
     try:
         from grace_control.core.executor_selector import resolve_model

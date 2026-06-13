@@ -173,3 +173,63 @@ class TestReviewerEvidenceBundle:
             assert "+added line" in result
             assert "Agent diff preview" in result
             assert "truncated=false" in result
+
+
+class FakePacket:
+    def __init__(self, pid="pkt_test123", title="Test packet"):
+        self.packet_id = pid
+        self.title = title
+
+
+class FakeVerdict:
+    def __init__(self, v): self.value = v
+
+
+class FakeEvidenceVerifierReport:
+    def __init__(self, verdict="PASS", summary="all evidence found"):
+        self.verdict = FakeVerdict(verdict)
+        self.summary = summary
+        self.failed_checks = []
+        self.spec_conflicts = []
+
+
+@pytest.mark.asyncio
+async def test_full_prompt_includes_packet_id_and_evidence_verifier(mocker):
+    """The final reviewer prompt must include packet id and evidence verifier summary."""
+    from grace_control.core.reviewer_gate import run_reviewer_gate
+
+    # Mock run_llm so we can capture the prompt
+    mock_run_llm = mocker.patch("grace_control.core.llm_runner.run_llm", return_value='{"verdict":"PASS"}')
+    mock_resolve = mocker.patch(
+        "grace_control.core.executor_selector.resolve_model",
+        return_value={"model": "deepseek/deepseek-v4-flash"},
+    )
+
+    packet = FakePacket()
+    acc = FakeAcceptanceReport()
+    evr = FakeEvidenceVerifierReport()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        wt = Path(tmp) / "worktree"
+        wt.mkdir()
+        (wt / "agent.patch").write_text("diff --git a/file.py b/file.py\n+new")
+        rd = Path(tmp) / "run"
+        rd.mkdir(parents=True)
+        (rd / "t0").mkdir()
+
+        report = await run_reviewer_gate(
+            packet=packet,
+            acceptance_report=acc,
+            evidence_verifier_report=evr,
+            worktree_path=wt,
+            run_dir=rd,
+            changed_files=["apps/api/app/services/llm/russian.py"],
+            artifacts=["path/to/evidence"],
+        )
+
+    # The prompt argument is the first positional arg to run_llm
+    prompt = mock_run_llm.call_args[0][0]
+    assert "pkt_test123" in prompt, "prompt must include packet ID"
+    assert "Test packet" in prompt, "prompt must include packet title"
+    assert "all evidence found" in prompt or "PASS" in prompt, "prompt must include evidence verifier summary"
+    assert "Worktree path:" in prompt or "Run directory:" in prompt, "prompt must include evidence paths"
