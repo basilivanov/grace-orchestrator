@@ -108,3 +108,56 @@ class TestRepairPrompt:
         prompt = build_repair_prompt("test", "test", {"waves": []}, errors)
         assert "corrected json only" in prompt.lower() or "only valid json" in prompt.lower()
         assert "markdown" in prompt.lower() and "not" in prompt.lower()
+
+
+class TestSessionHandleConversion:
+
+    def test_session_handle_restored_from_dict(self):
+        """previous_session restored from dict must be a valid AgentSessionHandle."""
+        from grace_control.core.agent_session_adapter import AgentSessionHandle
+
+        raw = {
+            "runner": "opencode",
+            "role": "architect",
+            "model": "deepseek/deepseek-v4-pro",
+            "session_id": "sess_abc123",
+        }
+        handle = AgentSessionHandle(**raw)
+        assert handle.session_id == "sess_abc123"
+        assert handle.runner == "opencode"
+        assert handle.model == "deepseek/deepseek-v4-pro"
+
+    def test_session_handle_from_json_string(self):
+        """previous_session restored from JSON string must be valid."""
+        from grace_control.core.agent_session_adapter import AgentSessionHandle
+        import json
+
+        raw_str = json.dumps({
+            "runner": "opencode",
+            "session_id": "sess_def456",
+        })
+        raw = json.loads(raw_str)
+        handle = AgentSessionHandle(**raw)
+        assert handle.session_id == "sess_def456"
+
+    def test_session_handle_accesses_session_id_safely(self):
+        """AgentSessionHandle.session_id must be accessible without AttributeError."""
+        from grace_control.core.agent_session_adapter import AgentSessionHandle
+
+        handle = AgentSessionHandle()
+        # Should be None, not raise AttributeError
+        sid = handle.session_id
+        assert sid is None
+
+        handle2 = AgentSessionHandle(session_id="sess_valid")
+        assert handle2.session_id == "sess_valid"
+
+    def test_session_handle_without_session_id_allows_fallback(self):
+        """When session_id is absent, run_architect_repair should use new session."""
+        from grace_control.core.agent_session_adapter import AgentSessionHandle
+
+        raw = {"runner": "opencode", "role": "architect"}
+        handle = AgentSessionHandle(**raw)
+        assert handle.session_id is None
+        # The repair code checks: if previous_session and previous_session.session_id
+        # Since session_id is None, it will fallback to new session (no crash)

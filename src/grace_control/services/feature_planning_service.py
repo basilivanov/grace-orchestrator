@@ -914,13 +914,16 @@ Respond ONLY with valid JSON (no markdown, no backticks):
         )
         if arch_runs:
             rj = arch_runs[0].result_json or {}
-            sess = rj.get("session_handle")
-            if sess:
+            sess_raw = rj.get("session_handle")
+            if sess_raw:
                 try:
                     import json as _json
-                    previous_session = _json.loads(sess) if isinstance(sess, str) else sess
+                    from grace_control.core.agent_session_adapter import AgentSessionHandle
+                    raw = _json.loads(sess_raw) if isinstance(sess_raw, str) else sess_raw
+                    if isinstance(raw, dict):
+                        previous_session = AgentSessionHandle(**raw)
                 except Exception:
-                    pass
+                    previous_session = None
 
         attempt = 1
         while attempt <= max_repair_attempts:
