@@ -545,7 +545,7 @@ Rules:
    - NEVER use `source` — use `.` (dot) for venv activation:
      `. .venv/bin/activate` not `source .venv/bin/activate`.
    - `/bin/sh` is dash, not bash. Bash-only features (source, arrays,
-     [[ ]], ${VAR//x/y}) will fail. Use POSIX-compatible syntax only.
+     [[ ]], ${{VAR//x/y}}) will fail. Use POSIX-compatible syntax only.
 
    CRITICAL — expected_evidence rules:
    - NEVER use `kind=diff` with pattern=`agent.patch`.
