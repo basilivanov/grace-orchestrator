@@ -218,7 +218,7 @@ class CommandRunner:
         try:
             with open(stdout_path, "w") as out_f, open(stderr_path, "w") as err_f:
                 proc = subprocess.run(
-                    cmd_list, cwd=str(resolved_cwd), timeout=timeout,
+                    cmd_str, cwd=str(resolved_cwd), timeout=timeout, shell=True,
                     stdout=out_f, stderr=err_f,
                 )
             stdout_text = open(stdout_path).read()
