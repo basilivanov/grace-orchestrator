@@ -530,6 +530,9 @@ Rules:
      tests the packet can satisfy within scope. If a T1 failure can
      only be fixed by changing files outside scope, the packet is
      invalid and must be repacked before coder execution.
+   - Frozen scope and scope must use ONLY relative paths (relative to
+     project root). Absolute paths (starting with /) are rejected by
+     contract validation and will cause the packet to fail immediately.
 
    Default method-extraction pattern:
    • Add new canonical method in the target service.

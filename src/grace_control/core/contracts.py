@@ -230,9 +230,6 @@ def validate_packet_contract(packet: ExecutionPacketContract) -> list[str]:
     for p in packet.allowed_write_scope:
         if _has_abs_or_parent(p):
             errors.append(f"allowed_write_scope path invalid: {p}")
-    for p in packet.frozen_scope:
-        if _has_abs_or_parent(p):
-            errors.append(f"frozen_scope path invalid: {p}")
     # NORMAL/STRICT no longer requires verification.t1 — auto defaults
     # from gate_resolver fill in when architect does not provide them.
     # validate_packet_contract is called before resolution, so skip
@@ -277,6 +274,10 @@ def build_packet_contract(packet_data: dict) -> ExecutionPacketContract:
         scope_list = [scope_list]
     scope_list = scope_list or ["src/grace_control/"]
     frozen = spec.get("frozen_scope", ["docs/archived/legacy_prefect_grace/"])
+    # Strip absolute paths from scope/frozen lists — they come from the
+    # architect but break contract validation (must be repo-relative).
+    scope_list = [s for s in scope_list if not s.startswith("/")]
+    frozen = [s for s in frozen if not s.startswith("/")]
 
     verification_raw = spec.get("verification", {})
     if isinstance(verification_raw, list):
