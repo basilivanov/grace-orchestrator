@@ -315,7 +315,16 @@ class PlanCompiler:
             kw in all_text.lower()
             for kw in ("remove", "delete", "rename", "move ", "extract from")
         ):
-            deletes_symbol = True
+            # Negative patterns: phrases like "do not delete", "no renames"
+            # should NOT trigger the detection.
+            neg = re.compile(
+                r'\b(do not|don.t|no|without|never|avoid|prevent)\s+'
+                r'(remove|delet|renam|mov|extract)\w*\b',
+                re.IGNORECASE,
+            )
+            has_negative = neg.search(all_text)
+            if not has_negative:
+                deletes_symbol = True
 
         # Error only when: tests outside scope + delete/rename + no shim
         if tests_outside and deletes_symbol and role == "coder":
