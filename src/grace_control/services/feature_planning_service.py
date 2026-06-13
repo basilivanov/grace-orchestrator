@@ -474,9 +474,8 @@ Rules:
 5. Use acceptance_profile — default is STRICT for every packet:
    - STRICT: default for any code change, migration, contract, or behavior
      modification. Triggers T0/T1/T2 + verifier + reviewer gates.
-   - NORMAL: use ONLY when architect is certain the change is cosmetic
-     (formatting, comments-only, trivial rename with full scope coverage).
-     Triggers T0/T1/T2 + verifier (no reviewer).
+   - NORMAL: default for regular product changes (refactoring, feature work).
+     Triggers T0/T1/T2 + verifier + reviewer gates.
    - FAST: use ONLY for documentation-only packets (markdown, docs, comments).
      No code changes involved. Triggers T0/T1/T2 only.
 6. depends_on: optional list of packet titles that must complete first (within same wave).

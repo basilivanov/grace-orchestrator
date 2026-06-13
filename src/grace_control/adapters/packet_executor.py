@@ -499,8 +499,6 @@ class PacketExecutionAdapter:
             worktree_path=wt_path, run_dir=run_dir, changed_files=changed_files, artifacts=art)
         if evr.verdict in (EvidenceVerifierVerdict.REWORK_TO_CODER, EvidenceVerifierVerdict.RETURN_TO_ARCHITECT):
             return _rej("rejected" if evr.verdict==EvidenceVerifierVerdict.REWORK_TO_CODER else "blocked", evr.summary, evr, skipped_reviewer_report("ev reject"))
-        if prof == AcceptanceProfile.NORMAL:
-            return _acc(_mk(True, "accepted"), evr, skipped_reviewer_report("NORMAL"))
         rvr = await run_reviewer_gate(packet=pkt_contract, acceptance_report=accept_report,
             evidence_verifier_report=evr, worktree_path=wt_path, run_dir=run_dir, changed_files=changed_files, artifacts=art)
         if rvr.verdict == ReviewerVerdict.PASS: return _acc(_mk(True, "accepted"), evr, rvr)
