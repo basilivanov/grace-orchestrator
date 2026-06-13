@@ -7,15 +7,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Literal
+
+from pydantic import BaseModel
 
 from grace_control.core.structured_logger import GraceLogger
 
 _log = GraceLogger("agent_session_adapter")
 
 
-@dataclass
-class AgentSessionHandle:
+class AgentSessionHandle(BaseModel):
     runner: str = "opencode"
     role: str = "architect"
     model: str | None = None
@@ -23,7 +24,24 @@ class AgentSessionHandle:
     cwd: str | None = None
     stdout_path: str | None = None
     stderr_path: str | None = None
-    metadata: dict = field(default_factory=dict)
+    metadata: dict = {}
+
+
+class AgentRunResult(BaseModel):
+    accepted: bool
+    output: str
+    domain_status: str = ""
+    stdout_path: str | None = None
+    stderr_path: str | None = None
+    session_handle: AgentSessionHandle | None = None
+    session_mode: Literal[
+        "actual_resume",
+        "fallback_new_session",
+        "new_session",
+        "no_session_handle",
+    ] = "new_session"
+    duration_ms: int = 0
+    error: str | None = None
 
 
 @dataclass
@@ -35,18 +53,6 @@ class AgentRunRequest:
     session_handle: AgentSessionHandle | None = None
     cwd: Path | None = None
     timeout_s: int = 300
-
-
-@dataclass
-class AgentRunResult:
-    accepted: bool
-    output: str
-    domain_status: str = ""
-    stdout_path: str | None = None
-    stderr_path: str | None = None
-    session_handle: AgentSessionHandle | None = None
-    duration_ms: int = 0
-    error: str | None = None
 
 
 class AgentSessionAdapter:
@@ -91,12 +97,14 @@ class OpenCodeSessionAdapter(AgentSessionAdapter):
                 output=raw,
                 domain_status="completed",
                 session_handle=handle,
+                session_mode="new_session",
             )
         except Exception as e:
             return AgentRunResult(
                 accepted=False,
                 output="",
                 domain_status="failed",
+                session_mode="new_session",
                 error=str(e)[:500],
             )
 
@@ -105,19 +113,23 @@ class OpenCodeSessionAdapter(AgentSessionAdapter):
         handle: AgentSessionHandle,
         message: str,
     ) -> AgentRunResult:
-        """Attempt resume if session_id available; otherwise run new."""
+        """Attempt resume if session_id available; otherwise fallback to new run."""
         if handle.session_id:
-            _log.info("session_resume_attempted", role=handle.role,
-                      session_id=handle.session_id)
-            # Future: implement actual OpenCode session resume via CLI
-            # Currently: fall back to new run since OpenCode resume is not
-            # available via the CLI backend.
+            _log.info("session_resume_not_implemented",
+                      role=handle.role, session_id=handle.session_id,
+                      fallback="new_session")
+            # Future: implement actual OpenCode resume via CLI
+            # Currently not available — fall back to new run
 
-        _log.info("session_resume_fallback", role=handle.role,
-                  reason="no_available_backend")
+        _log.info("repair_session_mode",
+                  role=handle.role if handle else "unknown",
+                  session_mode="fallback_new_session",
+                  reason="no_actual_resume_backend")
         request = AgentRunRequest(
             prompt=message,
             role=handle.role,
             model=handle.model or self.default_model,
         )
-        return await self.run_new(request)
+        result = await self.run_new(request)
+        result.session_mode = "fallback_new_session"
+        return result
