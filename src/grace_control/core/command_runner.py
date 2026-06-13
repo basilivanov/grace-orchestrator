@@ -200,6 +200,28 @@ class CommandRunner:
                 stderr="command must be non-empty",
             )
 
+        # Fix bare python3 -c arguments: if -c value is not quoted, re-quote it.
+        # The architect often generates python3 -c import sys; ... file.yml
+        # without quotes around the code. shlex.split splits each word, but
+        # -c only takes the next token. Detect this by checking if there are
+        # extra tokens before a file path, and re-quote them together.
+        if len(cmd_list) >= 4 and cmd_list[0] == "python3" and cmd_list[1] == "-c" and not cmd_list[2].startswith("'"):
+            # Re-quote: python3 -c 'all tokens up to the file path'
+            code_tokens = []
+            file_tokens = []
+            in_code = True
+            for t in cmd_list[2:]:
+                if in_code and ("/" in t or t.startswith(".")):
+                    in_code = False
+                if in_code:
+                    code_tokens.append(t)
+                else:
+                    file_tokens.append(t)
+            requoted = "python3 -c '" + " ".join(code_tokens) + "'"
+            if file_tokens:
+                requoted += " " + " ".join(file_tokens)
+            cmd_list = shlex.split(requoted)
+
         cmd_str = " ".join(cmd_list)
         timeout = timeout_s or self._default_timeout
         started = time.time()
