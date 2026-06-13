@@ -552,8 +552,8 @@ Rules:
    - For creating new files: `kind=file` with pattern matching the filename.
    - For modifying existing files: `kind=diff` WITHOUT a pattern — just
      checking that changed_files is non-empty is enough.
-   - Example CORRECT: `{"id":"EV","kind":"file","artifact_patterns":["llm/russian.py"]}`
-   - Example WRONG: `{"id":"EV","kind":"diff","artifact_patterns":["agent.patch"]}`
+   - Example CORRECT: `{{"id":"EV","kind":"file","artifact_patterns":["llm/russian.py"]}}`
+   - Example WRONG: `{{"id":"EV","kind":"diff","artifact_patterns":["agent.patch"]}}`
 
    CRITICAL — frozen_scope rules:
    - NEVER put any file from the packet's own scope into frozen_scope.
