@@ -534,6 +534,10 @@ Rules:
      tests the packet can satisfy within scope. If a T1 failure can
      only be fixed by changing files outside scope, the packet is
      invalid and must be repacked before coder execution.
+   - T2/FULL: do NOT run full guardrails.sh (strict/normal/fast).
+     Only run targeted commands specific to this packet's changes
+     (e.g. grep, test, diff). Running the entire guardrails suite
+     will pick up pre-existing failures unrelated to this packet.
    - Frozen scope and scope must use ONLY relative paths (relative to
      project root). Absolute paths (starting with /) are rejected by
      contract validation and will cause the packet to fail immediately.
