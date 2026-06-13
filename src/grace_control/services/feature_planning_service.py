@@ -476,7 +476,7 @@ Rules:
 7. Include `constraints` block with: frozen_scope (files NEVER to touch).
 8. Include `verification` dict with t0/t1/t2 lists of shell commands to run.
 
-   CRITICAL — verification quoting rules (shell commands run via `sh -c`):
+    CRITICAL — verification quoting rules (shell commands run via `sh -c`):
    - Use single quotes `'...'` for `python3 -c '...'` arguments.
    - NEVER embed double quotes `"..."` inside the `-c` string; double
      quotes break because bash interprets `\"` as a string terminator.
@@ -485,6 +485,16 @@ Rules:
    - Prefer calling scripts or using file-based checks over inline
      Python when the command path or assertion contains quote-sensitive
      characters like file paths with slashes, single quotes, or braces.
+
+   CRITICAL — verification timing (commands run AFTER agent changes):
+   - T0/T1/T2 commands run AFTER the agent has made all changes.
+   - If the packet REMOVES something, T0 must check for ABSENCE
+     (e.g. `grep -c 'pattern' file || true`, expecting 0 matches).
+   - If the packet ADDS something, T0 must check for PRESENCE.
+   - NEVER write a verification command that expects pre-packet state;
+     always verify the expected END state of this packet.
+   - A packet that deletes a feature must pass a check that the
+     feature is gone, not that it still exists.
 
 9. CRITICAL: Each packet MUST be small enough for a single agent run (~2-5 min, ~200 lines max).
 
