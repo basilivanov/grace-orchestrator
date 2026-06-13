@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel
@@ -15,6 +17,25 @@ from grace_control.core.execution_environment import ExecutionEnvironment
 from grace_control.core.structured_logger import GraceLogger
 
 _log = GraceLogger("plan_compiler")
+
+
+# ── Source split intent models ──────────────────────────────────────────
+@dataclass
+class SourceSplitIntent:
+    source_path: str
+    old_import_path: str | None = None
+    new_package_prefix: str | None = None
+    operation: str = "split"  # split, extract, move, refactor
+    requires_source_modification: bool = True
+    requires_import_migration: bool = False
+    allows_shim: bool = True
+
+
+@dataclass
+class RepoReference:
+    path: str
+    line: int
+    text: str
 
 
 class CompileError(BaseModel):
@@ -107,12 +128,123 @@ def _add_warning(
     )
 
 
+# ── Source split / import migration helpers ────────────────────────────
+
+_SOURCE_SPLIT_KEYWORDS = [
+    "split", "break up", "extract", "move", "refactor",
+    "decompose", "modularize", "shim", "legacy module", "old import",
+]
+
+_SOURCE_SPLIT_PATH_PATTERN = re.compile(
+    r'(apps/api/\S+\.py|packages/\S+\.py|src/\S+\.py|grace/\S+\.py)'
+)
+
+_OLD_IMPORT_PATTERN = re.compile(
+    r'(app\.\w+(?:\.\w+)+)'  # e.g. app.services.llm_service
+)
+
+
+def _import_path_to_source_path(import_path: str) -> str:
+    """Convert app.services.llm_service → apps/api/app/services/llm_service.py."""
+    parts = import_path.split(".")
+    if parts[0] == "app":
+        # app.services.llm_service → apps/api/app/services/llm_service.py
+        return "apps/api/" + "/".join(parts) + ".py"
+    if parts[0] in ("src", "packages", "scripts"):
+        return "/".join(parts) + ".py"
+    return import_path
+
+
+def detect_source_split_intents(feature_description: str, plan: dict, env: ExecutionEnvironment) -> list[SourceSplitIntent]:
+    """Analyze feature description + plan for split/refactor patterns."""
+    intents: list[SourceSplitIntent] = []
+    all_text = feature_description.lower()
+
+    # Check if it's a split/refactor task
+    is_split = any(kw in all_text for kw in _SOURCE_SPLIT_KEYWORDS)
+    if not is_split:
+        return intents
+
+    # Find source file paths in description
+    paths = _SOURCE_SPLIT_PATH_PATTERN.findall(feature_description)
+    import_candidates = _OLD_IMPORT_PATTERN.findall(feature_description)
+
+    # Also scan T0/T1/T2 for old import references
+    for wave in plan.get("waves", []):
+        for pkt in wave.get("packets", []):
+            for v_key in ("t0", "t1", "t2"):
+                for cmd in pkt.get("verification", {}).get(v_key, []):
+                    cmd_str = str(cmd) if isinstance(cmd, str) else " ".join(cmd)
+                    imps = _OLD_IMPORT_PATTERN.findall(cmd_str)
+                    import_candidates.extend(imps)
+
+    unique_paths = set(paths)
+    unique_imports = set(import_candidates)
+
+    for path in unique_paths:
+        parent = str(Path(path).parent)
+        intents.append(SourceSplitIntent(
+            source_path=path,
+            new_package_prefix=parent + "/" if parent else None,
+            operation="split",
+        ))
+
+    for imp in unique_imports:
+        source = _import_path_to_source_path(imp)
+        # Always create a refactor intent for import migration checks,
+        # even if the source path was also detected from feature description.
+        intents.append(SourceSplitIntent(
+            source_path=source,
+            old_import_path=imp,
+            operation="refactor",
+            requires_import_migration=True,
+        ))
+
+    return intents
+
+
+def collect_repo_references(target_root: Path, import_path: str) -> list[RepoReference]:
+    """Scan active code dirs for old import path references."""
+    if not target_root or not target_root.exists():
+        return []
+    refs: list[RepoReference] = []
+    search_dirs = ["apps/", "src/", "tests/", "packages/", "scripts/"]
+    exclude_dirs = {".git", ".grace", "node_modules", ".venv", "dist", "build", "coverage", "__pycache__", "archive"}
+
+    for rel_dir in search_dirs:
+        search_root = target_root / rel_dir
+        if not search_root.exists():
+            continue
+        for fpath in sorted(search_root.rglob("*.py")):
+            # Check if in excluded dir
+            parts = fpath.relative_to(target_root).parts
+            if any(ex in parts for ex in exclude_dirs):
+                continue
+            try:
+                text = fpath.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                continue
+            for lineno, line in enumerate(text.splitlines(), 1):
+                if import_path in line:
+                    refs.append(RepoReference(
+                        path=str(fpath.relative_to(target_root)),
+                        line=lineno,
+                        text=line.strip()[:300],
+                    ))
+                    if len(refs) >= 100:
+                        return refs
+    return refs
+
+
 class PlanCompiler:
 
     def compile_plan(
         self,
         plan: dict,
         env: ExecutionEnvironment | None = None,
+        *,
+        feature_description: str = "",
+        target_repo_root: Path | None = None,
     ) -> CompileResult:
         if env is None:
             from grace_control.core.execution_environment import probe_execution_environment
@@ -123,6 +255,9 @@ class PlanCompiler:
         waves = plan.get("waves", [])
         if not waves:
             return result  # Empty plan is valid (nothing to do)
+
+        # ── 0. Source-split preflight (before per-packet checks) ─────
+        self._validate_source_split(result, plan, env, feature_description, target_repo_root)
 
         for wi, wave in enumerate(waves):
             for pi, packet in enumerate(wave.get("packets", [])):
@@ -164,6 +299,69 @@ class PlanCompiler:
         _log.info("compile_done", ok=result.ok, errors=len(result.errors),
                   warnings=len(result.warnings))
         return result
+
+    def _validate_source_split(
+        self,
+        result: CompileResult,
+        plan: dict,
+        env: ExecutionEnvironment,
+        feature_description: str,
+        target_repo_root: Path | None = None,
+    ) -> None:
+        """Reject split/refactor plans that omit the original source file from scope."""
+        if not feature_description:
+            return
+
+        intents = detect_source_split_intents(feature_description, plan, env)
+        if not intents:
+            return
+
+        # Collect all files in scope across all packets
+        all_scope_files: set[str] = set()
+        for wave in plan.get("waves", []):
+            for pkt in wave.get("packets", []):
+                for s in pkt.get("scope", []) or []:
+                    all_scope_files.add(s)
+
+        for intent in intents:
+            src = intent.source_path
+            old_imp = intent.old_import_path
+
+            # E_SOURCE_SPLIT_ORIGIN_MISSING: source file must be in scope
+            if intent.requires_source_modification and src not in all_scope_files:
+                _add_error(
+                    result, "E_SOURCE_SPLIT_ORIGIN_MISSING",
+                    "scope",
+                    f"Task requires split/refactor of {src}, but this file is not "
+                    f"in any coder packet's write scope. Creating new modules is not "
+                    f"enough; the original file must become a shim/delegator or be updated.",
+                    None,
+                    f"Add {src} to an implementation packet's scope, or explicitly declare "
+                    f"this as a create-only preparation phase that does not require old "
+                    f"imports to be removed.",
+                )
+
+            # E_IMPORT_MIGRATION_SCOPE_INCOMPLETE: old imports outside scope
+            if intent.requires_import_migration and old_imp and target_repo_root:
+                refs = collect_repo_references(target_repo_root, old_imp)
+                if refs:
+                    outside: set[str] = set()
+                    for r in refs:
+                        if r.path not in all_scope_files and "docs/" not in r.path and "archive" not in r.path:
+                            outside.add(r.path)
+                    if outside:
+                        ref_paths = sorted(outside)[:10]
+                        _add_error(
+                            result, "E_IMPORT_MIGRATION_SCOPE_INCOMPLETE",
+                            "scope",
+                            f"Plan requires old import {old_imp} from {src} to be "
+                            f"removed, but {len(outside)} active references remain "
+                            f"outside write scope: {ref_paths}",
+                            None,
+                            "Include all active reference files in scope, split import "
+                            "migration into another packet, or keep old module as shim "
+                            "and relax T0 to allow shim-only reference.",
+                        )
 
     def _validate_cmd(
         self,

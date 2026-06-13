@@ -559,13 +559,27 @@ Rules:
    - Example CORRECT: `{{"id":"EV","kind":"file","artifact_patterns":["llm/russian.py"]}}`
    - Example WRONG: `{{"id":"EV","kind":"diff","artifact_patterns":["agent.patch"]}}`
 
-   CRITICAL — frozen_scope rules:
+    CRITICAL — frozen_scope rules:
    - NEVER put any file from the packet's own scope into frozen_scope.
    - frozen_scope is STRICTLY for files that MUST NOT be touched by this
      packet. If a file needs to be created or modified, it belongs in
      scope, NOT in frozen_scope.
    - Overlap between scope and frozen_scope makes the file unwritable
      and causes immediate packet failure.
+
+   CRITICAL — source split/refactor rules:
+   - If the task is to split/extract/refactor/move implementation out of
+     an existing source file, the original source file MUST be in write
+     scope of an implementation packet. Creating only new package/module
+     files is not enough and will be rejected by the Plan Compiler.
+   - If old import path must keep working, convert the original file into
+     a compatibility shim/delegator (keep the old import path alive).
+   - If acceptance/T0 requires old imports to disappear, every active file
+     containing the old import must be in write scope or the plan is invalid.
+   - If migration is too large, split into phases: create new modules,
+     convert old source file to shim, migrate consumers, remove shim later.
+   - Never claim full split completion if original source file is not
+     writable in this plan. Keep shim strategy explicit.
 
    Default method-extraction pattern:
    • Add new canonical method in the target service.
@@ -660,7 +674,12 @@ Respond ONLY with valid JSON (no markdown, no backticks):
             )
             target_root = Path(target_root_str) if isinstance(target_root_str, str) else Path(".")
             env = probe_execution_environment(target_repo_root=target_root)
-            compiled = PlanCompiler().compile_plan(plan, env)
+            feature_desc = spec.get("description", "") or spec.get("title", "")
+            compiled = PlanCompiler().compile_plan(
+                plan, env,
+                feature_description=feature_desc,
+                target_repo_root=target_root,
+            )
             spec["_plan_compiler"] = {
                 "ok": compiled.ok,
                 "errors": [e.model_dump() for e in compiled.errors],

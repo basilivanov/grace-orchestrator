@@ -12,6 +12,11 @@ from grace_control.core.plan_compiler import (
     CompileError,
     CompileResult,
     PlanCompiler,
+    SourceSplitIntent,
+    RepoReference,
+    detect_source_split_intents,
+    _import_path_to_source_path,
+    _SOURCE_SPLIT_KEYWORDS,
     compile_plan,
 )
 
@@ -392,3 +397,171 @@ class TestEnvironmentProbe:
         compiler = PlanCompiler()
         result = compiler.compile_plan({})
         assert result.ok
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Source split / import migration
+# ══════════════════════════════════════════════════════════════════════
+
+
+def _split_plan(scope_files: list[str], t0_cmds: list[str] | None = None) -> dict:
+    """Build a minimal split/refactor plan."""
+    pkt = _pkt(
+        title="Split LLM service into modules",
+        scope=scope_files,
+        t0=t0_cmds or [],
+        evidence=[{"id": "EV1", "kind": "diff", "required": True,
+                    "artifact_patterns": ["llm/*.py"]}],
+    )
+    return _plan(pkt)
+
+
+class TestSourceSplitDetection:
+
+    def test_import_path_to_source_path(self):
+        assert _import_path_to_source_path("app.services.llm_service") == \
+            "apps/api/app/services/llm_service.py"
+        assert _import_path_to_source_path("app.services.foo_bar") == \
+            "apps/api/app/services/foo_bar.py"
+
+    def test_detects_split_intent_from_description(self):
+        env = _env()
+        plan = _split_plan(["apps/api/app/services/llm/russian.py"])
+        intents = detect_source_split_intents(
+            "Split apps/api/app/services/llm_service.py into llm/ package",
+            plan, env,
+        )
+        assert len(intents) >= 1
+        assert any("llm_service.py" in i.source_path for i in intents)
+
+    def test_detects_old_import_from_t0(self):
+        env = _env()
+        plan = _split_plan(
+            ["apps/api/app/services/llm/russian.py"],
+            t0_cmds=["grep -RIn 'app.services.llm_service' apps/api tests || true"],
+        )
+        intents = detect_source_split_intents(
+            "Split llm_service.py into modules",
+            plan, env,
+        )
+        assert any(i.old_import_path == "app.services.llm_service" for i in intents)
+
+    def test_no_spread_detected_when_no_split_keywords(self):
+        env = _env()
+        plan = _plan(_pkt(title="Fix typo in docstring"))
+        intents = detect_source_split_intents("Fix typo in docs", plan, env)
+        assert len(intents) == 0
+
+    def test_rejects_split_plan_missing_origin_source_file(self):
+        """Split plan must include original source file in scope."""
+        compiler = PlanCompiler()
+        env = _env()
+        plan = _split_plan([
+            "apps/api/app/services/llm/__init__.py",
+            "apps/api/app/services/llm/russian.py",
+        ])
+        result = compiler.compile_plan(
+            plan, env,
+            feature_description="Split apps/api/app/services/llm_service.py into llm package",
+        )
+        assert not result.ok
+        assert any(e.code == "E_SOURCE_SPLIT_ORIGIN_MISSING" for e in result.errors)
+
+    def test_accepts_split_plan_when_origin_source_file_in_scope(self):
+        """Split plan with original source file in scope is OK."""
+        compiler = PlanCompiler()
+        env = _env()
+        plan = _split_plan([
+            "apps/api/app/services/llm/__init__.py",
+            "apps/api/app/services/llm/russian.py",
+            "apps/api/app/services/llm_service.py",
+        ])
+        result = compiler.compile_plan(
+            plan, env,
+            feature_description="Split apps/api/app/services/llm_service.py into llm package",
+        )
+        assert result.ok
+
+    def test_rejects_import_migration_when_references_outside_scope(self, tmp_path):
+        """Old import references outside scope are rejected."""
+        compiler = PlanCompiler()
+        env = _env()
+
+        # Create files in tmp to simulate repo with old imports
+        (tmp_path / "apps" / "api" / "app" / "services").mkdir(parents=True)
+        (tmp_path / "apps" / "api" / "app" / "services" / "natal_report_service.py").write_text(
+            "from app.services.llm_service import LLMService\n"
+        )
+        (tmp_path / "apps" / "horary_service.py").write_text(
+            "from app.services.llm_service import HoraryGenerationError\n"
+        )
+
+        plan = _split_plan(
+            ["apps/api/app/services/llm/russian.py"],
+            t0_cmds=["! grep -r app.services.llm_service apps/"],
+        )
+        result = compiler.compile_plan(
+            plan, env,
+            feature_description="Split apps/api/app/services/llm_service.py",
+            target_repo_root=tmp_path,
+        )
+        assert not result.ok
+        assert any(e.code == "E_IMPORT_MIGRATION_SCOPE_INCOMPLETE" for e in result.errors)
+
+    def test_accepts_import_migration_when_all_references_in_scope(self, tmp_path):
+        """Old import references in scope are OK."""
+        compiler = PlanCompiler()
+        env = _env()
+
+        (tmp_path / "apps" / "api" / "app" / "services").mkdir(parents=True)
+        (tmp_path / "apps" / "api" / "app" / "services" / "natal_report_service.py").write_text(
+            "from app.services.llm_service import LLMService\n"
+        )
+
+        plan = _split_plan(
+            ["apps/api/app/services/llm/russian.py",
+             "apps/api/app/services/llm_service.py",
+             "apps/api/app/services/natal_report_service.py"],
+            t0_cmds=["! grep -r app.services.llm_service apps/"],
+        )
+        result = compiler.compile_plan(
+            plan, env,
+            feature_description="Split apps/api/app/services/llm_service.py",
+            target_repo_root=tmp_path,
+        )
+        assert result.ok
+
+    def test_rejects_exact_failing_case(self):
+        """Regression: feat_kmtisgXzb9 plan must be rejected by compiler."""
+        compiler = PlanCompiler()
+        env = _env()
+        # This plan had scope missing llm_service.py
+        plan = _plan(
+            _pkt(
+                title="Extract llm/ package and update all callers",
+                scope=[
+                    "apps/api/app/services/llm/__init__.py",
+                    "apps/api/app/services/llm/russian.py",
+                    "apps/api/app/services/llm/client.py",
+                    "apps/api/app/services/llm/prompts.py",
+                    "apps/api/app/services/llm/service.py",
+                    "apps/api/app/services/llm/horary.py",
+                    "apps/api/app/services/today_service.py",
+                    "apps/api/app/services/horary_service.py",
+                    "apps/api/app/services/natal_report_service.py",
+                    "apps/api/tests/test_llm_service.py",
+                    "apps/api/tests/test_horary_endpoints.py",
+                    "apps/api/tests/test_horary_answer_quality.py",
+                    "apps/api/tests/test_horary_failure_metadata.py",
+                    "apps/api/tests/test_natal_full_report_api.py",
+                    "apps/api/tests/test_natal_report_service.py",
+                ],
+                t0=["grep -r from app.services.llm_service apps/"],
+            )
+        )
+        result = compiler.compile_plan(
+            plan, env,
+            feature_description="Split apps/api/app/services/llm_service.py into llm package. Update all callers and tests.",
+        )
+        assert not result.ok
+        assert any(e.code == "E_SOURCE_SPLIT_ORIGIN_MISSING" for e in result.errors)
