@@ -530,9 +530,13 @@ class TestMutationGuardBlocksArchitect:
     """Blocker 2: When context-builder mutates the target repo,
     the architect must NOT be called.
 
-    This tests the defensive-in-depth check in the router layer
-    where context.get("error") == "CONTEXT_BUILDER_MUTATED_TARGET_REPO"
-    prevents run_architect from being called.
+    Two paths block the architect:
+    1. Exception path: CONTEXT_BUILDER_MUTATED_TARGET_REPO is re-raised from
+       run_context_builder(), so run_architect() is never reached.
+    2. Guard path: if context dict contains error="CONTEXT_BUILDER_MUTATED_TARGET_REPO",
+       router code checks context.get("error") and skips run_architect().
+
+    The integration test below proves both paths.
     """
 
     def test_mutation_error_in_context_prevents_architect_call(self):
@@ -546,8 +550,6 @@ class TestMutationGuardBlocksArchitect:
         }
         # The guard check: if context has the mutation error, skip architect
         assert context.get("error") == "CONTEXT_BUILDER_MUTATED_TARGET_REPO"
-        # Architect should NOT be called — verified by the router guard
-        # that checks this condition before calling run_architect.
 
     def test_normal_context_allows_architect_call(self):
         """If context has no mutation error, architect can proceed."""
@@ -557,4 +559,77 @@ class TestMutationGuardBlocksArchitect:
             "files": [],
         }
         assert context.get("error") != "CONTEXT_BUILDER_MUTATED_TARGET_REPO"
+
+    @pytest.mark.asyncio
+    async def test_exception_path_skips_architect(self, tmp_path):
+        """When CONTEXT_BUILDER_MUTATED_TARGET_REPO is raised,
+        run_architect is never called.
+
+        This patches FeaturePlanningService.run_architect to track calls,
+        forces the mutation guard to trigger, and verifies run_architect
+        was NOT invoked.
+        """
+        from unittest.mock import AsyncMock, patch
+        from grace_control.db import init_db
+        from grace_control.services.feature_intake_service import FeatureIntakeService
+
+        # Set up in-memory DB
+        os.environ["GRACE_CONTEXT_DISABLED"] = "true"
+        init_db("sqlite:///:memory:")
+
+        from grace_control.db import get_db
+        from grace_control.services.feature_planning_service import FeaturePlanningService
+
+        # Create a real git repo as target
+        repo = tmp_path / "target_repo"
+        repo.mkdir()
+        subprocess.run(["git", "init"], cwd=str(repo), capture_output=True, timeout=10)
+        subprocess.run(["git", "config", "user.email", "test@test.com"],
+                        cwd=str(repo), capture_output=True, timeout=5)
+        subprocess.run(["git", "config", "user.name", "Test"],
+                        cwd=str(repo), capture_output=True, timeout=5)
+        (repo / "app.py").write_text("print('hello')")
+        subprocess.run(["git", "add", "."], cwd=str(repo), capture_output=True, timeout=5)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=str(repo), capture_output=True, timeout=10)
+
+        architect_calls = []
+
+        async def mock_architect(self_planning, feature_id, context, target_repo_root=None):
+            architect_calls.append({"feature_id": feature_id, "context": context})
+            return {"waves": [], "summary": "mock"}
+
+        with get_db() as db:
+            intake = FeatureIntakeService(db)
+            result = intake.create_feature(
+                title="Exception Path Test",
+                mode="draft_plan",
+                target_repo_root=str(repo),
+            )
+            fid = result["feature_id"]
+            planning = FeaturePlanningService(db)
+
+            # Mock ContextCollector._run_llm to both mutate the repo AND return valid JSON
+            original_run_llm = ContextCollector._run_llm
+
+            async def mock_run_llm_writes_file(self, prompt):
+                target = self._root / "BAD_MUTATION_EXCEPTION.py"
+                target.write_text("# This should not exist - mutation guard test")
+                return '{"summary": "test", "estimated_scope": [], "affected_contracts": [], "complexity_score": 50}'
+
+            with patch.object(ContextCollector, "_run_llm", mock_run_llm_writes_file):
+                with patch.object(FeaturePlanningService, "run_architect", mock_architect):
+                    with pytest.raises(CONTEXT_BUILDER_MUTATED_TARGET_REPO):
+                        await planning.run_context_builder(fid, target_repo_root=str(repo))
+
+            # Verify architect was never called
+            assert len(architect_calls) == 0, (
+                f"run_architect should NOT have been called after mutation guard, "
+                f"but was called {len(architect_calls)} time(s)"
+            )
+
+            # Verify repo is clean
+            snap = _git_snapshot(repo)
+            assert snap is not None
+            assert snap["is_clean"] is True
+            assert not (repo / "BAD_MUTATION_EXCEPTION.py").exists()
         # Architect can be called normally.

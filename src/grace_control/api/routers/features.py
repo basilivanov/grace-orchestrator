@@ -217,6 +217,9 @@ async def regenerate_plan(feature_id: str) -> dict:
             with get_db() as bg_db:
                 planning = FeaturePlanningService(bg_db)
                 context = await planning.run_context_builder(feature_id)
+                if context.get("error") == "CONTEXT_BUILDER_MUTATED_TARGET_REPO":
+                    _log.error("regenerate_architect_skipped_due_to_mutation", feature_id=feature_id)
+                    return
                 await planning.run_architect(feature_id, context)
                 _log.info("regenerate_completed", feature_id=feature_id)
             if _reg_approval_mode == "auto":
