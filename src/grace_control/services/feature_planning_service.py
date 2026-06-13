@@ -471,7 +471,14 @@ Rules:
 2. Each packet = one atomic code change (1-3 files max).
 3. Scope MUST list actual file paths to write (relative to project root).
 4. NO TWO packets may share the same file in their scope. If changes affect the same file, merge them into ONE packet.
-5. Use acceptance_profile: FAST (simple), NORMAL (moderate), STRICT (needs review).
+5. Use acceptance_profile — default is STRICT for every packet:
+   - STRICT: default for any code change, migration, contract, or behavior
+     modification. Triggers T0/T1/T2 + verifier + reviewer gates.
+   - NORMAL: use ONLY when architect is certain the change is cosmetic
+     (formatting, comments-only, trivial rename with full scope coverage).
+     Triggers T0/T1/T2 + verifier (no reviewer).
+   - FAST: use ONLY for documentation-only packets (markdown, docs, comments).
+     No code changes involved. Triggers T0/T1/T2 only.
 6. depends_on: optional list of packet titles that must complete first (within same wave).
 7. Include `constraints` block with: frozen_scope (files NEVER to touch).
 8. Include `verification` dict with t0/t1/t2 lists of shell commands to run.
@@ -543,7 +550,7 @@ Respond ONLY with valid JSON (no markdown, no backticks):
         {{
           "title": "Packet title",
           "scope": ["path/to/file1.py", "path/to/file2.py"],
-          "acceptance_profile": "NORMAL",
+          "acceptance_profile": "STRICT",
           "depends_on": [],
           "description": "what this packet does",
           "verification": {{
