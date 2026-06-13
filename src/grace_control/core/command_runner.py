@@ -239,19 +239,18 @@ class CommandRunner:
 
         try:
             with open(stdout_path, "w") as out_f, open(stderr_path, "w") as err_f:
-                # Run with shell when command contains shell operators (||, &&, |, etc),
-                # otherwise run directly to avoid shell metacharacter issues in inline Python.
-                has_ops = bool(re.search(r'\|\||&&', cmd_str))
-                if not cmd_str.startswith('python3 -c'):
-                    has_ops = has_ops or ';' in cmd_str or '2>&1' in cmd_str
-                if has_ops:
+                # Shell=True for non-python3 commands (so shell operators like
+                # || && ; $() 2>&1 work). For python3 -c, use list form to
+                # avoid shell metacharacter issues in inline Python code.
+                is_python3 = cmd_str.startswith('python3 -c')
+                if is_python3:
                     proc = subprocess.run(
-                        cmd_str, cwd=str(resolved_cwd), timeout=timeout, shell=True,
+                        cmd_list, cwd=str(resolved_cwd), timeout=timeout,
                         stdout=out_f, stderr=err_f,
                     )
                 else:
                     proc = subprocess.run(
-                        cmd_list, cwd=str(resolved_cwd), timeout=timeout,
+                        cmd_str, cwd=str(resolved_cwd), timeout=timeout, shell=True,
                         stdout=out_f, stderr=err_f,
                     )
             stdout_text = open(stdout_path).read()
