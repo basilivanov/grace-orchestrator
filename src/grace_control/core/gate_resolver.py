@@ -268,7 +268,7 @@ def resolve_default_t2(
 
     guardrails = _detect_guardrails(base)
     if guardrails:
-        strict_script = ["bash", f"scripts/{guardrails}", "strict-packet"]
+        strict_script = ["bash", f"scripts/{guardrails}", "strict"]
         if (base / "scripts" / guardrails).is_file():
             commands.append(strict_script)
             origins.append("auto:t2:guardrails_strict")
