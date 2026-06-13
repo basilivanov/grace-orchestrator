@@ -130,7 +130,7 @@ async def create_feature(request: FeatureCreateRequest) -> dict:
                     if _approval_mode == "auto":
                         with get_db() as auto_db:
                             auto_planning = FeaturePlanningService(auto_db)
-                            result = auto_planning.approve_plan(feature_id)
+                            result = await auto_planning.try_approve_or_repair_plan(feature_id)
                             _log.info("plan_auto_approved", feature_id=feature_id,
                                       approval_mode="auto", status=result.get("status"))
                 except Exception as e:

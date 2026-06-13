@@ -708,9 +708,13 @@ Respond ONLY with valid JSON (no markdown, no backticks):
                 )
                 self.db.add(materialize_run)
                 feature.status = "PLAN_FAILED"
-                # Do NOT raise ValueError — get_db() rolls back on exception,
-                # which would undo the spec_json update above.
-                return {"status": "PLAN_FAILED", "compiler_errors": len(compiled.errors)}
+                # Return compiler errors so caller can decide repair
+                return {
+                    "status": "PLAN_FAILED",
+                    "compiler_errors": [e.model_dump() for e in compiled.errors],
+                    "compiler_warnings": [w.model_dump() for w in compiled.warnings],
+                    "compiler_ok": compiled.ok,
+                }
                 materialize_run.error = f"plan compiler rejected: {len(compiled.errors)} errors"
                 self.db.add(materialize_run)
                 feature.status = "PLAN_FAILED"
@@ -792,6 +796,147 @@ Respond ONLY with valid JSON (no markdown, no backticks):
 
         self.db.commit()
         return {"status": "queued", "waves_count": len(waves), "packets_count": len(packet_ids), "packet_ids": packet_ids}
+
+    async def try_approve_or_repair_plan(
+        self,
+        feature_id: str,
+        *,
+        max_repair_attempts: int = 2,
+    ) -> dict:
+        """Approve plan or run architect repair loop if compiler rejects.
+
+        Returns the final approval result dict (same shape as approve_plan).
+        Never raises — returns PLAN_FAILED if repair exhausted.
+        """
+        result = self.approve_plan(feature_id)
+        status = result.get("status", "")
+
+        # If plan passed compiler or failed for a reason other than repairable → return
+        if status != "PLAN_FAILED":
+            return result
+
+        compiler_errors = result.get("compiler_errors", [])
+        if not compiler_errors:
+            return result
+
+        # Check if any error is repairable
+        from grace_control.services.planning_recovery_service import (
+            is_repairable_error,
+            classify_compiler_result,
+        )
+        error_class = classify_compiler_result(compiler_errors)
+        if error_class != "repairable":
+            _log.info("repair_skipped", feature_id=feature_id, error_class=error_class)
+            return result
+
+        # ── Repair loop ────────────────────────────────────────────
+        feature = self.db.query(Feature).filter_by(id=feature_id).first()
+        if not feature:
+            return result
+
+        spec = feature.spec_json or {}
+        plan = spec.get("plan_json", {}) or {}
+
+        feature_title = getattr(feature, "title", "") or spec.get("title", "")
+        feature_desc = getattr(feature, "description", "") or spec.get("description", "")
+
+        # Find previous architect run session handle
+        previous_session = None
+        arch_runs = (
+            self.db.query(FeaturePlanningRun)
+            .filter(
+                FeaturePlanningRun.feature_id == feature_id,
+                FeaturePlanningRun.stage == "architect",
+                FeaturePlanningRun.status == "done",
+            )
+            .order_by(FeaturePlanningRun.created_at.desc())
+            .limit(1)
+            .all()
+        )
+        if arch_runs:
+            rj = arch_runs[0].result_json or {}
+            sess = rj.get("session_handle")
+            if sess:
+                try:
+                    import json as _json
+                    previous_session = _json.loads(sess) if isinstance(sess, str) else sess
+                except Exception:
+                    pass
+
+        attempt = 1
+        while attempt <= max_repair_attempts:
+            _log.info("repair_attempt", feature_id=feature_id, attempt=attempt)
+
+            from grace_control.services.planning_recovery_service import run_architect_repair
+
+            repaired_plan, error = await run_architect_repair(
+                feature_title=feature_title,
+                feature_description=feature_desc,
+                previous_plan=plan,
+                compiler_errors=compiler_errors,
+                previous_session=previous_session,
+            )
+
+            if error or repaired_plan is None:
+                _log.warn("repair_failed", feature_id=feature_id,
+                          attempt=attempt, error=error)
+                break
+
+            # Save repaired plan
+            spec["plan_json"] = repaired_plan
+            feature.spec_json = spec
+            self.db.flush()
+
+            # Re-compile
+            from grace_control.core.plan_compiler import PlanCompiler
+            from grace_control.core.execution_environment import probe_execution_environment
+            from grace_control.config.settings import settings as _settings
+            import os as _os
+            target_root_str = (
+                spec.get("target_repo_root")
+                or _settings.target_repo_root
+                or _os.environ.get("GRACE_TARGET_REPO_ROOT")
+                or "."
+            )
+            target_root = Path(target_root_str) if isinstance(target_root_str, str) else Path(".")
+            env = probe_execution_environment(target_repo_root=target_root)
+            desc_full = (feature_desc + "\n" + feature_title
+                         + "\n" + str(spec.get("description", ""))
+                         + "\n" + str(spec.get("title", "")))
+            compiled = PlanCompiler().compile_plan(
+                repaired_plan, env,
+                feature_description=desc_full,
+                target_repo_root=target_root,
+            )
+            spec["_plan_compiler"] = {
+                "ok": compiled.ok,
+                "errors": [e.model_dump() for e in compiled.errors],
+                "warnings": [w.model_dump() for w in compiled.warnings],
+                "repair_attempt": attempt,
+            }
+            feature.spec_json = spec
+            self.db.flush()
+
+            if compiled.ok:
+                _log.info("repair_success", feature_id=feature_id,
+                          attempt=attempt)
+                # Plan is now valid — re-run approve_plan
+                return self.approve_plan(feature_id)
+
+            # Check if errors are still repairable or same
+            new_errors = [e.model_dump() for e in compiled.errors]
+            new_class = classify_compiler_result(new_errors)
+            if new_class != "repairable":
+                _log.warn("repair_terminal_error", feature_id=feature_id,
+                          attempt=attempt)
+                break
+
+            compiler_errors = new_errors
+            attempt += 1
+
+        _log.warn("repair_exhausted", feature_id=feature_id,
+                  attempts=attempt, max_attempts=max_repair_attempts)
+        return {"status": "PLAN_FAILED", "compiler_errors": compiler_errors}
 
     def regenerate_plan(self, feature_id: str) -> dict:
         feature = self.db.query(Feature).filter_by(id=feature_id).first()
