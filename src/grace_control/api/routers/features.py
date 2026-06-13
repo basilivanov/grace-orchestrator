@@ -122,6 +122,9 @@ async def create_feature(request: FeatureCreateRequest) -> dict:
                     with get_db() as bg_db:
                         planning = FeaturePlanningService(bg_db)
                         context = await planning.run_context_builder(feature_id, request.target_repo_root)
+                        if context.get("error") == "CONTEXT_BUILDER_MUTATED_TARGET_REPO":
+                            _log.error("architect_skipped_due_to_mutation", feature_id=feature_id)
+                            return
                         await planning.run_architect(feature_id, context, request.target_repo_root)
                         _log.info("draft_plan_completed", feature_id=feature_id)
                     if _approval_mode == "auto":
@@ -143,6 +146,8 @@ async def create_feature(request: FeatureCreateRequest) -> dict:
         # auto_queue is the only other valid mode (Literal enforces this)
         planning = FeaturePlanningService(db)
         context = await planning.run_context_builder(feature_id, request.target_repo_root)
+        if context.get("error") == "CONTEXT_BUILDER_MUTATED_TARGET_REPO":
+            raise HTTPException(status_code=409, detail="context-builder mutated target repo; planning stopped before architect")
         await planning.run_architect(feature_id, context, request.target_repo_root)
         approval = planning.approve_plan(feature_id)
         return {"data": {

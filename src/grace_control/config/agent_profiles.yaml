@@ -508,7 +508,7 @@ agents:
     inject_dir: false
     input:
       mode: stdin
-      template: '{prompt}'
+      template: '{packet_markdown}'
     model: deepseek/deepseek-v4-flash
     timeout_seconds: 120
   opencode:
