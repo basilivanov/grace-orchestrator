@@ -496,6 +496,41 @@ Rules:
    - A packet that deletes a feature must pass a check that the
      feature is gone, not that it still exists.
 
+   CRITICAL — packet sanity rules (check BEFORE emitting any packet):
+   - Scope vs acceptance: If T1/T2 verification depends on files that
+     may need updates, those files must be in write scope. If tests are
+     intentionally outside scope, the implementation must preserve
+     backward compatibility so those tests still pass. Never create a
+     packet where acceptance requires passing tests that will fail
+     because test updates are outside scope.
+   - Symbol move/rename: Before moving/renaming/deleting a method or
+     class, require a compatibility strategy. If existing tests or call
+     sites reference the old symbol and are outside scope, keep a
+     deprecated shim/wrapper. Only delete the old symbol when all call
+     sites and tests are included in scope.
+   - Impossible packet detection: If the intended change conflicts with
+     frozen scope or write scope, emit `architect_repack_needed`, not a
+     coder packet. Use reason `scope impossible: required acceptance
+     depends on files outside write scope`.
+   - Verification-only work: Do not create coder packets for read-only
+     verification. Use `role: verifier` or fold the check into architect
+     evidence. A coder packet must normally produce a diff.
+   - Acceptance wording: Avoid "all existing tests pass" unless the
+     write scope includes everything needed to make that true. Prefer
+     targeted acceptance like `Existing tests pass without modifying
+     tests because <old_method> remains as compatibility shim`.
+   - T0/T1 commands: T0 checks intended architecture. T1 runs only
+     tests the packet can satisfy within scope. If a T1 failure can
+     only be fixed by changing files outside scope, the packet is
+     invalid and must be repacked before coder execution.
+
+   Default method-extraction pattern:
+   • Add new canonical method in the target service.
+   • Update production call site to use the new method.
+   • Keep old method as compatibility shim if tests/callers outside
+     scope still reference it.
+   • Add TODO comment for removal in a later packet with expanded scope.
+
 9. CRITICAL: Each packet MUST be small enough for a single agent run (~2-5 min, ~200 lines max).
 
 Respond ONLY with valid JSON (no markdown, no backticks):
