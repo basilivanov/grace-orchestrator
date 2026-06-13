@@ -51,30 +51,12 @@ def probe_execution_environment(
     cwd = Path.cwd().resolve()
 
     # ── Shell detection ────────────────────────────────────────────
-    shell_path = os.environ.get("SHELL", "/bin/sh")
-    shell_is_bash = "bash" in os.path.basename(shell_path).lower()
-
-    # Check if /bin/sh supports 'source'
+    # The command runner uses /bin/sh (subprocess with shell=True),
+    # NOT the user's login shell ($SHELL). So we probe /bin/sh.
+    shell_path = "/bin/sh"
+    shell_is_bash = False  # Ubuntu /bin/sh is dash; even if symlinked to bash,
+                           # bash runs in POSIX mode as sh and lacks 'source'.
     shell_supports_source = False
-    try:
-        r = subprocess.run(
-            ["/bin/sh", "-c", "type source >/dev/null 2>&1"],
-            capture_output=True, timeout=3,
-        )
-        shell_supports_source = r.returncode == 0
-    except Exception:
-        pass
-    # dash falls back to '.' which works everywhere
-    if not shell_supports_source:
-        try:
-            r = subprocess.run(
-                ["/bin/sh", "-c", ". /dev/null 2>&1 || true"],
-                capture_output=True, timeout=3,
-            )
-            # '.' exists (though /dev/null isn't a script)
-            shell_supports_source = False  # '. exists but not 'source'
-        except Exception:
-            pass
 
     # ── Target repo paths ──────────────────────────────────────────
     target = target_repo_root or Path(

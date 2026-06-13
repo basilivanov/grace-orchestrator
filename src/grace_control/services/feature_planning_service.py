@@ -647,13 +647,18 @@ Respond ONLY with valid JSON (no markdown, no backticks):
         waves = plan.get("waves", []) if isinstance(plan, dict) else []
 
         # ── Plan Compiler / Preflight Validator ───────────────────────
-        # Validate the architect's plan before materializing packets.
-        # Catches invalid shell commands, scope/acceptance contradictions,
-        # evidence mismatches, and role inconsistencies.
         if isinstance(plan, dict) and plan.get("waves"):
             from grace_control.core.plan_compiler import PlanCompiler
             from grace_control.core.execution_environment import probe_execution_environment
-            target_root = Path(spec.get("target_repo_root", ".")) if isinstance(spec, dict) else Path(".")
+            from grace_control.config.settings import settings as _settings
+            import os as _os
+            target_root_str = (
+                spec.get("target_repo_root")
+                or _settings.target_repo_root
+                or _os.environ.get("GRACE_TARGET_REPO_ROOT")
+                or "."
+            )
+            target_root = Path(target_root_str) if isinstance(target_root_str, str) else Path(".")
             env = probe_execution_environment(target_repo_root=target_root)
             compiled = PlanCompiler().compile_plan(plan, env)
             spec["_plan_compiler"] = {

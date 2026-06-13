@@ -190,18 +190,25 @@ class PlanCompiler:
             )
 
         # Missing venv reference
-        if ".venv/bin/activate" in cmd:
+        if ".venv/bin/activate" in cmd or ".venv/bin/python" in cmd:
             if not env.has_api_venv:
                 _add_error(
                     result, "E_VENV_MISSING",
-                    field_path, "command references .venv/bin/activate but no venv found",
-                    title, f"python3 at {env.api_python_path} is available, use it directly",
+                    field_path,
+                    "command references venv but target repo has no .venv",
+                    title,
+                    f"system python3 at {env.api_python_path} is available; "
+                    "use it directly or install venv in target repo",
                 )
             else:
                 _add_warning(
                     result, "W_VENV_ACTIVATE_IN_WORKTREE",
-                    field_path, "worktree has no .venv, activation will fail at runtime",
-                    title, "strip venv activation — system python3 is available",
+                    field_path,
+                    "venv exists in target repo but may not exist in worktree; "
+                    "activation will fail at runtime in worktree",
+                    title,
+                    "use the absolute python path instead of activation: "
+                    f"{env.api_python_path} -m pytest ...",
                 )
 
         # Unsafe grep splitting
@@ -263,6 +270,9 @@ class PlanCompiler:
         if not env.shell_is_bash:
             for pattern, feature, fix in _BASH_ONLY_PATTERNS:
                 if pattern.search(cmd):
+                    # Skip 'source' when it's for venv activation (caught by E_VENV_MISSING)
+                    if feature == "source" and ("venv" in cmd.lower() or "activate" in cmd.lower()):
+                        continue
                     _add_error(
                         result, "E_BASH_SYNTAX_UNDER_SH",
                         field_path, f"command uses bash-only feature '{feature}' but shell is {env.shell}",
@@ -291,42 +301,40 @@ class PlanCompiler:
             test_refs = _re.findall(r'tests?/[\w/_.-]+\.py', cmd_s)
             test_files_in_t1.update(test_refs)
 
-        if test_files_in_t1 and role == "coder":
-            test_files_in_scope = set()
-            for s in scope:
-                if "test" in s.lower():
-                    test_files_in_scope.add(s)
+        test_files_in_scope: set[str] = set()
+        for s in scope:
+            if "test" in s.lower():
+                test_files_in_scope.add(s)
 
-            tests_outside = test_files_in_t1 - test_files_in_scope
-            if tests_outside:
-                # Check if the packet deletes/renames symbols
-                deletes_symbol = False
-                all_text = " ".join(coder_instructions + [str(acceptance)])
-                if any(
-                    kw in all_text.lower()
-                    for kw in ("remove", "delete", "rename", "move ", "extract from")
-                ):
-                    deletes_symbol = True
+        tests_outside = test_files_in_t1 - test_files_in_scope
 
-                if deletes_symbol:
-                    _add_error(
-                        result, "E_SCOPE_ACCEPTANCE_IMPOSSIBLE",
-                        f"verification.t1", f"T1 runs tests {tests_outside} which are outside scope {scope}, "
-                        f"but packet deletes/renames symbols those tests may depend on",
-                        title, "keep compatibility shim or include test files in scope",
-                    )
+        # Check if the packet deletes/renames symbols
+        deletes_symbol = False
+        all_text = " ".join(coder_instructions + [str(acceptance)])
+        if any(
+            kw in all_text.lower()
+            for kw in ("remove", "delete", "rename", "move ", "extract from")
+        ):
+            deletes_symbol = True
 
-        # Check for "all tests pass" acceptance with narrow scope
-        for ac in acceptance:
-            if isinstance(ac, str) and "all existing tests" in ac.lower() and role == "coder":
-                test_files_in_scope = [s for s in scope if "test" in s or "tests/" in s]
-                if not test_files_in_scope:
-                    _add_error(
-                        result, "E_ACCEPTANCE_IMPOSSIBLE",
-                        "acceptance_criteria", "acceptance says 'all existing tests pass' "
-                        "but no test files are in write scope",
-                        title, "include test files in scope or relax acceptance criteria",
-                    )
+        # Error only when: tests outside scope + delete/rename + no shim
+        if tests_outside and deletes_symbol and role == "coder":
+            has_shim = any(
+                kw in all_text.lower()
+                for kw in ("shim", "compatibility wrapper", "keep old", "deprecated stub",
+                          "re-export", "backward compat")
+            )
+            if not has_shim:
+                _add_error(
+                    result, "E_SCOPE_ACCEPTANCE_IMPOSSIBLE",
+                    f"verification.t1",
+                    f"T1 runs tests {tests_outside} outside write scope {scope}, "
+                    f"packet deletes/renames/moves symbols, and no compatibility "
+                    f"shim is described",
+                    title,
+                    "keep compatibility shim/wrapper/re-export for old symbol, "
+                    "or include test files in write scope",
+                )
 
     def _validate_evidence(
         self,

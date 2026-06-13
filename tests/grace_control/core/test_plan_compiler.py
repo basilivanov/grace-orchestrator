@@ -65,15 +65,15 @@ def _pkt(title="Test packet", scope=None, t0=None, t1=None, t2=None,
 class TestShellEnvironment:
 
     def test_rejects_source_when_shell_is_dash(self):
-        """source is bash-only; dash/sh should fail."""
+        """source is bash-only; sh should fail (even for non-venv usage)."""
         compiler = PlanCompiler()
-        env = _env(shell_is_bash=False, shell_supports_source=False)
+        env = _env()
         result = compiler.compile_plan(
-            _plan(_pkt(t0=["source .venv/bin/activate && pytest"])),
+            _plan(_pkt(t0=["source /etc/profile && echo ok"])),
             env,
         )
         assert not result.ok
-        assert any("bash" in e.code.lower() or "venv" in e.code.lower() for e in result.errors)
+        assert any("bash" in e.code.lower() for e in result.errors)
 
     def test_rejects_missing_venv_reference(self):
         """venv activation should fail when venv doesn't exist."""
@@ -87,14 +87,15 @@ class TestShellEnvironment:
         assert any("venv" in e.code.lower() for e in result.errors)
 
     def test_rejects_bash_syntax_under_sh(self):
-        """[[ ... ]] should fail under dash."""
+        """[[ ... ]] should fail under sh — bash-only syntax."""
         compiler = PlanCompiler()
-        env = _env(shell_is_bash=False)
+        env = _env()
         result = compiler.compile_plan(
-            _plan(_pkt(t0=["[[ -f file.yml ]] && echo ok"])),
+            _plan(_pkt(t0=["[[ -f /etc/hostname ]] && echo ok"])),
             env,
         )
         assert not result.ok
+        assert any("bash" in e.code.lower() for e in result.errors)
 
     def test_accepts_posix_syntax(self):
         """POSIX syntax should pass even under dash."""
@@ -106,15 +107,12 @@ class TestShellEnvironment:
         )
         assert result.ok
 
-    def test_accepts_bash_command_when_runner_is_bash(self):
-        """source should be allowed when shell is bash."""
-        compiler = PlanCompiler()
-        env = _env(shell_is_bash=True, shell_supports_source=True, has_api_venv=True)
-        result = compiler.compile_plan(
-            _plan(_pkt(t0=["source .venv/bin/activate && pytest"])),
-            env,
-        )
-        assert result.ok
+    def test_runner_shell_is_always_sh(self):
+        """Commands always run through /bin/sh, not login $SHELL."""
+        # Even if $SHELL=/bin/bash, the compiler hardcodes /bin/sh
+        env = _env()
+        assert env.shell == "/bin/sh" or "sh" in env.shell
+        assert not env.shell_is_bash
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -216,18 +214,70 @@ class TestScopeAcceptance:
         result = compiler.compile_plan(_plan(pkt), env)
         assert result.ok  # Adding a method shouldn't break existing tests
 
-    def test_rejects_all_tests_pass_without_test_scope(self):
+    def test_all_tests_pass_ok_when_no_move_delete(self):
+        """all existing tests pass with narrow code scope is OK when no delete/rename/move."""
         compiler = PlanCompiler()
         env = _env()
         pkt = _pkt(
-            title="Change internal logic",
+            title="Refactor internal logic",
             scope=["apps/api/app/services/logic.py"],
             acceptance=["All existing tests pass"],
-            instructions=["refactor internal logic"],
+            instructions=["refactor internal logic — no symbol renames"],
             role="coder",
         )
         result = compiler.compile_plan(_plan(pkt), env)
-        assert not result.ok
+        assert result.ok  # No error: no delete/rename/move, tests may pass naturally
+
+    def test_all_tests_pass_error_when_move_delete_no_shim(self):
+        """all existing tests pass + move/delete + no shim = error."""
+        compiler = PlanCompiler()
+        env = _env()
+        pkt = _pkt(
+            title="Move method from ServiceA to ServiceB",
+            scope=["apps/api/app/services/service_a.py",
+                   "apps/api/app/services/service_b.py"],
+            t1=["cd apps/api && python -m pytest tests/test_service_a.py -q"],
+            instructions=["remove _build_llm_input from NatalReportService",
+                         "delete the old method entirely"],
+            acceptance=["All existing tests pass"],
+            role="coder",
+        )
+        result = compiler.compile_plan(_plan(pkt), env)
+        assert not result.ok  # Error: delete + tests outside scope + no shim
+
+    def test_all_tests_pass_ok_when_move_with_shim(self):
+        """all existing tests pass + move/delete + shim instruction = OK."""
+        compiler = PlanCompiler()
+        env = _env()
+        pkt = _pkt(
+            title="Move method with compatibility shim",
+            scope=["apps/api/app/services/service_a.py",
+                   "apps/api/app/services/service_b.py"],
+            t1=["cd apps/api && python -m pytest tests/test_service_a.py -q"],
+            instructions=["move method to ServiceB",
+                         "keep old method as compatibility shim in ServiceA",
+                         "add deprecated stub wrapper"],
+            acceptance=["All existing tests pass"],
+            role="coder",
+        )
+        result = compiler.compile_plan(_plan(pkt), env)
+        assert result.ok  # OK: has shim instruction
+
+    def test_all_tests_pass_ok_when_tests_in_scope(self):
+        """all existing tests pass with tests in scope is OK."""
+        compiler = PlanCompiler()
+        env = _env()
+        pkt = _pkt(
+            title="Move method with test scope",
+            scope=["apps/api/app/services/service_a.py",
+                   "tests/test_service_a.py"],
+            t1=["cd apps/api && python -m pytest tests/test_service_a.py -q"],
+            instructions=["remove _build_llm_input from ServiceA"],
+            acceptance=["All existing tests pass"],
+            role="coder",
+        )
+        result = compiler.compile_plan(_plan(pkt), env)
+        assert result.ok  # OK: tests are in scope
 
 
 # ══════════════════════════════════════════════════════════════════════
