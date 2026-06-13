@@ -697,7 +697,7 @@ Respond ONLY with valid JSON (no markdown, no backticks):
                 for e in compiled.errors:
                     _log.warn("plan_compiler_error", feature_id=feature_id,
                               code=e.code, packet=e.packet_title or "",
-                              message=e.message)
+                              err_msg=e.message)
                 materialize_run = FeaturePlanningRun(
                     id=generate_unique_id(self.db, FeaturePlanningRun, new_run_uid),
                     feature_id=feature_id,
