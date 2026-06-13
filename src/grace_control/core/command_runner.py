@@ -223,9 +223,21 @@ class CommandRunner:
             cmd_list = shlex.split(requoted)
 
         cmd_str = " ".join(cmd_list)
-        # Replace 'source' with '.' for shell compatibility (dash does not have source)
+        # Replace 'source' with '.' for dash/sh compatibility (source is bash-only)
         if cmd_str.startswith('source ') or ' && source ' in cmd_str or '; source ' in cmd_str:
             cmd_str = cmd_str.replace('source ', '. ')
+        # Strip .venv activation — worktree has no venv, system python3 has pytest
+        # cd apps/api && . .venv/bin/activate && python3 ... → cd apps/api && python3 ...
+        while '.venv/bin/activate' in cmd_str:
+            idx = cmd_str.index('.venv/bin/activate')
+            start = cmd_str.rfind('.', 0, idx) if '. ' in cmd_str[:idx] else cmd_str.rfind('&& ', 0, idx) if '&& ' in cmd_str[:idx] else idx
+            if start > 0 and cmd_str[start:start+2] in ('. ', '&&'):
+                end = idx + len('.venv/bin/activate')
+                if end < len(cmd_str) and cmd_str[end:end+3] == ' &&':
+                    end += 4  # strip ' && ' after activate too
+                cmd_str = cmd_str[:start] + cmd_str[end:]
+            else:
+                break
         timeout = timeout_s or self._default_timeout
         started = time.time()
 
