@@ -475,6 +475,17 @@ Rules:
 6. depends_on: optional list of packet titles that must complete first (within same wave).
 7. Include `constraints` block with: frozen_scope (files NEVER to touch).
 8. Include `verification` dict with t0/t1/t2 lists of shell commands to run.
+
+   CRITICAL — verification quoting rules (shell commands run via `sh -c`):
+   - Use single quotes `'...'` for `python3 -c '...'` arguments.
+   - NEVER embed double quotes `"..."` inside the `-c` string; double
+     quotes break because bash interprets `\"` as a string terminator.
+   - Example SAFE: `python3 -c 'import sys; print(sys.version)'`
+   - Example BROKEN: `python3 -c "import yaml; print(d[\"key\"])"`
+   - Prefer calling scripts or using file-based checks over inline
+     Python when the command path or assertion contains quote-sensitive
+     characters like file paths with slashes, single quotes, or braces.
+
 9. CRITICAL: Each packet MUST be small enough for a single agent run (~2-5 min, ~200 lines max).
 
 Respond ONLY with valid JSON (no markdown, no backticks):

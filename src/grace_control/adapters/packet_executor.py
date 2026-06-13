@@ -682,11 +682,23 @@ class PacketExecutionAdapter:
         if is_minimal:
             workspace_mode = "scoped_copy"
 
-        wt_root = Path(_s.worktree_root or self.worktree_root)
+        # Prefer the constructor-provided worktree_root (may be absolute from
+        # git_context resolution) over the settings default (which is relative
+        # .grace/worktrees). When the settings value is used and is relative,
+        # resolve it against target_root for target_repo_worktree mode so that
+        # git worktree add + existence checks agree on the same absolute path.
+        if self.worktree_root.is_absolute():
+            wt_root = self.worktree_root
+        else:
+            wt_root = Path(_s.worktree_root)
+        if workspace_mode == "target_repo_worktree" and not wt_root.is_absolute():
+            wt_root = target_root / wt_root
         wt_path = wt_root / slug
 
-        # Fail if worktree path is inside GRACE repo for real-project mode
-        if workspace_mode == "target_repo_worktree":
+        # Fail if worktree path is inside GRACE repo for real-project mode.
+        # In target_repo_worktree mode, project_root is the target repo itself
+        # and the worktree belongs inside it — skip this check.
+        if workspace_mode == "target_repo_worktree" and str(self.project_root.resolve()) != str(target_root.resolve()):
             try:
                 wt_path.resolve().relative_to(self.project_root.resolve())
                 import os
