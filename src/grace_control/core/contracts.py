@@ -294,6 +294,10 @@ def build_packet_contract(packet_data: dict) -> ExecutionPacketContract:
     scope_list = [s for s in scope_list if not s.startswith("/")]
     frozen = [s for s in frozen if not s.startswith("/")]
 
+    # Remove from frozen_scope any entries that overlap with allowed_write_scope.
+    # The architect sometimes puts target files in both, making them unwritable.
+    frozen = [s for s in frozen if s not in scope_list]
+
     verification_raw = spec.get("verification", {})
     if isinstance(verification_raw, list):
         t0: list[list[str]] = []
