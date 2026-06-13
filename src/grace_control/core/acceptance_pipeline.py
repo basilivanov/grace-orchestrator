@@ -28,6 +28,7 @@ from grace_control.core.structured_logger import GraceLogger
 _log = GraceLogger("acceptance")
 
 import os
+import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -513,7 +514,7 @@ class AcceptancePipeline:
         # Use explicit T0 commands if provided; otherwise fall back to auto defaults.
         explicit_t0 = packet.verification.get("t0", [])
         if explicit_t0:
-            t0_cmds = [c.split() if isinstance(c, str) else c for c in explicit_t0]
+            t0_cmds = [shlex.split(c) if isinstance(c, str) else c for c in explicit_t0]
             t0_origins = ["architect:verification"] * len(explicit_t0)
         else:
             t0_cmds, t0_origins = self._build_t0_commands(packet, cf, cwd=cwd or self._root)
@@ -556,7 +557,7 @@ class AcceptancePipeline:
 
         if explicit:
             # When architect provides explicit T1, use ONLY those commands.
-            all_cmds = [c.split() if isinstance(c, str) else c for c in explicit]
+            all_cmds = [shlex.split(c) if isinstance(c, str) else c for c in explicit]
             all_origins = ["architect:verification"] * len(explicit)
         else:
             # No explicit T1 — use auto defaults from gate resolver
@@ -604,7 +605,7 @@ class AcceptancePipeline:
 
         if explicit:
             # When architect provides explicit T2, use ONLY those commands.
-            all_cmds = [c.split() if isinstance(c, str) else c for c in explicit]
+            all_cmds = [shlex.split(c) if isinstance(c, str) else c for c in explicit]
             all_origins = ["architect:verification"] * len(explicit)
         else:
             # No explicit T2 — use auto defaults from gate resolver
