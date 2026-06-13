@@ -223,6 +223,9 @@ class CommandRunner:
             cmd_list = shlex.split(requoted)
 
         cmd_str = " ".join(cmd_list)
+        # Replace 'source' with '.' for shell compatibility (dash does not have source)
+        if cmd_str.startswith('source ') or ' && source ' in cmd_str or '; source ' in cmd_str:
+            cmd_str = cmd_str.replace('source ', '. ')
         timeout = timeout_s or self._default_timeout
         started = time.time()
 
