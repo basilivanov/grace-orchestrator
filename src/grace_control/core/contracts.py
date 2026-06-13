@@ -219,6 +219,21 @@ def _has_abs_or_parent(path: str) -> bool:
     return path.startswith("/") or ".." in Path(path).parts
 
 
+def _strip_guardrails(cmds: list) -> None:
+    """Remove commands that run guardrails.sh or check_frontmatter in-place."""
+    i = 0
+    while i < len(cmds):
+        cmd = cmds[i]
+        if isinstance(cmd, str):
+            joined = cmd
+        else:
+            joined = " ".join(cmd)
+        if "guardrails.sh" in joined or "check_frontmatter" in joined:
+            cmds.pop(i)
+        else:
+            i += 1
+
+
 def validate_packet_contract(packet: ExecutionPacketContract) -> list[str]:
     errors: list[str] = []
     if not packet.packet_id or not packet.packet_id.strip():
@@ -299,6 +314,13 @@ def build_packet_contract(packet_data: dict) -> ExecutionPacketContract:
         t2 = verification_raw.get("t2", [])
         if isinstance(t2, dict) and "commands" in t2:
             t2 = t2["commands"]
+        # Strip guardrails.sh and check_frontmatter from T0/T1/T2 —
+        # these are full-suite gates that pick up pre-existing failures
+        # unrelated to the packet. Architect keeps generating them despite
+        # prompt rules, so we enforce it at the contract level.
+        _strip_guardrails(t0)
+        _strip_guardrails(t1)
+        _strip_guardrails(t2)
     else:
         t0 = []
         t1 = spec.get("verification_commands", [])
