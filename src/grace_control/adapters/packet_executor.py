@@ -612,8 +612,49 @@ class PacketExecutionAdapter:
         branch = _attempt_branch(pid, attempt)
 
         from grace_control.config.settings import settings as _s
-        workspace_mode = executor.get("workspace_mode") or _s.workspace_mode or "full_git_worktree"
+        # ── Target repo root: packet metadata > settings > project_root ──
+        pkt_metadata = getattr(packet_contract, "metadata", None) or {}
+        pkt_target_repo = pkt_metadata.get("target_repo_root", "")
+        pkt_workspace_mode = pkt_metadata.get("workspace_mode", "")
+        _effective_target_repo = pkt_target_repo or _s.target_repo_root or ""
+        workspace_mode = pkt_workspace_mode or executor.get("workspace_mode") or _s.workspace_mode or "full_git_worktree"
         is_minimal = executor.get("minimal_repo", False)
+
+        # If a target_repo_root exists and differs from the orchestrator's
+        # project_root, default to target_repo_worktree unless explicitly
+        # overridden. This prevents packets for business features from
+        # accidentally running inside the GRACE orchestrator repo.
+        if _effective_target_repo and str(_effective_target_repo) != str(self.project_root):
+            if not pkt_workspace_mode and not executor.get("workspace_mode"):
+                workspace_mode = "target_repo_worktree"
+                _log.info("workspace_mode_defaulted_to_target_repo_worktree",
+                           packet_id=pid, target_repo_root=str(_effective_target_repo))
+
+        # ── Fail-fast: scope paths must exist under the effective root ──
+        target_root = Path(_effective_target_repo) if _effective_target_repo else Path(_s.target_repo_root or self.project_root)
+        if _effective_target_repo and eff:
+            for scope_path in eff:
+                p = target_root / scope_path
+                orchestrator_p = self.project_root / scope_path
+                if not p.exists() and orchestrator_p.exists():
+                    from grace_control.agent.backend import ExecutionResult as _ER
+                    err = (f"WRONG_WORKTREE_ROOT: scope path '{scope_path}' does not exist under "
+                           f"target_repo_root={target_root} but exists under "
+                           f"project_root={self.project_root}. Refusing to run agent "
+                           f"in orchestrator repo for a target feature packet.")
+                    _log.error("wrong_worktree_root", packet_id=pid, error=err)
+                    return _ER(
+                        accepted=False,
+                        domain_status="failed",
+                        worktree_path="",
+                        branch_name="",
+                        commit_sha="",
+                        stdout="",
+                        stderr=err,
+                        duration_ms=0,
+                        errors=[err],
+                    )
+
         # TZ §6.3: auto-upgrade scoped_copy to full_git_worktree if verification
         # contains commands that need broader repo context (pytest, tsc, etc.).
         _workspace_evidence: dict = {}
@@ -641,7 +682,6 @@ class PacketExecutionAdapter:
         if is_minimal:
             workspace_mode = "scoped_copy"
 
-        target_root = Path(_s.target_repo_root or self.project_root)
         wt_root = Path(_s.worktree_root or self.worktree_root)
         wt_path = wt_root / slug
 

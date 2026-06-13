@@ -335,5 +335,7 @@ def build_packet_contract(packet_data: dict) -> ExecutionPacketContract:
             "origin": spec.get("origin", ""),
             "session_id": spec.get("session_id", ""),
             "frontend": spec.get("frontend"),  # TZ_FRONTEND_ACCEPTANCE P0
+            "target_repo_root": spec.get("target_repo_root", ""),
+            "workspace_mode": spec.get("workspace_mode", ""),
         },
     )

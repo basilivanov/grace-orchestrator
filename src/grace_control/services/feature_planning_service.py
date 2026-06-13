@@ -7,9 +7,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
+
+from grace_control.core.structured_logger import GraceLogger
+
+_log = GraceLogger("feature_planning")
 
 from grace_control.core.uid import generate_unique_id, new_wave_uid, new_packet_uid, new_run_uid
 from grace_control.db import get_db
@@ -18,6 +23,46 @@ from grace_control.db.schema import PacketState
 
 _CONTENT_PREVIEW_CHARS = 2500
 _MAX_RELEVANT_FILES = 15
+
+
+class CONTEXT_BUILDER_MUTATED_TARGET_REPO(Exception):
+    """Raised when context-builder mutates files in the target repo."""
+
+
+def _git_snapshot(repo_root: Path) -> dict | None:
+    """Return a snapshot of HEAD SHA and changed files for a git repo.
+
+    Returns None if repo_root is not a git repo.
+    """
+    try:
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(repo_root), capture_output=True, text=True, timeout=10,
+        )
+        if head.returncode != 0:
+            return None
+        status = subprocess.run(
+            ["git", "status", "--short"],
+            cwd=str(repo_root), capture_output=True, text=True, timeout=10,
+        )
+        return {
+            "head": head.stdout.strip(),
+            "status_short": status.stdout.strip(),
+            "is_clean": status.stdout.strip() == "",
+        }
+    except Exception:
+        return None
+
+
+def _git_reset_hard(repo_root: Path, head_sha: str) -> None:
+    """Reset target repo to a known clean state."""
+    try:
+        subprocess.run(["git", "reset", "--hard", head_sha],
+                        cwd=str(repo_root), capture_output=True, text=True, timeout=30)
+        subprocess.run(["git", "clean", "-fd"],
+                        cwd=str(repo_root), capture_output=True, text=True, timeout=30)
+    except Exception:
+        pass
 
 
 class FeaturePlanningService:
@@ -98,10 +143,15 @@ class FeaturePlanningService:
         feature = self.db.query(Feature).filter_by(id=feature_id).first()
         task_desc = (feature.description or feature.title or "") if feature else ""
 
-        try:
-            worktree_root = target_repo_root or _ctx_settings.target_repo_root or "."
-            root = Path(worktree_root)
+        # ── Mutation guard: pre-snapshot target repo ──
+        worktree_root = target_repo_root or _ctx_settings.target_repo_root or "."
+        root = Path(worktree_root)
+        pre_snapshot = _git_snapshot(root)
+        if pre_snapshot and not pre_snapshot["is_clean"]:
+            _log.warn("context_builder_pre_snapshot_dirty",
+                       feature_id=feature_id, status=pre_snapshot["status_short"][:200])
 
+        try:
             # Determine scope from feature spec_json
             spec = feature.spec_json or {} if feature else {}
             scope = spec.get("scope") if isinstance(spec, dict) else None
@@ -114,6 +164,7 @@ class FeaturePlanningService:
                 project_root=root,
                 model=ctx_model.get("model"),
                 cli=ctx_model.get("command", "opencode"),
+                executor_id=ctx_model.get("executor_id"),
                 stdout_log_path=stdout_path,
                 stderr_log_path=stderr_path,
             )
@@ -149,7 +200,61 @@ class FeaturePlanningService:
             }
             cb_run.status = "done"
             cb_run.model = ctx_model.get("model", "")
+
+            # ── Mutation guard: post-run check ──
+            post_snapshot = _git_snapshot(root)
+            if post_snapshot and pre_snapshot and pre_snapshot["is_clean"]:
+                if not post_snapshot["is_clean"]:
+                    diff_result = subprocess.run(
+                        ["git", "diff", "--exit-code"],
+                        cwd=str(root), capture_output=True, text=True, timeout=30,
+                    )
+                    status_result = subprocess.run(
+                        ["git", "status", "--short"],
+                        cwd=str(root), capture_output=True, text=True, timeout=10,
+                    )
+                    mutation_evidence = {
+                        "pre_head": pre_snapshot["head"],
+                        "post_head": post_snapshot["head"],
+                        "diff_exit_code": diff_result.returncode,
+                        "status_short": status_result.stdout.strip()[:2000],
+                        "diff_stdout": diff_result.stdout[:4000] if diff_result.stdout else "",
+                        "diff_stderr": diff_result.stderr[:1000] if diff_result.stderr else "",
+                    }
+                    # Save mutation evidence to planning log dir
+                    evidence_dir = Path(log_dir)
+                    evidence_dir.mkdir(parents=True, exist_ok=True)
+                    (evidence_dir / "context-builder-diff.txt").write_text(
+                        diff_result.stdout if diff_result.stdout else ""
+                    )
+                    (evidence_dir / "context-builder-status.txt").write_text(
+                        status_result.stdout
+                    )
+                    _log.error("CONTEXT_BUILDER_MUTATED_TARGET_REPO",
+                               feature_id=feature_id,
+                               mutation_evidence=mutation_evidence)
+                    # Reset target repo to clean state
+                    _git_reset_hard(root, pre_snapshot["head"])
+                    # Mark planning run failed and raise
+                    cb_run.status = "failed"
+                    cb_run.error = "CONTEXT_BUILDER_MUTATED_TARGET_REPO"
+                    raise CONTEXT_BUILDER_MUTATED_TARGET_REPO(
+                        f"context-builder mutated target repo at {root}. "
+                        f"Repo has been reset to pre-run state. "
+                        f"Evidence saved in {evidence_dir}"
+                    )
         except Exception as e:
+            if isinstance(e, CONTEXT_BUILDER_MUTATED_TARGET_REPO):
+                # Mutation guard: re-raise after cleanup is already done above
+                cb_run.finished_at = datetime.now(UTC)
+                cb_run.duration_ms = int((cb_run.finished_at - cb_run.started_at).total_seconds() * 1000)
+                cb_run.result_json = {"summary": str(e)[:200], "file_count": 0, "files": [], "error": "CONTEXT_BUILDER_MUTATED_TARGET_REPO"}
+                self._emit_event(feature_id, "context_builder_failed", {
+                    "run_id": run_id, "duration_ms": cb_run.duration_ms, "status": "failed",
+                    "reason": "CONTEXT_BUILDER_MUTATED_TARGET_REPO",
+                })
+                self.db.commit()
+                raise
             context = {
                 "summary": f"Fallback: {task_desc[:200]}",
                 "file_count": 0,
@@ -481,6 +586,11 @@ Respond ONLY with valid JSON (no markdown, no backticks):
                 enriched_spec.setdefault("verification", root_verification)
                 if root_constraints.get("frozen_scope"):
                     enriched_spec.setdefault("frozen_scope", root_constraints["frozen_scope"])
+                # Propagate target_repo_root from feature spec into each packet spec
+                # so that packet_executor can route to the correct repo worktree.
+                target_repo = spec.get("target_repo_root") if isinstance(spec, dict) else None
+                if target_repo:
+                    enriched_spec["target_repo_root"] = target_repo
                 packet = Packet(
                     id=pkt_id,
                     feature_id=feature_id,

@@ -66,10 +66,15 @@ class ContextCollector:
 
     def __init__(self, project_root: Path | None = None,
                  model: str | None = None, cli: str = "opencode",
+                 executor_id: str | None = None,
                  stdout_log_path: Path | str | None = None,
                  stderr_log_path: Path | str | None = None):
         self._root = project_root or Path.cwd()
         self._model = model or os.environ.get("GRACE_CONTEXT_MODEL", "deepseek/deepseek-v4-flash")
+        # executor_id takes priority over cli for profile lookup in run_llm.
+        # This ensures the read-only context-json-flash profile is used instead
+        # of the generic coder-like "opencode" profile.
+        self._executor_id = executor_id or cli
         self._cli = cli
         self._stdout_log_path = stdout_log_path
         self._stderr_log_path = stderr_log_path
@@ -177,7 +182,7 @@ Complexity: 0-50 (config), 51-150 (single module), 151-250 (multi-module), 251-3
 
     async def _run_llm(self, prompt: str) -> str:
         from grace_control.core.llm_runner import run_llm
-        return await run_llm(prompt, role="context_collector", model=self._model, cli=self._cli, cwd=self._root,
+        return await run_llm(prompt, role="context_collector", model=self._model, cli=self._executor_id, cwd=self._root,
                              stdout_log_path=self._stdout_log_path, stderr_log_path=self._stderr_log_path)
 
     def _fallback_analysis(self, task: str, files: list[FileContext], scope: list[str]) -> CodebaseContext:

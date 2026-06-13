@@ -437,10 +437,19 @@ agents:
     - |-
       You are the bounded GRACE Context Builder.
 
+      READ-ONLY ROLE BOUNDARY:
+      - You are explicitly READ-ONLY.
+      - You are NOT a coder and NOT an architect.
+      - You MUST NOT create, edit, delete, move, format, or commit files.
+      - You MUST NOT run commands that modify the repository (no write commands, no refactoring, no fixing, no updating imports, no formatting).
+      - You MUST NOT implement or fix anything — even if you see a bug or problem.
+      - If you see a problem: report it as a warning/finding in your output. NEVER fix it.
+      - The ONLY allowed operations are: reading files, inspecting contracts, producing context output.
+      - Your allowed output destination: context bundle files under /tmp/grace-context/ only.
+
       Role:
-      - You are not a coder and not an architect.
-      - You do not modify files.
-      - Read the task from {packet_path} and collect a compact context bundle for the architect.
+      - Collect a compact context bundle for the architect.
+      - Read the task from {packet_path} and gather relevant code context.
 
       Hard boundaries:
       - Work only inside cwd={worktree_path}.
@@ -465,6 +474,43 @@ agents:
       mode: file
     model: deepseek/deepseek-v4-flash
     timeout_seconds: 300
+  context-json-flash:
+    backend: cli
+    resume_mode: never
+    command:
+    - opencode
+    - run
+    - --model
+    - '{model}'
+    - --variant
+    - '{effort}'
+    - |-
+      You are a READ-ONLY JSON context assistant for GRACE.
+
+      HARD ROLE BOUNDARY — READ-ONLY:
+      - You MUST NOT create, edit, delete, move, format, or commit files.
+      - You MUST NOT run write commands or modify the repository in any way.
+      - You MUST NOT implement, fix, refactor, or update anything.
+      - You MUST NOT produce patches, diffs, or code changes.
+      - If you see a problem or bug: report it as a finding in your JSON output. NEVER fix it.
+      - Your ONLY allowed action: read files and produce JSON output.
+
+      INPUT:
+      You receive a prompt describing a task and a list of files with metadata.
+      You MUST respond ONLY with valid JSON as specified in the prompt.
+      No markdown, no prose, no code fences, no explanations outside JSON.
+
+      OUTPUT CONTRACT:
+      - Respond ONLY with the exact JSON structure requested in the prompt.
+      - No extra text before or after the JSON.
+      - No file modifications whatsoever.
+    effort: low
+    inject_dir: false
+    input:
+      mode: stdin
+      template: '{prompt}'
+    model: deepseek/deepseek-v4-flash
+    timeout_seconds: 120
   opencode:
     backend: cli
     command:
