@@ -226,16 +226,11 @@ class CommandRunner:
         # Replace 'source' with '.' for dash/sh compatibility (source is bash-only)
         if cmd_str.startswith('source ') or ' && source ' in cmd_str or '; source ' in cmd_str:
             cmd_str = cmd_str.replace('source ', '. ')
-        # Strip .venv activation — worktree has no venv, system python3 has all deps
-        # cd apps/api && . .venv/bin/activate && python3 ... → cd apps/api && python3 ...
-        # cd apps/api && source .venv/bin/activate && python3 ... → cd apps/api && python3 ...
+        # Strip .venv activation — worktree has no venv, system python3 has pytest
         cmd_str = cmd_str.replace('&& . .venv/bin/activate &&', '&&')
         cmd_str = cmd_str.replace('&& source .venv/bin/activate &&', '&&')
-        # If activate is at the start: . .venv/bin/activate && python3 ... → python3 ...
         if cmd_str.startswith('. .venv/bin/activate && '):
             cmd_str = cmd_str[len('. .venv/bin/activate && '):]
-        if cmd_str.startswith('source .venv/bin/activate && '):
-            cmd_str = cmd_str[len('source .venv/bin/activate && '):]
         timeout = timeout_s or self._default_timeout
         started = time.time()
 

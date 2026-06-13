@@ -541,11 +541,15 @@ Rules:
      project root). Absolute paths (starting with /) are rejected by
      contract validation and will cause the packet to fail immediately.
 
-   CRITICAL — runtime environment rules (all commands run via /bin/sh, NOT bash):
+    CRITICAL — runtime environment rules (all commands run via /bin/sh, NOT bash):
    - NEVER use `source` — use `.` (dot) for venv activation:
-     `. .venv/bin/activate` not `source .venv/bin/activate`.
+     Do NOT use `. .venv/bin/activate` at all — worktree has no venv.
+     Run python3/pytest directly: system python3 has all needed modules.
    - `/bin/sh` is dash, not bash. Bash-only features (source, arrays,
      [[ ]], ${{VAR//x/y}}) will fail. Use POSIX-compatible syntax only.
+   - In grep/find/egrep commands: QUOTE patterns containing spaces or
+     special characters with single quotes.
+     Example: `grep -c 'class LLMService' file.py` NOT `grep -c class LLMService file.py`
 
    CRITICAL — expected_evidence rules:
    - NEVER use `kind=diff` with pattern=`agent.patch`.
