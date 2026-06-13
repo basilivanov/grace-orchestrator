@@ -646,6 +646,46 @@ Respond ONLY with valid JSON (no markdown, no backticks):
         plan = spec.get("plan_json", {}) if isinstance(spec, dict) else {}
         waves = plan.get("waves", []) if isinstance(plan, dict) else []
 
+        # ── Plan Compiler / Preflight Validator ───────────────────────
+        # Validate the architect's plan before materializing packets.
+        # Catches invalid shell commands, scope/acceptance contradictions,
+        # evidence mismatches, and role inconsistencies.
+        if isinstance(plan, dict) and plan.get("waves"):
+            from grace_control.core.plan_compiler import PlanCompiler
+            from grace_control.core.execution_environment import probe_execution_environment
+            target_root = Path(spec.get("target_repo_root", ".")) if isinstance(spec, dict) else Path(".")
+            env = probe_execution_environment(target_repo_root=target_root)
+            compiled = PlanCompiler().compile_plan(plan, env)
+            spec["_plan_compiler"] = {
+                "ok": compiled.ok,
+                "errors": [e.model_dump() for e in compiled.errors],
+                "warnings": [w.model_dump() for w in compiled.warnings],
+            }
+            feature.spec_json = spec
+            if not compiled.ok:
+                _log.warn("plan_compiler_rejected", feature_id=feature_id,
+                          errors=len(compiled.errors), warnings=len(compiled.warnings))
+                for e in compiled.errors:
+                    _log.warn("plan_compiler_error", feature_id=feature_id,
+                              code=e.code, packet=e.packet_title or "",
+                              message=e.message)
+                materialize_run = FeaturePlanningRun(
+                    id=generate_unique_id(self.db, FeaturePlanningRun, new_run_uid),
+                    feature_id=feature_id,
+                    stage="materialize",
+                    status="failed",
+                    started_at=datetime.now(UTC),
+                    executor_id="plan_materializer",
+                )
+                materialize_run.error = f"plan compiler rejected: {len(compiled.errors)} errors"
+                self.db.add(materialize_run)
+                feature.status = "PLAN_FAILED"
+                self.db.commit()
+                raise ValueError(
+                    f"Plan compiler found {len(compiled.errors)} errors: "
+                    + "; ".join(f"{e.code}: {e.message[:80]}" for e in compiled.errors[:3])
+                )
+
         from grace_control.core.gate_resolver import enrich_packet
 
         now = datetime.now(UTC)
