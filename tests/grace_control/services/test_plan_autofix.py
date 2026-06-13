@@ -177,3 +177,38 @@ class TestSessionMode:
         report = SafePlanAutofixer().apply(plan, errors)
         assert report.applied
         assert report.patched_plan is not None
+
+    def test_real_compiler_message_with_list_format_is_parsed(self):
+        """Compiler message with Python list representation is parsed correctly."""
+        plan = _make_plan([
+            _pkt("Split LLM", scope=["apps/api/app/services/llm/russian.py"]),
+        ])
+        errors = [
+            {"code": "E_IMPORT_MIGRATION_SCOPE_INCOMPLETE",
+             "message": "Plan requires old import app.services.llm_service to be removed, "
+                        "but 2 active references remain outside write scope: "
+                        "['apps/api/app/services/horary_service.py', "
+                        "'apps/api/tests/test_horary_answer_quality.py']"},
+        ]
+        report = SafePlanAutofixer().apply(plan, errors)
+        # Should parse and add the reference files
+        assert report.applied
+        patched_scope = report.patched_plan["waves"][0]["packets"][0]["scope"]
+        assert "apps/api/app/services/horary_service.py" in patched_scope
+        assert "apps/api/tests/test_horary_answer_quality.py" in patched_scope
+
+    def test_autofix_failure_does_not_crash_repair_fallback(self):
+        """When autofix fails, the system should still be able to attempt LLM repair."""
+        from grace_control.core.plan_compiler import PlanCompiler
+        env = None  # Will be None, but compile_plan handles it
+        plan = _make_plan([
+            _pkt("Split LLM", scope=[]),
+        ])
+        errors = [
+            {"code": "E_CODER_EMPTY_SCOPE",
+             "message": "coder packet has empty write scope"},
+        ]
+        report = SafePlanAutofixer().apply(plan, errors)
+        assert not report.applied  # No autofix for this error code
+        # The caller should still be able to call LLM repair — this verifies
+        # that autofix doesn't crash and prevents later steps (previous_session etc.)

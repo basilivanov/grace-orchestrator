@@ -900,6 +900,28 @@ Respond ONLY with valid JSON (no markdown, no backticks):
             return {"status": "PLAN_FAILED", "compiler_errors": compiler_errors}
 
         # ── 2. LLM Repair loop ──────────────────────────────────────
+        previous_session = None
+        arch_runs = (
+            self.db.query(FeaturePlanningRun)
+            .filter(
+                FeaturePlanningRun.feature_id == feature_id,
+                FeaturePlanningRun.stage == "architect",
+                FeaturePlanningRun.status == "done",
+            )
+            .order_by(FeaturePlanningRun.created_at.desc())
+            .limit(1)
+            .all()
+        )
+        if arch_runs:
+            rj = arch_runs[0].result_json or {}
+            sess = rj.get("session_handle")
+            if sess:
+                try:
+                    import json as _json
+                    previous_session = _json.loads(sess) if isinstance(sess, str) else sess
+                except Exception:
+                    pass
+
         attempt = 1
         while attempt <= max_repair_attempts:
             _log.info("repair_attempt", feature_id=feature_id, attempt=attempt)

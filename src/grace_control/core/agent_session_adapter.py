@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from grace_control.core.structured_logger import GraceLogger
 
@@ -24,7 +24,7 @@ class AgentSessionHandle(BaseModel):
     cwd: str | None = None
     stdout_path: str | None = None
     stderr_path: str | None = None
-    metadata: dict = {}
+    metadata: dict = Field(default_factory=dict)
 
 
 class AgentRunResult(BaseModel):

@@ -12,8 +12,6 @@ from pathlib import Path
 
 from grace_control.core.structured_logger import GraceLogger
 
-from grace_control.core.structured_logger import GraceLogger
-
 _log = GraceLogger("plan_autofixer")
 
 MAX_AUTO_SCOPE_FILES = 30
@@ -21,6 +19,15 @@ MAX_AUTO_SCOPE_FILES = 30
 ALLOWED_DIRS = ("apps/", "src/", "packages/", "tests/", "scripts/")
 
 _ERROR_PATH_PATTERN = re.compile(r"(\S+\.py)")
+
+
+def _clean_path(p: str) -> str:
+    """Strip quotes, brackets, and leading artifacts from an extracted path."""
+    p = p.strip()
+    # Remove common compiler message artifacts: ['  ",  '  preceding the path
+    for ch in ("['", '["', "['\\", '["\\', "', '", "\", '", "']", '"]', "'", '"', "[", "]", "\\"):
+        p = p.replace(ch, "")
+    return p.strip()
 
 
 @dataclass
@@ -76,7 +83,8 @@ class SafePlanAutofixer:
     ) -> None:
         """Add missing source file to the nearest coder packet's scope."""
         msg = err.get("message", "")
-        paths = _ERROR_PATH_PATTERN.findall(msg)
+        paths = [_clean_path(p) for p in _ERROR_PATH_PATTERN.findall(msg)]
+        paths = [p for p in paths if self._is_allowed_path(p)]
         if not paths:
             report.skipped.append({
                 "code": "SKIPPED_NO_PATH",
@@ -166,7 +174,9 @@ class SafePlanAutofixer:
     ) -> None:
         """Add active reference files outside scope to nearest packet."""
         msg = err.get("message", "")
-        refs = _ERROR_PATH_PATTERN.findall(msg)
+        refs = [_clean_path(p) for p in _ERROR_PATH_PATTERN.findall(msg)]
+        # Reject paths that aren't under allowed dirs
+        allowed = [r for r in refs if self._is_allowed_path(r)]
         if not refs:
             report.skipped.append({
                 "code": "SKIPPED_NO_REFS",
