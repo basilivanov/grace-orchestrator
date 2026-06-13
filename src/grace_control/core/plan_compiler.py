@@ -133,6 +133,10 @@ def _add_warning(
 _SOURCE_SPLIT_KEYWORDS = [
     "split", "break up", "extract", "move", "refactor",
     "decompose", "modularize", "shim", "legacy module", "old import",
+    # Russian
+    "разбить", "разделить", "вынести", "распилить",
+    "декомпозировать", "разнести", "рефактор", "перенести",
+    "разбиение", "разделение",
 ]
 
 _SOURCE_SPLIT_PATH_PATTERN = re.compile(
@@ -624,5 +628,15 @@ class PlanCompiler:
 
 # ── Public convenience function ────────────────────────────────────────
 
-def compile_plan(plan: dict, env: ExecutionEnvironment | None = None) -> CompileResult:
-    return PlanCompiler().compile_plan(plan, env)
+def compile_plan(
+    plan: dict,
+    env: ExecutionEnvironment | None = None,
+    *,
+    feature_description: str = "",
+    target_repo_root: Path | None = None,
+) -> CompileResult:
+    return PlanCompiler().compile_plan(
+        plan, env,
+        feature_description=feature_description,
+        target_repo_root=target_repo_root,
+    )

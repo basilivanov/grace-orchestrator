@@ -674,7 +674,12 @@ Respond ONLY with valid JSON (no markdown, no backticks):
             )
             target_root = Path(target_root_str) if isinstance(target_root_str, str) else Path(".")
             env = probe_execution_environment(target_repo_root=target_root)
-            feature_desc = spec.get("description", "") or spec.get("title", "")
+            feature_desc = (
+                (getattr(feature, "description", None) or "")
+                + "\n" + (getattr(feature, "title", None) or "")
+                + "\n" + str(spec.get("description", ""))
+                + "\n" + str(spec.get("title", ""))
+            )
             compiled = PlanCompiler().compile_plan(
                 plan, env,
                 feature_description=feature_desc,

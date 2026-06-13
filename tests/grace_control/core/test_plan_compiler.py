@@ -565,3 +565,43 @@ class TestSourceSplitDetection:
         )
         assert not result.ok
         assert any(e.code == "E_SOURCE_SPLIT_ORIGIN_MISSING" for e in result.errors)
+
+    def test_detects_russian_split_intent_from_description(self):
+        """Russian 'разбить' should trigger source-split detection."""
+        env = _env()
+        plan = _split_plan(["apps/api/app/services/llm/russian.py"])
+        intents = detect_source_split_intents(
+            "разбить apps/api/app/services/llm_service.py на мелкие файлы",
+            plan, env,
+        )
+        assert len(intents) >= 1
+        assert any("llm_service.py" in i.source_path for i in intents)
+
+    def test_compile_plan_wrapper_supports_kwargs(self):
+        """Module-level compile_plan wrapper must accept feature_description/target_repo_root."""
+        env = _env()
+        plan = _split_plan([
+            "apps/api/app/services/llm/russian.py",
+            "apps/api/app/services/llm_service.py",
+        ])
+        from pathlib import Path
+        result = compile_plan(
+            plan, env,
+            feature_description="Split llm_service.py",
+            target_repo_root=Path("/tmp"),
+        )
+        assert isinstance(result.ok, bool)
+
+    def test_russian_split_rejected_when_origin_missing(self):
+        """Russian feature description + missing source file → E_SOURCE_SPLIT_ORIGIN_MISSING."""
+        compiler = PlanCompiler()
+        env = _env()
+        plan = _split_plan([
+            "apps/api/app/services/llm/russian.py",
+        ])
+        result = compiler.compile_plan(
+            plan, env,
+            feature_description="разбить apps/api/app/services/llm_service.py на модули",
+        )
+        assert not result.ok
+        assert any(e.code == "E_SOURCE_SPLIT_ORIGIN_MISSING" for e in result.errors)
