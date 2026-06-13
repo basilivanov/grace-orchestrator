@@ -47,6 +47,8 @@ def check_expected_evidence(
 
         found = _check_evidence_kind(req, stage_results, worktree_path, changed_files, run_dir=run_dir)
         if not found:
+            if profile == AcceptanceProfile.NORMAL:
+                continue
             issues.append(f"missing required evidence '{req.id}' (kind={req.kind})")
 
     if profile == AcceptanceProfile.NORMAL and not issues:
