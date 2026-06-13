@@ -217,10 +217,19 @@ class CommandRunner:
 
         try:
             with open(stdout_path, "w") as out_f, open(stderr_path, "w") as err_f:
-                proc = subprocess.run(
-                    cmd_str, cwd=str(resolved_cwd), timeout=timeout, shell=True,
-                    stdout=out_f, stderr=err_f,
-                )
+                # Run with shell when command contains shell operators (||, &&, |, etc),
+                # otherwise run directly to avoid shell metacharacter issues in inline Python.
+                has_ops = bool(re.search(r'(&&|\|\||[|<>;])', cmd_str))
+                if has_ops:
+                    proc = subprocess.run(
+                        cmd_str, cwd=str(resolved_cwd), timeout=timeout, shell=True,
+                        stdout=out_f, stderr=err_f,
+                    )
+                else:
+                    proc = subprocess.run(
+                        cmd_list, cwd=str(resolved_cwd), timeout=timeout,
+                        stdout=out_f, stderr=err_f,
+                    )
             stdout_text = open(stdout_path).read()
             stderr_text = open(stderr_path).read()
             duration = int((time.time() - started) * 1000)
