@@ -98,6 +98,149 @@ def parse_reviewer_json(raw: str) -> ReviewerReport:
         )
 
 
+# ── Reviewer evidence bundle constants ──────────────────────────────────
+MAX_REVIEWER_PATCH_CHARS = 6000
+MAX_ACCEPTANCE_STAGE_SUMMARY_CHARS = 500
+MAX_ACCEPTANCE_STAGES = 20
+MAX_SCOPE_VIOLATIONS = 10
+MAX_EVIDENCE_PATHS = 20
+
+_SECRET_PATTERNS = [
+    re.compile(r'\b(?:API_KEY|TOKEN|SECRET|PASSWORD|JWT_SECRET|SESSION_SECRET)\s*=\s*[^\s"\']+', re.IGNORECASE),
+    re.compile(r'Authorization:\s*Bearer\s+\S+', re.IGNORECASE),
+    re.compile(r'DATABASE_URL\s*=\s*\S+', re.IGNORECASE),
+    re.compile(r'(?:sk|ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{20,}', re.IGNORECASE),
+]
+
+
+def _redact_secrets(text: str) -> str:
+    for pat in _SECRET_PATTERNS:
+        text = pat.sub("***REDACTED***", text)
+    return text
+
+
+def _serialize_acceptance_report(report) -> dict | None:
+    if report is None:
+        return None
+    try:
+        stages = []
+        for s in getattr(report, "stages", []) or []:
+            try:
+                name = s.name.value if hasattr(s.name, "value") else str(s.name)
+            except Exception:
+                name = str(getattr(s, "name", "?"))
+            try:
+                status = s.status.value if hasattr(s.status, "value") else str(s.status)
+            except Exception:
+                status = str(getattr(s, "status", "?"))
+            summary = str(getattr(s, "summary", "") or "")[:MAX_ACCEPTANCE_STAGE_SUMMARY_CHARS]
+            stages.append({"name": name, "status": status, "summary": summary})
+            if len(stages) >= MAX_ACCEPTANCE_STAGES:
+                break
+        violations = []
+        for v in getattr(report, "scope_violations", []) or []:
+            violations.append(str(v)[:200])
+            if len(violations) >= MAX_SCOPE_VIOLATIONS:
+                break
+        return {
+            "final_verdict": report.final_verdict.value if hasattr(report.final_verdict, "value") else str(report.final_verdict),
+            "stages": stages,
+            "scope_violations": violations,
+        }
+    except Exception:
+        return None
+
+
+def _load_patch_preview(worktree_path: Path | None, run_dir: Path | None) -> tuple[str | None, bool]:
+    if worktree_path and isinstance(worktree_path, Path):
+        patch_path = worktree_path / "agent.patch"
+        if patch_path.exists():
+            try:
+                raw = patch_path.read_text()
+                raw = _redact_secrets(raw)
+                truncated = len(raw) > MAX_REVIEWER_PATCH_CHARS
+                return raw[:MAX_REVIEWER_PATCH_CHARS], truncated
+            except Exception:
+                pass
+    if run_dir and isinstance(run_dir, Path):
+        patch_path = run_dir / "agent.patch"
+        if patch_path.exists():
+            try:
+                raw = patch_path.read_text()
+                raw = _redact_secrets(raw)
+                truncated = len(raw) > MAX_REVIEWER_PATCH_CHARS
+                return raw[:MAX_REVIEWER_PATCH_CHARS], truncated
+            except Exception:
+                pass
+    return None, False
+
+
+def _build_reviewer_evidence_bundle(
+    *,
+    worktree_path: Path | None = None,
+    run_dir: Path | None = None,
+    changed_files: list[str] | None = None,
+    acceptance_report=None,
+    artifacts: list[str] | None = None,
+) -> dict:
+    bundle: dict = {}
+
+    if worktree_path:
+        bundle["worktree_path"] = str(worktree_path)
+    if run_dir:
+        bundle["run_dir"] = str(run_dir)
+
+    ar = _serialize_acceptance_report(acceptance_report)
+    if ar:
+        bundle["acceptance_report"] = ar
+
+    if changed_files:
+        bundle["changed_files"] = changed_files[:50]
+
+    patch_text, patch_truncated = _load_patch_preview(worktree_path, run_dir)
+    if patch_text is not None:
+        bundle["patch_preview"] = patch_text
+        bundle["patch_truncated"] = patch_truncated
+
+    if artifacts:
+        bundle["evidence_paths"] = artifacts[:MAX_EVIDENCE_PATHS]
+
+    return bundle
+
+
+def _render_reviewer_evidence_bundle(bundle: dict) -> str:
+    parts: list[str] = []
+
+    if bundle.get("worktree_path"):
+        parts.append(f"Worktree path: {bundle['worktree_path']}")
+    if bundle.get("run_dir"):
+        parts.append(f"Run directory: {bundle['run_dir']}")
+
+    ar = bundle.get("acceptance_report")
+    if ar:
+        parts.append(f"Acceptance report: {json.dumps(ar, ensure_ascii=False)}")
+
+    cf = bundle.get("changed_files")
+    if cf:
+        parts.append(f"Changed files ({len(cf)}): {cf}")
+
+    ep = bundle.get("evidence_paths")
+    if ep:
+        parts.append("Evidence artifacts:")
+        for p in ep:
+            parts.append(f"  - {p}")
+
+    pp = bundle.get("patch_preview")
+    if pp:
+        truncated = "true" if bundle.get("patch_truncated") else "false"
+        parts.append(f"\nAgent diff preview (first {len(pp)} chars, truncated={truncated}):")
+        parts.append(pp)
+    elif not cf:
+        parts.append("Agent diff preview: unavailable")
+
+    return "\n".join(parts)
+
+
 async def run_reviewer_gate(
     *,
     packet,
@@ -110,18 +253,21 @@ async def run_reviewer_gate(
 ) -> ReviewerReport:
     from grace_control.core.llm_runner import run_llm
 
+    # ── Build evidence bundle ───────────────────────────────────────
+    bundle = _build_reviewer_evidence_bundle(
+        worktree_path=worktree_path,
+        run_dir=run_dir,
+        changed_files=changed_files,
+        acceptance_report=acceptance_report,
+        artifacts=artifacts,
+    )
+    evidence_block = _render_reviewer_evidence_bundle(bundle)
+
     prompt_parts: list[str] = []
     prompt_parts.append(f"Packet: {packet.packet_id} — {getattr(packet, 'title', '')}")
-    prompt_parts.append(f"Acceptance verdict: {acceptance_report.final_verdict.value}")
-    prompt_parts.append(f"Acceptance summary: {acceptance_report.summary}")
     prompt_parts.append(f"Evidence verifier verdict: {evidence_verifier_report.verdict.value}")
     prompt_parts.append(f"Evidence verifier summary: {evidence_verifier_report.summary}")
-    prompt_parts.append(f"Evidence verifier failed checks: {evidence_verifier_report.failed_checks}")
-    prompt_parts.append(f"Evidence verifier spec conflicts: {evidence_verifier_report.spec_conflicts}")
-    if changed_files:
-        prompt_parts.append(f"Changed files ({len(changed_files)}): {changed_files[:20]}")
-    if artifacts:
-        prompt_parts.append(f"Artifacts: {artifacts[:20]}")
+    prompt_parts.append(evidence_block)
 
     prompt_path = Path(__file__).resolve().parent / "prompts" / "reviewer_prompt.md"
     try:
@@ -129,7 +275,7 @@ async def run_reviewer_gate(
     except Exception:
         prompt_template = "You are final Reviewer. Return JSON verdict."
 
-    full_prompt = f"{prompt_template}\n\n## Context\n\n" + "\n".join(prompt_parts)
+    full_prompt = f"{prompt_template}\n\n## Evidence\n\n{evidence_block}"
 
     try:
         from grace_control.core.executor_selector import resolve_model
