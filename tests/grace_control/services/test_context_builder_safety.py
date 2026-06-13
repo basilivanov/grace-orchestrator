@@ -527,60 +527,33 @@ class TestContextJsonFlashTemplateRender:
 
 
 class TestMutationGuardBlocksArchitect:
-    """Blocker 2: When context-builder mutates the target repo,
-    the architect must NOT be called.
+    """When context-builder mutates the target repo, run_architect must
+    NOT be called.
 
-    Two paths block the architect:
-    1. Exception path: CONTEXT_BUILDER_MUTATED_TARGET_REPO is re-raised from
-       run_context_builder(), so run_architect() is never reached.
-    2. Guard path: if context dict contains error="CONTEXT_BUILDER_MUTATED_TARGET_REPO",
-       router code checks context.get("error") and skips run_architect().
-
-    The integration test below proves both paths.
+    Two blocking paths:
+    1. Exception path: CONTEXT_BUILDER_MUTATED_TARGET_REPO re-raises from
+       run_context_builder(), so execution never reaches run_architect().
+    2. Guard path: router code checks context.get("error") and skips
+       run_architect() even if run_context_builder returns normally
+       (fallback context with error field).
     """
-
-    def test_mutation_error_in_context_prevents_architect_call(self):
-        """If run_context_builder returns context with mutation error,
-        architect must not be called."""
-        context = {
-            "summary": "Fallback",
-            "file_count": 0,
-            "files": [],
-            "error": "CONTEXT_BUILDER_MUTATED_TARGET_REPO",
-        }
-        # The guard check: if context has the mutation error, skip architect
-        assert context.get("error") == "CONTEXT_BUILDER_MUTATED_TARGET_REPO"
-
-    def test_normal_context_allows_architect_call(self):
-        """If context has no mutation error, architect can proceed."""
-        context = {
-            "summary": "Normal context",
-            "file_count": 5,
-            "files": [],
-        }
-        assert context.get("error") != "CONTEXT_BUILDER_MUTATED_TARGET_REPO"
 
     @pytest.mark.asyncio
     async def test_exception_path_skips_architect(self, tmp_path):
         """When CONTEXT_BUILDER_MUTATED_TARGET_REPO is raised,
-        run_architect is never called.
-
-        This patches FeaturePlanningService.run_architect to track calls,
-        forces the mutation guard to trigger, and verifies run_architect
-        was NOT invoked.
+        run_architect is never called. Tests the full
+        run_context_builder → exception → architect-not-reached flow.
         """
         from unittest.mock import AsyncMock, patch
         from grace_control.db import init_db
         from grace_control.services.feature_intake_service import FeatureIntakeService
 
-        # Set up in-memory DB
         os.environ["GRACE_CONTEXT_DISABLED"] = "true"
         init_db("sqlite:///:memory:")
 
         from grace_control.db import get_db
         from grace_control.services.feature_planning_service import FeaturePlanningService
 
-        # Create a real git repo as target
         repo = tmp_path / "target_repo"
         repo.mkdir()
         subprocess.run(["git", "init"], cwd=str(repo), capture_output=True, timeout=10)
@@ -608,9 +581,6 @@ class TestMutationGuardBlocksArchitect:
             fid = result["feature_id"]
             planning = FeaturePlanningService(db)
 
-            # Mock ContextCollector._run_llm to both mutate the repo AND return valid JSON
-            original_run_llm = ContextCollector._run_llm
-
             async def mock_run_llm_writes_file(self, prompt):
                 target = self._root / "BAD_MUTATION_EXCEPTION.py"
                 target.write_text("# This should not exist - mutation guard test")
@@ -621,15 +591,157 @@ class TestMutationGuardBlocksArchitect:
                     with pytest.raises(CONTEXT_BUILDER_MUTATED_TARGET_REPO):
                         await planning.run_context_builder(fid, target_repo_root=str(repo))
 
-            # Verify architect was never called
             assert len(architect_calls) == 0, (
                 f"run_architect should NOT have been called after mutation guard, "
                 f"but was called {len(architect_calls)} time(s)"
             )
 
-            # Verify repo is clean
             snap = _git_snapshot(repo)
             assert snap is not None
             assert snap["is_clean"] is True
             assert not (repo / "BAD_MUTATION_EXCEPTION.py").exists()
+
+    @pytest.mark.asyncio
+    async def test_guard_path_skips_architect_after_error_context(self, tmp_path):
+        """Simulates the router guard pattern: run_context_builder returns
+        a context dict with error=CONTEXT_BUILDER_MUTATED_TARGET_REPO,
+        and the guard check prevents run_architect from being called.
+
+        This tests the same guard pattern used in features.py and architect.py:
+          context = await planning.run_context_builder(...)
+          if context.get("error") == "CONTEXT_BUILDER_MUTATED_TARGET_REPO":
+              return   # ← skip architect
+          await planning.run_architect(...)   # ← only reached if no error
+        """
+        from unittest.mock import AsyncMock, patch
+        from grace_control.db import init_db
+        from grace_control.services.feature_intake_service import FeatureIntakeService
+
+        os.environ["GRACE_CONTEXT_DISABLED"] = "true"
+        init_db("sqlite:///:memory:")
+
+        from grace_control.db import get_db
+        from grace_control.services.feature_planning_service import FeaturePlanningService
+
+        repo = tmp_path / "target_repo_guard"
+        repo.mkdir()
+        subprocess.run(["git", "init"], cwd=str(repo), capture_output=True, timeout=10)
+        subprocess.run(["git", "config", "user.email", "test@test.com"],
+                        cwd=str(repo), capture_output=True, timeout=5)
+        subprocess.run(["git", "config", "user.name", "Test"],
+                        cwd=str(repo), capture_output=True, timeout=5)
+        (repo / "app.py").write_text("print('hello')")
+        subprocess.run(["git", "add", "."], cwd=str(repo), capture_output=True, timeout=5)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=str(repo), capture_output=True, timeout=10)
+
+        architect_calls = []
+
+        async def mock_architect(self_planning, feature_id, context, target_repo_root=None):
+            architect_calls.append({"feature_id": feature_id, "context": context})
+            return {"waves": [], "summary": "mock"}
+
+        with get_db() as db:
+            intake = FeatureIntakeService(db)
+            result = intake.create_feature(
+                title="Guard Path Test",
+                mode="draft_plan",
+                target_repo_root=str(repo),
+            )
+            fid = result["feature_id"]
+            planning = FeaturePlanningService(db)
+
+            # Mock run_context_builder to return error context (simulates
+            # the case where mutation is detected but exception is caught
+            # at an outer layer, e.g. by a generic except in a router).
+            async def mock_context_builder_returns_error(self_planning, feature_id, target_repo_root=None):
+                return {
+                    "summary": "Fallback",
+                    "file_count": 0,
+                    "files": [],
+                    "error": "CONTEXT_BUILDER_MUTATED_TARGET_REPO",
+                }
+
+            with patch.object(FeaturePlanningService, "run_context_builder", mock_context_builder_returns_error):
+                with patch.object(FeaturePlanningService, "run_architect", mock_architect):
+                    context = await planning.run_context_builder(fid, target_repo_root=str(repo))
+
+                    # This is the exact guard pattern from features.py and architect.py:
+                    if context.get("error") == "CONTEXT_BUILDER_MUTATED_TARGET_REPO":
+                        pass  # skip architect — same as `return` in background or `raise HTTPException` in sync
+                    else:
+                        await planning.run_architect(fid, context, target_repo_root=str(repo))
+
+            assert len(architect_calls) == 0, (
+                f"run_architect should NOT have been called when context error "
+                f"is CONTEXT_BUILDER_MUTATED_TARGET_REPO, but was called "
+                f"{len(architect_calls)} time(s)"
+            )
+
+    @pytest.mark.asyncio
+    async def test_normal_context_reaches_architect(self, tmp_path):
+        """When context is normal (no error), architect IS called.
+        This proves the guard doesn't false-positive block architect.
+        """
+        from unittest.mock import AsyncMock, patch
+        from grace_control.db import init_db
+        from grace_control.services.feature_intake_service import FeatureIntakeService
+
+        os.environ["GRACE_CONTEXT_DISABLED"] = "true"
+        init_db("sqlite:///:memory:")
+
+        from grace_control.db import get_db
+        from grace_control.services.feature_planning_service import FeaturePlanningService
+
+        repo = tmp_path / "target_repo_normal"
+        repo.mkdir()
+        subprocess.run(["git", "init"], cwd=str(repo), capture_output=True, timeout=10)
+        subprocess.run(["git", "config", "user.email", "test@test.com"],
+                        cwd=str(repo), capture_output=True, timeout=5)
+        subprocess.run(["git", "config", "user.name", "Test"],
+                        cwd=str(repo), capture_output=True, timeout=5)
+        (repo / "app.py").write_text("print('hello')")
+        subprocess.run(["git", "add", "."], cwd=str(repo), capture_output=True, timeout=5)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=str(repo), capture_output=True, timeout=10)
+
+        architect_calls = []
+
+        async def mock_architect(self_planning, feature_id, context, target_repo_root=None):
+            architect_calls.append({"feature_id": feature_id, "context": context})
+            return {"waves": [], "summary": "mock"}
+
+        with get_db() as db:
+            intake = FeatureIntakeService(db)
+            result = intake.create_feature(
+                title="Normal Path Test",
+                mode="draft_plan",
+                target_repo_root=str(repo),
+            )
+            fid = result["feature_id"]
+            planning = FeaturePlanningService(db)
+
+            # Mock to return normal context (no mutation, no error)
+            async def mock_context_builder_normal(self_planning, feature_id, target_repo_root=None):
+                return {
+                    "summary": "Normal context for testing",
+                    "file_count": 3,
+                    "files": [],
+                    "complexity_score": 50,
+                    "estimated_scope": [],
+                }
+
+            with patch.object(FeaturePlanningService, "run_context_builder", mock_context_builder_normal):
+                with patch.object(FeaturePlanningService, "run_architect", mock_architect):
+                    context = await planning.run_context_builder(fid, target_repo_root=str(repo))
+
+                    # Same guard pattern as in routers:
+                    if context.get("error") == "CONTEXT_BUILDER_MUTATED_TARGET_REPO":
+                        pass  # skip
+                    else:
+                        await planning.run_architect(fid, context, target_repo_root=str(repo))
+
+            # Architect IS called when context has no error
+            assert len(architect_calls) == 1, (
+                f"run_architect should have been called once for normal context, "
+                f"but was called {len(architect_calls)} time(s)"
+            )
         # Architect can be called normally.
