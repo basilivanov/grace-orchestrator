@@ -889,6 +889,8 @@ Respond ONLY with valid JSON (no markdown, no backticks):
             self.db.flush()
             if compiled.ok:
                 _log.info("autofix_success", feature_id=feature_id)
+                feature.status = "PLAN_READY"
+                self.db.flush()
                 return self.approve_plan(feature_id)
             compiler_errors = [e.model_dump() for e in compiled.errors]
             error_class = classify_compiler_result(compiler_errors)
@@ -969,7 +971,9 @@ Respond ONLY with valid JSON (no markdown, no backticks):
             if compiled.ok:
                 _log.info("repair_success", feature_id=feature_id,
                           attempt=attempt)
-                # Plan is now valid — re-run approve_plan
+                # Reset status to PLAN_READY so approve_plan accepts it
+                feature.status = "PLAN_READY"
+                self.db.flush()
                 return self.approve_plan(feature_id)
 
             # Check if errors are still repairable or same
