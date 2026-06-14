@@ -7,8 +7,22 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
 from grace_control.api.main import app
+from grace_control.config.settings import settings
 from grace_control.db import get_db, init_db
 from grace_control.db.schema import Feature, Lease, Packet, PacketRun, PacketState, Wave, Worker
+
+
+@pytest.fixture(autouse=True)
+def grace_settings_isolation():
+    """Snapshot and restore global settings after every test.
+
+    Prevents test-to-test leakage from direct mutations like
+    ``settings.agent_runtime_fail_on_bad_git_root = True``.
+    """
+    snapshot = settings.model_dump()
+    yield
+    for k, v in snapshot.items():
+        setattr(settings, k, v)
 
 
 @pytest.fixture
