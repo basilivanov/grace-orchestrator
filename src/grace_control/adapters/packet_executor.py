@@ -40,6 +40,9 @@ from grace_control.runtime.opencode_runtime_adapter import (
     OpenCodeExecutionBackend,
     OpenCodeRuntimeAdapter,
 )
+from grace_control.runtime.runtime_diagnostics import RuntimeDiagnosticsBuilder
+from grace_control.runtime.runtime_diff_inspector import RuntimeDiffInspector, RuntimeDiffInspectionRequest
+from grace_control.runtime.runtime_scope_enforcer import RuntimeScopeEnforcer
 from grace_control.core.structured_logger import GraceLogger
 from grace_control.db import get_db
 from grace_control.db.schema import Packet, PacketRun
@@ -450,6 +453,15 @@ class PacketExecutionAdapter:
             if agent_commit_sha:
                 self._obs_event("packet.diff_captured", status="completed")
 
+            # ── W6: Post-run Scope Enforcement + Diagnostics ──────────────
+            w6_reject = await self._run_scope_enforcement(
+                result=result, pkt_contract=pkt_contract, run_id=run_id, run_number=run_number,
+                packet_id=packet_id, base_ref=base_ref, base_sha=base_sha,
+                executor=executor, start=start,
+            )
+            if w6_reject is not None:
+                return w6_reject
+
             self._obs_event("packet.tests_started", status="started")
             accept_report, ar_path, safe_data, changed_files, wt_path, run_dir = await self._run_acceptance(
                 pkt_contract, result, packet_id, run_number, base_ref, base_sha, start)
@@ -765,6 +777,127 @@ class PacketExecutionAdapter:
                 pass
         self._obs_event("packet.execution_failed", status="rejected", message=reason[:200])
         return er
+
+    # ── W6: Post-run Scope Enforcement + Diagnostics ─────────────────────
+
+    async def _run_scope_enforcement(
+        self,
+        *,
+        result,
+        pkt_contract,
+        run_id: str,
+        run_number: int,
+        packet_id: str,
+        base_ref: str,
+        base_sha: str,
+        executor: dict,
+        start: float,
+    ) -> ExecutionResult | None:
+        """Run diff inspection + scope enforcement. Returns reject ExecutionResult or None."""
+        wt_path = getattr(result, "worktree_path", None)
+        if not wt_path or not Path(wt_path).exists():
+            return None
+
+        from grace_control.config.settings import settings as _s
+        store = getattr(self, "_obs_store", None)
+        events = getattr(self, "_obs_events", None)
+        trace = getattr(self, "_obs_trace", None)
+        redactor = getattr(self, "_obs_redactor", None)
+        obs_disabled = getattr(self, "_obs_disabled", True)
+
+        inspector = RuntimeDiffInspector()
+        diff_req = RuntimeDiffInspectionRequest(
+            repo_root=str(self.project_root),
+            worktree_root=str(wt_path),
+            base_ref=base_sha or base_ref,
+        )
+        if events and trace:
+            try:
+                events.emit(trace=trace, event="packet.diff_inspection_started",
+                            stage="post_execution", component="scope_enforcer", status="started")
+            except Exception:
+                pass
+        diff_result = inspector.inspect(diff_req)
+        if events and trace:
+            try:
+                if diff_result.ok:
+                    events.emit(trace=trace, event="packet.diff_inspection_completed",
+                                stage="post_execution", component="scope_enforcer", status="completed",
+                                payload={"changed_file_count": len(diff_result.changed_files)})
+                else:
+                    events.emit(trace=trace, event="packet.diff_inspection_failed",
+                                stage="post_execution", component="scope_enforcer",
+                                status="failed", message=diff_result.summary)
+            except Exception:
+                pass
+
+        allowed = list(pkt_contract.allowed_write_scope or [])
+        frozen = list(pkt_contract.frozen_scope or [])
+
+        if events and trace:
+            try:
+                events.emit(trace=trace, event="packet.scope_enforcement_started",
+                            stage="post_execution", component="scope_enforcer", status="started")
+            except Exception:
+                pass
+        scope_result = RuntimeScopeEnforcer.enforce(
+            changed_files=diff_result.changed_files,
+            allowed_scope=allowed,
+            frozen_scope=frozen,
+            fail_on_no_changes=getattr(_s, "agent_runtime_fail_on_no_changes", False),
+        )
+        if events and trace:
+            try:
+                if scope_result.ok:
+                    events.emit(trace=trace, event="packet.scope_enforcement_completed",
+                                stage="post_execution", component="scope_enforcer", status="completed",
+                                payload={"changed_file_count": len(scope_result.changed_files)})
+                else:
+                    events.emit(trace=trace, event="packet.scope_enforcement_failed",
+                                stage="post_execution", component="scope_enforcer",
+                                status="failed", message=scope_result.summary,
+                                payload={"out_of_scope_count": len(scope_result.out_of_scope_files),
+                                         "frozen_touched_count": len(scope_result.frozen_touched_files)})
+            except Exception:
+                pass
+
+        mode = getattr(_s, "opencode_runtime_mode", "direct")
+        diag = RuntimeDiagnosticsBuilder.build(
+            runtime_run_id=run_id,
+            packet_id=packet_id,
+            trace_id=trace.trace_id if trace else "",
+            adapter="opencode",
+            runtime_mode=mode,
+            duration_ms=int((time.time() - start) * 1000),
+            accepted=scope_result.ok,
+            failure_code=scope_result.failure_code,
+            failure_stage="scope_enforcement" if not scope_result.ok else None,
+            changed_files=scope_result.changed_files,
+            out_of_scope_files=scope_result.out_of_scope_files,
+            frozen_touched_files=scope_result.frozen_touched_files,
+            stdout_tail=getattr(result, "stdout", "") or "",
+            stderr_tail=getattr(result, "stderr", "") or "",
+        )
+
+        if not obs_disabled and store and trace and redactor:
+            refs = RuntimeDiagnosticsBuilder.persist(diag, scope_result, diff_result, trace, packet_id, store, redactor)
+            diag.artifact_refs = [r.path for r in refs if r.path]
+
+            if events and trace:
+                try:
+                    events.emit(trace=trace, event="packet.runtime_diagnostics_created",
+                                stage="post_execution", component="scope_enforcer", status="completed",
+                                artifact_refs=refs)
+                except Exception:
+                    pass
+
+        if not scope_result.ok:
+            reason = scope_result.summary
+            _log.warn("scope_enforcement_failed", packet_id=packet_id,
+                       failure_code=scope_result.failure_code, summary=reason)
+            return self._fast_reject(reason, executor.get("executor_id", ""), run_id, start)
+
+        return None
 
     # ── W2 Packet Runtime Observability ─────────────────────────────────
 

@@ -1,0 +1,19 @@
+{
+  "diff_inspector_exists": true,
+  "scope_enforcer_exists": true,
+  "diagnostics_builder_exists": true,
+  "changed_files_detected": true,
+  "untracked_files_detected": true,
+  "deleted_files_detected": true,
+  "out_of_scope_rejected": true,
+  "frozen_scope_rejected": true,
+  "scope_failure_before_acceptance": true,
+  "scope_artifact_written": true,
+  "diff_artifact_written": true,
+  "diagnostics_artifact_written": true,
+  "events_emitted": true,
+  "artifacts_redacted": true,
+  "no_new_subprocess_imports": true,
+  "new_tests_pass": true,
+  "existing_tests_pass": true
+}

@@ -149,6 +149,9 @@ class GraceSettings(BaseSettings):
     opencode_server_log_path: str = ".grace/opencode-server.log"
     opencode_server_pid_path: str = ".grace/opencode-server.pid"
 
+    # ── W6 Post-run Scope Enforcement + Diagnostics ──
+    agent_runtime_fail_on_no_changes: bool = False
+
     # ── Dev tools / replay ──
     dev_tools_enabled: bool = False
     dev_keep_failed_worktrees: bool = False
