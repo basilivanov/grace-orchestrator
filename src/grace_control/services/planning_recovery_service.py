@@ -113,7 +113,7 @@ Description: {feature_description}
   4. remove shim later.
 - Keep ALL other parts unchanged.
 
-Respond with the corrected JSON plan now. Start with {{"waves": ."""
+Respond with the corrected JSON plan now. Start with {{"waves":"""
     return prompt
 
 

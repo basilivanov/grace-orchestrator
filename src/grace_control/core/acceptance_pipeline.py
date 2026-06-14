@@ -556,7 +556,7 @@ class AcceptancePipeline:
         explicit_raw = packet.verification.get("t1")
         if isinstance(explicit_raw, list) and "t1" in packet.verification:
             # Architect explicitly provided T1 (even if empty list).
-            # Empty list means "no T1 verification" — do NOT use defaults.
+            # Empty list means explicit skip — NORMAL/STRICT still fail.
             all_cmds = [shlex.split(c) if isinstance(c, str) else c for c in explicit_raw]
             all_origins = ["architect:verification"] * len(explicit_raw) if explicit_raw else []
         else:
@@ -575,6 +575,8 @@ class AcceptancePipeline:
             filtered_cmds.append(cmd)
             filtered_origins.append(origin)
         all_cmds, all_origins = filtered_cmds, filtered_origins
+
+        commands = [self._runner.run(cmd, output_dir=run_dir, cwd=cwd) for cmd in all_cmds]
 
         if not all_cmds:
             if packet.acceptance_profile == AcceptanceProfile.FAST:
