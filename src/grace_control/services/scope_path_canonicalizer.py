@@ -17,8 +17,20 @@ _log = GraceLogger("scope_path_canonicalizer")
 
 
 def _import_to_fs(m: re.Match) -> str:
-    """Convert app.services.llm_service → apps/api/app/services/llm_service.py"""
+    """Convert app.services.llm_service → apps/api/app/services/llm_service.py
+    or app.services.llm → apps/api/app/services/llm/ (directory)"""
     parts = m.group(1).split(".")
+    # Last part is module filename. If import has exactly 3 parts (app.XX.YY)
+    # and last part has no underscore, it's likely a package directory.
+    if len(parts) >= 2:
+        last = parts[-1]
+        # app.X.Y with 3 parts: app, X, Y → Y could be package or file
+        if len(parts) == 2 and "_" not in last:
+            # Package directory: app.services.llm → apps/api/app/services/llm/
+            return "apps/api/app/" + "/".join(parts) + "/"
+        # File: app.services.llm_service → apps/api/app/services/llm_service.py
+        return "apps/api/app/" + "/".join(parts) + ".py"
+    # Fallback for unusual patterns
     return "apps/api/app/" + "/".join(parts) + ".py"
 
 

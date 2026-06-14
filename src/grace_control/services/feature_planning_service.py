@@ -975,6 +975,22 @@ Respond ONLY with valid JSON (no markdown, no backticks):
             # Save repaired plan AND update local plan for next attempt
             spec["plan_json"] = repaired_plan
             plan = repaired_plan  # ← important: attempt 2 uses attempt 1 fixed plan
+
+            # Canonicalize scope paths after LLM repair before recompile
+            from grace_control.services.scope_path_canonicalizer import ScopePathCanonicalizer
+            canonical = ScopePathCanonicalizer().canonicalize_plan(plan)
+            if canonical.changed and canonical.plan:
+                plan = canonical.plan
+                spec["plan_json"] = plan
+                spec["_scope_canonicalization"] = {
+                    "changed": True,
+                    "fixes": canonical.fixes,
+                    "warnings": canonical.warnings,
+                    "errors": canonical.errors,
+                }
+                _log.info("repair_scope_canonicalized", feature_id=feature_id,
+                          fixes=len(canonical.fixes))
+
             feature.spec_json = spec
             self.db.flush()
 

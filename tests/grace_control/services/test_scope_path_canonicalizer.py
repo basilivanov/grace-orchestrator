@@ -37,12 +37,22 @@ class TestCanonicalizer:
         assert "apps/api/app/services/llm_service.py" in scope
 
     def test_canonicalizes_import_path_app_services_llm_package(self):
+        """app.services.llm → directory (package), not file."""
         plan = _make_plan(["app.services.llm"])
         result = ScopePathCanonicalizer().canonicalize_plan(plan)
         assert result.changed
         scope = result.plan["waves"][0]["packets"][0]["scope"]
-        # app.services.llm maps to a file path by default
-        assert "apps/api/app/services/llm.py" in scope or "apps/api/app/services/llm/" in scope
+        assert "apps/api/app/services/llm/" in scope
+        assert "apps/api/app/services/llm.py" not in scope
+
+    def test_canonicalizes_import_app_services_llm_russian(self):
+        """app.services.llm.russian → file, not directory."""
+        plan = _make_plan(["app.services.llm.russian"])
+        result = ScopePathCanonicalizer().canonicalize_plan(plan)
+        assert result.changed
+        scope = result.plan["waves"][0]["packets"][0]["scope"]
+        assert "apps/api/app/services/llm/russian.py" in scope
+        assert "apps/api/app/services/llm/" not in scope
 
     def test_canonicalizer_persists_audit_report(self):
         plan = _make_plan(["app/llm/russian.py", "app.services.llm_service"])

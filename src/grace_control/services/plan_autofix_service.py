@@ -303,11 +303,12 @@ class SafePlanAutofixer:
         err: dict,
         report: PlanAutofixReport,
     ) -> None:
-        """Replace non-canonical scope path with full filesystem path."""
+        """Replace non-canonical scope path with full filesystem path.
+        Always runs ScopePathCanonicalizer on the bad path instead of
+        trusting error message suggestions."""
         msg = err.get("message", "")
         import re as _re
         path_match = _re.search(r"scope path '([^']+)'", msg)
-        suggestion_match = _re.search(r"replace '([^']+)' with the full", msg)
         if not path_match:
             report.skipped.append({
                 "code": "SKIPPED_NO_PATH_FOUND",
@@ -317,12 +318,13 @@ class SafePlanAutofixer:
             return
 
         bad_path = path_match.group(1)
-        suggested = suggestion_match.group(1) if suggestion_match else None
 
-        if not suggested:
-            # Try canonicalizing inline
-            from grace_control.services.scope_path_canonicalizer import ScopePathCanonicalizer
-            suggested = ScopePathCanonicalizer()._canonicalize(bad_path)
+        # Always use canonicalizer — don't trust error message suggestion
+        from grace_control.services.scope_path_canonicalizer import ScopePathCanonicalizer
+        canonicalizer = ScopePathCanonicalizer()
+        suggested = canonicalizer._canonicalize(bad_path)
+        if suggested == bad_path or suggested == canonicalizer._canonicalize(suggested):
+            # Path didn't change or is already canonical — try inline canonicalize
             if suggested == bad_path:
                 report.skipped.append({
                     "code": "SKIPPED_NO_SUGGESTION",
