@@ -347,8 +347,24 @@ class PlanCompiler:
             src = intent.source_path
             old_imp = intent.old_import_path
 
+            # Skip intents for files that don't exist in the repo — these
+            # are new files being created, not source files being refactored.
+            source_exists = False
+            if target_repo_root and target_repo_root.exists():
+                test_path = target_repo_root / src
+                if test_path.exists():
+                    source_exists = True
+            if not source_exists and target_repo_root:
+                # Fallback: check relative paths without target repo root
+                if Path(src).exists():
+                    source_exists = True
+
             # E_SOURCE_SPLIT_ORIGIN_MISSING: source file must be in scope
             if intent.requires_source_modification and src not in all_scope_files:
+                # Only flag if source file ACTUALLY EXISTS — new files being
+                # created don't need an origin source to be in scope.
+                if not source_exists:
+                    continue
                 _add_error(
                     result, "E_SOURCE_SPLIT_ORIGIN_MISSING",
                     "scope",
@@ -362,7 +378,7 @@ class PlanCompiler:
                 )
 
             # E_IMPORT_MIGRATION_SCOPE_INCOMPLETE: old imports outside scope
-            if intent.requires_import_migration and old_imp and target_repo_root:
+            if intent.requires_import_migration and old_imp and target_repo_root and source_exists:
                 refs = collect_repo_references(target_repo_root, old_imp)
                 if refs:
                     outside: set[str] = set()

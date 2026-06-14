@@ -452,8 +452,9 @@ class TestSourceSplitDetection:
         intents = detect_source_split_intents("Fix typo in docs", plan, env)
         assert len(intents) == 0
 
-    def test_rejects_split_plan_missing_origin_source_file(self):
-        """Split plan must include original source file in scope."""
+    def test_rejects_split_plan_missing_origin_source_file(self, tmp_path):
+        (tmp_path / "apps/api/app/services").mkdir(parents=True)
+        (tmp_path / "apps/api/app/services/llm_service.py").write_text("class LLMService: pass\n")
         compiler = PlanCompiler()
         env = _env()
         plan = _split_plan([
@@ -463,6 +464,7 @@ class TestSourceSplitDetection:
         result = compiler.compile_plan(
             plan, env,
             feature_description="Split apps/api/app/services/llm_service.py into llm package",
+            target_repo_root=tmp_path,
         )
         assert not result.ok
         assert any(e.code == "E_SOURCE_SPLIT_ORIGIN_MISSING" for e in result.errors)
@@ -487,12 +489,20 @@ class TestSourceSplitDetection:
         compiler = PlanCompiler()
         env = _env()
 
-        # Create files in tmp to simulate repo with old imports
-        (tmp_path / "apps" / "api" / "app" / "services").mkdir(parents=True)
-        (tmp_path / "apps" / "api" / "app" / "services" / "natal_report_service.py").write_text(
+        # Create files in tmp with source file + old import references
+        (tmp_path / "apps/api/app/services").mkdir(parents=True)
+        (tmp_path / "apps/api/app/services/llm_service.py").write_text("class LLMService: pass\n")
+        (tmp_path / "apps" / "natal_report_service.py").write_text(
             "from app.services.llm_service import LLMService\n"
         )
-        (tmp_path / "apps" / "horary_service.py").write_text(
+        # Create source file and consumer with old import in separate temp dir
+        repo = tmp_path / "repo_a"
+        (repo / "apps/api/app/services").mkdir(parents=True)
+        (repo / "apps/api/app/services/llm_service.py").write_text("class LLMService: pass\n")
+        (repo / "apps/natal_report_service.py").write_text(
+            "from app.services.llm_service import LLMService\n"
+        )
+        (repo / "apps/horary_service.py").write_text(
             "from app.services.llm_service import HoraryGenerationError\n"
         )
 
@@ -503,7 +513,7 @@ class TestSourceSplitDetection:
         result = compiler.compile_plan(
             plan, env,
             feature_description="Split apps/api/app/services/llm_service.py",
-            target_repo_root=tmp_path,
+            target_repo_root=repo,
         )
         assert not result.ok
         assert any(e.code == "E_IMPORT_MIGRATION_SCOPE_INCOMPLETE" for e in result.errors)
@@ -513,8 +523,10 @@ class TestSourceSplitDetection:
         compiler = PlanCompiler()
         env = _env()
 
-        (tmp_path / "apps" / "api" / "app" / "services").mkdir(parents=True)
-        (tmp_path / "apps" / "api" / "app" / "services" / "natal_report_service.py").write_text(
+        repo = tmp_path / "repo_b"
+        (repo / "apps/api/app/services").mkdir(parents=True)
+        (repo / "apps/api/app/services/llm_service.py").write_text("class LLMService: pass\n")
+        (repo / "apps/api/app/services/natal_report_service.py").write_text(
             "from app.services.llm_service import LLMService\n"
         )
 
@@ -527,12 +539,14 @@ class TestSourceSplitDetection:
         result = compiler.compile_plan(
             plan, env,
             feature_description="Split apps/api/app/services/llm_service.py",
-            target_repo_root=tmp_path,
+            target_repo_root=repo,
         )
         assert result.ok
 
-    def test_rejects_exact_failing_case(self):
+    def test_rejects_exact_failing_case(self, tmp_path):
         """Regression: feat_kmtisgXzb9 plan must be rejected by compiler."""
+        (tmp_path / "apps/api/app/services").mkdir(parents=True)
+        (tmp_path / "apps/api/app/services/llm_service.py").write_text("class LLMService: pass\n")
         compiler = PlanCompiler()
         env = _env()
         # This plan had scope missing llm_service.py
@@ -562,6 +576,7 @@ class TestSourceSplitDetection:
         result = compiler.compile_plan(
             plan, env,
             feature_description="Split apps/api/app/services/llm_service.py into llm package. Update all callers and tests.",
+            target_repo_root=tmp_path,
         )
         assert not result.ok
         assert any(e.code == "E_SOURCE_SPLIT_ORIGIN_MISSING" for e in result.errors)
@@ -592,8 +607,10 @@ class TestSourceSplitDetection:
         )
         assert isinstance(result.ok, bool)
 
-    def test_russian_split_rejected_when_origin_missing(self):
+    def test_russian_split_rejected_when_origin_missing(self, tmp_path):
         """Russian feature description + missing source file → E_SOURCE_SPLIT_ORIGIN_MISSING."""
+        (tmp_path / "apps/api/app/services").mkdir(parents=True)
+        (tmp_path / "apps/api/app/services/llm_service.py").write_text("class LLMService: pass\n")
         compiler = PlanCompiler()
         env = _env()
         plan = _split_plan([
@@ -602,6 +619,7 @@ class TestSourceSplitDetection:
         result = compiler.compile_plan(
             plan, env,
             feature_description="разбить apps/api/app/services/llm_service.py на модули",
+            target_repo_root=tmp_path,
         )
         assert not result.ok
         assert any(e.code == "E_SOURCE_SPLIT_ORIGIN_MISSING" for e in result.errors)
