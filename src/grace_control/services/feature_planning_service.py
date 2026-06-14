@@ -474,7 +474,10 @@ Other files (paths only):
                     feature_text=task,
                     context_paths=[f.get("path", "") for f in all_files],
                 )
-                kg_block = kg_svc.build_kg_prompt_block(extract, task)
+                kg_block = kg_svc.build_kg_prompt_block(
+                    extract, task,
+                    context_paths=[f.get("path", "") for f in all_files],
+                )
                 prompt += kg_block + "\n"
 
         prompt += f"""Full file listing for scope reference:

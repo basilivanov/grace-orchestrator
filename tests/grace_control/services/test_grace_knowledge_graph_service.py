@@ -80,7 +80,10 @@ class TestKnowledgeGraphLoad:
         svc = GraceKnowledgeGraphService()
         kg = svc.load(tmp_path)
         extract = svc.extract_relevant_modules(kg, feature_text="Split llm_service.py into llm package")
-        block = svc.build_kg_prompt_block(extract, "Split llm_service.py into llm package")
+        block = svc.build_kg_prompt_block(
+            extract, "Split apps/api/app/services/llm_service.py into llm package",
+            context_paths=["apps/api/app/services/llm_service.py"],
+        )
         assert "Forbidden near-misses" in block
         assert "apps/api/app/llm/" in block
 

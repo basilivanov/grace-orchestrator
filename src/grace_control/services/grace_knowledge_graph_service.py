@@ -145,7 +145,13 @@ class GraceKnowledgeGraphService:
 
         return extract
 
-    def build_kg_prompt_block(self, extract: GraceKnowledgeGraphExtract, feature_text: str) -> str:
+    def build_kg_prompt_block(
+        self,
+        extract: GraceKnowledgeGraphExtract,
+        feature_text: str,
+        *,
+        context_paths: list[str] | None = None,
+    ) -> str:
         """Build the GRACE canon block for the Architect prompt."""
         if not extract.loaded or not extract.relevant_modules:
             return ""
@@ -168,20 +174,14 @@ class GraceKnowledgeGraphService:
                 for p in mod.paths:
                     parts.append(f"    - {p}")
 
-        # For LLM split features, add concrete manifest
-        if ("llm" in feature_text.lower() and "service" in feature_text.lower()):
-            parts.append("\n### Concrete path manifest for this feature")
-            parts.append("Existing source:")
-            parts.append("- apps/api/app/services/llm_service.py")
-            parts.append("Correct new package directory:")
-            parts.append("- apps/api/app/services/llm/")
-            parts.append("Correct new file examples:")
-            parts.append("- apps/api/app/services/llm/__init__.py")
-            parts.append("- apps/api/app/services/llm/russian.py")
-            parts.append("- apps/api/app/services/llm/client.py")
-            parts.append("Forbidden near-misses (DO NOT USE):")
-            parts.append("- apps/api/app/llm/")
-            parts.append("- app/llm/")
-            parts.append("- app.services.llm inside packet.scope")
+        # Build concrete path manifest generically (no hardcoded service names)
+        from grace_control.services.feature_path_manifest_service import FeaturePathManifestBuilder
+        manifest = FeaturePathManifestBuilder().build(
+            feature_text=feature_text,
+            context_paths=context_paths or [],
+        )
+        manifest_block = FeaturePathManifestBuilder().build_prompt_block(manifest)
+        if manifest_block:
+            parts.append(manifest_block)
 
         return "\n".join(parts)
