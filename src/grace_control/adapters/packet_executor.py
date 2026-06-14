@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 from datetime import UTC, datetime
@@ -24,7 +25,7 @@ from pydantic import BaseModel
 from grace_control.agent.backend import ExecutionBackend
 from grace_control.core.evidence_verifier import EvidenceVerifierVerdict, run_evidence_verifier, skipped_evidence_report
 from grace_control.core.reviewer_gate import ReviewerVerdict, run_reviewer_gate, skipped_reviewer_report
-from grace_control.core.runtime_artifacts import RuntimeArtifactStore
+from grace_control.core.runtime_artifacts import RuntimeArtifactRef, RuntimeArtifactStore
 from grace_control.core.runtime_events import RuntimeEventLogger
 from grace_control.core.runtime_redaction import RuntimeRedactor
 from grace_control.core.runtime_trace import (
@@ -296,22 +297,29 @@ class PacketExecutionAdapter:
             base_ref = settings.base_branch
             base_sha = self._inspector.base_sha(self.project_root, base_ref)
             evidence_dir = self.state_root / "packets" / packet_id / "runs" / f"R{run_number:02d}"
+
+            # ── W2: agent_started before executor ──────────────────────────
+            self._obs_event("packet.agent_started", status="started")
             result = await self._call_executor(packet_path, pkt_contract, run_number, base_ref, base_sha, executor, evidence_dir)
             _log.debug("executor_run_completed", packet_id=packet_id, ok=result.ok, errors=result.errors[:2])
 
             if not hasattr(result, "evidence") or result.evidence is None:
                 result.evidence = {}
 
-            # ── W2: capture prompt + agent output artifacts ────────────────
+            # ── W2: capture prompt + agent output artifacts, emit with refs ─
             self._obs_event("packet.worktree_created", status="completed")
-            self._obs_event("packet.prompt_built", status="completed")
+            prompt_ref = self._capture_prompt_artifact(result)
+            out_refs = self._capture_agent_output_artifact(result)
+            agent_refs: list[RuntimeArtifactRef] = []
+            if prompt_ref:
+                agent_refs.append(prompt_ref)
+            agent_refs.extend(out_refs)
+            self._obs_event("packet.prompt_built", status="completed", artifact_refs=[prompt_ref] if prompt_ref else None)
             _accepted = getattr(result, "accepted", getattr(result, "ok", False))
             if _accepted:
-                self._obs_event("packet.agent_completed", status="completed")
+                self._obs_event("packet.agent_completed", status="completed", artifact_refs=agent_refs if agent_refs else None)
             else:
-                self._obs_event("packet.agent_failed", status="failed")
-            self._capture_prompt_artifact(result)
-            self._capture_agent_output_artifact(result)
+                self._obs_event("packet.agent_failed", status="failed", artifact_refs=agent_refs if agent_refs else None)
 
             skip_context = executor.get("skip_context_builder", False)
             if skip_context:
@@ -336,11 +344,11 @@ class PacketExecutionAdapter:
             self._obs_event("packet.tests_started", status="started")
             accept_report, ar_path, safe_data, changed_files, wt_path, run_dir = await self._run_acceptance(
                 pkt_contract, result, packet_id, run_number, base_ref, base_sha, start)
-            self._capture_test_output_artifact(accept_report)
+            test_ref = self._capture_test_output_artifact(accept_report)
             if accept_report.is_accepted:
-                self._obs_event("packet.tests_completed", status="completed")
+                self._obs_event("packet.tests_completed", status="completed", artifact_refs=[test_ref] if test_ref else None)
             else:
-                self._obs_event("packet.tests_failed", status="failed")
+                self._obs_event("packet.tests_failed", status="failed", artifact_refs=[test_ref] if test_ref else None)
 
             if not accept_report.is_accepted:
                 ev, rv = await self._maybe_verify(accept_report, pkt_contract, wt_path, run_dir, changed_files, packet_data)
@@ -487,9 +495,10 @@ class PacketExecutionAdapter:
                 acceptance_report=accept_report, evr=evr, rvr=rvr
             )
             self._write_agent_patch(wt_path, run_dir, base_sha)
-            self._capture_diff_patch_artifact(wt_path, run_dir, base_sha)
-            self._capture_evidence_artifact(packet_id, run_id, rn, sha, changed_files, accept_report, evr, er)
-            self._obs_event("packet.evidence_captured", status="completed")
+            diff_ref = self._capture_diff_patch_artifact(wt_path, run_dir, base_sha)
+            ev_ref, meta_ref = self._capture_evidence_artifact(packet_id, run_id, rn, sha, changed_files, accept_report, evr, er)
+            evidence_refs = [r for r in (diff_ref, ev_ref, meta_ref) if r is not None]
+            self._obs_event("packet.evidence_captured", status="completed", artifact_refs=evidence_refs if evidence_refs else None)
             self._obs_event("packet.execution_completed", status="accepted", duration_ms=er.duration_ms)
             ev.save_agent_log(packet_id, rn, result, self.state_root)
             self._evidence.update_run_result(run_id=run_id, status="accepted", legacy_result=sd,
@@ -510,9 +519,10 @@ class PacketExecutionAdapter:
             )
             self._write_agent_patch(wt_path, run_dir, base_sha)
             er = _mk(False, domain, r=reason, e="")
-            self._capture_diff_patch_artifact(wt_path, run_dir, base_sha)
-            self._capture_evidence_artifact(packet_id, run_id, rn, sha, changed_files, accept_report, evr, er)
-            self._obs_event("packet.evidence_captured", status="completed")
+            diff_ref = self._capture_diff_patch_artifact(wt_path, run_dir, base_sha)
+            ev_ref, meta_ref = self._capture_evidence_artifact(packet_id, run_id, rn, sha, changed_files, accept_report, evr, er)
+            evidence_refs = [r for r in (diff_ref, ev_ref, meta_ref) if r is not None]
+            self._obs_event("packet.evidence_captured", status="completed", artifact_refs=evidence_refs if evidence_refs else None)
             self._obs_event("packet.execution_completed", status=domain, duration_ms=er.duration_ms)
             self._evidence.update_run_result(run_id=run_id, status=domain, legacy_result=sd,
                 acceptance_report=accept_report, evidence_verifier_report=evr, reviewer_report=rvr,
@@ -569,9 +579,10 @@ class PacketExecutionAdapter:
             acceptance_report=accept_report, evr=evr, rvr=rvr
         )
         self._write_agent_patch(wt_path, run_dir, base_sha)
-        self._capture_diff_patch_artifact(wt_path, run_dir, base_sha)
-        self._capture_evidence_artifact(packet_id, run_id, rn, commit_sha, changed_files, accept_report, evr, er)
-        self._obs_event("packet.evidence_captured", status="completed")
+        diff_ref = self._capture_diff_patch_artifact(wt_path, run_dir, base_sha)
+        ev_ref, meta_ref = self._capture_evidence_artifact(packet_id, run_id, rn, commit_sha, changed_files, accept_report, evr, er)
+        evidence_refs = [r for r in (diff_ref, ev_ref, meta_ref) if r is not None]
+        self._obs_event("packet.evidence_captured", status="completed", artifact_refs=evidence_refs if evidence_refs else None)
         self._obs_event("packet.execution_completed", status=status, duration_ms=dur)
         self._evidence.update_run_result(run_id=run_id, status=status, legacy_result=safe_data,
             acceptance_report=accept_report, evidence_verifier_report=evr, reviewer_report=rvr,
@@ -675,7 +686,8 @@ class PacketExecutionAdapter:
             self._obs_disabled = True
 
     def _obs_event(self, event: str, status: str | None = None,
-                   message: str | None = None, duration_ms: int | None = None) -> None:
+                   message: str | None = None, duration_ms: int | None = None,
+                   artifact_refs: list[RuntimeArtifactRef] | None = None) -> None:
         if getattr(self, "_obs_disabled", True):
             return
         try:
@@ -687,78 +699,89 @@ class PacketExecutionAdapter:
                 status=status,
                 message=message,
                 duration_ms=duration_ms,
+                artifact_refs=artifact_refs,
             )
         except Exception:
             pass
 
-    def _obs_write_artifact(self, name: str, content: str, kind: str) -> None:
+    def _obs_write_artifact(self, name: str, content: str, kind: str) -> RuntimeArtifactRef | None:
         if getattr(self, "_obs_disabled", True):
-            return
+            return None
         try:
-            self._obs_packet_dir.mkdir(parents=True, exist_ok=True)
             redacted = self._obs_redactor.redact_string(content) if self._obs_redact_enabled else content
-            (self._obs_packet_dir / name).write_text(redacted, encoding="utf-8")
+            return self._obs_store.write_packet_text(
+                trace=self._obs_trace, packet_id=self._obs_trace.packet_id,
+                name=name, content=redacted, kind=kind,
+            )
         except Exception:
-            pass
+            return None
 
-    def _obs_write_json_artifact(self, name: str, payload: dict, kind: str) -> None:
+    def _obs_write_json_artifact(self, name: str, payload: dict | list, kind: str) -> RuntimeArtifactRef | None:
         if getattr(self, "_obs_disabled", True):
-            return
+            return None
         try:
-            self._obs_packet_dir.mkdir(parents=True, exist_ok=True)
             redacted_payload = self._obs_redactor.redact_payload(payload) if self._obs_redact_enabled else payload
-            content = json.dumps(redacted_payload, indent=2, ensure_ascii=False, default=str)
-            if self._obs_redact_enabled:
-                content = self._obs_redactor.redact_string(content)
-            (self._obs_packet_dir / name).write_text(content, encoding="utf-8")
+            return self._obs_store.write_packet_json(
+                trace=self._obs_trace, packet_id=self._obs_trace.packet_id,
+                name=name, payload=redacted_payload, kind=kind,
+            )
+        except Exception:
+            return None
+
+    def _capture_prompt_artifact(self, result) -> RuntimeArtifactRef | None:
+        try:
+            prompt = getattr(result, "prompt", None) or ""
+            if prompt:
+                return self._obs_write_artifact("prompt.txt", prompt, "prompt")
         except Exception:
             pass
+        return None
 
-    def _capture_prompt_artifact(self, result) -> None:
-        prompt = getattr(result, "prompt", None) or ""
-        if prompt:
-            try:
-                self._obs_write_artifact("prompt.txt", prompt, "prompt")
-            except Exception:
-                pass
-
-    def _capture_agent_output_artifact(self, result) -> None:
+    def _capture_agent_output_artifact(self, result) -> list[RuntimeArtifactRef]:
+        refs: list[RuntimeArtifactRef] = []
         try:
             stdout = getattr(result, "stdout", None) or ""
             stderr = getattr(result, "stderr", None) or ""
             if stdout:
-                self._obs_write_artifact("agent_stdout.txt", stdout, "agent_stdout")
+                r = self._obs_write_artifact("agent_stdout.txt", stdout, "agent_stdout")
+                if r:
+                    refs.append(r)
             if stderr:
-                self._obs_write_artifact("agent_stderr.txt", stderr, "agent_stderr")
+                r = self._obs_write_artifact("agent_stderr.txt", stderr, "agent_stderr")
+                if r:
+                    refs.append(r)
         except Exception:
             pass
+        return refs
 
-    def _capture_test_output_artifact(self, accept_report) -> None:
+    def _capture_test_output_artifact(self, accept_report) -> RuntimeArtifactRef | None:
         if accept_report is None:
-            return
+            return None
         try:
             payload = accept_report.to_dict() if hasattr(accept_report, "to_dict") else {"summary": str(accept_report)}
-            self._obs_write_json_artifact("test_output.txt", payload, "test_output")
+            return self._obs_write_json_artifact("test_output.txt", payload, "test_output")
         except Exception:
-            pass
+            return None
 
-    def _capture_diff_patch_artifact(self, wt_path, run_dir, base_sha) -> None:
+    def _capture_diff_patch_artifact(self, wt_path, run_dir, base_sha) -> RuntimeArtifactRef | None:
         if getattr(self, "_obs_disabled", True):
-            return
+            return None
         if not run_dir or not base_sha:
-            return
+            return None
         try:
             patch_src = Path(run_dir) / "agent.patch"
             if patch_src.exists():
                 content = patch_src.read_text(encoding="utf-8")
-                self._obs_write_artifact("diff.patch", content, "diff")
+                return self._obs_write_artifact("diff.patch", content, "diff")
         except Exception:
             pass
+        return None
 
     def _capture_evidence_artifact(self, packet_id: str, run_id: str, run_number: int,
-                                    commit_sha: str, changed_files, accept_report, evr, er) -> None:
+                                    commit_sha: str, changed_files, accept_report, evr,
+                                    er) -> tuple[RuntimeArtifactRef | None, RuntimeArtifactRef | None]:
         if getattr(self, "_obs_disabled", True):
-            return
+            return None, None
         try:
             ac = accept_report.to_dict() if accept_report and hasattr(accept_report, "to_dict") else {}
             evidence_data = {
@@ -774,20 +797,32 @@ class PacketExecutionAdapter:
                 "acceptance_summary": ac.get("summary", ""),
                 "evidence_verifier_verdict": evr.verdict if evr and hasattr(evr, "verdict") else "",
             }
+            # Build truthful artifact manifest from the packet dir
+            written_names: list[str] = []
+            written_refs: dict[str, dict] = {}
+            pkt_dir = self._obs_packet_dir
+            if pkt_dir and pkt_dir.exists():
+                for f in pkt_dir.iterdir():
+                    if f.is_file():
+                        written_names.append(f.name)
+                        content = f.read_text(encoding="utf-8")
+                        written_refs[f.name] = {
+                            "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+                            "size_bytes": len(content.encode("utf-8")),
+                            "present": True,
+                        }
             meta = {
                 "packet_id": packet_id,
                 "run_id": run_id,
                 "run_number": run_number,
                 "commit_sha": commit_sha or "",
-                "artifact_files": [
-                    "prompt.txt", "agent_stdout.txt", "agent_stderr.txt",
-                    "diff.patch", "test_output.txt", "evidence.json",
-                ],
+                "artifacts": written_refs,
             }
-            self._obs_write_json_artifact("evidence.json", evidence_data, "evidence")
-            self._obs_write_json_artifact("metadata.json", meta, "metadata")
+            ev_ref = self._obs_write_json_artifact("evidence.json", evidence_data, "evidence")
+            meta_ref = self._obs_write_json_artifact("metadata.json", meta, "metadata")
+            return ev_ref, meta_ref
         except Exception:
-            pass
+            return None, None
 
     async def _call_executor(self, packet_path: Path, packet_contract, attempt: int,
                               base_ref: str, base_sha: str, executor: dict, evidence_dir: Path | None = None):
@@ -1075,17 +1110,6 @@ class PacketExecutionAdapter:
             scope_paths=list(eff or []), executor=executor, timeout_s=settings.agent_timeout_seconds,
             session_dir=self.state_root, evidence_dir=evidence_dir,
             resume_session_id=resume_session_id, fork_session=fork)
-        if not getattr(self, "_obs_disabled", True):
-            try:
-                self._obs_events.emit(
-                    trace=getattr(self, "_obs_trace", None) or get_current_trace(),
-                    event="packet.agent_started",
-                    stage="packet_execution",
-                    component="packet_executor",
-                    status="started",
-                )
-            except Exception:
-                pass
         result = await self._backend.run(req)
 
         # TZ_SESSION_RESUME.md Phase 3: save session after run

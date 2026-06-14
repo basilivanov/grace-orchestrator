@@ -98,6 +98,54 @@ class RuntimeArtifactStore:
             kind=kind,
         )
 
+    def write_packet_text(
+        self,
+        *,
+        trace: RuntimeTraceContext,
+        packet_id: str,
+        name: str,
+        content: str,
+        kind: str,
+    ) -> RuntimeArtifactRef:
+        feature_id = _safe_part(trace.feature_id or "unknown", "feature_id")
+        _safe_part(packet_id, "packet_id")
+        safe_name = _safe_part(name, "name")
+        pkt_dir = self.packet_dir(feature_id, packet_id)
+        pkt_dir.mkdir(parents=True, exist_ok=True)
+        path = pkt_dir / safe_name
+        path.write_text(content, encoding="utf-8")
+        sha256 = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        size_bytes = len(content.encode("utf-8"))
+        preview = content[:settings.runtime_debug_max_preview_chars] if self._preview_enabled() else None
+        rel = path.relative_to(self._root.parent) if path.is_relative_to(self._root.parent) else path
+        ref = RuntimeArtifactRef(
+            kind=kind,
+            path=str(rel),
+            sha256=sha256,
+            size_bytes=size_bytes,
+            preview=preview,
+        )
+        _log.debug("artifact_written", kind=kind, path=str(path), sha256=sha256[:12], size_bytes=size_bytes)
+        return ref
+
+    def write_packet_json(
+        self,
+        *,
+        trace: RuntimeTraceContext,
+        packet_id: str,
+        name: str,
+        payload: Any,
+        kind: str,
+    ) -> RuntimeArtifactRef:
+        content = json.dumps(payload, indent=2, ensure_ascii=False, default=str)
+        return self.write_packet_text(
+            trace=trace,
+            packet_id=packet_id,
+            name=name,
+            content=content,
+            kind=kind,
+        )
+
     def append_jsonl(
         self,
         *,

@@ -203,10 +203,31 @@ class TestTracePropagation:
             events = [json.loads(l) for l in lines if l.strip()]
             event_names = {e["event"] for e in events}
             for ev in ("packet.execution_started", "packet.worktree_created",
-                       "packet.prompt_built", "packet.tests_started",
+                       "packet.agent_started", "packet.prompt_built",
+                       "packet.agent_completed", "packet.diff_captured",
+                       "packet.tests_started", "packet.tests_completed",
                        "packet.evidence_captured", "packet.execution_completed"):
                 assert ev in event_names, f"missing event in events.jsonl: {ev}"
             assert result.accepted is True
+
+    async def test_events_carry_artifact_refs_with_sha_and_size(self):
+        """Events that capture artifacts should carry RuntimeArtifactRef with sha256/size."""
+        with tempfile.TemporaryDirectory() as _td:
+            td = Path(_td)
+            result = await _run_adapter(Path(td))
+            events_file = Path(td) / ".grace" / "runs" / "feat_w2" / "events.jsonl"
+            lines = events_file.read_text().strip().split("\n")
+            events = [json.loads(l) for l in lines if l.strip()]
+            # Find events with artifact_refs
+            ref_events = {e["event"]: e.get("artifact_refs", []) for e in events if e.get("artifact_refs")}
+            assert "packet.prompt_built" in ref_events, "prompt_built should carry artifact_refs"
+            assert "packet.evidence_captured" in ref_events, "evidence_captured should carry artifact_refs"
+            # Check sha256 and size_bytes on each ref
+            for event_name, refs in ref_events.items():
+                for ref in refs:
+                    assert "sha256" in ref, f"{event_name} ref missing sha256: {ref}"
+                    assert "size_bytes" in ref, f"{event_name} ref missing size_bytes: {ref}"
+                    assert ref["size_bytes"] > 0, f"{event_name} ref has zero size: {ref}"
 
 
 class TestArtifactLocation:
@@ -259,7 +280,9 @@ class TestArtifactLocation:
             result = await _run_adapter(Path(td))
             data = json.loads((td / ".grace" / "runs" / "feat_w2" / "packets" / "pkt-w2" / "metadata.json").read_text())
             assert data["packet_id"] == "pkt-w2"
-            assert "prompt.txt" in data["artifact_files"]
+            assert data["artifacts"]["prompt.txt"]["present"] is True
+            assert data["artifacts"]["prompt.txt"]["sha256"]
+            assert data["artifacts"]["prompt.txt"]["size_bytes"] > 0
 
 
 class TestRedaction:
