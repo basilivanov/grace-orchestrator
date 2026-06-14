@@ -117,7 +117,7 @@ class GraceSettings(BaseSettings):
 
     # ── Runtime observability (W1) ──
     runtime_observability_enabled: bool = True
-    runtime_debug_payload_capture_enabled: bool = True
+    runtime_debug_payload_capture_enabled: bool = False
     runtime_artifacts_root: str = ".grace/runs"
     runtime_debug_max_preview_chars: int = 500
     runtime_redact_secrets: bool = True

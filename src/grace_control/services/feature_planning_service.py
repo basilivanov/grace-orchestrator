@@ -985,13 +985,13 @@ Respond ONLY with valid JSON (no markdown, no backticks):
                 )
                 self.db.add(materialize_run)
                 feature.status = "PLAN_FAILED"
-                # Return compiler errors so caller can decide repair
-                return {
-                    "status": "PLAN_FAILED",
-                    "compiler_errors": [e.model_dump() for e in compiled.errors],
-                    "compiler_warnings": [w.model_dump() for w in compiled.warnings],
-                    "compiler_ok": compiled.ok,
-                }
+                materialize_run.error = f"plan compiler rejected: {len(compiled.errors)} errors"
+                self.db.add(materialize_run)
+                self.db.commit()
+                raise ValueError(
+                    f"Plan compiler found {len(compiled.errors)} errors: "
+                    + "; ".join(f"{e.code}: {e.message[:80]}" for e in compiled.errors[:3])
+                )
             else:
                 self._event_logger.emit(
                     trace=self._trace_ctx, event="plan_compiler.completed", stage="plan_compiler",

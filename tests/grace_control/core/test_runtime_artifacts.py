@@ -4,12 +4,40 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from grace_control.core.runtime_artifacts import RuntimeArtifactRef, RuntimeArtifactStore
+import pytest
+
+from grace_control.core.runtime_artifacts import RuntimeArtifactRef, RuntimeArtifactStore, _safe_part
 from grace_control.core.runtime_trace import RuntimeTraceContext, generate_trace_id
 
 
 def _make_trace(feature_id: str = "feat_test") -> RuntimeTraceContext:
     return RuntimeTraceContext(trace_id=generate_trace_id(), feature_id=feature_id)
+
+
+class TestSafePart:
+
+    def test_safe_part_accepts_valid(self):
+        assert _safe_part("feat_abc", "feature_id") == "feat_abc"
+
+    def test_safe_rejects_slash(self):
+        with pytest.raises(ValueError, match="unsafe artifact path component"):
+            _safe_part("../evil", "feature_id")
+
+    def test_safe_rejects_backslash(self):
+        with pytest.raises(ValueError, match="unsafe artifact path component"):
+            _safe_part("foo\\bar", "stage")
+
+    def test_safe_rejects_dot(self):
+        with pytest.raises(ValueError, match="unsafe artifact path component"):
+            _safe_part(".", "name")
+
+    def test_safe_rejects_dotdot(self):
+        with pytest.raises(ValueError, match="unsafe artifact path component"):
+            _safe_part("..", "name")
+
+    def test_safe_rejects_empty(self):
+        with pytest.raises(ValueError, match="unsafe artifact path component"):
+            _safe_part("", "stage")
 
 
 class TestRuntimeArtifactRef:
@@ -40,7 +68,7 @@ class TestRuntimeArtifactRef:
 
 class TestRuntimeArtifactStore:
 
-    def test_artifact_store_writes_json_with_sha_size_preview(self, tmp_path):
+    def test_artifact_store_writes_json_with_sha_size(self, tmp_path):
         store = RuntimeArtifactStore(root=tmp_path)
         trace = _make_trace("feat_jtest")
         ref = store.write_json(
@@ -50,13 +78,13 @@ class TestRuntimeArtifactStore:
         assert ref.sha256 and len(ref.sha256) == 64
         assert ref.size_bytes > 0
         assert ref.kind == "parsed_plan"
-        # File exists
+        assert ref.preview is None  # disabled by default
         artifact_path = tmp_path / "feat_jtest" / "architect" / "parsed_plan.json"
         assert artifact_path.exists()
         data = json.loads(artifact_path.read_text())
         assert data == {"waves": []}
 
-    def test_artifact_store_writes_text_with_sha_size_preview(self, tmp_path):
+    def test_artifact_store_writes_text_with_sha_size(self, tmp_path):
         store = RuntimeArtifactStore(root=tmp_path)
         trace = _make_trace("feat_jtest")
         ref = store.write_text(
@@ -66,6 +94,7 @@ class TestRuntimeArtifactStore:
         assert ref.sha256 and len(ref.sha256) == 64
         assert ref.size_bytes == 13
         assert ref.kind == "prompt"
+        assert ref.preview is None  # disabled by default
         artifact_path = tmp_path / "feat_jtest" / "architect" / "prompt.txt"
         assert artifact_path.read_text() == "Hello, world!"
 
@@ -81,16 +110,16 @@ class TestRuntimeArtifactStore:
         store = RuntimeArtifactStore(root=tmp_path)
         trace = _make_trace("feat_jsonl")
         ref1 = store.append_jsonl(
-            trace=trace, stage="", name="events.jsonl",
+            trace=trace, stage="events", name="events.jsonl",
             payload={"event": "e1"}, kind="events",
         )
         ref2 = store.append_jsonl(
-            trace=trace, stage="", name="events.jsonl",
+            trace=trace, stage="events", name="events.jsonl",
             payload={"event": "e2"}, kind="events",
         )
         assert ref1.sha256 and ref2.sha256
-        assert ref1.size_bytes < ref2.size_bytes  # second has more content
-        events_path = tmp_path / "feat_jsonl" / "events.jsonl"
+        assert ref1.size_bytes < ref2.size_bytes
+        events_path = tmp_path / "feat_jsonl" / "events" / "events.jsonl"
         lines = events_path.read_text().strip().split("\n")
         assert len(lines) == 2
         assert json.loads(lines[0]) == {"event": "e1"}
@@ -105,3 +134,41 @@ class TestRuntimeArtifactStore:
                          payload={"text": "test"}, kind="prompt")
         assert (tmp_path / "feat_multi" / "context_builder" / "input.json").exists()
         assert (tmp_path / "feat_multi" / "architect" / "prompt.txt").exists()
+
+    def test_feature_id_traversal_rejected(self, tmp_path):
+        store = RuntimeArtifactStore(root=tmp_path)
+        trace = _make_trace("../evil")
+        with pytest.raises(ValueError, match="unsafe.*feature_id"):
+            store.write_json(trace=trace, stage="architect", name="file.json",
+                             payload={}, kind="test")
+
+    def test_stage_traversal_rejected(self, tmp_path):
+        store = RuntimeArtifactStore(root=tmp_path)
+        trace = _make_trace("feat_safe")
+        with pytest.raises(ValueError, match="unsafe.*stage"):
+            store.write_json(trace=trace, stage="../evil", name="file.json",
+                             payload={}, kind="test")
+
+    def test_name_traversal_rejected(self, tmp_path):
+        store = RuntimeArtifactStore(root=tmp_path)
+        trace = _make_trace("feat_safe")
+        with pytest.raises(ValueError, match="unsafe.*name"):
+            store.write_json(trace=trace, stage="architect", name="../evil.json",
+                             payload={}, kind="test")
+
+    def test_append_jsonl_feature_id_traversal_rejected(self, tmp_path):
+        store = RuntimeArtifactStore(root=tmp_path)
+        trace = _make_trace("../evil")
+        with pytest.raises(ValueError, match="unsafe.*feature_id"):
+            store.append_jsonl(trace=trace, stage="events", name="events.jsonl",
+                               payload={"e": 1}, kind="events")
+
+    def test_preview_disabled_by_default(self, tmp_path):
+        """Default is False, so preview should be None."""
+        store = RuntimeArtifactStore(root=tmp_path)
+        trace = _make_trace("feat_preview")
+        ref = store.write_text(
+            trace=trace, stage="architect", name="prompt.txt",
+            content="x" * 1000, kind="prompt",
+        )
+        assert ref.preview is None
