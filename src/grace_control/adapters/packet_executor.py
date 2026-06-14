@@ -858,10 +858,52 @@ class PacketExecutionAdapter:
         if not diff_result.ok:
             reason = f"Diff inspection failed: {diff_result.summary}"
             _log.warn("diff_inspection_failed", packet_id=packet_id, summary=reason)
+
+            # Build diagnostics even for diff failure (important safety-layer artifact)
+            diag = RuntimeDiagnosticsBuilder.build(
+                runtime_run_id=run_id,
+                packet_id=packet_id,
+                trace_id=trace.trace_id if trace else "",
+                adapter="opencode",
+                runtime_mode=getattr(_s, "opencode_runtime_mode", "direct"),
+                accepted=False,
+                failure_code=diff_result.failure_code,
+                failure_stage="diff_inspection",
+                stdout_tail=getattr(result, "stdout", "") or "",
+                stderr_tail=getattr(result, "stderr", "") or "",
+            )
+
+            # Persist diagnostics artifact if store available
+            if not obs_disabled and store and trace and redactor:
+                try:
+                    store.write_packet_json(
+                        trace=trace, packet_id=packet_id,
+                        name="runtime_diagnostics.json",
+                        payload=redactor.redact_payload(diag.model_dump()),
+                        kind="runtime_diagnostics",
+                    )
+                    store.write_packet_json(
+                        trace=trace, packet_id=packet_id,
+                        name="diff_inspection.json",
+                        payload=redactor.redact_payload(diff_result.model_dump()),
+                        kind="diff_inspection",
+                    )
+                except Exception:
+                    pass
+                if events and trace:
+                    try:
+                        events.emit(trace=trace, event="packet.runtime_diagnostics_created",
+                                    stage="post_execution", component="scope_enforcer",
+                                    status="failed",
+                                    message=diff_result.summary)
+                    except Exception:
+                        pass
+
             er = self._fast_reject(reason, executor.get("executor_id", ""), run_id, start)
             try:
                 er.evidence["diff_inspection"] = diff_result.model_dump()
-                er.evidence["failure_code"] = AgentRuntimeFailureCode.AGENT_DIFF_INSPECTION_FAILED
+                er.evidence["runtime_diagnostics"] = diag.model_dump()
+                er.evidence["failure_code"] = diff_result.failure_code
             except Exception:
                 pass
             return er
