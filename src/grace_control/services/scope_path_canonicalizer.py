@@ -36,6 +36,11 @@ def _import_to_fs(m: re.Match) -> str:
 
 # ── Canonicalization rules (ordered: first match wins) ─────────────────
 _RULES: list[tuple[re.Pattern, str | callable]] = [
+    # apps/api/app/llm/<file>.py → apps/api/app/services/llm/<file>.py
+    (re.compile(r"^apps/api/app/llm/(\S+\.py)$"), r"apps/api/app/services/llm/\1"),
+    # apps/api/app/llm/ (directory) → apps/api/app/services/llm/
+    (re.compile(r"^apps/api/app/llm/$"), "apps/api/app/services/llm/"),
+
     # app/llm/<file>.py → apps/api/app/services/llm/<file>.py
     (re.compile(r"^app/llm/(\S+\.py)$"), r"apps/api/app/services/llm/\1"),
     # app/llm/ (directory) → apps/api/app/services/llm/
