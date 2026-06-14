@@ -176,9 +176,15 @@ class GraceKnowledgeGraphService:
 
         # Build concrete path manifest generically (no hardcoded service names)
         from grace_control.services.feature_path_manifest_service import FeaturePathManifestBuilder
+        from grace_control.services.grace_knowledge_graph_service import GraceKnowledgeGraph
         manifest = FeaturePathManifestBuilder().build(
             feature_text=feature_text,
             context_paths=context_paths or [],
+            kg=GraceKnowledgeGraph(
+                project="",
+                modules=extract.relevant_modules,
+                slices=extract.relevant_slices,
+            ) if extract.relevant_modules else None,
         )
         manifest_block = FeaturePathManifestBuilder().build_prompt_block(manifest)
         if manifest_block:

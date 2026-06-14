@@ -60,6 +60,16 @@ class TestManifestForLLMService:
         assert manifest.source_path == "apps/api/app/services/horary_service.py"
         assert manifest.package_path == "apps/api/app/services/horary/"
 
+    def test_bare_filename_without_context_returns_no_manifest(self):
+        """Bare 'llm_service.py' without context paths → not found."""
+        builder = FeaturePathManifestBuilder()
+        manifest = builder.build(
+            feature_text="Split llm_service.py into llm package",
+            context_paths=[],
+        )
+        assert not manifest.found
+        assert manifest.package_path is None
+
     def test_manifest_uses_longest_kg_prefix(self):
         """Builder selects M-BACKEND-SERVICES by longest path match."""
         kg = _kg_with_backend_services()

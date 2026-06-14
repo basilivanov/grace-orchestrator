@@ -126,20 +126,26 @@ class FeaturePathManifestBuilder:
     def _find_source_file(self, feature_text: str, context_paths: list[str]) -> str | None:
         """Find existing source file from feature text or context paths."""
         # First, try to find a .py file mentioned in the feature text
-        path_pattern = re.compile(r"(\S+_service\.py|\S+_splitted\.py|\S+\.py)")
+        path_pattern = re.compile(r"(\/[^ ]+\.py|[a-zA-Z_]+/[^ ]+\.py)")
         matches = path_pattern.findall(feature_text)
         for m in matches:
-            # Accept paths that look like service files
-            if m != ".py":
-                # Try to resolve to full path
-                if "/" not in m:
-                    # Feature text may contain just filename; combine with context paths
+            m = m.strip()
+            if m == ".py":
+                continue
+            # Only accept paths with a directory component
+            if "/" in m:
+                # Verify it matches a context path
+                if context_paths:
                     for ctx in context_paths:
-                        if m in ctx and ctx.endswith(m):
+                        if m in ctx and ctx.endswith(m.replace("*", "")):
                             return ctx
-                    # If no context matches, use filename with best guess from KG later
+                    # Path in feature text but not in context → still accept if looks plausible
                     return m
                 return m
+            # Bare filename (e.g. "llm_service.py") — only accept if found in context
+            for ctx in context_paths:
+                if m in ctx and ctx.endswith(m):
+                    return ctx
 
         # Fallback: look for _service.py patterns in context paths
         service_files = [c for c in context_paths if c.endswith("_service.py")]
