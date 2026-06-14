@@ -109,17 +109,19 @@ class AgentRuntimeSelftest:
                      actual=contract.target_repo_root or "(empty)",
                      failure_code=AgentRuntimeFailureCode.AGENT_RUNTIME_CONTRACT_INVALID if not contract.target_repo_root else None)
 
+        target_repo_exists = Path(contract.target_repo_root).is_dir()
         self._check(CHECK_TARGET_REPO_EXISTS,
-                     ok=Path(contract.target_repo_root).is_dir(),
+                     ok=target_repo_exists,
                      expected=f"directory exists: {contract.target_repo_root}",
-                     actual="exists" if Path(contract.target_repo_root).is_dir() else "not found",
-                     failure_code=None)
+                     actual="exists" if target_repo_exists else "not found",
+                     failure_code=AgentRuntimeFailureCode.AGENT_TARGET_REPO_NOT_FOUND if not target_repo_exists else None)
 
+        orchestrator_repo_exists = Path(contract.orchestrator_repo_root).is_dir()
         self._check(CHECK_ORCHESTRATOR_REPO_EXISTS,
-                     ok=Path(contract.orchestrator_repo_root).is_dir(),
+                     ok=orchestrator_repo_exists,
                      expected=f"directory exists: {contract.orchestrator_repo_root}",
-                     actual="exists" if Path(contract.orchestrator_repo_root).is_dir() else "not found",
-                     failure_code=None)
+                     actual="exists" if orchestrator_repo_exists else "not found",
+                     failure_code=AgentRuntimeFailureCode.AGENT_ORCHESTRATOR_REPO_NOT_FOUND if not orchestrator_repo_exists else None)
 
         # The worktree slug directory is created inside _call_executor.
         # Check that the parent worktree root infrastructure exists.
@@ -179,7 +181,7 @@ class AgentRuntimeSelftest:
                 ok=is_rel,
                 expected=f"relative path, no '..': {p}",
                 actual=p,
-                failure_code=None,
+                failure_code=AgentRuntimeFailureCode.AGENT_SCOPE_PATH_INVALID if not is_rel else None,
             )
             if is_rel:
                 parent = Path(contract.worktree_root) / Path(p).parent if Path(p).parent != Path(".") else Path(contract.worktree_root)
@@ -196,7 +198,7 @@ class AgentRuntimeSelftest:
                      ok=not overlap,
                      expected="no overlap between frozen_scope and packet_scope",
                      actual=f"overlapping: {overlap}" if overlap else "none",
-                     failure_code=None)
+                     failure_code=AgentRuntimeFailureCode.AGENT_FROZEN_SCOPE_OVERLAP if overlap else None)
 
         # Artifact dir writability — try to create dir + probe file
         try:
@@ -206,6 +208,12 @@ class AgentRuntimeSelftest:
             probe.write_text("probe")
             probe.unlink()
             writable = True
+            # Remove empty dir to avoid orphaned directories when selftest
+            # runs without observability (no artifacts will be written later).
+            try:
+                probe_dir.rmdir()
+            except OSError:
+                pass  # not empty — another process wrote something, leave it
         except Exception:
             writable = False
         self._check(CHECK_ARTIFACT_DIR_WRITABLE,
@@ -217,8 +225,8 @@ class AgentRuntimeSelftest:
         # OpenCode checks
         self._run_opencode_checks(contract)
 
-        # Determine overall result
-        critical = self._checks_failing_with_codes([
+        # Determine overall result — build critical set dynamically
+        critical_codes = [
             AgentRuntimeFailureCode.AGENT_ENV_BAD_USER,
             AgentRuntimeFailureCode.AGENT_ENV_BAD_HOME,
             AgentRuntimeFailureCode.AGENT_ENV_BAD_CWD,
@@ -227,7 +235,16 @@ class AgentRuntimeSelftest:
             AgentRuntimeFailureCode.AGENT_SCOPE_PARENT_NOT_CREATABLE,
             AgentRuntimeFailureCode.AGENT_ARTIFACT_DIR_NOT_WRITABLE,
             AgentRuntimeFailureCode.AGENT_RUNTIME_CONTRACT_INVALID,
-        ])
+            AgentRuntimeFailureCode.AGENT_SCOPE_PATH_INVALID,
+            AgentRuntimeFailureCode.AGENT_FROZEN_SCOPE_OVERLAP,
+            AgentRuntimeFailureCode.AGENT_TARGET_REPO_NOT_FOUND,
+            AgentRuntimeFailureCode.AGENT_ORCHESTRATOR_REPO_NOT_FOUND,
+        ]
+        if getattr(settings, "agent_runtime_require_opencode_auth", False):
+            critical_codes.append(AgentRuntimeFailureCode.AGENT_ENV_MISSING_AUTH)
+        if getattr(settings, "agent_runtime_require_model_config", False):
+            critical_codes.append(AgentRuntimeFailureCode.AGENT_MODEL_UNAVAILABLE)
+        critical = self._checks_failing_with_codes(critical_codes)
 
         if critical:
             fc = critical[0].failure_code

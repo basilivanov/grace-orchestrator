@@ -328,7 +328,9 @@ class PacketExecutionAdapter:
             from grace_control.config.settings import settings as _settings
 
             # ── W3: Agent Runtime Contract + Selftest ──────────────────────
-            if not getattr(self, "_obs_disabled", True):
+            # Selftest is a safety gate — always runs when enabled (default True).
+            # Events/artifacts are only emitted when observability is enabled.
+            if getattr(_settings, "agent_runtime_selftest_enabled", True):
                 worktree_path = _resolve_worktree_for_contract(
                     packet_data, executor, _settings, self.project_root, self.worktree_root,
                 )
@@ -342,32 +344,37 @@ class PacketExecutionAdapter:
                     worktree_path=worktree_path,
                     settings=_settings,
                 )
-                contract_ref = self._obs_store.write_packet_json(
-                    trace=self._obs_trace, packet_id=packet_id,
-                    name="runtime_contract.json",
-                    payload=contract.model_dump(),
-                    kind="runtime_contract",
-                )
-                self._obs_event("packet.runtime_contract_created", status="completed",
-                                artifact_refs=[contract_ref] if contract_ref else None)
 
-                self._obs_event("packet.runtime_selftest_started", status="started")
-                selftest = AgentRuntimeSelftest(store=self._obs_store)
+                if not getattr(self, "_obs_disabled", True):
+                    contract_ref = self._obs_store.write_packet_json(
+                        trace=self._obs_trace, packet_id=packet_id,
+                        name="runtime_contract.json",
+                        payload=contract.model_dump(),
+                        kind="runtime_contract",
+                    )
+                    self._obs_event("packet.runtime_contract_created", status="completed",
+                                    artifact_refs=[contract_ref] if contract_ref else None)
+                    self._obs_event("packet.runtime_selftest_started", status="started")
+
+                selftest = AgentRuntimeSelftest()
                 selftest_result = selftest.run(contract, self._obs_trace)
-                # Emit one event per check
-                for c in selftest_result.checks:
-                    self._obs_event("packet.runtime_selftest_check_completed", status="completed",
-                                    payload={"check_id": c.check_id, "ok": c.ok,
-                                             "expected": c.expected, "actual": c.actual,
-                                             "failure_code": c.failure_code})
-                selftest_ref = selftest.persist(selftest_result, self._obs_trace)
-                if selftest_result.ok:
-                    self._obs_event("packet.runtime_selftest_completed", status="completed",
-                                    artifact_refs=[selftest_ref] if selftest_ref else None)
-                else:
-                    self._obs_event("packet.runtime_selftest_failed", status="failed",
-                                    message=selftest_result.summary,
-                                    artifact_refs=[selftest_ref] if selftest_ref else None)
+
+                if not getattr(self, "_obs_disabled", True):
+                    for c in selftest_result.checks:
+                        self._obs_event("packet.runtime_selftest_check_completed", status="completed",
+                                        payload={"check_id": c.check_id, "ok": c.ok,
+                                                 "expected": c.expected, "actual": c.actual,
+                                                 "failure_code": c.failure_code})
+                    selftest_ref = selftest.persist(selftest_result, self._obs_trace)
+                    if selftest_result.ok:
+                        self._obs_event("packet.runtime_selftest_completed", status="completed",
+                                        artifact_refs=[selftest_ref] if selftest_ref else None)
+                    else:
+                        self._obs_event("packet.runtime_selftest_failed", status="failed",
+                                        message=selftest_result.summary,
+                                        artifact_refs=[selftest_ref] if selftest_ref else None)
+
+                if not selftest_result.ok:
                     return self._fast_reject(selftest_result.summary, executor.get("executor_id", ""), run_id, start)
 
             # ── end W3 ─────────────────────────────────────────────────────
@@ -743,10 +750,7 @@ class PacketExecutionAdapter:
     def _init_observability(self, packet_data: dict, run_id: str) -> None:
         try:
             from grace_control.config.settings import settings as _obs_settings
-            if not _obs_settings.runtime_observability_enabled:
-                self._obs_disabled = True
-                return
-            self._obs_disabled = False
+            self._obs_disabled = not _obs_settings.runtime_observability_enabled
             feature_id = packet_data.get("feature_id", "") or ""
             wave_id = packet_data.get("wave_id", "") or ""
             packet_id = packet_data.get("id", "")
@@ -758,6 +762,8 @@ class PacketExecutionAdapter:
                 runtime_run_id=run_id,
             )
             set_current_trace(self._obs_trace)
+            if self._obs_disabled:
+                return
             self._obs_store = RuntimeArtifactStore()
             self._obs_events = RuntimeEventLogger(store=self._obs_store)
             self._obs_redactor = RuntimeRedactor()

@@ -157,8 +157,10 @@ async def _run_adapter(td: Path, *, accepted=True, report=None, backend=None, at
 
     _s.runtime_artifacts_root = str(td / ".grace" / "runs")
     # W3 selftest — relax checks for test env (no real git repos)
-    _s.agent_runtime_fail_on_bad_cwd = False
-    _s.agent_runtime_fail_on_bad_git_root = False
+    if not settings_overrides or "agent_runtime_fail_on_bad_cwd" not in settings_overrides:
+        _s.agent_runtime_fail_on_bad_cwd = False
+    if not settings_overrides or "agent_runtime_fail_on_bad_git_root" not in settings_overrides:
+        _s.agent_runtime_fail_on_bad_git_root = False
 
     if report is None:
         report = _make_accepted() if accepted else _make_rework()
@@ -344,6 +346,34 @@ class TestObservabilityDisabled:
                 "runtime_observability_enabled": False,
             })
             assert result.accepted is True
+
+    async def test_selftest_blocks_execution_even_with_observability_disabled(self):
+        """Selftest is a safety gate — must run even when observability is off.
+        If a critical failure occurs, execution must be blocked."""
+        with tempfile.TemporaryDirectory() as _td:
+            td = Path(_td)
+            from grace_control.config.settings import settings as _s
+            original_selftest = _s.agent_runtime_selftest_enabled
+            original_git = _s.agent_runtime_fail_on_bad_git_root
+            original_target_repo = _s.target_repo_root
+            try:
+                _s.agent_runtime_selftest_enabled = True
+                _s.agent_runtime_fail_on_bad_git_root = True
+                _s.target_repo_root = str(td)
+                result = await _run_adapter(
+                    Path(td),
+                    settings_overrides={"runtime_observability_enabled": False,
+                                        "agent_runtime_selftest_enabled": True,
+                                        "agent_runtime_fail_on_bad_git_root": True},
+                )
+                # With observability off but selftest on + bad git root,
+                # execution should be blocked (no mock git in test env).
+                assert not result.accepted, "selftest with critical failure must block execution"
+                assert result.reason is not None
+            finally:
+                _s.agent_runtime_selftest_enabled = original_selftest
+                _s.agent_runtime_fail_on_bad_git_root = original_git
+                _s.target_repo_root = original_target_repo
 
 
 class TestFailureIsolation:

@@ -203,67 +203,125 @@ class TestSelftestFailures:
         with tempfile.TemporaryDirectory() as _td:
             td = Path(_td)
             from grace_control.config.settings import settings
-            original = settings.agent_runtime_fail_on_bad_cwd
+            original_cwd = settings.agent_runtime_fail_on_bad_cwd
+            original_git = settings.agent_runtime_fail_on_bad_git_root
             try:
                 settings.agent_runtime_fail_on_bad_cwd = True
+                settings.agent_runtime_fail_on_bad_git_root = False
                 contract = _make_contract(td, cwd="/tmp/somewhere-else")
                 selftest = AgentRuntimeSelftest(shell_runner=_noop_shell)
                 result = selftest.run(contract, _make_trace())
+                assert not result.ok, "bad cwd should make selftest fail"
+                assert result.failure_code == AgentRuntimeFailureCode.AGENT_ENV_BAD_CWD
                 cwd_checks = [c for c in result.checks if c.check_id == CHECK_CWD_EQUALS_WORKTREE_ROOT]
                 assert cwd_checks
                 c = cwd_checks[0]
                 assert not c.ok
                 assert c.failure_code == AgentRuntimeFailureCode.AGENT_ENV_BAD_CWD
             finally:
-                settings.agent_runtime_fail_on_bad_cwd = original
+                settings.agent_runtime_fail_on_bad_cwd = original_cwd
+                settings.agent_runtime_fail_on_bad_git_root = original_git
 
     def test_selftest_fails_when_git_root_not_worktree_with_strict_setting(self):
         with tempfile.TemporaryDirectory() as _td:
             td = Path(_td)
             from grace_control.config.settings import settings
-            original = settings.agent_runtime_fail_on_bad_git_root
+            original_git = settings.agent_runtime_fail_on_bad_git_root
+            original_cwd = settings.agent_runtime_fail_on_bad_cwd
             try:
                 settings.agent_runtime_fail_on_bad_git_root = True
+                settings.agent_runtime_fail_on_bad_cwd = False
                 contract = _make_contract(td)
                 selftest = AgentRuntimeSelftest(shell_runner=_fail_git_shell)
                 result = selftest.run(contract, _make_trace())
-                # The git root check uses target_repo_root which is td (not a git repo)
+                assert not result.ok, "bad git root should make selftest fail"
+                assert result.failure_code == AgentRuntimeFailureCode.AGENT_ENV_BAD_GIT_ROOT
                 git_checks = [c for c in result.checks if c.check_id == CHECK_GIT_ROOT_EQUALS_WORKTREE_ROOT]
                 assert git_checks
                 c = git_checks[0]
                 assert not c.ok
                 assert c.failure_code == AgentRuntimeFailureCode.AGENT_ENV_BAD_GIT_ROOT
             finally:
-                settings.agent_runtime_fail_on_bad_git_root = original
+                settings.agent_runtime_fail_on_bad_git_root = original_git
+                settings.agent_runtime_fail_on_bad_cwd = original_cwd
 
     def test_selftest_rejects_absolute_scope_path(self):
         with tempfile.TemporaryDirectory() as _td:
             td = Path(_td)
-            contract = _make_contract(td, packet_scope=["/absolute/path"])
-            selftest = AgentRuntimeSelftest(shell_runner=_noop_shell)
-            result = selftest.run(contract, _make_trace())
-            scope_checks = [c for c in result.checks if c.check_id == CHECK_PACKET_SCOPE_RELATIVE]
-            assert any(not c.ok for c in scope_checks), "absolute path should fail scope check"
+            from grace_control.config.settings import settings
+            original_git = settings.agent_runtime_fail_on_bad_git_root
+            try:
+                settings.agent_runtime_fail_on_bad_git_root = False
+                contract = _make_contract(td, packet_scope=["/absolute/path"])
+                selftest = AgentRuntimeSelftest(shell_runner=_noop_shell)
+                result = selftest.run(contract, _make_trace())
+                assert not result.ok, "absolute scope should make selftest fail"
+                assert result.failure_code == AgentRuntimeFailureCode.AGENT_SCOPE_PATH_INVALID
+                scope_checks = [c for c in result.checks if c.check_id == CHECK_PACKET_SCOPE_RELATIVE]
+                assert any(not c.ok for c in scope_checks), "absolute path should fail scope check"
+                for c in scope_checks:
+                    if not c.ok:
+                        assert c.failure_code == AgentRuntimeFailureCode.AGENT_SCOPE_PATH_INVALID
+            finally:
+                settings.agent_runtime_fail_on_bad_git_root = original_git
 
     def test_selftest_rejects_dotdot_scope_path(self):
         with tempfile.TemporaryDirectory() as _td:
             td = Path(_td)
-            contract = _make_contract(td, packet_scope=["src/../outside"])
-            selftest = AgentRuntimeSelftest(shell_runner=_noop_shell)
-            result = selftest.run(contract, _make_trace())
-            scope_checks = [c for c in result.checks if c.check_id == CHECK_PACKET_SCOPE_RELATIVE]
-            assert any(not c.ok for c in scope_checks), "dotdot path should fail scope check"
+            from grace_control.config.settings import settings
+            original_git = settings.agent_runtime_fail_on_bad_git_root
+            try:
+                settings.agent_runtime_fail_on_bad_git_root = False
+                contract = _make_contract(td, packet_scope=["src/../outside"])
+                selftest = AgentRuntimeSelftest(shell_runner=_noop_shell)
+                result = selftest.run(contract, _make_trace())
+                assert not result.ok, "dotdot scope should make selftest fail"
+                assert result.failure_code == AgentRuntimeFailureCode.AGENT_SCOPE_PATH_INVALID
+                scope_checks = [c for c in result.checks if c.check_id == CHECK_PACKET_SCOPE_RELATIVE]
+                assert any(not c.ok for c in scope_checks), "dotdot path should fail scope check"
+                for c in scope_checks:
+                    if not c.ok:
+                        assert c.failure_code == AgentRuntimeFailureCode.AGENT_SCOPE_PATH_INVALID
+            finally:
+                settings.agent_runtime_fail_on_bad_git_root = original_git
 
     def test_selftest_rejects_frozen_scope_overlap(self):
         with tempfile.TemporaryDirectory() as _td:
             td = Path(_td)
-            contract = _make_contract(td, packet_scope=["src/foo", "src/bar"],
-                                      frozen_scope=["src/foo"])
-            selftest = AgentRuntimeSelftest(shell_runner=_noop_shell)
-            result = selftest.run(contract, _make_trace())
-            overlap_checks = [c for c in result.checks if c.check_id == CHECK_FROZEN_SCOPE_NO_OVERLAP]
-            assert overlap_checks
-            assert not overlap_checks[0].ok, "frozen scope overlap should be detected"
+            from grace_control.config.settings import settings
+            original_git = settings.agent_runtime_fail_on_bad_git_root
+            try:
+                settings.agent_runtime_fail_on_bad_git_root = False
+                contract = _make_contract(td, packet_scope=["src/foo", "src/bar"],
+                                          frozen_scope=["src/foo"])
+                selftest = AgentRuntimeSelftest(shell_runner=_noop_shell)
+                result = selftest.run(contract, _make_trace())
+                assert not result.ok, "frozen scope overlap should make selftest fail"
+                assert result.failure_code == AgentRuntimeFailureCode.AGENT_FROZEN_SCOPE_OVERLAP
+                overlap_checks = [c for c in result.checks if c.check_id == CHECK_FROZEN_SCOPE_NO_OVERLAP]
+                assert overlap_checks
+                assert not overlap_checks[0].ok, "frozen scope overlap should be detected"
+                assert overlap_checks[0].failure_code == AgentRuntimeFailureCode.AGENT_FROZEN_SCOPE_OVERLAP
+            finally:
+                settings.agent_runtime_fail_on_bad_git_root = original_git
+
+    def test_selftest_fails_on_missing_target_repo(self):
+        with tempfile.TemporaryDirectory() as _td:
+            td = Path(_td)
+            from grace_control.config.settings import settings
+            original_git = settings.agent_runtime_fail_on_bad_git_root
+            original_cwd = settings.agent_runtime_fail_on_bad_cwd
+            try:
+                settings.agent_runtime_fail_on_bad_git_root = False
+                settings.agent_runtime_fail_on_bad_cwd = False
+                contract = _make_contract(td, target_repo_root="/nonexistent/path")
+                selftest = AgentRuntimeSelftest(shell_runner=_noop_shell)
+                result = selftest.run(contract, _make_trace())
+                assert not result.ok, "missing target repo should make selftest fail"
+                assert result.failure_code == AgentRuntimeFailureCode.AGENT_TARGET_REPO_NOT_FOUND
+            finally:
+                settings.agent_runtime_fail_on_bad_git_root = original_git
+                settings.agent_runtime_fail_on_bad_cwd = original_cwd
 
     def test_selftest_detects_artifact_dir_not_writable(self):
         with tempfile.TemporaryDirectory() as _td:
@@ -332,20 +390,28 @@ class TestOpenCodeChecks:
     def test_opencode_auth_missing_is_failure_when_strict(self):
         """When agent_runtime_require_opencode_auth is True, missing auth fails."""
         from grace_control.config.settings import settings
-        original = settings.agent_runtime_require_opencode_auth
+        original_auth = settings.agent_runtime_require_opencode_auth
+        original_git = settings.agent_runtime_fail_on_bad_git_root
+        original_cwd = settings.agent_runtime_fail_on_bad_cwd
         try:
             settings.agent_runtime_require_opencode_auth = True
+            settings.agent_runtime_fail_on_bad_git_root = False
+            settings.agent_runtime_fail_on_bad_cwd = False
             with tempfile.TemporaryDirectory() as _td:
                 td = Path(_td)
                 contract = _make_contract(td)
                 selftest = AgentRuntimeSelftest(shell_runner=_noop_shell)
                 result = selftest.run(contract, _make_trace())
+                assert not result.ok, "missing auth (strict) should make selftest fail"
+                assert result.failure_code == AgentRuntimeFailureCode.AGENT_ENV_MISSING_AUTH
                 oc = [c for c in result.checks if c.check_id == CHECK_OPENCODE_AUTH_VISIBLE]
                 assert oc
                 assert not oc[0].ok
                 assert oc[0].failure_code == AgentRuntimeFailureCode.AGENT_ENV_MISSING_AUTH
         finally:
-            settings.agent_runtime_require_opencode_auth = original
+            settings.agent_runtime_require_opencode_auth = original_auth
+            settings.agent_runtime_fail_on_bad_git_root = original_git
+            settings.agent_runtime_fail_on_bad_cwd = original_cwd
 
     def test_opencode_model_missing_is_warning_when_not_strict(self):
         with tempfile.TemporaryDirectory() as _td:
@@ -359,20 +425,28 @@ class TestOpenCodeChecks:
 
     def test_opencode_model_missing_is_failure_when_strict(self):
         from grace_control.config.settings import settings
-        original = settings.agent_runtime_require_model_config
+        original_model = settings.agent_runtime_require_model_config
+        original_git = settings.agent_runtime_fail_on_bad_git_root
+        original_cwd = settings.agent_runtime_fail_on_bad_cwd
         try:
             settings.agent_runtime_require_model_config = True
+            settings.agent_runtime_fail_on_bad_git_root = False
+            settings.agent_runtime_fail_on_bad_cwd = False
             with tempfile.TemporaryDirectory() as _td:
                 td = Path(_td)
                 contract = _make_contract(td)
                 selftest = AgentRuntimeSelftest(shell_runner=_noop_shell)
                 result = selftest.run(contract, _make_trace())
+                assert not result.ok, "missing model (strict) should make selftest fail"
+                assert result.failure_code == AgentRuntimeFailureCode.AGENT_MODEL_UNAVAILABLE
                 oc = [c for c in result.checks if c.check_id == CHECK_OPENCODE_MODEL_CONFIG_PRESENT]
                 assert oc
                 assert not oc[0].ok
                 assert oc[0].failure_code == AgentRuntimeFailureCode.AGENT_MODEL_UNAVAILABLE
         finally:
-            settings.agent_runtime_require_model_config = original
+            settings.agent_runtime_require_model_config = original_model
+            settings.agent_runtime_fail_on_bad_git_root = original_git
+            settings.agent_runtime_fail_on_bad_cwd = original_cwd
 
 
 class TestFailureCodes:
@@ -389,6 +463,18 @@ class TestFailureCodes:
 
     def test_scope_parent_failure_code(self):
         assert AgentRuntimeFailureCode.AGENT_SCOPE_PARENT_NOT_CREATABLE == "AGENT_SCOPE_PARENT_NOT_CREATABLE"
+
+    def test_scope_path_invalid_failure_code(self):
+        assert AgentRuntimeFailureCode.AGENT_SCOPE_PATH_INVALID == "AGENT_SCOPE_PATH_INVALID"
+
+    def test_frozen_scope_overlap_failure_code(self):
+        assert AgentRuntimeFailureCode.AGENT_FROZEN_SCOPE_OVERLAP == "AGENT_FROZEN_SCOPE_OVERLAP"
+
+    def test_target_repo_not_found_failure_code(self):
+        assert AgentRuntimeFailureCode.AGENT_TARGET_REPO_NOT_FOUND == "AGENT_TARGET_REPO_NOT_FOUND"
+
+    def test_orchestrator_repo_not_found_failure_code(self):
+        assert AgentRuntimeFailureCode.AGENT_ORCHESTRATOR_REPO_NOT_FOUND == "AGENT_ORCHESTRATOR_REPO_NOT_FOUND"
 
 
 class TestContractArtifact:

@@ -123,6 +123,7 @@ class GraceSettings(BaseSettings):
     runtime_redact_secrets: bool = True
 
     # ── W3 Agent Runtime Selftest ──
+    agent_runtime_selftest_enabled: bool = True
     agent_runtime_require_opencode_auth: bool = False
     agent_runtime_require_model_config: bool = False
     agent_runtime_fail_on_bad_cwd: bool = True
