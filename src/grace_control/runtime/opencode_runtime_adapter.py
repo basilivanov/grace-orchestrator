@@ -7,7 +7,7 @@ import os
 import signal
 import time
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from grace_control.agent.backend import ExecutionBackend, ExecutionRequest, ExecutionResult
 from grace_control.config.settings import settings
@@ -62,26 +62,30 @@ class OpenCodeRuntimeAdapter(AgentExecutionAdapter):
         self._store = store or RuntimeArtifactStore()
         self._redactor = redactor or RuntimeRedactor()
 
-    async def run(self, contract: AgentRuntimeContract, prompt: str) -> AgentExecutionAdapterResult:
+    async def run(self, contract: AgentRuntimeContract, prompt: str, cmd: list[str] | None = None) -> AgentExecutionAdapterResult:
         start = time.time()
         try:
-            mode = getattr(settings, "opencode_runtime_mode", "direct")
-            if mode == "serve_attach":
-                sm = self._server_manager or OpenCodeServerManager()
-                server_state = await sm.ensure_running()
-                if server_state.status == OpenCodeServerStatus.FAILED:
-                    return AgentExecutionAdapterResult(
-                        ok=False,
-                        adapter="opencode",
-                        command=[],
-                        cwd=contract.worktree_root,
-                        duration_ms=int((time.time() - start) * 1000),
-                        failure_code=server_state.failure_code or AgentRuntimeFailureCode.AGENT_OPENCODE_SERVER_NOT_RUNNING,
-                        failure_summary=server_state.failure_summary or "server not running",
-                    )
-                cmd = self._attach_cmd_builder.build(contract, server_state.url)
+            if cmd is not None:
+                pass
             else:
-                cmd = self._cmd_builder.build(contract)
+                mode = getattr(settings, "opencode_runtime_mode", "direct")
+                if mode == "serve_attach":
+                    from grace_control.runtime.opencode_server_manager import OpenCodeServerManager
+                    sm = self._server_manager or OpenCodeServerManager()
+                    server_state = await sm.ensure_running()
+                    if server_state.status == OpenCodeServerStatus.FAILED:
+                        return AgentExecutionAdapterResult(
+                            ok=False,
+                            adapter="opencode",
+                            command=[],
+                            cwd=contract.worktree_root,
+                            duration_ms=int((time.time() - start) * 1000),
+                            failure_code=server_state.failure_code or AgentRuntimeFailureCode.AGENT_OPENCODE_SERVER_NOT_RUNNING,
+                            failure_summary=server_state.failure_summary or "server not running",
+                        )
+                    cmd = self._attach_cmd_builder.build(contract, server_state.url)
+                else:
+                    cmd = self._cmd_builder.build(contract)
         except ValueError as e:
             return AgentExecutionAdapterResult(
                 ok=False,
@@ -354,11 +358,132 @@ class OpenCodeExecutionBackend:
         store = self._store
         events = self._events
         all_refs: list[RuntimeArtifactRef] = []
+        run_cmd: list[str] | None = None
+        mode = getattr(settings, "opencode_runtime_mode", "direct")
 
-        # ── 1. Write command.txt before the process ────────────────────
+        # ── 1. Serve/attach server management (mode == "serve_attach") ──
+        if mode == "serve_attach":
+            sm = self._adapter._server_manager or OpenCodeServerManager()
+            binary = getattr(settings, "opencode_binary", "opencode")
+            host = getattr(settings, "opencode_server_host", "127.0.0.1")
+            port = getattr(settings, "opencode_server_port", 4096)
+            server_url = f"http://{host}:{port}"
+            server_cmd_str = f"{binary} serve --hostname {host} --port {port}"
+
+            # Server command artifact
+            server_cmd_ref = None
+            if trace and store:
+                try:
+                    server_cmd_ref = store.write_packet_text(
+                        trace=trace, packet_id=package_id,
+                        name="opencode_server_command.txt",
+                        content=self._adapter._redactor.redact_string(server_cmd_str),
+                        kind="opencode_server_command",
+                    )
+                    if server_cmd_ref:
+                        all_refs.append(server_cmd_ref)
+                except Exception:
+                    pass
+
+            if events and trace:
+                events.emit(trace=trace, event="packet.opencode_server_start_started",
+                            stage="opencode_run", component="opencode_adapter",
+                            status="started",
+                            artifact_refs=[server_cmd_ref] if server_cmd_ref else None)
+
+            server_state = await sm.ensure_running()
+
+            # Server state artifact
+            state_ref = None
+            if trace and store:
+                try:
+                    state_ref = store.write_packet_json(
+                        trace=trace, packet_id=package_id,
+                        name="opencode_server_state.json",
+                        payload=self._adapter._redactor.redact_payload(server_state.model_dump()),
+                        kind="opencode_server_state",
+                    )
+                    if state_ref:
+                        all_refs.append(state_ref)
+                except Exception:
+                    pass
+
+            # Server health artifact
+            health = await sm.healthcheck()
+            health_ref = None
+            if trace and store:
+                try:
+                    health_ref = store.write_packet_json(
+                        trace=trace, packet_id=package_id,
+                        name="opencode_server_health.json",
+                        payload=self._adapter._redactor.redact_payload(health.model_dump()),
+                        kind="opencode_server_health",
+                    )
+                    if health_ref:
+                        all_refs.append(health_ref)
+                except Exception:
+                    pass
+
+            # Server log tail artifact
+            log_tail_ref = None
+            if trace and store:
+                try:
+                    log_path = Path(getattr(settings, "opencode_server_log_path", ".grace/opencode-server.log"))
+                    if log_path.exists():
+                        tail_lines = log_path.read_text(encoding="utf-8").split("\n")[-50:]
+                        log_content = "\n".join(tail_lines)
+                        log_tail_ref = store.write_packet_text(
+                            trace=trace, packet_id=package_id,
+                            name="opencode_server_log_tail.txt",
+                            content=self._adapter._redactor.redact_string(log_content),
+                            kind="opencode_server_log_tail",
+                        )
+                        if log_tail_ref:
+                            all_refs.append(log_tail_ref)
+                except Exception:
+                    pass
+
+            if events and trace:
+                server_event = "packet.opencode_server_reused" if server_state.status == OpenCodeServerStatus.RUNNING else "packet.opencode_server_start_completed"
+                events.emit(trace=trace, event=server_event,
+                            stage="opencode_run", component="opencode_adapter",
+                            status="completed",
+                            artifact_refs=[r for r in (state_ref, health_ref, log_tail_ref) if r] or None)
+
+            if server_state.status == OpenCodeServerStatus.FAILED:
+                if events and trace:
+                    events.emit(trace=trace, event="packet.opencode_server_start_failed",
+                                stage="opencode_run", component="opencode_adapter",
+                                status="failed",
+                                message=server_state.failure_summary or "server start failed")
+                return _map_adapter_result(
+                    _make_failed_result(contract, early_failure_code=server_state.failure_code or
+                                        AgentRuntimeFailureCode.AGENT_OPENCODE_SERVER_NOT_RUNNING,
+                                        early_failure_summary=server_state.failure_summary or "server not running"),
+                    request,
+                )
+            if server_state.status == OpenCodeServerStatus.UNHEALTHY:
+                if events and trace:
+                    events.emit(trace=trace, event="packet.opencode_server_start_failed",
+                                stage="opencode_run", component="opencode_adapter",
+                                status="failed",
+                                message=server_state.failure_summary or "server unhealthy")
+                return _map_adapter_result(
+                    _make_failed_result(contract, early_failure_code=AgentRuntimeFailureCode.AGENT_OPENCODE_SERVER_UNHEALTHY,
+                                        early_failure_summary=server_state.failure_summary or "server unhealthy"),
+                    request,
+                )
+
+            # Attach command
+            run_cmd = self._adapter._attach_cmd_builder.build(contract, server_url)
+
+        # ── 2. Write command.txt before the process ────────────────────
+        cmd_ref = None
         if trace and store:
             try:
-                raw_cmd = " ".join(self._adapter._cmd_builder.build(contract))
+                if run_cmd is None:
+                    run_cmd = self._adapter._cmd_builder.build(contract)
+                raw_cmd = " ".join(run_cmd)
                 redacted_cmd = self._adapter._redactor.redact_string(raw_cmd)
                 cmd_ref = store.write_packet_text(
                     trace=trace, packet_id=package_id,
@@ -369,20 +494,30 @@ class OpenCodeExecutionBackend:
             except Exception:
                 pass
 
-        # ── 2. Emit lifecycle: command built + process started ─────────
+        # ── 3. Emit lifecycle: command built + process started ─────────
         if events and trace:
             events.emit(trace=trace, event="packet.opencode_command_built",
                         stage="opencode_run", component="opencode_adapter",
                         status="completed",
-                        artifact_refs=[cmd_ref] if (all_refs and cmd_ref in all_refs) else None)
+                        artifact_refs=[cmd_ref] if cmd_ref else None)
             events.emit(trace=trace, event="packet.opencode_process_started",
                         stage="opencode_run", component="opencode_adapter",
                         status="started")
 
-        # ── 3. Run the adapter (no artifacts — we write them ourselves) ─
-        adapter_result = await self._adapter.run(contract, prompt)
+        # ── 4. Run the adapter (pass prebuilt cmd if serve_attach) ─────
+        if run_cmd is not None:
+            adapter_result = await self._adapter.run(contract, prompt, cmd=run_cmd)
+        else:
+            adapter_result = await self._adapter.run(contract, prompt)
 
-        # ── 4. Write remaining artifacts after the process ─────────────
+        # ── 5. Classify attach failure ─────────────────────────────────
+        if mode == "serve_attach" and not adapter_result.ok and adapter_result.failure_code is None:
+            adapter_result.failure_code = AgentRuntimeFailureCode.AGENT_OPENCODE_ATTACH_FAILED
+            adapter_result.failure_stage = "opencode_attach_run"
+            if not adapter_result.failure_summary:
+                adapter_result.failure_summary = f"attach run failed (exit {adapter_result.exit_code})"
+
+        # ── 6. Write remaining artifacts after the process ─────────────
         stdout_ref = None
         stderr_ref = None
         events_ref = None
@@ -454,7 +589,7 @@ class OpenCodeExecutionBackend:
             except Exception:
                 _log.warn("write_result_failed")
 
-        # ── 5. Emit per-artifact lifecycle events ──────────────────────
+        # ── 7. Emit per-artifact lifecycle events ──────────────────────
         if events and trace:
             if stdout_ref:
                 events.emit(trace=trace, event="packet.opencode_stdout_captured",
@@ -479,7 +614,7 @@ class OpenCodeExecutionBackend:
                             status="completed",
                             artifact_refs=[result_ref])
 
-            # ── 6. Final lifecycle event ───────────────────────────────
+            # ── 8. Final lifecycle event ──────────────────────────────
             if adapter_result.ok:
                 events.emit(trace=trace, event="packet.opencode_process_completed",
                             stage="opencode_run", component="opencode_adapter",
@@ -534,6 +669,18 @@ def _build_full_prompt(request: ExecutionRequest) -> str:
         return f"# Packet: {request.packet_id}\n\nExecute the required changes."
 
     return "\n\n".join(prompts)
+
+
+def _make_failed_result(contract: AgentRuntimeContract,
+                         early_failure_code: str,
+                         early_failure_summary: str) -> AgentExecutionAdapterResult:
+    return AgentExecutionAdapterResult(
+        ok=False, adapter="opencode", command=[],
+        cwd=contract.worktree_root, duration_ms=0,
+        failure_code=early_failure_code,
+        failure_stage="opencode_server_setup",
+        failure_summary=early_failure_summary,
+    )
 
 
 def _map_adapter_result(ar: AgentExecutionAdapterResult, request: ExecutionRequest) -> ExecutionResult:

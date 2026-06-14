@@ -19,11 +19,11 @@ pytestmark = pytest.mark.asyncio
 FAKE_PID = 12345
 
 
-def _ok_health(host: str, port: int) -> tuple[bool, str, int | None]:
+def _ok_health(host: str, port: int, timeout: int = 5) -> tuple[bool, str, int | None]:
     return True, "tcp_ok", 5
 
 
-def _fail_health(host: str, port: int) -> tuple[bool, str, int | None]:
+def _fail_health(host: str, port: int, timeout: int = 5) -> tuple[bool, str, int | None]:
     return False, "connection_refused", None
 
 

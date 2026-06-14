@@ -23,17 +23,17 @@ from grace_control.runtime.opencode_server_state import (
 _log = GraceLogger("opencode_server_manager")
 
 ProcessRunner = Callable[..., asyncio.subprocess.Process]
-HealthRunner = Callable[[str, int], tuple[bool, str, int | None]]
+HealthRunner = Callable[[str, int, int], tuple[bool, str, int | None]]
 
 
 def _real_process_runner(*args, **kwargs) -> asyncio.subprocess.Process:
     return asyncio.create_subprocess_exec(*args, **kwargs)
 
 
-def _tcp_healthcheck(host: str, port: int) -> tuple[bool, str, int | None]:
+def _tcp_healthcheck(host: str, port: int, timeout_seconds: int = 5) -> tuple[bool, str, int | None]:
     try:
         start = time.monotonic()
-        s = socket.create_connection((host, port), timeout=5)
+        s = socket.create_connection((host, port), timeout=timeout_seconds)
         elapsed = int((time.monotonic() - start) * 1000)
         s.close()
         return True, "tcp_ok", elapsed
@@ -84,9 +84,10 @@ class OpenCodeServerManager:
     async def healthcheck(self) -> OpenCodeServerHealth:
         host = getattr(settings, "opencode_server_host", "127.0.0.1")
         port = getattr(settings, "opencode_server_port", 4096)
+        timeout = getattr(settings, "opencode_server_health_timeout_seconds", 5)
         url = getattr(settings, "opencode_server_url", "") or f"http://{host}:{port}"
         pid = self._read_pid()
-        ok, summary, latency = self._healthcheck(host, port)
+        ok, summary, latency = self._healthcheck(host, port, timeout)
         if ok:
             return OpenCodeServerHealth(ok=True, url=url, pid=pid, latency_ms=latency, summary=summary)
         return OpenCodeServerHealth(
