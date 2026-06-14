@@ -183,6 +183,13 @@ class OpenCodeRuntimeAdapter(AgentExecutionAdapter):
             no_event_bypassed=bypass_no_event,
         )
 
+        # In serve_attach mode, override generic failures to ATTACH_FAILED
+        if getattr(settings, "opencode_runtime_mode", None) == "serve_attach":
+            if failure_code in (None, AgentRuntimeFailureCode.AGENT_PROCESS_CRASHED,
+                                AgentRuntimeFailureCode.AGENT_NO_EVENT_OUTPUT):
+                failure_code = AgentRuntimeFailureCode.AGENT_OPENCODE_ATTACH_FAILED
+                failure_summary = failure_summary or f"attach run failed (exit {exit_code})"
+
         session_id = None
         if raw_events:
             for ev in raw_events:
@@ -393,6 +400,31 @@ class OpenCodeExecutionBackend:
 
             server_state = await sm.ensure_running()
 
+            # Early return on failure — no artifacts, only failure event
+            if server_state.status == OpenCodeServerStatus.FAILED:
+                if events and trace:
+                    events.emit(trace=trace, event="packet.opencode_server_start_failed",
+                                stage="opencode_run", component="opencode_adapter",
+                                status="failed",
+                                message=server_state.failure_summary or "server start failed")
+                return _map_adapter_result(
+                    _make_failed_result(contract, early_failure_code=server_state.failure_code or
+                                        AgentRuntimeFailureCode.AGENT_OPENCODE_SERVER_NOT_RUNNING,
+                                        early_failure_summary=server_state.failure_summary or "server not running"),
+                    request,
+                )
+            if server_state.status == OpenCodeServerStatus.UNHEALTHY:
+                if events and trace:
+                    events.emit(trace=trace, event="packet.opencode_server_start_failed",
+                                stage="opencode_run", component="opencode_adapter",
+                                status="failed",
+                                message=server_state.failure_summary or "server unhealthy")
+                return _map_adapter_result(
+                    _make_failed_result(contract, early_failure_code=AgentRuntimeFailureCode.AGENT_OPENCODE_SERVER_UNHEALTHY,
+                                        early_failure_summary=server_state.failure_summary or "server unhealthy"),
+                    request,
+                )
+
             # Server state artifact
             state_ref = None
             if trace and store:
@@ -408,8 +440,18 @@ class OpenCodeExecutionBackend:
                 except Exception:
                     pass
 
-            # Server health artifact
+            # Healthcheck + artifact
+            if events and trace:
+                events.emit(trace=trace, event="packet.opencode_server_healthcheck_started",
+                            stage="opencode_run", component="opencode_adapter",
+                            status="started")
             health = await sm.healthcheck()
+            if events and trace:
+                events.emit(trace=trace, event="packet.opencode_server_healthcheck_completed",
+                            stage="opencode_run", component="opencode_adapter",
+                            status="completed",
+                            payload={"ok": health.ok, "latency_ms": health.latency_ms})
+
             health_ref = None
             if trace and store:
                 try:
@@ -443,39 +485,25 @@ class OpenCodeExecutionBackend:
                 except Exception:
                     pass
 
+            # Server event: reused or start_completed
             if events and trace:
-                server_event = "packet.opencode_server_reused" if server_state.status == OpenCodeServerStatus.RUNNING else "packet.opencode_server_start_completed"
-                events.emit(trace=trace, event=server_event,
-                            stage="opencode_run", component="opencode_adapter",
-                            status="completed",
-                            artifact_refs=[r for r in (state_ref, health_ref, log_tail_ref) if r] or None)
-
-            if server_state.status == OpenCodeServerStatus.FAILED:
-                if events and trace:
-                    events.emit(trace=trace, event="packet.opencode_server_start_failed",
+                if server_state.reused:
+                    events.emit(trace=trace, event="packet.opencode_server_reused",
                                 stage="opencode_run", component="opencode_adapter",
-                                status="failed",
-                                message=server_state.failure_summary or "server start failed")
-                return _map_adapter_result(
-                    _make_failed_result(contract, early_failure_code=server_state.failure_code or
-                                        AgentRuntimeFailureCode.AGENT_OPENCODE_SERVER_NOT_RUNNING,
-                                        early_failure_summary=server_state.failure_summary or "server not running"),
-                    request,
-                )
-            if server_state.status == OpenCodeServerStatus.UNHEALTHY:
-                if events and trace:
-                    events.emit(trace=trace, event="packet.opencode_server_start_failed",
+                                status="completed",
+                                artifact_refs=[r for r in (state_ref, health_ref, log_tail_ref) if r] or None)
+                else:
+                    events.emit(trace=trace, event="packet.opencode_server_start_completed",
                                 stage="opencode_run", component="opencode_adapter",
-                                status="failed",
-                                message=server_state.failure_summary or "server unhealthy")
-                return _map_adapter_result(
-                    _make_failed_result(contract, early_failure_code=AgentRuntimeFailureCode.AGENT_OPENCODE_SERVER_UNHEALTHY,
-                                        early_failure_summary=server_state.failure_summary or "server unhealthy"),
-                    request,
-                )
+                                status="completed",
+                                artifact_refs=[r for r in (state_ref, health_ref, log_tail_ref) if r] or None)
 
             # Attach command
             run_cmd = self._adapter._attach_cmd_builder.build(contract, server_url)
+            if events and trace:
+                events.emit(trace=trace, event="packet.opencode_attach_command_built",
+                            stage="opencode_run", component="opencode_adapter",
+                            status="completed")
 
         # ── 2. Write command.txt before the process ────────────────────
         cmd_ref = None
@@ -510,14 +538,7 @@ class OpenCodeExecutionBackend:
         else:
             adapter_result = await self._adapter.run(contract, prompt)
 
-        # ── 5. Classify attach failure ─────────────────────────────────
-        if mode == "serve_attach" and not adapter_result.ok and adapter_result.failure_code is None:
-            adapter_result.failure_code = AgentRuntimeFailureCode.AGENT_OPENCODE_ATTACH_FAILED
-            adapter_result.failure_stage = "opencode_attach_run"
-            if not adapter_result.failure_summary:
-                adapter_result.failure_summary = f"attach run failed (exit {adapter_result.exit_code})"
-
-        # ── 6. Write remaining artifacts after the process ─────────────
+        # ── 5. Write remaining artifacts after the process ─────────────
         stdout_ref = None
         stderr_ref = None
         events_ref = None

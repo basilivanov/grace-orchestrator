@@ -287,4 +287,6 @@ class TestAttachRuntimeMode:
             )
             result = await adapter.run(_contract(), "test prompt")
             assert not result.ok
-            assert result.failure_code is not None
+            # Generic crash (exit 1, no events) must be classified as attach failure
+            assert result.failure_code == AgentRuntimeFailureCode.AGENT_OPENCODE_ATTACH_FAILED, \
+                f"expected ATTACH_FAILED, got {result.failure_code}"

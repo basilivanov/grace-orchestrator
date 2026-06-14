@@ -20,6 +20,7 @@ class OpenCodeServerState(BaseModel):
     log_path: str = ""
     failure_code: str | None = None
     failure_summary: str | None = None
+    reused: bool = False
 
 
 class OpenCodeServerHealth(BaseModel):

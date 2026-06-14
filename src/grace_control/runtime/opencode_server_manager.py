@@ -67,6 +67,7 @@ class OpenCodeServerManager:
         if state.status == OpenCodeServerStatus.RUNNING:
             health = await self.healthcheck()
             if health.ok:
+                state.reused = True
                 _log.info("server_reused", url=state.url, pid=state.pid)
                 return state
             if getattr(settings, "opencode_server_restart_on_unhealthy", True):
@@ -79,7 +80,9 @@ class OpenCodeServerManager:
                 failure_code=AgentRuntimeFailureCode.AGENT_OPENCODE_SERVER_UNHEALTHY,
                 failure_summary=health.summary or "server unhealthy",
             )
-        return await self.start()
+        state = await self.start()
+        state.reused = False
+        return state
 
     async def healthcheck(self) -> OpenCodeServerHealth:
         host = getattr(settings, "opencode_server_host", "127.0.0.1")
