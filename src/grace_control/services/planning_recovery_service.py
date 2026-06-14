@@ -85,7 +85,10 @@ def build_repair_prompt(
 Do NOT regenerate the whole plan from scratch.
 Patch the previous JSON plan minimally.
 Preserve valid packets unless the compiler error requires changing them.
-Return corrected JSON only — NO markdown, NO backticks, NO explanation.
+
+CRITICAL: Your response must be ONLY valid JSON. Start with {{ and end with }}.
+NO markdown fences. NO backticks. NO explanation text before or after.
+NO code blocks. NO multi-line comments. JUST the JSON object.
 
 ## Original feature
 Title: {feature_title}
@@ -110,7 +113,7 @@ Description: {feature_description}
   4. remove shim later.
 - Keep ALL other parts unchanged.
 
-Return ONLY valid JSON (the corrected plan)."""
+Respond with the corrected JSON plan now. Start with {{"waves":
     return prompt
 
 
@@ -144,14 +147,26 @@ async def run_architect_repair(
     if not result.accepted or not result.output.strip():
         return None, result.error or "architect repair returned empty"
 
-    # Parse JSON from output
+    # Parse JSON from output. Try several strategies:
+    # 1. Find outermost { ... } block
+    # 2. Try to parse entire output as JSON (in case it's pure JSON without fences)
     import re
+    parsed = None
     json_match = re.search(r"\{.*\}", result.output, re.DOTALL)
-    if not json_match:
-        return None, "no JSON found in architect repair output"
 
-    try:
-        repaired = json.loads(json_match.group())
-        return repaired, None
-    except json.JSONDecodeError as e:
-        return None, f"JSON parse error in repair output: {e}"
+    if json_match:
+        try:
+            parsed = json.loads(json_match.group())
+        except json.JSONDecodeError:
+            pass
+
+    if parsed is None:
+        try:
+            parsed = json.loads(result.output.strip())
+        except json.JSONDecodeError:
+            pass
+
+    if parsed is None:
+        return None, "no valid JSON found in architect repair output"
+
+    return parsed, None
