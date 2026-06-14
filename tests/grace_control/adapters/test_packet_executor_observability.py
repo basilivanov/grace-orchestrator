@@ -161,6 +161,8 @@ async def _run_adapter(td: Path, *, accepted=True, report=None, backend=None, at
         _s.agent_runtime_fail_on_bad_cwd = False
     if not settings_overrides or "agent_runtime_fail_on_bad_git_root" not in settings_overrides:
         _s.agent_runtime_fail_on_bad_git_root = False
+    if not settings_overrides or "agent_runtime_allow_non_git_scope_skip" not in settings_overrides:
+        _s.agent_runtime_allow_non_git_scope_skip = True
 
     if report is None:
         report = _make_accepted() if accepted else _make_rework()
@@ -378,6 +380,8 @@ class TestObservabilityDisabled:
 
 class TestFailureIsolation:
     async def test_artifact_write_failure_does_not_crash(self):
+        from grace_control.config.settings import settings as _s
+        _s.agent_runtime_allow_non_git_scope_skip = True
         with tempfile.TemporaryDirectory() as _td:
             td = Path(_td)
             adapter = PacketExecutionAdapter(
@@ -417,6 +421,8 @@ class TestFailureIsolation:
             assert r.accepted is True
 
     async def test_event_failure_does_not_crash(self):
+        from grace_control.config.settings import settings as _s
+        _s.agent_runtime_allow_non_git_scope_skip = True
         with tempfile.TemporaryDirectory() as _td:
             td = Path(_td)
             adapter = PacketExecutionAdapter(

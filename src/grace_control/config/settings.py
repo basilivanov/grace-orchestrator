@@ -152,6 +152,10 @@ class GraceSettings(BaseSettings):
     # ── W6 Post-run Scope Enforcement + Diagnostics ──
     agent_runtime_fail_on_no_changes: bool = False
 
+    # ── W7 Runtime Hardening ──
+    agent_runtime_allow_non_git_scope_skip: bool = False
+    opencode_server_kill_grace_seconds: int = 5
+
     # ── Dev tools / replay ──
     dev_tools_enabled: bool = False
     dev_keep_failed_worktrees: bool = False

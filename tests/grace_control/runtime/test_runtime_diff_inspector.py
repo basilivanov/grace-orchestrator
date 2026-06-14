@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from grace_control.runtime.runtime_diff_inspector import (
@@ -14,11 +12,12 @@ pytestmark = pytest.mark.asyncio
 
 
 def _making_shell(stdout_map: dict[str, str]):
-    """Create an async shell runner that returns predefined output per command."""
+    """Create an async shell runner that matches on argv content."""
 
-    async def _run(cmd: str) -> tuple[int, str, str]:
+    async def _run(argv: list[str]) -> tuple[int, str, str]:
+        joined = " ".join(argv)
         for pattern, out in stdout_map.items():
-            if pattern in cmd:
+            if pattern in joined:
                 return 0, out, ""
         return 0, "", ""
 
@@ -61,14 +60,44 @@ class TestDiffInspectorUnit:
         assert "new_file.py" in result.untracked_files
 
     async def test_handles_git_failure(self):
-        """Git failure (non-zero exit on base diff) must be AGENT_DIFF_INSPECTION_FAILED."""
-
-        async def _fail(cmd: str) -> tuple[int, str, str]:
+        async def _fail(argv: list[str]) -> tuple[int, str, str]:
             return 128, "", "fatal: not a git repository"
 
         inspector = RuntimeDiffInspector(shell_runner=_fail)
         result = await inspector.inspect(RuntimeDiffInspectionRequest(
             repo_root="/tmp", worktree_root="/tmp/wt", base_ref="main",
         ))
-        assert not result.ok, "git failure must propagate as not ok"
+        assert not result.ok
         assert result.failure_code == AgentRuntimeFailureCode.AGENT_DIFF_INSPECTION_FAILED
+
+    async def test_staged_diff_failure_fails_closed(self):
+        async def _fail_staged(argv: list[str]) -> tuple[int, str, str]:
+            joined = " ".join(argv)
+            if "diff --name-only HEAD" in joined:
+                return 0, "src/foo.py", ""
+            if "diff --cached --name-only" in joined:
+                return 1, "", "staged error"
+            return 0, "", ""
+
+        inspector = RuntimeDiffInspector(shell_runner=_fail_staged)
+        result = await inspector.inspect(RuntimeDiffInspectionRequest(
+            repo_root="/tmp", worktree_root="/tmp/wt", base_ref="HEAD",
+        ))
+        assert not result.ok
+        assert result.failure_code == AgentRuntimeFailureCode.AGENT_DIFF_INSPECTION_FAILED
+
+    async def test_shortstat_failure_does_not_hide_changed_files(self):
+        async def _fail_shortstat(argv: list[str]) -> tuple[int, str, str]:
+            joined = " ".join(argv)
+            if "diff --shortstat" in joined:
+                return 1, "", "shortstat error"
+            if "diff --name-only HEAD" in joined:
+                return 0, "src/foo.py\nsrc/bar.py", ""
+            return 0, "", ""
+
+        inspector = RuntimeDiffInspector(shell_runner=_fail_shortstat)
+        result = await inspector.inspect(RuntimeDiffInspectionRequest(
+            repo_root="/tmp", worktree_root="/tmp/wt", base_ref="HEAD",
+        ))
+        assert result.ok
+        assert "src/foo.py" in result.changed_files

@@ -38,8 +38,14 @@ class RuntimeScopeEnforcer:
 
         changed = _dedupe_ordered(changed_files)
 
-        # Reject absolute and dotdot paths in changed_files
-        invalid = [f for f in changed if f.startswith("/") or "/../" in f or f.startswith("../") or f == ".."]
+        # Reject absolute and dotdot paths in changed_files (hardened)
+        invalid = []
+        for f in changed:
+            nf = f.replace("\\", "/")
+            if nf.startswith("/") or nf.startswith("..") or nf == ".." or "/../" in nf:
+                invalid.append(f)
+            elif len(nf) >= 2 and nf[1] == ":" and nf[0].isalpha():
+                invalid.append(f)
         if invalid:
             return RuntimeScopeEnforcementResult(
                 ok=False, changed_files=list(changed), allowed_files=[],
@@ -94,7 +100,19 @@ class RuntimeScopeEnforcer:
 
 
 def _invalid_scope_paths(paths: list[str]) -> list[str]:
-    return [p for p in paths if p.startswith("/") or p.startswith("..") or "/../" in p or p == ".."]
+    invalid: list[str] = []
+    for p in paths:
+        normalized = p.replace("\\", "/")
+        if normalized.startswith("/"):
+            invalid.append(p)
+        elif normalized.startswith("..") or normalized == "..":
+            invalid.append(p)
+        elif "/../" in normalized:
+            invalid.append(p)
+        elif len(normalized) >= 2 and normalized[1] == ":" and normalized[0].isalpha():
+            # Windows drive path like C:\...
+            invalid.append(p)
+    return invalid
 
 
 def _normalize_scope_list(scope: list[str]) -> list[str]:
@@ -107,7 +125,7 @@ def _normalize_scope_list(scope: list[str]) -> list[str]:
 
 
 def _in_scope(file_path: str, scope_set: frozenset[str]) -> bool:
-    normalized = Path(file_path).as_posix().replace("\\", "/")
+    normalized = file_path.replace("\\", "/")
     # Exact file match
     if normalized in scope_set:
         return True

@@ -812,16 +812,26 @@ class PacketExecutionAdapter:
         start: float,
     ) -> ExecutionResult | None:
         """Run diff inspection + scope enforcement. Returns reject ExecutionResult or None."""
+        from grace_control.config.settings import settings as _s
+
         wt_path = getattr(result, "worktree_path", None)
         if not wt_path or not Path(wt_path).exists():
             return None
 
-        # Verify the worktree is a git repo — skip W6 if not
+        # Verify the worktree is a git repo
         if not _is_git_worktree(str(wt_path)):
-            _log.info("w6_skipped_non_git", packet_id=packet_id, worktree=str(wt_path))
-            return None
+            if getattr(_s, "agent_runtime_allow_non_git_scope_skip", False):
+                _log.info("w6_skipped_non_git", packet_id=packet_id, worktree=str(wt_path))
+                return None
+            reason = f"Worktree is not a git repository: {wt_path}"
+            _log.warn("w6_non_git_rejected", packet_id=packet_id, reason=reason)
+            er = self._fast_reject(reason, executor.get("executor_id", ""), run_id, start)
+            try:
+                er.evidence["failure_code"] = AgentRuntimeFailureCode.AGENT_WORKTREE_NOT_GIT
+            except Exception:
+                pass
+            return er
 
-        from grace_control.config.settings import settings as _s
         store = getattr(self, "_obs_store", None)
         events = getattr(self, "_obs_events", None)
         trace = getattr(self, "_obs_trace", None)
@@ -887,6 +897,12 @@ class PacketExecutionAdapter:
                         name="diff_inspection.json",
                         payload=redactor.redact_payload(diff_result.model_dump()),
                         kind="diff_inspection",
+                    )
+                    store.write_packet_json(
+                        trace=trace, packet_id=packet_id,
+                        name="changed_files.json",
+                        payload=redactor.redact_payload({"changed_files": []}),
+                        kind="changed_files",
                     )
                 except Exception:
                     pass

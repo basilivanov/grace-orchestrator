@@ -105,6 +105,7 @@ class OpenCodeRuntimeAdapter(AgentExecutionAdapter):
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             stdin=asyncio.subprocess.PIPE,
+            start_new_session=True,
         )
 
         timeout_s = settings.opencode_direct_timeout_seconds
@@ -147,17 +148,26 @@ class OpenCodeRuntimeAdapter(AgentExecutionAdapter):
                 )
                 exit_code = await proc.wait()
         except asyncio.TimeoutError:
+            # Kill the entire process group, not just the parent
             try:
-                proc.terminate()
+                pgid = os.getpgid(proc.pid)
+                os.killpg(pgid, signal.SIGTERM)
             except Exception:
-                pass
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
             try:
                 await asyncio.wait_for(proc.wait(), timeout=grace_s)
             except asyncio.TimeoutError:
                 try:
-                    proc.kill()
+                    pgid = os.getpgid(proc.pid)
+                    os.killpg(pgid, signal.SIGKILL)
                 except Exception:
-                    pass
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
                 try:
                     await asyncio.wait_for(proc.wait(), timeout=grace_s)
                 except Exception:

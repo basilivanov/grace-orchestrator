@@ -14,32 +14,8 @@ from grace_control.runtime.agent_runtime_contract import AgentRuntimeFailureCode
 
 _log = GraceLogger("runtime_diff_inspector")
 
-AsyncShellRunner = Callable[[str], tuple[int, str, str]]
-
-
-async def _real_shell(cmd: str) -> tuple[int, str, str]:
-    """Run a shell command via asyncio subprocess — no direct import subprocess."""
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd.split(), stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
-            return proc.returncode or 0, stdout.decode("utf-8").strip(), stderr.decode("utf-8").strip()
-        except asyncio.TimeoutError:
-            try:
-                proc.kill()
-                await proc.wait()
-            except Exception:
-                pass
-            return 1, "", "timeout"
-    except FileNotFoundError:
-        return 127, "", "binary not found"
-
-
-async def _noop_shell(cmd: str) -> tuple[int, str, str]:
-    return 0, "", ""
+# Used only for tests — production uses direct argv-based git calls
+AsyncShellRunner = Callable[[list[str]], tuple[int, str, str]]
 
 
 class RuntimeDiffInspectionRequest(BaseModel):
@@ -65,20 +41,20 @@ class RuntimeDiffInspectionResult(BaseModel):
 class RuntimeDiffInspector:
 
     def __init__(self, shell_runner: AsyncShellRunner | None = None):
-        self._shell = shell_runner or _real_shell
+        self._shell = shell_runner
 
     async def inspect(self, request: RuntimeDiffInspectionRequest) -> RuntimeDiffInspectionResult:
         cwd = request.worktree_root
         base = request.base_ref or "HEAD"
 
         try:
-            # Critical: base diff must succeed. If git can't compute diff, hard fail.
+            # All git commands use direct argv — no string shell, no cmd.split()
             rc, out, stderr = await self._run_git(cwd, "diff", "--name-only", base)
             if rc != 0:
                 return RuntimeDiffInspectionResult(
                     ok=False, changed_files=[],
                     failure_code=AgentRuntimeFailureCode.AGENT_DIFF_INSPECTION_FAILED,
-                    summary=f"git diff failed (rc={rc}): {stderr or out or 'unknown'}",
+                    summary=f"git diff --name-only {base} failed (rc={rc}): {stderr or out or 'unknown'}",
                 )
 
             changed = [l.strip() for l in out.split("\n") if l.strip()]
@@ -105,31 +81,38 @@ class RuntimeDiffInspector:
             )
 
     async def _run_git(self, cwd: str, *args: str) -> tuple[int, str, str]:
-        cmd = "git -C " + _quote(cwd) + " " + " ".join(_quote(a) for a in args)
-        return await self._shell(cmd)
-
-    async def _get_changed_files(self, cwd: str, base: str) -> list[str]:
-        rc, out, _ = await self._run_git(cwd, "diff", "--name-only", base)
-        if rc != 0:
-            return []
-        return [l.strip() for l in out.split("\n") if l.strip()]
+        """Run git with direct argv — no string shell, no cmd.split(), no shell=True."""
+        if self._shell:
+            return await self._shell(["git", "-C", cwd, *args])
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "git", "-C", cwd, *args,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+            return proc.returncode or 0, stdout.decode("utf-8").strip(), stderr.decode("utf-8").strip()
+        except asyncio.TimeoutError:
+            return 1, "", "timeout"
+        except FileNotFoundError:
+            return 127, "", "binary not found"
 
     async def _get_staged_files(self, cwd: str) -> list[str]:
-        rc, out, _ = await self._run_git(cwd, "diff", "--cached", "--name-only")
+        rc, out, stderr = await self._run_git(cwd, "diff", "--cached", "--name-only")
         if rc != 0:
-            return []
+            return self._fail(rc, out, stderr)
         return [l.strip() for l in out.split("\n") if l.strip()]
 
     async def _get_unstaged_files(self, cwd: str) -> list[str]:
-        rc, out, _ = await self._run_git(cwd, "diff", "--name-only")
+        rc, out, stderr = await self._run_git(cwd, "diff", "--name-only")
         if rc != 0:
-            return []
+            return self._fail(rc, out, stderr)
         return [l.strip() for l in out.split("\n") if l.strip()]
 
     async def _get_untracked_files(self, cwd: str) -> list[str]:
-        rc, out, _ = await self._run_git(cwd, "ls-files", "--others", "--exclude-standard")
+        rc, out, stderr = await self._run_git(cwd, "ls-files", "--others", "--exclude-standard")
         if rc != 0:
-            return []
+            return self._fail(rc, out, stderr)
         return [l.strip() for l in out.split("\n") if l.strip()]
 
     async def _get_diff_stat(self, cwd: str, base: str) -> dict[str, int]:
@@ -154,9 +137,10 @@ class RuntimeDiffInspector:
                     stat["files_changed"] = nums[0]
         return stat
 
-
-def _quote(s: str) -> str:
-    return s.replace("'", "'\\''")
+    def _fail(self, rc: int, out: str, stderr: str) -> list[str]:
+        raise RuntimeError(
+            f"critical git command failed (rc={rc}): {stderr or out or 'unknown'}"
+        )
 
 
 def _dedupe(items: list[str]) -> list[str]:

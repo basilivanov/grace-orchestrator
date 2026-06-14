@@ -25,6 +25,17 @@ def grace_settings_isolation():
         setattr(settings, k, v)
 
 
+def _apply_test_settings() -> None:
+    """Relax safety checks for test environments (no real git repos)."""
+    from grace_control.config.settings import settings
+    settings.agent_runtime_allow_non_git_scope_skip = True
+
+
+@pytest.fixture(autouse=True)
+def grace_test_settings():
+    _apply_test_settings()
+
+
 @pytest.fixture
 def db():
     """In-memory SQLite database."""

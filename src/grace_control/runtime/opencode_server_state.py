@@ -30,3 +30,4 @@ class OpenCodeServerHealth(BaseModel):
     latency_ms: int | None = None
     failure_code: str | None = None
     summary: str = ""
+    healthcheck_kind: str = "tcp"

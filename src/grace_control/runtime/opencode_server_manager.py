@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
+import json as _json_module
 import os
+import signal
 import socket
 import time
 from pathlib import Path
@@ -92,11 +95,12 @@ class OpenCodeServerManager:
         pid = self._read_pid()
         ok, summary, latency = self._healthcheck(host, port, timeout)
         if ok:
-            return OpenCodeServerHealth(ok=True, url=url, pid=pid, latency_ms=latency, summary=summary)
+            return OpenCodeServerHealth(ok=True, url=url, pid=pid, latency_ms=latency,
+                                        summary=summary, healthcheck_kind="tcp")
         return OpenCodeServerHealth(
             ok=False, url=url, pid=pid, latency_ms=latency,
             failure_code=AgentRuntimeFailureCode.AGENT_OPENCODE_SERVER_UNHEALTHY,
-            summary=summary,
+            summary=summary, healthcheck_kind="tcp",
         )
 
     async def start(self) -> OpenCodeServerState:
@@ -142,8 +146,36 @@ class OpenCodeServerManager:
                     status=OpenCodeServerStatus.RUNNING, url=url, pid=pid, log_path=str(log_path),
                 )
 
+        # Kill the started process on timeout
         _log.error("server_start_timeout", url=url, timeout=timeout_s,
                    last_health=last_health.summary if last_health else "no_healthcheck")
+        try:
+            if proc.returncode is None:
+                try:
+                    pgid = os.getpgid(proc.pid)
+                    os.killpg(pgid, signal.SIGTERM)
+                    try:
+                        await asyncio.wait_for(proc.wait(), timeout=5)
+                    except asyncio.TimeoutError:
+                        try:
+                            os.killpg(pgid, signal.SIGKILL)
+                            await asyncio.wait_for(proc.wait(), timeout=3)
+                        except Exception:
+                            pass
+                    except Exception:
+                        pass
+                except (ProcessLookupError, OSError):
+                    try:
+                        proc.terminate()
+                        await asyncio.wait_for(proc.wait(), timeout=5)
+                    except Exception:
+                        pass
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        self._clear_pid()
         return OpenCodeServerState(
             status=OpenCodeServerStatus.FAILED, url=url,
             failure_code=AgentRuntimeFailureCode.AGENT_OPENCODE_SERVER_TIMEOUT,
@@ -152,21 +184,41 @@ class OpenCodeServerManager:
         )
 
     async def stop(self) -> None:
-        proc = self._server_proc
-        if proc and proc.returncode is None:
+        # Stop self._server_proc if running
+        if self._server_proc and self._server_proc.returncode is None:
             try:
-                proc.terminate()
-                await asyncio.wait_for(proc.wait(), timeout=5)
-            except asyncio.TimeoutError:
-                try:
-                    proc.kill()
-                    await asyncio.wait_for(proc.wait(), timeout=3)
-                except Exception:
-                    pass
+                self._kill_process_handling(self._server_proc)
             except Exception:
                 pass
-        self._server_proc = None
+            self._server_proc = None
+        # Also stop PID-file process if different from self._server_proc and not our own PID
+        pid = self._read_pid()
+        if pid is not None and pid != os.getpid() and self._pid_alive(pid):
+            try:
+                pgid = os.getpgid(pid)
+                os.killpg(pgid, signal.SIGTERM)
+                try:
+                    await asyncio.sleep(3)
+                except Exception:
+                    pass
+                if self._pid_alive(pid):
+                    os.killpg(pgid, signal.SIGKILL)
+            except (ProcessLookupError, OSError):
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                    await asyncio.sleep(3)
+                    if self._pid_alive(pid):
+                        os.kill(pid, signal.SIGKILL)
+                except (OSError, ProcessLookupError):
+                    pass
         self._clear_pid()
+
+    def _kill_process_handling(self, proc) -> None:
+        try:
+            pgid = os.getpgid(proc.pid)
+            os.killpg(pgid, signal.SIGTERM)
+        except Exception:
+            proc.terminate()
 
     async def restart(self) -> OpenCodeServerState:
         await self.stop()
@@ -182,10 +234,20 @@ class OpenCodeServerManager:
         pid = self._read_pid()
         if pid is not None:
             if self._pid_alive(pid):
-                return OpenCodeServerState(
-                    status=OpenCodeServerStatus.RUNNING, url=url, pid=pid, log_path=log_path,
-                )
-            self._clear_pid()
+                # State file match is preferred but not required — trust PID if no state file
+                if self._state_matches_pid(pid, host, port):
+                    return OpenCodeServerState(
+                        status=OpenCodeServerStatus.RUNNING, url=url, pid=pid, log_path=log_path,
+                    )
+                state_exists = Path(getattr(settings, "opencode_server_pid_path", ".grace/opencode-server.pid")).parent / "opencode-server-state.json"
+                if state_exists.exists():
+                    self._clear_pid()
+                else:
+                    return OpenCodeServerState(
+                        status=OpenCodeServerStatus.RUNNING, url=url, pid=pid, log_path=log_path,
+                    )
+            else:
+                self._clear_pid()
         return OpenCodeServerState(status=OpenCodeServerStatus.STOPPED, url=url, log_path=log_path)
 
     def _read_pid(self) -> int | None:
@@ -201,10 +263,29 @@ class OpenCodeServerManager:
 
     def _write_pid(self, pid: int) -> None:
         pid_path = Path(getattr(settings, "opencode_server_pid_path", ".grace/opencode-server.pid"))
+        state_dir = pid_path.parent
         try:
-            pid_path.parent.mkdir(parents=True, exist_ok=True)
+            state_dir.mkdir(parents=True, exist_ok=True)
             pid_path.write_text(str(pid))
         except OSError:
+            pass
+        # Also write server state JSON
+        try:
+            state_file = state_dir / "opencode-server-state.json"
+            import json as _json
+            state = {
+                "pid": pid,
+                "url": getattr(settings, "opencode_server_url", "") or
+                       f"http://{getattr(settings, 'opencode_server_host', '127.0.0.1')}:{getattr(settings, 'opencode_server_port', 4096)}",
+                "host": getattr(settings, "opencode_server_host", "127.0.0.1"),
+                "port": getattr(settings, "opencode_server_port", 4096),
+                "command": f"{getattr(settings, 'opencode_binary', 'opencode')} serve --hostname {getattr(settings, 'opencode_server_host', '127.0.0.1')} --port {getattr(settings, 'opencode_server_port', 4096)}",
+                "binary": getattr(settings, "opencode_binary", "opencode"),
+            }
+            import datetime
+            state["started_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+            state_file.write_text(_json.dumps(state, indent=2))
+        except Exception:
             pass
 
     def _clear_pid(self) -> None:
@@ -225,6 +306,18 @@ class OpenCodeServerManager:
             os.kill(pid, 0)
             return True
         except (OSError, PermissionError):
+            return False
+
+    def _state_matches_pid(self, pid: int, host: str, port: int) -> bool:
+        """Check that PID file has matching server state to avoid reusing unrelated PID."""
+        try:
+            state_path = Path(getattr(settings, "opencode_server_pid_path", ".grace/opencode-server.pid")).parent / "opencode-server-state.json"
+            if not state_path.exists():
+                return False
+            import json
+            state = json.loads(state_path.read_text())
+            return state.get("pid") == pid and state.get("host") == host and state.get("port") == port
+        except Exception:
             return False
 
     def _redact_url(self, url: str) -> str:
