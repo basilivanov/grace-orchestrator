@@ -110,6 +110,43 @@ class TestScopeUnit:
         assert not result.ok
         assert result.failure_code == AgentRuntimeFailureCode.AGENT_NO_CHANGES_PRODUCED
 
+    def test_rejects_invalid_allowed_scope_absolute(self):
+        """Allowed scope with absolute path must be rejected."""
+        result = RuntimeScopeEnforcer.enforce(
+            changed_files=["src/foo.py"],
+            allowed_scope=["/etc"],
+            frozen_scope=[],
+        )
+        assert not result.ok
+        assert result.failure_code == AgentRuntimeFailureCode.AGENT_SCOPE_ENFORCEMENT_FAILED
+
+    def test_rejects_invalid_allowed_scope_dotdot(self):
+        result = RuntimeScopeEnforcer.enforce(
+            changed_files=["src/foo.py"],
+            allowed_scope=["../src"],
+            frozen_scope=[],
+        )
+        assert not result.ok
+        assert result.failure_code == AgentRuntimeFailureCode.AGENT_SCOPE_ENFORCEMENT_FAILED
+
+    def test_rejects_invalid_frozen_scope_absolute(self):
+        result = RuntimeScopeEnforcer.enforce(
+            changed_files=["src/foo.py"],
+            allowed_scope=["src"],
+            frozen_scope=["/secret"],
+        )
+        assert not result.ok
+        assert result.failure_code == AgentRuntimeFailureCode.AGENT_SCOPE_ENFORCEMENT_FAILED
+
+    def test_rejects_invalid_frozen_scope_dotdot(self):
+        result = RuntimeScopeEnforcer.enforce(
+            changed_files=["src/foo.py"],
+            allowed_scope=["src"],
+            frozen_scope=["../secret"],
+        )
+        assert not result.ok
+        assert result.failure_code == AgentRuntimeFailureCode.AGENT_SCOPE_ENFORCEMENT_FAILED
+
     def test_multiple_out_of_scope_files(self):
         result = RuntimeScopeEnforcer.enforce(
             changed_files=["src/ok.py", "src/bad.py", "other/x.py", "other/y.py"],

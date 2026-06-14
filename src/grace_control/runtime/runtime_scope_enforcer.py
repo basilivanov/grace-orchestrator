@@ -52,6 +52,16 @@ class RuntimeScopeEnforcer:
                 summary="No changes produced (allowed by config)",
             )
 
+        # Validate scope paths — absolute and dotdot paths are invalid in scope config
+        invalid_scope = _invalid_scope_paths(allowed_scope) + _invalid_scope_paths(frozen_scope)
+        if invalid_scope:
+            return RuntimeScopeEnforcementResult(
+                ok=False, changed_files=list(changed), allowed_files=[],
+                out_of_scope_files=list(changed), frozen_touched_files=[],
+                failure_code=AgentRuntimeFailureCode.AGENT_SCOPE_ENFORCEMENT_FAILED,
+                summary=f"Invalid scope paths (absolute/.. not allowed): {invalid_scope}",
+            )
+
         frozen = _normalize_scope_list(frozen_scope)
         allow = _normalize_scope_list(allowed_scope)
 
@@ -81,6 +91,10 @@ class RuntimeScopeEnforcer:
             out_of_scope_files=[], frozen_touched_files=[],
             summary=f"All {len(changed)} changed files are within scope",
         )
+
+
+def _invalid_scope_paths(paths: list[str]) -> list[str]:
+    return [p for p in paths if p.startswith("/") or p.startswith("..") or "/../" in p or p == ".."]
 
 
 def _normalize_scope_list(scope: list[str]) -> list[str]:

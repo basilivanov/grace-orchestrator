@@ -100,6 +100,21 @@ def _attempt_branch(packet_id: str, attempt: int) -> str:
 import re as _re_classify
 
 
+def _is_git_worktree(path: str) -> bool:
+    """Quick check if a directory is inside a git repo (handles worktrees)."""
+    try:
+        p = Path(path).resolve()
+        while True:
+            git_path = p / ".git"
+            if git_path.exists():
+                return True
+            if p.parent == p:
+                return False
+            p = p.parent
+    except Exception:
+        return False
+
+
 def _redact_secrets(text: str) -> str:
     """Redact obvious secrets from log tails. Never expose API keys.
 
@@ -798,6 +813,11 @@ class PacketExecutionAdapter:
         if not wt_path or not Path(wt_path).exists():
             return None
 
+        # Verify the worktree is a git repo — skip W6 if not
+        if not _is_git_worktree(str(wt_path)):
+            _log.info("w6_skipped_non_git", packet_id=packet_id, worktree=str(wt_path))
+            return None
+
         from grace_control.config.settings import settings as _s
         store = getattr(self, "_obs_store", None)
         events = getattr(self, "_obs_events", None)
@@ -817,7 +837,7 @@ class PacketExecutionAdapter:
                             stage="post_execution", component="scope_enforcer", status="started")
             except Exception:
                 pass
-        diff_result = inspector.inspect(diff_req)
+        diff_result = await inspector.inspect(diff_req)
         if events and trace:
             try:
                 if diff_result.ok:
@@ -830,6 +850,12 @@ class PacketExecutionAdapter:
                                 status="failed", message=diff_result.summary)
             except Exception:
                 pass
+
+        # Hard reject on diff failure — can't enforce scope without trustworthy diff
+        if not diff_result.ok:
+            reason = f"Diff inspection failed: {diff_result.summary}"
+            _log.warn("diff_inspection_failed", packet_id=packet_id, summary=reason)
+            return self._fast_reject(reason, executor.get("executor_id", ""), run_id, start)
 
         allowed = list(pkt_contract.allowed_write_scope or [])
         frozen = list(pkt_contract.frozen_scope or [])
@@ -875,8 +901,8 @@ class PacketExecutionAdapter:
             changed_files=scope_result.changed_files,
             out_of_scope_files=scope_result.out_of_scope_files,
             frozen_touched_files=scope_result.frozen_touched_files,
-            stdout_tail=getattr(result, "stdout", "") or "",
-            stderr_tail=getattr(result, "stderr", "") or "",
+            stdout_tail=getattr(result, "stdout") or "",
+            stderr_tail=getattr(result, "stderr") or "",
         )
 
         if not obs_disabled and store and trace and redactor:
@@ -895,7 +921,16 @@ class PacketExecutionAdapter:
             reason = scope_result.summary
             _log.warn("scope_enforcement_failed", packet_id=packet_id,
                        failure_code=scope_result.failure_code, summary=reason)
-            return self._fast_reject(reason, executor.get("executor_id", ""), run_id, start)
+            er = self._fast_reject(reason, executor.get("executor_id", ""), run_id, start)
+            # Attach scope/diff/diagnostics to evidence for trace/UI
+            try:
+                er.evidence["scope_enforcement"] = scope_result.model_dump()
+                er.evidence["diff_inspection"] = diff_result.model_dump()
+                er.evidence["runtime_diagnostics"] = diag.model_dump()
+                er.evidence["failure_code"] = scope_result.failure_code
+            except Exception:
+                pass
+            return er
 
         return None
 

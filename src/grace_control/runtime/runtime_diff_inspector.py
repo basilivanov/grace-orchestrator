@@ -14,31 +14,31 @@ from grace_control.runtime.agent_runtime_contract import AgentRuntimeFailureCode
 
 _log = GraceLogger("runtime_diff_inspector")
 
-ShellRunner = Callable[[str], tuple[int, str, str]]
+AsyncShellRunner = Callable[[str], tuple[int, str, str]]
 
 
-def _real_shell(cmd: str) -> tuple[int, str, str]:
+async def _real_shell(cmd: str) -> tuple[int, str, str]:
     """Run a shell command via asyncio subprocess — no direct import subprocess."""
-    import asyncio.subprocess as _asp
-
-    async def _run():
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd.split(), stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd.split(), stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await proc.communicate(timeout=30)
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
             return proc.returncode or 0, stdout.decode("utf-8").strip(), stderr.decode("utf-8").strip()
         except asyncio.TimeoutError:
+            try:
+                proc.kill()
+                await proc.wait()
+            except Exception:
+                pass
             return 1, "", "timeout"
-        except FileNotFoundError:
-            return 127, "", "binary not found"
-
-    import asyncio
-    return asyncio.run(_run())
+    except FileNotFoundError:
+        return 127, "", "binary not found"
 
 
-def _noop_shell(cmd: str) -> tuple[int, str, str]:
+async def _noop_shell(cmd: str) -> tuple[int, str, str]:
     return 0, "", ""
 
 
@@ -64,19 +64,28 @@ class RuntimeDiffInspectionResult(BaseModel):
 
 class RuntimeDiffInspector:
 
-    def __init__(self, shell_runner: ShellRunner | None = None):
+    def __init__(self, shell_runner: AsyncShellRunner | None = None):
         self._shell = shell_runner or _real_shell
 
-    def inspect(self, request: RuntimeDiffInspectionRequest) -> RuntimeDiffInspectionResult:
+    async def inspect(self, request: RuntimeDiffInspectionRequest) -> RuntimeDiffInspectionResult:
         cwd = request.worktree_root
         base = request.base_ref or "HEAD"
 
         try:
-            changed = self._get_changed_files(cwd, base)
-            staged = self._get_staged_files(cwd)
-            unstaged = self._get_unstaged_files(cwd)
-            untracked = self._get_untracked_files(cwd)
-            diff_stat = self._get_diff_stat(cwd, base)
+            # Critical: base diff must succeed. If git can't compute diff, hard fail.
+            rc, out, stderr = await self._run_git(cwd, "diff", "--name-only", base)
+            if rc != 0:
+                return RuntimeDiffInspectionResult(
+                    ok=False, changed_files=[],
+                    failure_code=AgentRuntimeFailureCode.AGENT_DIFF_INSPECTION_FAILED,
+                    summary=f"git diff failed (rc={rc}): {stderr or out or 'unknown'}",
+                )
+
+            changed = [l.strip() for l in out.split("\n") if l.strip()]
+            staged = await self._get_staged_files(cwd)
+            unstaged = await self._get_unstaged_files(cwd)
+            untracked = await self._get_untracked_files(cwd)
+            diff_stat = await self._get_diff_stat(cwd, base)
 
             all_changed = _dedupe(changed + staged + unstaged + untracked)
             return RuntimeDiffInspectionResult(
@@ -90,42 +99,41 @@ class RuntimeDiffInspector:
             )
         except Exception as e:
             return RuntimeDiffInspectionResult(
-                ok=False,
-                changed_files=[],
+                ok=False, changed_files=[],
                 failure_code=AgentRuntimeFailureCode.AGENT_DIFF_INSPECTION_FAILED,
                 summary=str(e),
             )
 
-    def _run_git(self, cwd: str, *args: str) -> tuple[int, str, str]:
+    async def _run_git(self, cwd: str, *args: str) -> tuple[int, str, str]:
         cmd = "git -C " + _quote(cwd) + " " + " ".join(_quote(a) for a in args)
-        return self._shell(cmd)
+        return await self._shell(cmd)
 
-    def _get_changed_files(self, cwd: str, base: str) -> list[str]:
-        rc, out, _ = self._run_git(cwd, "diff", "--name-only", base)
+    async def _get_changed_files(self, cwd: str, base: str) -> list[str]:
+        rc, out, _ = await self._run_git(cwd, "diff", "--name-only", base)
         if rc != 0:
             return []
         return [l.strip() for l in out.split("\n") if l.strip()]
 
-    def _get_staged_files(self, cwd: str) -> list[str]:
-        rc, out, _ = self._run_git(cwd, "diff", "--cached", "--name-only")
+    async def _get_staged_files(self, cwd: str) -> list[str]:
+        rc, out, _ = await self._run_git(cwd, "diff", "--cached", "--name-only")
         if rc != 0:
             return []
         return [l.strip() for l in out.split("\n") if l.strip()]
 
-    def _get_unstaged_files(self, cwd: str) -> list[str]:
-        rc, out, _ = self._run_git(cwd, "diff", "--name-only")
+    async def _get_unstaged_files(self, cwd: str) -> list[str]:
+        rc, out, _ = await self._run_git(cwd, "diff", "--name-only")
         if rc != 0:
             return []
         return [l.strip() for l in out.split("\n") if l.strip()]
 
-    def _get_untracked_files(self, cwd: str) -> list[str]:
-        rc, out, _ = self._run_git(cwd, "ls-files", "--others", "--exclude-standard")
+    async def _get_untracked_files(self, cwd: str) -> list[str]:
+        rc, out, _ = await self._run_git(cwd, "ls-files", "--others", "--exclude-standard")
         if rc != 0:
             return []
         return [l.strip() for l in out.split("\n") if l.strip()]
 
-    def _get_diff_stat(self, cwd: str, base: str) -> dict[str, int]:
-        rc, out, _ = self._run_git(cwd, "diff", "--shortstat", base)
+    async def _get_diff_stat(self, cwd: str, base: str) -> dict[str, int]:
+        rc, out, _ = await self._run_git(cwd, "diff", "--shortstat", base)
         if rc != 0:
             return {}
         stat: dict[str, int] = {}

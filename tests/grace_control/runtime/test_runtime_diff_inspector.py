@@ -8,12 +8,15 @@ from grace_control.runtime.runtime_diff_inspector import (
     RuntimeDiffInspector,
     RuntimeDiffInspectionRequest,
 )
+from grace_control.runtime.agent_runtime_contract import AgentRuntimeFailureCode
+
+pytestmark = pytest.mark.asyncio
 
 
-def _making_shell(stdout_map: dict[str, str]) -> callable:
-    """Create a shell runner that returns predefined output per command."""
+def _making_shell(stdout_map: dict[str, str]):
+    """Create an async shell runner that returns predefined output per command."""
 
-    def _run(cmd: str) -> tuple[int, str, str]:
+    async def _run(cmd: str) -> tuple[int, str, str]:
         for pattern, out in stdout_map.items():
             if pattern in cmd:
                 return 0, out, ""
@@ -24,7 +27,7 @@ def _making_shell(stdout_map: dict[str, str]) -> callable:
 
 class TestDiffInspectorUnit:
 
-    def test_detects_changed_files(self):
+    async def test_detects_changed_files(self):
         shell = _making_shell({
             "diff --name-only HEAD": "src/foo.py\nsrc/bar.py",
             "diff --cached --name-only": "",
@@ -33,14 +36,14 @@ class TestDiffInspectorUnit:
             "diff --shortstat HEAD": " 2 files changed, 5 insertions(+)",
         })
         inspector = RuntimeDiffInspector(shell_runner=shell)
-        result = inspector.inspect(RuntimeDiffInspectionRequest(
+        result = await inspector.inspect(RuntimeDiffInspectionRequest(
             repo_root="/tmp", worktree_root="/tmp/wt", base_ref="HEAD",
         ))
         assert result.ok
         assert "src/foo.py" in result.changed_files
         assert "src/bar.py" in result.changed_files
 
-    def test_detects_untracked_files(self):
+    async def test_detects_untracked_files(self):
         shell = _making_shell({
             "diff --name-only HEAD": "",
             "diff --cached --name-only": "",
@@ -49,7 +52,7 @@ class TestDiffInspectorUnit:
             "diff --shortstat HEAD": "",
         })
         inspector = RuntimeDiffInspector(shell_runner=shell)
-        result = inspector.inspect(RuntimeDiffInspectionRequest(
+        result = await inspector.inspect(RuntimeDiffInspectionRequest(
             repo_root="/tmp", worktree_root="/tmp/wt", base_ref="HEAD",
         ))
         assert result.ok
@@ -57,14 +60,15 @@ class TestDiffInspectorUnit:
         assert "untracked.py" in result.changed_files
         assert "new_file.py" in result.untracked_files
 
-    def test_handles_git_failure(self):
-        def _fail(cmd: str) -> tuple[int, str, str]:
+    async def test_handles_git_failure(self):
+        """Git failure (non-zero exit on base diff) must be AGENT_DIFF_INSPECTION_FAILED."""
+
+        async def _fail(cmd: str) -> tuple[int, str, str]:
             return 128, "", "fatal: not a git repository"
+
         inspector = RuntimeDiffInspector(shell_runner=_fail)
-        result = inspector.inspect(RuntimeDiffInspectionRequest(
+        result = await inspector.inspect(RuntimeDiffInspectionRequest(
             repo_root="/tmp", worktree_root="/tmp/wt", base_ref="main",
         ))
-        # Git failure with no files and no git binary — result is ok with empty changes
-        # (non-zero git exit returns [], which means no changes detected, not a crash)
-        assert result.ok
-        assert result.changed_files == []
+        assert not result.ok, "git failure must propagate as not ok"
+        assert result.failure_code == AgentRuntimeFailureCode.AGENT_DIFF_INSPECTION_FAILED
