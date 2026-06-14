@@ -138,6 +138,17 @@ class GraceSettings(BaseSettings):
     opencode_json_events_required: bool = True
     opencode_capture_raw_events: bool = True
 
+    # ── W5 OpenCode Serve/Attach ──
+    opencode_runtime_mode: str = "direct"
+    opencode_server_host: str = "127.0.0.1"
+    opencode_server_port: int = 4096
+    opencode_server_url: str = ""
+    opencode_server_start_timeout_seconds: int = 20
+    opencode_server_health_timeout_seconds: int = 5
+    opencode_server_restart_on_unhealthy: bool = True
+    opencode_server_log_path: str = ".grace/opencode-server.log"
+    opencode_server_pid_path: str = ".grace/opencode-server.pid"
+
     # ── Dev tools / replay ──
     dev_tools_enabled: bool = False
     dev_keep_failed_worktrees: bool = False

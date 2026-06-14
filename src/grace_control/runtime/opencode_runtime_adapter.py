@@ -24,9 +24,12 @@ from grace_control.runtime.agent_runtime_contract import (
     AgentRuntimeContract,
     AgentRuntimeFailureCode,
 )
+from grace_control.runtime.opencode_attach_command_builder import OpenCodeAttachCommandBuilder
 from grace_control.runtime.opencode_command_builder import OpenCodeCommandBuilder
 from grace_control.runtime.opencode_event_collector import OpenCodeEventCollector
 from grace_control.runtime.opencode_failure_classifier import OpenCodeFailureClassifier
+from grace_control.runtime.opencode_server_manager import OpenCodeServerManager
+from grace_control.runtime.opencode_server_state import OpenCodeServerStatus
 
 _log = GraceLogger("opencode_runtime_adapter")
 
@@ -42,6 +45,8 @@ class OpenCodeRuntimeAdapter(AgentExecutionAdapter):
     def __init__(
         self,
         command_builder: OpenCodeCommandBuilder | None = None,
+        attach_command_builder: OpenCodeAttachCommandBuilder | None = None,
+        server_manager: OpenCodeServerManager | None = None,
         event_collector: OpenCodeEventCollector | None = None,
         failure_classifier: OpenCodeFailureClassifier | None = None,
         process_runner: ProcessRunner | None = None,
@@ -49,6 +54,8 @@ class OpenCodeRuntimeAdapter(AgentExecutionAdapter):
         redactor: RuntimeRedactor | None = None,
     ):
         self._cmd_builder = command_builder or OpenCodeCommandBuilder()
+        self._attach_cmd_builder = attach_command_builder or OpenCodeAttachCommandBuilder()
+        self._server_manager = server_manager
         self._collector = event_collector
         self._classifier = failure_classifier or OpenCodeFailureClassifier()
         self._process_runner = process_runner or _real_process_runner
@@ -58,7 +65,23 @@ class OpenCodeRuntimeAdapter(AgentExecutionAdapter):
     async def run(self, contract: AgentRuntimeContract, prompt: str) -> AgentExecutionAdapterResult:
         start = time.time()
         try:
-            cmd = self._cmd_builder.build(contract)
+            mode = getattr(settings, "opencode_runtime_mode", "direct")
+            if mode == "serve_attach":
+                sm = self._server_manager or OpenCodeServerManager()
+                server_state = await sm.ensure_running()
+                if server_state.status == OpenCodeServerStatus.FAILED:
+                    return AgentExecutionAdapterResult(
+                        ok=False,
+                        adapter="opencode",
+                        command=[],
+                        cwd=contract.worktree_root,
+                        duration_ms=int((time.time() - start) * 1000),
+                        failure_code=server_state.failure_code or AgentRuntimeFailureCode.AGENT_OPENCODE_SERVER_NOT_RUNNING,
+                        failure_summary=server_state.failure_summary or "server not running",
+                    )
+                cmd = self._attach_cmd_builder.build(contract, server_state.url)
+            else:
+                cmd = self._cmd_builder.build(contract)
         except ValueError as e:
             return AgentExecutionAdapterResult(
                 ok=False,

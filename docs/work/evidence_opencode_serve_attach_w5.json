@@ -1,0 +1,21 @@
+{
+  "server_manager_exists": true,
+  "direct_mode_preserved": true,
+  "serve_attach_mode_enabled": true,
+  "server_command_uses_localhost": true,
+  "server_reuse": true,
+  "stale_pid_cleanup": true,
+  "unhealthy_restart": true,
+  "attach_command_has_attach": true,
+  "attach_command_has_dir": true,
+  "attach_command_has_agent": true,
+  "attach_command_has_model": true,
+  "attach_command_has_format_json": true,
+  "w4_artifacts_preserved": true,
+  "w4_events_preserved": true,
+  "server_events_emitted": true,
+  "server_artifacts_redacted": true,
+  "packet_timeout_does_not_kill_server": true,
+  "new_tests_pass": true,
+  "existing_tests_pass": true
+}
