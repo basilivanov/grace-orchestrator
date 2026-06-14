@@ -1,0 +1,18 @@
+{
+  "opencode_adapter_exists": true,
+  "command_has_dir": true,
+  "command_has_agent": true,
+  "command_has_model": true,
+  "command_has_format_json": true,
+  "command_has_no_attach": true,
+  "cwd_is_worktree": true,
+  "prompt_explicit": true,
+  "stdout_stderr_artifacts": true,
+  "raw_events_artifact": true,
+  "adapter_result_artifact": true,
+  "failure_classification": true,
+  "packet_execution_uses_adapter_when_enabled": true,
+  "legacy_backend_available_when_disabled": true,
+  "new_tests_pass": true,
+  "existing_tests_pass": true
+}

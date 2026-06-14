@@ -463,6 +463,38 @@ class TestWorktreeRegression:
         assert "git.worktree_add(_effective_repo, wt_path, branch, base_ref=base_ref)" in src
 
 
+class TestOpenCodeAdapterIntegration:
+    """W4: verify PacketExecutionAdapter switches backend based on flag."""
+
+    def test_uses_opencode_backend_when_enabled(self):
+        from grace_control.runtime.opencode_runtime_adapter import OpenCodeExecutionBackend
+        from grace_control.config.settings import settings as _s
+        original = _s.agent_runtime_use_opencode_adapter
+        try:
+            _s.agent_runtime_use_opencode_adapter = True
+            adapter = PacketExecutionAdapter(
+                project_root=Path("/tmp"), state_root=Path("/tmp"),
+                worktree_root=Path("/tmp"),
+            )
+            assert isinstance(adapter._backend, OpenCodeExecutionBackend)
+        finally:
+            _s.agent_runtime_use_opencode_adapter = original
+
+    def test_falls_back_to_legacy_when_disabled(self):
+        from grace_control.runtime.opencode_runtime_adapter import OpenCodeExecutionBackend
+        from grace_control.config.settings import settings as _s
+        original = _s.agent_runtime_use_opencode_adapter
+        try:
+            _s.agent_runtime_use_opencode_adapter = False
+            adapter = PacketExecutionAdapter(
+                project_root=Path("/tmp"), state_root=Path("/tmp"),
+                worktree_root=Path("/tmp"),
+            )
+            assert not isinstance(adapter._backend, OpenCodeExecutionBackend)
+        finally:
+            _s.agent_runtime_use_opencode_adapter = original
+
+
 class TestRejectedPacket:
     async def test_rejected_packet_still_creates_some_artifacts(self):
         with tempfile.TemporaryDirectory() as _td:

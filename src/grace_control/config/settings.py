@@ -130,6 +130,14 @@ class GraceSettings(BaseSettings):
     agent_runtime_fail_on_bad_git_root: bool = True
     agent_runtime_fail_on_dirty_worktree: bool = False
 
+    # ── W4 OpenCode Direct Runtime Adapter ──
+    agent_runtime_use_opencode_adapter: bool = False
+    opencode_binary: str = "opencode"
+    opencode_direct_timeout_seconds: int = 1800
+    opencode_process_kill_grace_seconds: int = 5
+    opencode_json_events_required: bool = True
+    opencode_capture_raw_events: bool = True
+
     # ── Dev tools / replay ──
     dev_tools_enabled: bool = False
     dev_keep_failed_worktrees: bool = False

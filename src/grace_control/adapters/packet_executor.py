@@ -36,6 +36,7 @@ from grace_control.core.runtime_trace import (
 )
 from grace_control.runtime.agent_runtime_contract import AgentRuntimeContractBuilder
 from grace_control.runtime.agent_runtime_selftest import AgentRuntimeSelftest
+from grace_control.runtime.opencode_runtime_adapter import OpenCodeRuntimeAdapter
 from grace_control.core.structured_logger import GraceLogger
 from grace_control.db import get_db
 from grace_control.db.schema import Packet, PacketRun
@@ -297,8 +298,16 @@ class PacketExecutionAdapter:
                  backend: ExecutionBackend | None = None):
         self.project_root = Path(project_root); self.state_root = Path(state_root); self.worktree_root = Path(worktree_root)
         if backend is None:
-            from grace_control.agent import select_backend
-            self._backend = select_backend()
+            from grace_control.config.settings import settings as _s
+            if getattr(_s, "agent_runtime_use_opencode_adapter", False):
+                from grace_control.runtime.opencode_runtime_adapter import (
+                    OpenCodeExecutionBackend,
+                    OpenCodeRuntimeAdapter,
+                )
+                self._backend = OpenCodeExecutionBackend(OpenCodeRuntimeAdapter())
+            else:
+                from grace_control.agent import select_backend
+                self._backend = select_backend()
         else:
             self._backend = backend
         from grace_control.core.cleanup_on_state import TerminalStateCleanup
