@@ -197,6 +197,7 @@ class FeaturePlanningService:
                     }
                     for f in code_ctx.files[:_MAX_RELEVANT_FILES]
                 ],
+                "target_repo_root": str(root.resolve()),
             }
             cb_run.status = "done"
             cb_run.model = ctx_model.get("model", "")
@@ -460,6 +461,22 @@ Other files (paths only):
 {others}
 """
 
+        # ── GRACE CANON — Knowledge Graph Extract ────────────────
+        target_root = context.get("target_repo_root")
+        if target_root:
+            from grace_control.services.grace_knowledge_graph_service import GraceKnowledgeGraphService
+            from pathlib import Path
+            kg_svc = GraceKnowledgeGraphService()
+            kg = kg_svc.load(Path(target_root))
+            if kg:
+                extract = kg_svc.extract_relevant_modules(
+                    kg,
+                    feature_text=task,
+                    context_paths=[f.get("path", "") for f in all_files],
+                )
+                kg_block = kg_svc.build_kg_prompt_block(extract, task)
+                prompt += kg_block + "\n"
+
         prompt += f"""Full file listing for scope reference:
 {all_paths}
 
@@ -597,7 +614,18 @@ Rules:
    • Update production call site to use the new method.
    • Keep old method as compatibility shim if tests/callers outside
      scope still reference it.
-   • Add TODO comment for removal in a later packet with expanded scope.
+    • Add TODO comment for removal in a later packet with expanded scope.
+
+   CRITICAL — GRACE canon maintainer responsibility:
+   - You are not only planning code changes. You maintain the target repo GRACE canon.
+   - Before planning: use the GRACE CANON section above as the authoritative module/path map.
+   - Do not invent paths outside the canonical paths listed in GRACE CANON.
+   - When the feature changes stable module topology, decide whether
+     grace/knowledge-graph.xml must be updated. If yes, include it in scope
+     or add a separate packet for canon update.
+   - Always include "canon_update_decision" in your JSON output.
+   - Do not update knowledge-graph.xml for tiny internal edits that do not
+     introduce a stable module/package/slice boundary.
 
 9. CRITICAL: Each packet MUST be small enough for a single agent run (~2-5 min, ~200 lines max).
 
@@ -631,6 +659,12 @@ Respond ONLY with valid JSON (no markdown, no backticks):
     "t0": [],
     "t1": [],
     "t2": []
+  }},
+  "canon_update_decision": {{
+    "knowledge_graph": "not_needed | update_required | unclear",
+    "reason": "...",
+    "affected_modules": ["M-BACKEND-SERVICES"],
+    "proposed_new_paths": []
   }}
 }}"""
         return prompt
@@ -706,6 +740,8 @@ Respond ONLY with valid JSON (no markdown, no backticks):
                 feature.spec_json = spec
                 _log.info("scope_canonicalized", feature_id=feature_id,
                           fixes=len(canonical.fixes))
+            # Refresh waves after canonicalization (plan may have changed)
+            waves = plan.get("waves", [])
             compiled = PlanCompiler().compile_plan(
                 plan, env,
                 feature_description=feature_desc,
