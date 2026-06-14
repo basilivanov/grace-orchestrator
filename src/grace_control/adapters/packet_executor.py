@@ -34,7 +34,10 @@ from grace_control.core.runtime_trace import (
     get_current_trace,
     set_current_trace,
 )
-from grace_control.runtime.agent_runtime_contract import AgentRuntimeContractBuilder
+from grace_control.runtime.agent_runtime_contract import (
+    AgentRuntimeContractBuilder,
+    AgentRuntimeFailureCode,
+)
 from grace_control.runtime.agent_runtime_selftest import AgentRuntimeSelftest
 from grace_control.runtime.opencode_runtime_adapter import (
     OpenCodeExecutionBackend,
@@ -855,7 +858,13 @@ class PacketExecutionAdapter:
         if not diff_result.ok:
             reason = f"Diff inspection failed: {diff_result.summary}"
             _log.warn("diff_inspection_failed", packet_id=packet_id, summary=reason)
-            return self._fast_reject(reason, executor.get("executor_id", ""), run_id, start)
+            er = self._fast_reject(reason, executor.get("executor_id", ""), run_id, start)
+            try:
+                er.evidence["diff_inspection"] = diff_result.model_dump()
+                er.evidence["failure_code"] = AgentRuntimeFailureCode.AGENT_DIFF_INSPECTION_FAILED
+            except Exception:
+                pass
+            return er
 
         allowed = list(pkt_contract.allowed_write_scope or [])
         frozen = list(pkt_contract.frozen_scope or [])
