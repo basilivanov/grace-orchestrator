@@ -330,32 +330,144 @@ class OpenCodeExecutionBackend:
         trace = self._trace
         store = self._store
         events = self._events
-
         all_refs: list[RuntimeArtifactRef] = []
 
+        # ── 1. Write command.txt before the process ────────────────────
         if trace and store:
-            adapter_result, all_refs = await self._adapter.run_with_artifacts(
-                contract, prompt, trace, package_id,
-            )
-        else:
-            adapter_result = await self._adapter.run(contract, prompt)
+            try:
+                raw_cmd = " ".join(self._adapter._cmd_builder.build(contract))
+                redacted_cmd = self._adapter._redactor.redact_string(raw_cmd)
+                cmd_ref = store.write_packet_text(
+                    trace=trace, packet_id=package_id,
+                    name="command.txt", content=redacted_cmd, kind="opencode_command",
+                )
+                if cmd_ref:
+                    all_refs.append(cmd_ref)
+            except Exception:
+                pass
 
-        if trace and events:
+        # ── 2. Emit lifecycle: command built + process started ─────────
+        if events and trace:
+            events.emit(trace=trace, event="packet.opencode_command_built",
+                        stage="opencode_run", component="opencode_adapter",
+                        status="completed",
+                        artifact_refs=[cmd_ref] if (all_refs and cmd_ref in all_refs) else None)
+            events.emit(trace=trace, event="packet.opencode_process_started",
+                        stage="opencode_run", component="opencode_adapter",
+                        status="started")
+
+        # ── 3. Run the adapter (no artifacts — we write them ourselves) ─
+        adapter_result = await self._adapter.run(contract, prompt)
+
+        # ── 4. Write remaining artifacts after the process ─────────────
+        stdout_ref = None
+        stderr_ref = None
+        events_ref = None
+        result_ref = None
+
+        if trace and store:
+            try:
+                redacted_prompt = self._adapter._redactor.redact_string(prompt)
+                r = store.write_packet_text(
+                    trace=trace, packet_id=package_id,
+                    name="prompt.txt", content=redacted_prompt, kind="opencode_prompt",
+                )
+                if r:
+                    all_refs.append(r)
+            except Exception:
+                _log.warn("write_prompt_failed")
+
+            if adapter_result.stdout:
+                try:
+                    redacted = self._adapter._redactor.redact_string(adapter_result.stdout)
+                    r = store.write_packet_text(
+                        trace=trace, packet_id=package_id,
+                        name="agent_stdout.txt", content=redacted, kind="opencode_stdout",
+                    )
+                    if r:
+                        all_refs.append(r)
+                        stdout_ref = r
+                except Exception:
+                    _log.warn("write_stdout_failed")
+
+            if adapter_result.stderr:
+                try:
+                    redacted = self._adapter._redactor.redact_string(adapter_result.stderr)
+                    r = store.write_packet_text(
+                        trace=trace, packet_id=package_id,
+                        name="agent_stderr.txt", content=redacted, kind="opencode_stderr",
+                    )
+                    if r:
+                        all_refs.append(r)
+                        stderr_ref = r
+                except Exception:
+                    _log.warn("write_stderr_failed")
+
+            if adapter_result.raw_events:
+                try:
+                    lines = "\n".join(
+                        json.dumps(self._adapter._redactor.redact_payload(ev), ensure_ascii=False)
+                        for ev in adapter_result.raw_events
+                    )
+                    r = store.write_packet_text(
+                        trace=trace, packet_id=package_id,
+                        name="raw_opencode_events.jsonl", content=lines, kind="opencode_events",
+                    )
+                    if r:
+                        all_refs.append(r)
+                        events_ref = r
+                except Exception:
+                    _log.warn("write_events_failed")
+
+            try:
+                redacted = self._adapter._redactor.redact_payload(adapter_result.model_dump())
+                r = store.write_packet_json(
+                    trace=trace, packet_id=package_id,
+                    name="adapter_result.json", payload=redacted, kind="opencode_result",
+                )
+                if r:
+                    all_refs.append(r)
+                    result_ref = r
+            except Exception:
+                _log.warn("write_result_failed")
+
+        # ── 5. Emit per-artifact lifecycle events ──────────────────────
+        if events and trace:
+            if stdout_ref:
+                events.emit(trace=trace, event="packet.opencode_stdout_captured",
+                            stage="opencode_run", component="opencode_adapter",
+                            status="completed",
+                            artifact_refs=[stdout_ref])
+            if stderr_ref:
+                events.emit(trace=trace, event="packet.opencode_stderr_captured",
+                            stage="opencode_run", component="opencode_adapter",
+                            status="completed",
+                            artifact_refs=[stderr_ref])
+
+            if events_ref:
+                events.emit(trace=trace, event="packet.opencode_event_received",
+                            stage="opencode_run", component="opencode_adapter",
+                            status="completed",
+                            payload={"event_count": len(adapter_result.raw_events)})
+
+            if result_ref:
+                events.emit(trace=trace, event="packet.opencode_adapter_result_mapped",
+                            stage="opencode_run", component="opencode_adapter",
+                            status="completed",
+                            artifact_refs=[result_ref])
+
+            # ── 6. Final lifecycle event ───────────────────────────────
             if adapter_result.ok:
-                events.emit(
-                    trace=trace, event="packet.opencode_process_completed",
-                    stage="opencode_run", component="opencode_adapter",
-                    status="completed", duration_ms=adapter_result.duration_ms,
-                    artifact_refs=all_refs if all_refs else None,
-                )
+                events.emit(trace=trace, event="packet.opencode_process_completed",
+                            stage="opencode_run", component="opencode_adapter",
+                            status="completed", duration_ms=adapter_result.duration_ms,
+                            artifact_refs=all_refs if all_refs else None)
             else:
-                events.emit(
-                    trace=trace, event="packet.opencode_process_failed",
-                    stage="opencode_run", component="opencode_adapter",
-                    status="failed", message=adapter_result.failure_summary or "",
-                    duration_ms=adapter_result.duration_ms,
-                    artifact_refs=all_refs if all_refs else None,
-                )
+                events.emit(trace=trace, event="packet.opencode_process_failed",
+                            stage="opencode_run", component="opencode_adapter",
+                            status="failed", message=adapter_result.failure_summary or "",
+                            duration_ms=adapter_result.duration_ms,
+                            artifact_refs=all_refs if all_refs else None)
 
         return _map_adapter_result(adapter_result, request)
 

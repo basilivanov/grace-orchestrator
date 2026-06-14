@@ -451,9 +451,18 @@ class TestExecutionBackend:
             events_file = td_path / ".grace" / "runs" / "feat_w4" / "events.jsonl"
             assert events_file.exists(), "events.jsonl must exist"
             lines = events_file.read_text().strip().split("\n")
-            events = [json.loads(l) for l in lines if l.strip()]
-            event_names = {e["event"] for e in events}
-            assert "packet.opencode_process_completed" in event_names
+            emitted_events = [json.loads(l) for l in lines if l.strip()]
+            event_names = {e["event"] for e in emitted_events}
+            expected_events = {
+                "packet.opencode_command_built",
+                "packet.opencode_process_started",
+                "packet.opencode_stdout_captured",
+                "packet.opencode_event_received",
+                "packet.opencode_adapter_result_mapped",
+                "packet.opencode_process_completed",
+            }
+            missing_events = expected_events - event_names
+            assert not missing_events, f"missing lifecycle events: {missing_events}"
 
     async def test_backend_with_observability_writes_jsonl_format(self):
         """raw_opencode_events.jsonl must be line-delimited JSON, not an array."""
