@@ -29,6 +29,7 @@ REPAIRABLE_COMPILER_ERRORS = {
     "E_CODER_EMPTY_SCOPE",
     "E_EVIDENCE_DIFF_EMPTY_SCOPE",
     "E_EVIDENCE_DIFF_VERIFICATION_ONLY",
+    "E_SCOPE_PATH_NOT_CANONICAL",
 }
 
 # ── Errors that CANNOT be repaired (shell env, venv, syntax) ────────────
@@ -50,7 +51,7 @@ def classify_compiler_result(errors: list[dict]) -> str:
         return "ok"
 
     all_repairable = all(
-        is_repairable_error(e.get("code", "")) for e in errors
+        e.get("code", "") in REPAIRABLE_COMPILER_ERRORS for e in errors
     )
     has_terminal = any(
         e.get("code", "") in TERMINAL_COMPILER_ERRORS for e in errors
@@ -60,7 +61,6 @@ def classify_compiler_result(errors: list[dict]) -> str:
         return "terminal"
     if all_repairable:
         return "repairable"
-    # Mixed: some repairable, some unknown
     return "review"
 
 

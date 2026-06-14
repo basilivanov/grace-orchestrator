@@ -578,8 +578,19 @@ Rules:
      containing the old import must be in write scope or the plan is invalid.
    - If migration is too large, split into phases: create new modules,
      convert old source file to shim, migrate consumers, remove shim later.
-   - Never claim full split completion if original source file is not
-     writable in this plan. Keep shim strategy explicit.
+    - Never claim full split completion if original source file is not
+      writable in this plan. Keep shim strategy explicit.
+
+   CRITICAL — scope path rules (all scope entries must be repository filesystem paths):
+   - packet.scope MUST contain repository filesystem paths only.
+   - NEVER put Python import paths or invented short paths into scope.
+   - Example WRONG: `app/llm/russian.py` or `app.services.llm_service`
+   - Example CORRECT: `apps/api/app/services/llm/russian.py`
+   - Python import `app.services.llm_service` → filesystem `apps/api/app/services/llm_service.py`
+   - Package `app.services.llm` → directory `apps/api/app/services/llm/`
+   - If creating files under new package, use explicit paths like
+     `apps/api/app/services/llm/__init__.py`, `apps/api/app/services/llm/russian.py`.
+   - Non-canonical paths are rejected at compile time before coder execution.
 
    Default method-extraction pattern:
    • Add new canonical method in the target service.
@@ -680,6 +691,21 @@ Respond ONLY with valid JSON (no markdown, no backticks):
                 + "\n" + str(spec.get("description", ""))
                 + "\n" + str(spec.get("title", ""))
             )
+            # ── Scope Path Canonicalizer (before PlanCompiler) ────────
+            from grace_control.services.scope_path_canonicalizer import ScopePathCanonicalizer
+            canonical = ScopePathCanonicalizer().canonicalize_plan(plan)
+            if canonical.changed and canonical.plan:
+                plan = canonical.plan
+                spec["plan_json"] = plan
+                spec["_scope_canonicalization"] = {
+                    "changed": True,
+                    "fixes": canonical.fixes,
+                    "warnings": canonical.warnings,
+                    "errors": canonical.errors,
+                }
+                feature.spec_json = spec
+                _log.info("scope_canonicalized", feature_id=feature_id,
+                          fixes=len(canonical.fixes))
             compiled = PlanCompiler().compile_plan(
                 plan, env,
                 feature_description=feature_desc,

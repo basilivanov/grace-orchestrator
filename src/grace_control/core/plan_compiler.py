@@ -267,6 +267,22 @@ class PlanCompiler:
             for pi, packet in enumerate(wave.get("packets", [])):
                 title = packet.get("title", f"wave-{wi}-pkt-{pi}")
                 scope = packet.get("scope", [])
+                # Check for non-canonical scope paths
+                for si, sp in enumerate(scope):
+                    if isinstance(sp, str) and (
+                        sp.startswith("app/")
+                        or sp.startswith("app.")
+                        or (".services" in sp and "/" not in sp)
+                    ):
+                        # Non-canonical — compiler will catch via canonicalizer
+                        _add_error(
+                            result, "E_SCOPE_PATH_NOT_CANONICAL",
+                            f"waves[{wi}].packets[{pi}].scope[{si}]",
+                            f"scope path '{sp}' is not canonical (e.g. use "
+                            f"apps/api/app/services/... not app/... or app.services...)",
+                            title,
+                            f"replace '{sp}' with the full filesystem path",
+                        )
                 verification = packet.get("verification", {})
                 evidence = packet.get("expected_evidence", [])
                 role = packet.get("role", "coder")

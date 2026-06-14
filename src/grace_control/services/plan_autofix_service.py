@@ -56,6 +56,8 @@ class SafePlanAutofixer:
                 self._try_fix_source_split(patched, err, report)
             elif code == "E_IMPORT_MIGRATION_SCOPE_INCOMPLETE":
                 self._try_fix_import_scope(patched, err, report)
+            elif code == "E_SCOPE_PATH_NOT_CANONICAL":
+                self._try_fix_noncanonical_path(patched, err, report)
             else:
                 report.skipped.append({
                     "code": "SKIPPED_UNSUPPORTED_ERROR",
@@ -294,3 +296,68 @@ class SafePlanAutofixer:
     def _is_table(self, plan: dict, key: str, path: str) -> bool:
         frozen = plan.get("constraints", {}).get(key, []) or []
         return path in frozen
+
+    def _try_fix_noncanonical_path(
+        self,
+        plan: dict,
+        err: dict,
+        report: PlanAutofixReport,
+    ) -> None:
+        """Replace non-canonical scope path with full filesystem path."""
+        msg = err.get("message", "")
+        import re as _re
+        path_match = _re.search(r"scope path '([^']+)'", msg)
+        suggestion_match = _re.search(r"replace '([^']+)' with the full", msg)
+        if not path_match:
+            report.skipped.append({
+                "code": "SKIPPED_NO_PATH_FOUND",
+                "reason": "no path found in error message",
+                "error_code": "E_SCOPE_PATH_NOT_CANONICAL",
+            })
+            return
+
+        bad_path = path_match.group(1)
+        suggested = suggestion_match.group(1) if suggestion_match else None
+
+        if not suggested:
+            # Try canonicalizing inline
+            from grace_control.services.scope_path_canonicalizer import ScopePathCanonicalizer
+            suggested = ScopePathCanonicalizer()._canonicalize(bad_path)
+            if suggested == bad_path:
+                report.skipped.append({
+                    "code": "SKIPPED_NO_SUGGESTION",
+                    "reason": f"cannot determine canonical path for '{bad_path}'",
+                    "error_code": "E_SCOPE_PATH_NOT_CANONICAL",
+                    "file": bad_path,
+                })
+                return
+
+        # Find the packet containing this path and replace it
+        waves = plan.get("waves", [])
+        replaced = False
+        for wi, wave in enumerate(waves):
+            for pi, pkt in enumerate(wave.get("packets", [])):
+                scope = pkt.get("scope", []) or []
+                if bad_path in scope:
+                    idx = scope.index(bad_path)
+                    scope[idx] = suggested
+                    replaced = True
+                    pkt["scope"] = scope
+                    report.fixes.append({
+                        "code": "AUTO_CANONICALIZE_SCOPE_PATH",
+                        "from": bad_path,
+                        "to": suggested,
+                        "reason": "E_SCOPE_PATH_NOT_CANONICAL",
+                        "packet_title": pkt.get("title", f"wave-{wi}-pkt-{pi}"),
+                    })
+                    break
+            if replaced:
+                break
+
+        if not replaced:
+            report.skipped.append({
+                "code": "SKIPPED_PATH_NOT_IN_SCOPE",
+                "reason": f"path '{bad_path}' not found in any packet scope",
+                "error_code": "E_SCOPE_PATH_NOT_CANONICAL",
+                "file": bad_path,
+            })
