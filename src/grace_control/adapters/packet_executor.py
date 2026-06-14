@@ -797,14 +797,14 @@ class PacketExecutionAdapter:
                 "acceptance_summary": ac.get("summary", ""),
                 "evidence_verifier_verdict": evr.verdict if evr and hasattr(evr, "verdict") else "",
             }
-            # Build truthful artifact manifest from the packet dir
-            written_names: list[str] = []
+            # Write evidence.json first so it appears in metadata.artifacts
+            ev_ref = self._obs_write_json_artifact("evidence.json", evidence_data, "evidence")
+            # Build truthful artifact manifest from the packet dir (includes evidence.json)
             written_refs: dict[str, dict] = {}
             pkt_dir = self._obs_packet_dir
             if pkt_dir and pkt_dir.exists():
                 for f in pkt_dir.iterdir():
-                    if f.is_file():
-                        written_names.append(f.name)
+                    if f.is_file() and f.name != "metadata.json":
                         content = f.read_text(encoding="utf-8")
                         written_refs[f.name] = {
                             "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
@@ -818,7 +818,6 @@ class PacketExecutionAdapter:
                 "commit_sha": commit_sha or "",
                 "artifacts": written_refs,
             }
-            ev_ref = self._obs_write_json_artifact("evidence.json", evidence_data, "evidence")
             meta_ref = self._obs_write_json_artifact("metadata.json", meta, "metadata")
             return ev_ref, meta_ref
         except Exception:
