@@ -164,3 +164,93 @@ async def test_merge_requires_worktree_and_branch(api):
     """Merge returns 400 without worktree_path/branch_name."""
     r = await api.post("/api/packets/any/merge", json={})
     assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_runtime_diagnostics_no_runs(api):
+    from grace_control.db import get_db
+    from grace_control.db.schema import Packet
+
+    with get_db() as db:
+        db.add(Packet(id="pkt-diag-001", feature_id="f1", wave_id="w1",
+                       slug="pkt-diag-001", title="Diag",
+                       spec_json={}, state="draft"))
+        db.commit()
+
+    r = await api.get("/api/packets/pkt-diag-001/runtime-diagnostics")
+    assert r.status_code == 200
+    assert r.json()["data"]["status"] == "no_runs"
+
+
+@pytest.mark.asyncio
+async def test_runtime_diagnostics_scope_failure(api):
+    from grace_control.db import get_db
+    from grace_control.db.schema import Packet, PacketRun
+
+    with get_db() as db:
+        db.add(Packet(id="pkt-scope-001", feature_id="f1", wave_id="w1",
+                       slug="pkt-scope-001", title="Scope Fail",
+                       spec_json={}, state="failed"))
+        run = PacketRun(
+            id="pkt-scope-001-R01", packet_id="pkt-scope-001",
+            run_number=1, worker_id="w1", status="failed",
+            result_json={
+                "diagnostics": {
+                    "evidence": {
+                        "failure_code": "AGENT_CHANGED_OUT_OF_SCOPE",
+                        "scope_enforcement": {
+                            "ok": False,
+                            "out_of_scope_files": ["outside/x.py"],
+                            "summary": "Agent changed files outside allowed scope",
+                        },
+                        "diff_inspection": {"ok": True, "changed_files": ["outside/x.py"]},
+                        "changed_files": ["outside/x.py"],
+                    }
+                }
+            },
+        )
+        db.add(run)
+        db.commit()
+
+    r = await api.get("/api/packets/pkt-scope-001/runtime-diagnostics")
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["failure_code"] == "AGENT_CHANGED_OUT_OF_SCOPE"
+    assert "outside" in data["details"]
+    assert "outside/x.py" in data["changed_files"]
+
+
+@pytest.mark.asyncio
+async def test_runtime_diagnostics_success(api):
+    from grace_control.db import get_db
+    from grace_control.db.schema import Packet, PacketRun
+
+    with get_db() as db:
+        db.add(Packet(id="pkt-ok-001", feature_id="f1", wave_id="w1",
+                       slug="pkt-ok-001", title="OK Packet",
+                       spec_json={}, state="accepted"))
+        run = PacketRun(
+            id="pkt-ok-001-R01", packet_id="pkt-ok-001",
+            run_number=1, worker_id="w1", status="accepted",
+            result_json={
+                "diagnostics": {
+                    "evidence": {
+                        "failure_code": None,
+                        "changed_files": ["src/ok.py"],
+                        "scope_enforcement": {"ok": True, "out_of_scope_files": [],
+                                              "frozen_touched_files": []},
+                        "diff_inspection": {"ok": True, "changed_files": ["src/ok.py"]},
+                        "artifact_refs": ["runtime_diagnostics.json", "scope_enforcement.json"],
+                    }
+                }
+            },
+        )
+        db.add(run)
+        db.commit()
+
+    r = await api.get("/api/packets/pkt-ok-001/runtime-diagnostics")
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["failure_code"] is None
+    assert "runtime_diagnostics.json" in data.get("artifact_refs", [])
+    assert "src/ok.py" in data["changed_files"]

@@ -332,3 +332,61 @@ async def merge_packet(packet_id: str, request: dict) -> dict:
         "data": {"packet_id": packet_id, "state": "merged", "commit_sha": result.commit_sha},
         "timestamp": datetime.now(UTC).isoformat() + "Z",
     }
+
+
+@router.get("/{packet_id}/runtime-diagnostics")
+async def get_packet_runtime_diagnostics(packet_id: str) -> dict:
+    """Return runtime diagnostics for a packet — scope enforcement, diff,
+    failure code, changed files. Built from the latest run's result_json."""
+    with get_db() as db:
+        p = db.query(Packet).filter_by(id=packet_id).first()
+        if not p:
+            raise HTTPException(status_code=404, detail="Packet not found")
+        run = db.query(PacketRun).filter_by(packet_id=packet_id).order_by(
+            PacketRun.run_number.desc()
+        ).first()
+
+    if not run:
+        return {"data": {"packet_id": packet_id, "status": "no_runs",
+                         "failure_code": None, "message": "No runs for this packet"},
+                "timestamp": datetime.now(UTC).isoformat() + "Z"}
+
+    rj = run.result_json or {}
+    diagnostics_evidence = (rj.get("diagnostics") or {}).get("evidence", {}) or rj.get("evidence", {})
+    failure_code = diagnostics_evidence.get("failure_code")
+    status = "failed" if failure_code else (p.state if p else "unknown")
+
+    title = _FATAL_SCOPE_TITLES.get(failure_code or "", "Runtime error") if failure_code else "Success"
+    details = ""
+    changed = diagnostics_evidence.get("changed_files", [])
+    scope = diagnostics_evidence.get("scope_enforcement", {})
+    if isinstance(scope, dict):
+        if scope.get("out_of_scope_files"):
+            details = f"Files outside scope: {scope['out_of_scope_files']}"
+        elif scope.get("frozen_touched_files"):
+            details = f"Frozen scope changes: {scope['frozen_touched_files']}"
+        if scope.get("summary"):
+            details = details or scope["summary"]
+
+    artifact_refs = diagnostics_evidence.get("artifact_refs", [])
+    read_model = {
+        "packet_id": packet_id,
+        "status": status,
+        "failure_code": failure_code,
+        "title": title,
+        "details": details,
+        "changed_files": changed,
+        "artifact_refs": artifact_refs,
+        "run_id": run.id,
+    }
+    return {"data": read_model, "timestamp": datetime.now(UTC).isoformat() + "Z"}
+
+
+_FATAL_SCOPE_TITLES = {
+    "AGENT_CHANGED_OUT_OF_SCOPE": "Agent changed files outside allowed scope",
+    "AGENT_TOUCHED_FROZEN_SCOPE": "Agent modified frozen scope files",
+    "AGENT_SCOPE_ENFORCEMENT_FAILED": "Scope enforcement check failed",
+    "AGENT_DIFF_INSPECTION_FAILED": "Diff inspection failed",
+    "AGENT_NO_CHANGES_PRODUCED": "Agent produced no changes",
+    "AGENT_WORKTREE_NOT_GIT": "Worktree is not a git repository",
+}
