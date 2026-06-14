@@ -34,6 +34,8 @@ from grace_control.core.runtime_trace import (
     get_current_trace,
     set_current_trace,
 )
+from grace_control.runtime.agent_runtime_contract import AgentRuntimeContractBuilder
+from grace_control.runtime.agent_runtime_selftest import AgentRuntimeSelftest
 from grace_control.core.structured_logger import GraceLogger
 from grace_control.db import get_db
 from grace_control.db.schema import Packet, PacketRun
@@ -47,6 +49,39 @@ _log = GraceLogger("adapter")
 # Canonical worktree/branch naming helpers — single source of truth.
 def _attempt_slug(packet_id: str, attempt: int) -> str:
     return f"{packet_id}-attempt-{attempt:04d}"
+
+
+def _resolve_worktree_for_contract(
+    packet_data: dict,
+    executor: dict,
+    settings_obj: object,
+    project_root: Path,
+    worktree_root: Path,
+) -> Path:
+    """Determine the expected worktree path the same way _call_executor does."""
+    from grace_control.config.settings import settings as _s
+    pid = packet_data.get("id", "unknown")
+    attempt = packet_data.get("attempt_count", 1)
+    slug = _attempt_slug(pid, attempt)
+
+    pkt_metadata = packet_data.get("spec_json") or {}
+    if isinstance(pkt_metadata, str):
+        pkt_metadata = {}
+    pkt_target_repo = pkt_metadata.get("target_repo_root", "")
+    pkt_workspace_mode = pkt_metadata.get("workspace_mode", "")
+    _effective_target_repo = pkt_target_repo or _s.target_repo_root or ""
+    workspace_mode = pkt_workspace_mode or executor.get("workspace_mode") or _s.workspace_mode or "full_git_worktree"
+
+    target_root = Path(_effective_target_repo) if _effective_target_repo else Path(_s.target_repo_root or project_root)
+
+    if worktree_root.is_absolute():
+        wt_root = worktree_root
+    else:
+        wt_root = Path(_s.worktree_root)
+    if workspace_mode == "target_repo_worktree" and not wt_root.is_absolute():
+        wt_root = target_root / wt_root
+
+    return wt_root / slug
 
 
 def _attempt_branch(packet_id: str, attempt: int) -> str:
@@ -290,11 +325,57 @@ class PacketExecutionAdapter:
         self._init_observability(packet_data, run_id)
         self._obs_event("packet.execution_started", status="started")
         try:
+            from grace_control.config.settings import settings as _settings
+
+            # ── W3: Agent Runtime Contract + Selftest ──────────────────────
+            if not getattr(self, "_obs_disabled", True):
+                worktree_path = _resolve_worktree_for_contract(
+                    packet_data, executor, _settings, self.project_root, self.worktree_root,
+                )
+                contract = AgentRuntimeContractBuilder.build(
+                    packet_data=packet_data,
+                    executor=executor,
+                    run_id=run_id,
+                    trace=self._obs_trace,
+                    project_root=self.project_root,
+                    target_repo_root=_settings.target_repo_root or "",
+                    worktree_path=worktree_path,
+                    settings=_settings,
+                )
+                contract_ref = self._obs_store.write_packet_json(
+                    trace=self._obs_trace, packet_id=packet_id,
+                    name="runtime_contract.json",
+                    payload=contract.model_dump(),
+                    kind="runtime_contract",
+                )
+                self._obs_event("packet.runtime_contract_created", status="completed",
+                                artifact_refs=[contract_ref] if contract_ref else None)
+
+                self._obs_event("packet.runtime_selftest_started", status="started")
+                selftest = AgentRuntimeSelftest(store=self._obs_store)
+                selftest_result = selftest.run(contract, self._obs_trace)
+                # Emit one event per check
+                for c in selftest_result.checks:
+                    self._obs_event("packet.runtime_selftest_check_completed", status="completed",
+                                    payload={"check_id": c.check_id, "ok": c.ok,
+                                             "expected": c.expected, "actual": c.actual,
+                                             "failure_code": c.failure_code})
+                selftest_ref = selftest.persist(selftest_result, self._obs_trace)
+                if selftest_result.ok:
+                    self._obs_event("packet.runtime_selftest_completed", status="completed",
+                                    artifact_refs=[selftest_ref] if selftest_ref else None)
+                else:
+                    self._obs_event("packet.runtime_selftest_failed", status="failed",
+                                    message=selftest_result.summary,
+                                    artifact_refs=[selftest_ref] if selftest_ref else None)
+                    return self._fast_reject(selftest_result.summary, executor.get("executor_id", ""), run_id, start)
+
+            # ── end W3 ─────────────────────────────────────────────────────
+
             packet_path = self._materializer.materialize(packet_data, self.state_root)
             from grace_control.core.contracts import build_packet_contract
             pkt_contract = build_packet_contract(packet_data)
-            from grace_control.config.settings import settings
-            base_ref = settings.base_branch
+            base_ref = _settings.base_branch
             base_sha = self._inspector.base_sha(self.project_root, base_ref)
             evidence_dir = self.state_root / "packets" / packet_id / "runs" / f"R{run_number:02d}"
 
@@ -687,7 +768,8 @@ class PacketExecutionAdapter:
 
     def _obs_event(self, event: str, status: str | None = None,
                    message: str | None = None, duration_ms: int | None = None,
-                   artifact_refs: list[RuntimeArtifactRef] | None = None) -> None:
+                   artifact_refs: list[RuntimeArtifactRef] | None = None,
+                   payload: dict | None = None) -> None:
         if getattr(self, "_obs_disabled", True):
             return
         try:
@@ -700,6 +782,7 @@ class PacketExecutionAdapter:
                 message=message,
                 duration_ms=duration_ms,
                 artifact_refs=artifact_refs,
+                payload=payload,
             )
         except Exception:
             pass

@@ -1,0 +1,13 @@
+{
+  "runtime_contract_created": true,
+  "runtime_contract_artifact": true,
+  "selftest_runs_before_executor": true,
+  "selftest_artifact": true,
+  "selftest_check_events": true,
+  "critical_failure_blocks_executor": true,
+  "bad_cwd_failure_code": "AGENT_ENV_BAD_CWD",
+  "bad_git_root_failure_code": "AGENT_ENV_BAD_GIT_ROOT",
+  "missing_worktree_failure_code": "AGENT_WORKTREE_INVALID",
+  "new_tests_pass": true,
+  "existing_tests_pass": true
+}

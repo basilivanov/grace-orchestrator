@@ -156,6 +156,9 @@ async def _run_adapter(td: Path, *, accepted=True, report=None, backend=None, at
     (run_dir / "agent.patch").write_text("mock diff content\n")
 
     _s.runtime_artifacts_root = str(td / ".grace" / "runs")
+    # W3 selftest — relax checks for test env (no real git repos)
+    _s.agent_runtime_fail_on_bad_cwd = False
+    _s.agent_runtime_fail_on_bad_git_root = False
 
     if report is None:
         report = _make_accepted() if accepted else _make_rework()

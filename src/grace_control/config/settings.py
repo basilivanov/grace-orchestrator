@@ -122,6 +122,13 @@ class GraceSettings(BaseSettings):
     runtime_debug_max_preview_chars: int = 500
     runtime_redact_secrets: bool = True
 
+    # ── W3 Agent Runtime Selftest ──
+    agent_runtime_require_opencode_auth: bool = False
+    agent_runtime_require_model_config: bool = False
+    agent_runtime_fail_on_bad_cwd: bool = True
+    agent_runtime_fail_on_bad_git_root: bool = True
+    agent_runtime_fail_on_dirty_worktree: bool = False
+
     # ── Dev tools / replay ──
     dev_tools_enabled: bool = False
     dev_keep_failed_worktrees: bool = False
