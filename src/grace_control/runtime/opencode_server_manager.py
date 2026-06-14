@@ -121,6 +121,7 @@ class OpenCodeServerManager:
                 binary, "serve", "--hostname", host, "--port", str(port),
                 stdout=open(log_path, "a"),
                 stderr=asyncio.subprocess.STDOUT,
+                start_new_session=True,
             )
             self._server_proc = proc
         except FileNotFoundError:
@@ -187,38 +188,61 @@ class OpenCodeServerManager:
         # Stop self._server_proc if running
         if self._server_proc and self._server_proc.returncode is None:
             try:
-                self._kill_process_handling(self._server_proc)
+                await self._kill_process_async(self._server_proc)
             except Exception:
                 pass
             self._server_proc = None
-        # Also stop PID-file process if different from self._server_proc and not our own PID
+        # Stop PID-file process only when state matches (not unrelated reused PID)
         pid = self._read_pid()
         if pid is not None and pid != os.getpid() and self._pid_alive(pid):
-            try:
-                pgid = os.getpgid(pid)
-                os.killpg(pgid, signal.SIGTERM)
+            from grace_control.config.settings import settings as _s
+            host = getattr(_s, "opencode_server_host", "127.0.0.1")
+            port = getattr(_s, "opencode_server_port", 4096)
+            if self._state_matches_pid(pid, host, port):
                 try:
-                    await asyncio.sleep(3)
-                except Exception:
-                    pass
-                if self._pid_alive(pid):
-                    os.killpg(pgid, signal.SIGKILL)
-            except (ProcessLookupError, OSError):
-                try:
-                    os.kill(pid, signal.SIGTERM)
-                    await asyncio.sleep(3)
+                    pgid = os.getpgid(pid)
+                    os.killpg(pgid, signal.SIGTERM)
+                    try:
+                        await asyncio.sleep(5)
+                    except Exception:
+                        pass
                     if self._pid_alive(pid):
-                        os.kill(pid, signal.SIGKILL)
-                except (OSError, ProcessLookupError):
-                    pass
+                        os.killpg(pgid, signal.SIGKILL)
+                except (ProcessLookupError, OSError):
+                    try:
+                        os.kill(pid, signal.SIGTERM)
+                        await asyncio.sleep(5)
+                        if self._pid_alive(pid):
+                            os.kill(pid, signal.SIGKILL)
+                    except (OSError, ProcessLookupError):
+                        pass
         self._clear_pid()
 
-    def _kill_process_handling(self, proc) -> None:
+    async def _kill_process_async(self, proc) -> None:
+        """SIGTERM → wait grace → SIGKILL → wait."""
         try:
             pgid = os.getpgid(proc.pid)
             os.killpg(pgid, signal.SIGTERM)
         except Exception:
-            proc.terminate()
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=5)
+        except (asyncio.TimeoutError, Exception):
+            try:
+                pgid = os.getpgid(proc.pid)
+                os.killpg(pgid, signal.SIGKILL)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=5)
+            except Exception:
+                pass
 
     async def restart(self) -> OpenCodeServerState:
         await self.stop()
@@ -234,18 +258,12 @@ class OpenCodeServerManager:
         pid = self._read_pid()
         if pid is not None:
             if self._pid_alive(pid):
-                # State file match is preferred but not required — trust PID if no state file
                 if self._state_matches_pid(pid, host, port):
                     return OpenCodeServerState(
                         status=OpenCodeServerStatus.RUNNING, url=url, pid=pid, log_path=log_path,
                     )
-                state_exists = Path(getattr(settings, "opencode_server_pid_path", ".grace/opencode-server.pid")).parent / "opencode-server-state.json"
-                if state_exists.exists():
-                    self._clear_pid()
-                else:
-                    return OpenCodeServerState(
-                        status=OpenCodeServerStatus.RUNNING, url=url, pid=pid, log_path=log_path,
-                    )
+                # PID alive but state doesn't match — could be unrelated process
+                self._clear_pid()
             else:
                 self._clear_pid()
         return OpenCodeServerState(status=OpenCodeServerStatus.STOPPED, url=url, log_path=log_path)

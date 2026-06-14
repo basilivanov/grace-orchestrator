@@ -118,8 +118,19 @@ class TestServerManagerStart:
             _s.opencode_server_pid_path = str(pid_path)
             _s.opencode_server_log_path = str(td_path / "opencode-server.log")
             _s.opencode_server_start_timeout_seconds = 1
+            _s.opencode_server_host = "127.0.0.1"
+            _s.opencode_server_port = 4096
 
             pid_path.write_text(str(os.getpid()))
+            # Write matching state file so PID is trusted
+            state_path = td_path / "opencode-server-state.json"
+            import json
+            state_path.write_text(json.dumps({
+                "pid": os.getpid(),
+                "host": "127.0.0.1",
+                "port": 4096,
+                "binary": "opencode",
+            }))
             mgr = OpenCodeServerManager(health_runner=_ok_health)
             state = await mgr.ensure_running()
             assert state.status == OpenCodeServerStatus.RUNNING
@@ -235,8 +246,17 @@ class TestEnsureRunning:
             _s.opencode_server_pid_path = str(pid_path)
             _s.opencode_server_log_path = str(td_path / "opencode-server.log")
             _s.opencode_server_restart_on_unhealthy = False
+            _s.opencode_server_host = "127.0.0.1"
+            _s.opencode_server_port = 4096
 
             pid_path.write_text(str(os.getpid()))
+            import json
+            (td_path / "opencode-server-state.json").write_text(json.dumps({
+                "pid": os.getpid(),
+                "host": "127.0.0.1",
+                "port": 4096,
+                "binary": "opencode",
+            }))
             mgr = OpenCodeServerManager(health_runner=_fail_health)
             state = await mgr.ensure_running()
             assert state.status == OpenCodeServerStatus.UNHEALTHY
