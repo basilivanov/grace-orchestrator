@@ -33,6 +33,18 @@ class FeaturePathManifest:
 
 class FeaturePathManifestBuilder:
 
+    def __init__(self, trace=None, event_logger=None, artifact_store=None):
+        self._trace = trace
+        self._event_logger = event_logger
+        self._artifact_store = artifact_store
+
+    def _emit(self, event: str, **kw):
+        if self._event_logger and self._trace:
+            self._event_logger.emit(
+                trace=self._trace, event=event, stage="feature_path_manifest",
+                component="FeaturePathManifestBuilder", **kw,
+            )
+
     _SPLIT_KEYWORDS = [
         "split", "break up", "extract", "move", "refactor",
         "decompose", "modularize",
@@ -46,6 +58,7 @@ class FeaturePathManifestBuilder:
         context_paths: list[str] | None = None,
         kg: GraceKnowledgeGraph | None = None,
     ) -> FeaturePathManifest:
+        self._emit(event="feature_path_manifest.build_started", status="started")
         manifest = FeaturePathManifest()
         all_text = feature_text.lower()
         context_paths = context_paths or []
@@ -60,6 +73,8 @@ class FeaturePathManifestBuilder:
             manifest.warnings.append(
                 "Cannot derive concrete path manifest: no source file found in feature text or context paths"
             )
+            self._emit(event="feature_path_manifest.source_unresolved", status="warning",
+                       payload={"warnings": manifest.warnings})
             return manifest
 
         manifest.source_path = source_path
@@ -86,6 +101,30 @@ class FeaturePathManifestBuilder:
             manifest.forbidden_near_misses = self._build_forbidden(manifest)
 
         manifest.found = True
+
+        # ── Runtime observability ──
+        if self._artifact_store and self._trace:
+            self._artifact_store.write_json(
+                trace=self._trace, stage="feature_path_manifest", name="output.json",
+                payload={
+                    "source_path": manifest.source_path,
+                    "owning_module_id": manifest.owning_module_id,
+                    "owning_module_paths": manifest.owning_module_paths,
+                    "package_path": manifest.package_path,
+                    "forbidden_near_misses": manifest.forbidden_near_misses,
+                    "warnings": manifest.warnings,
+                    "found": manifest.found,
+                },
+                kind="manifest_output",
+            )
+        self._emit(event="feature_path_manifest.completed", status="completed",
+                   payload={
+                       "source_path": manifest.source_path,
+                       "owning_module_id": manifest.owning_module_id,
+                       "package_path": manifest.package_path,
+                       "warnings": manifest.warnings,
+                   })
+
         return manifest
 
     def build_prompt_block(self, manifest: FeaturePathManifest) -> str:
@@ -119,7 +158,14 @@ class FeaturePathManifestBuilder:
             for f in manifest.forbidden_near_misses:
                 parts.append(f"- {f}")
 
-        return "\n".join(parts)
+        block = "\n".join(parts)
+        # ── Runtime observability ──
+        if self._artifact_store and self._trace:
+            self._artifact_store.write_text(
+                trace=self._trace, stage="feature_path_manifest", name="prompt_block.txt",
+                content=block, kind="manifest_prompt_block",
+            )
+        return block
 
     # ── Private helpers ────────────────────────────────────────────
 

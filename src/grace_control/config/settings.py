@@ -115,6 +115,13 @@ class GraceSettings(BaseSettings):
     opencode_server_url: str = ""
     opencode_server_password: str = ""
 
+    # ── Runtime observability (W1) ──
+    runtime_observability_enabled: bool = True
+    runtime_debug_payload_capture_enabled: bool = True
+    runtime_artifacts_root: str = ".grace/runs"
+    runtime_debug_max_preview_chars: int = 500
+    runtime_redact_secrets: bool = True
+
     # ── Dev tools / replay ──
     dev_tools_enabled: bool = False
     dev_keep_failed_worktrees: bool = False

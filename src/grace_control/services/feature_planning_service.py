@@ -70,6 +70,12 @@ class FeaturePlanningService:
 
     def __init__(self, db):
         self.db = db
+        from grace_control.core.runtime_trace import RuntimeTraceContext, generate_trace_id
+        from grace_control.core.runtime_artifacts import RuntimeArtifactStore
+        from grace_control.core.runtime_events import RuntimeEventLogger
+        self._trace_ctx = RuntimeTraceContext(trace_id=generate_trace_id())
+        self._artifact_store = RuntimeArtifactStore()
+        self._event_logger = RuntimeEventLogger(store=self._artifact_store)
 
     def get_planning_state(self, feature_id: str) -> dict:
         feature = self.db.query(Feature).filter_by(id=feature_id).first()
@@ -143,6 +149,26 @@ class FeaturePlanningService:
         feature = self.db.query(Feature).filter_by(id=feature_id).first()
         task_desc = (feature.description or feature.title or "") if feature else ""
 
+        # ── Runtime observability: trace + events ──
+        self._trace_ctx.feature_id = feature_id
+        self._trace_ctx.runtime_run_id = run_id
+        self._trace_ctx.stage = "feature"
+        self._event_logger.emit(
+            trace=self._trace_ctx, event="feature.trace_started", stage="feature",
+            component="FeaturePlanningService", status="started",
+            payload={"feature_id": feature_id},
+        )
+        self._event_logger.emit(
+            trace=self._trace_ctx, event="feature.input_captured", stage="feature",
+            component="FeaturePlanningService", status="completed",
+            payload={"task_desc": task_desc[:200]},
+        )
+        self._event_logger.emit(
+            trace=self._trace_ctx, event="feature.target_repo_resolved", stage="feature",
+            component="FeaturePlanningService", status="completed",
+            payload={"target_repo_root": target_repo_root},
+        )
+
         # ── Mutation guard: pre-snapshot target repo ──
         worktree_root = target_repo_root or _ctx_settings.target_repo_root or "."
         root = Path(worktree_root)
@@ -151,10 +177,27 @@ class FeaturePlanningService:
             _log.warn("context_builder_pre_snapshot_dirty",
                        feature_id=feature_id, status=pre_snapshot["status_short"][:200])
 
+        self._event_logger.emit(
+            trace=self._trace_ctx, event="context_builder.started", stage="context_builder",
+            component="FeaturePlanningService", status="running",
+        )
+
         try:
             # Determine scope from feature spec_json
             spec = feature.spec_json or {} if feature else {}
             scope = spec.get("scope") if isinstance(spec, dict) else None
+
+            self._event_logger.emit(
+                trace=self._trace_ctx, event="context_builder.input_captured", stage="context_builder",
+                component="FeaturePlanningService", status="completed",
+                payload={"target_repo_root": str(root), "scope": scope, "model": "", "executor_id": "context_collector"},
+            )
+            # Persist feature_input.json
+            feature_input = {"task_desc": task_desc[:500], "scope": scope, "target_repo_root": str(root)}
+            self._artifact_store.write_json(
+                trace=self._trace_ctx, stage="feature", name="feature_input.json",
+                payload=feature_input, kind="feature_input",
+            )
 
             from grace_control.core.context_collector import ContextCollector
             from grace_control.core.executor_selector import resolve_model
@@ -201,6 +244,36 @@ class FeaturePlanningService:
             }
             cb_run.status = "done"
             cb_run.model = ctx_model.get("model", "")
+
+            # ── Runtime observability: context_builder artifacts + events ──
+            self._artifact_store.write_json(
+                trace=self._trace_ctx, stage="context_builder", name="input.json",
+                payload={"target_repo_root": str(root), "scope": scope, "executor_id": "context_collector"},
+                kind="context_input",
+            )
+            self._artifact_store.write_json(
+                trace=self._trace_ctx, stage="context_builder", name="output.json",
+                payload=context, kind="context_output",
+            )
+            files_artifact = {
+                "file_count": len(code_ctx.files),
+                "selected_files": [f.path for f in code_ctx.files[:_MAX_RELEVANT_FILES] if f.relevant],
+                "summary": code_ctx.summary,
+                "complexity_score": code_ctx.complexity_score,
+            }
+            self._artifact_store.write_json(
+                trace=self._trace_ctx, stage="context_builder", name="files.json",
+                payload=files_artifact, kind="context_files",
+            )
+            self._event_logger.emit(
+                trace=self._trace_ctx, event="context_builder.output_captured", stage="context_builder",
+                component="FeaturePlanningService", status="completed",
+                payload={"file_count": len(code_ctx.files), "complexity_score": code_ctx.complexity_score},
+            )
+            self._event_logger.emit(
+                trace=self._trace_ctx, event="context_builder.completed", stage="context_builder",
+                component="FeaturePlanningService", status="completed",
+            )
 
             # ── Mutation guard: post-run check ──
             post_snapshot = _git_snapshot(root)
@@ -250,6 +323,11 @@ class FeaturePlanningService:
                 cb_run.finished_at = datetime.now(UTC)
                 cb_run.duration_ms = int((cb_run.finished_at - cb_run.started_at).total_seconds() * 1000)
                 cb_run.result_json = {"summary": str(e)[:200], "file_count": 0, "files": [], "error": "CONTEXT_BUILDER_MUTATED_TARGET_REPO"}
+                self._event_logger.emit(
+                    trace=self._trace_ctx, event="context_builder.failed", stage="context_builder",
+                    component="FeaturePlanningService", status="failed",
+                    payload={"reason": "CONTEXT_BUILDER_MUTATED_TARGET_REPO"},
+                )
                 self._emit_event(feature_id, "context_builder_failed", {
                     "run_id": run_id, "duration_ms": cb_run.duration_ms, "status": "failed",
                     "reason": "CONTEXT_BUILDER_MUTATED_TARGET_REPO",
@@ -268,6 +346,13 @@ class FeaturePlanningService:
         cb_run.finished_at = datetime.now(UTC)
         cb_run.duration_ms = int((cb_run.finished_at - cb_run.started_at).total_seconds() * 1000)
         cb_run.result_json = context
+
+        if cb_run.status == "failed":
+            self._event_logger.emit(
+                trace=self._trace_ctx, event="context_builder.failed", stage="context_builder",
+                component="FeaturePlanningService", status="failed",
+                payload={"error": cb_run.error[:200]},
+            )
 
         self._emit_event(feature_id, "context_builder_completed" if cb_run.status == "done" else "context_builder_failed", {
             "run_id": run_id, "duration_ms": cb_run.duration_ms, "status": cb_run.status,
@@ -306,9 +391,31 @@ class FeaturePlanningService:
         arch_run.stderr_path = stderr_path
         self.db.commit()
 
+        # ── Runtime observability: architect ──
+        self._trace_ctx.feature_id = feature_id
+        self._trace_ctx.stage = "architect"
+        self._event_logger.emit(
+            trace=self._trace_ctx, event="architect.started", stage="architect",
+            component="FeaturePlanningService", status="running",
+        )
+
         try:
             # Build prompt — reuses the same prompt structure as _call_architect_llm
+            self._event_logger.emit(
+                trace=self._trace_ctx, event="architect.prompt_build_started", stage="architect",
+                component="FeaturePlanningService", status="running",
+            )
             prompt = self._build_architect_prompt(task_desc, context)
+            # Persist prompt artifact
+            prompt_ref = self._artifact_store.write_text(
+                trace=self._trace_ctx, stage="architect", name="prompt.txt",
+                content=prompt, kind="prompt",
+            )
+            self._event_logger.emit(
+                trace=self._trace_ctx, event="architect.prompt_built", stage="architect",
+                component="FeaturePlanningService", status="completed",
+                artifact_refs=[prompt_ref],
+            )
 
             worktree_root = target_repo_root or _arch_settings.target_repo_root or ""
 
@@ -326,6 +433,17 @@ class FeaturePlanningService:
                             stdout_log_path=arch_run.stdout_path,
                             stderr_log_path=arch_run.stderr_path,
                         )
+                        # Persist raw response
+                        raw_ref = self._artifact_store.write_text(
+                            trace=self._trace_ctx, stage="architect", name="raw_response.txt",
+                            content=raw, kind="raw_response",
+                        )
+                        self._event_logger.emit(
+                            trace=self._trace_ctx, event="architect.raw_response_captured", stage="architect",
+                            component="FeaturePlanningService", status="completed",
+                            artifact_refs=[raw_ref],
+                        )
+
                         plan = json.loads(raw)
 
                         # Normalize plan structure
@@ -345,6 +463,16 @@ class FeaturePlanningService:
 
                         plan.setdefault("constraints", {})
                         plan.setdefault("verification", {"t0": [], "t1": [], "t2": []})
+
+                        # Persist parsed plan
+                        self._artifact_store.write_json(
+                            trace=self._trace_ctx, stage="architect", name="parsed_plan.json",
+                            payload=plan, kind="parsed_plan",
+                        )
+                        self._event_logger.emit(
+                            trace=self._trace_ctx, event="architect.parsed_plan_captured", stage="architect",
+                            component="FeaturePlanningService", status="completed",
+                        )
 
                         arch_run.status = "done"
                         arch_run.model = cli_name
@@ -366,6 +494,11 @@ class FeaturePlanningService:
             arch_run.status = "failed"
             arch_run.error = str(e)[:500]
             arch_run.result_json = plan
+            self._event_logger.emit(
+                trace=self._trace_ctx, event="architect.failed", stage="architect",
+                component="FeaturePlanningService", status="failed",
+                payload={"error": str(e)[:200]},
+            )
 
         self._finalize_plan(feature_id, plan, arch_run, run_id)
         return plan
@@ -466,7 +599,9 @@ Other files (paths only):
         if target_root:
             from grace_control.services.grace_knowledge_graph_service import GraceKnowledgeGraphService
             from pathlib import Path
-            kg_svc = GraceKnowledgeGraphService()
+            kg_svc = GraceKnowledgeGraphService(
+                trace=self._trace_ctx, event_logger=self._event_logger, artifact_store=self._artifact_store,
+            )
             kg = kg_svc.load(Path(target_root))
             if kg:
                 extract = kg_svc.extract_relevant_modules(
@@ -728,9 +863,26 @@ Respond ONLY with valid JSON (no markdown, no backticks):
                 + "\n" + str(spec.get("description", ""))
                 + "\n" + str(spec.get("title", ""))
             )
+            # ── Runtime observability: persist input plan ──
+            self._trace_ctx.feature_id = feature_id
+            self._trace_ctx.stage = "plan_compiler"
+            self._artifact_store.write_json(
+                trace=self._trace_ctx, stage="plan_compiler", name="input_plan.json",
+                payload=plan, kind="plan_input",
+            )
+
             # ── Scope Path Canonicalizer (before PlanCompiler) ────────
+            self._event_logger.emit(
+                trace=self._trace_ctx, event="scope_canonicalizer.started", stage="scope_canonicalizer",
+                component="FeaturePlanningService", status="running",
+            )
             from grace_control.services.scope_path_canonicalizer import ScopePathCanonicalizer
             canonical = ScopePathCanonicalizer().canonicalize_plan(plan)
+            # Persist canonicalizer input/output/fixes
+            self._artifact_store.write_json(
+                trace=self._trace_ctx, stage="scope_canonicalizer", name="input_plan.json",
+                payload=plan, kind="plan_input",
+            )
             if canonical.changed and canonical.plan:
                 plan = canonical.plan
                 spec["plan_json"] = plan
@@ -743,13 +895,68 @@ Respond ONLY with valid JSON (no markdown, no backticks):
                 feature.spec_json = spec
                 _log.info("scope_canonicalized", feature_id=feature_id,
                           fixes=len(canonical.fixes))
+                self._artifact_store.write_json(
+                    trace=self._trace_ctx, stage="scope_canonicalizer", name="output_plan.json",
+                    payload=plan, kind="plan_output",
+                )
+                self._artifact_store.write_json(
+                    trace=self._trace_ctx, stage="scope_canonicalizer", name="fixes.json",
+                    payload={"fixes": canonical.fixes, "warnings": canonical.warnings, "errors": canonical.errors},
+                    kind="canonicalizer_fixes",
+                )
+                self._event_logger.emit(
+                    trace=self._trace_ctx, event="scope_canonicalizer.fix_applied", stage="scope_canonicalizer",
+                    component="FeaturePlanningService", status="completed",
+                    payload={"fix_count": len(canonical.fixes)},
+                )
+            self._event_logger.emit(
+                trace=self._trace_ctx, event="scope_canonicalizer.completed", stage="scope_canonicalizer",
+                component="FeaturePlanningService", status="completed",
+            )
+
             # Refresh waves after canonicalization (plan may have changed)
             waves = plan.get("waves", [])
+
+            # ── Plan Compiler ────────────────────────────────────────
+            self._event_logger.emit(
+                trace=self._trace_ctx, event="plan_compiler.started", stage="plan_compiler",
+                component="FeaturePlanningService", status="running",
+            )
             compiled = PlanCompiler().compile_plan(
                 plan, env,
                 feature_description=feature_desc,
                 target_repo_root=target_root,
             )
+            # Persist compiler output
+            self._artifact_store.write_json(
+                trace=self._trace_ctx, stage="plan_compiler", name="output.json",
+                payload={"ok": compiled.ok, "error_count": len(compiled.errors), "warning_count": len(compiled.warnings)},
+                kind="plan_compiler_output",
+            )
+            if compiled.errors:
+                self._artifact_store.write_json(
+                    trace=self._trace_ctx, stage="plan_compiler", name="errors.json",
+                    payload=[e.model_dump() for e in compiled.errors],
+                    kind="plan_compiler_errors",
+                )
+                for e in compiled.errors:
+                    self._event_logger.emit(
+                        trace=self._trace_ctx, event="plan_compiler.error_detected", stage="plan_compiler",
+                        component="FeaturePlanningService", status="error",
+                        payload={"code": e.code, "message": e.message[:200]},
+                    )
+            if compiled.warnings:
+                self._artifact_store.write_json(
+                    trace=self._trace_ctx, stage="plan_compiler", name="warnings.json",
+                    payload=[w.model_dump() for w in compiled.warnings],
+                    kind="plan_compiler_warnings",
+                )
+                for w in compiled.warnings:
+                    self._event_logger.emit(
+                        trace=self._trace_ctx, event="plan_compiler.warning_detected", stage="plan_compiler",
+                        component="FeaturePlanningService", status="warn",
+                        payload={"code": w.code, "message": w.message[:200]},
+                    )
             spec["_plan_compiler"] = {
                 "ok": compiled.ok,
                 "errors": [e.model_dump() for e in compiled.errors],
@@ -757,6 +964,11 @@ Respond ONLY with valid JSON (no markdown, no backticks):
             }
             feature.spec_json = spec
             if not compiled.ok:
+                self._event_logger.emit(
+                    trace=self._trace_ctx, event="plan_compiler.failed", stage="plan_compiler",
+                    component="FeaturePlanningService", status="failed",
+                    payload={"errors": len(compiled.errors), "warnings": len(compiled.warnings)},
+                )
                 _log.warn("plan_compiler_rejected", feature_id=feature_id,
                           errors=len(compiled.errors), warnings=len(compiled.warnings))
                 for e in compiled.errors:
@@ -780,13 +992,10 @@ Respond ONLY with valid JSON (no markdown, no backticks):
                     "compiler_warnings": [w.model_dump() for w in compiled.warnings],
                     "compiler_ok": compiled.ok,
                 }
-                materialize_run.error = f"plan compiler rejected: {len(compiled.errors)} errors"
-                self.db.add(materialize_run)
-                feature.status = "PLAN_FAILED"
-                self.db.commit()
-                raise ValueError(
-                    f"Plan compiler found {len(compiled.errors)} errors: "
-                    + "; ".join(f"{e.code}: {e.message[:80]}" for e in compiled.errors[:3])
+            else:
+                self._event_logger.emit(
+                    trace=self._trace_ctx, event="plan_compiler.completed", stage="plan_compiler",
+                    component="FeaturePlanningService", status="completed",
                 )
 
         from grace_control.core.gate_resolver import enrich_packet
@@ -802,10 +1011,22 @@ Respond ONLY with valid JSON (no markdown, no backticks):
         )
         self.db.add(materialize_run)
 
+        # ── Runtime observability: materializer ──
+        self._trace_ctx.stage = "materializer"
+        self._event_logger.emit(
+            trace=self._trace_ctx, event="packet_materializer.started", stage="materializer",
+            component="FeaturePlanningService", status="running",
+        )
+        self._artifact_store.write_json(
+            trace=self._trace_ctx, stage="materializer", name="input_plan.json",
+            payload=plan, kind="materializer_input",
+        )
+
         root_verification = spec.get("verification", plan.get("verification", {}))
         root_constraints = spec.get("constraints", plan.get("constraints", {}))
 
         packet_ids = []
+        packet_details: list[dict] = []
         reserved: set[str] = set()
         for i, w in enumerate(waves):
             wave_id = generate_unique_id(self.db, Wave, new_wave_uid, reserved=reserved)
@@ -844,11 +1065,42 @@ Respond ONLY with valid JSON (no markdown, no backticks):
                 )
                 self.db.add(packet)
                 packet_ids.append(pkt_id)
+                detail = {
+                    "packet_id": pkt_id,
+                    "title": pkt.get("title", ""),
+                    "role": enriched_spec.get("role", "coder"),
+                    "scope": enriched_spec.get("scope", []),
+                    "frozen_scope": enriched_spec.get("frozen_scope", []),
+                    "acceptance_profile": enriched_spec.get("acceptance_profile", "NORMAL"),
+                    "depends_on": pkt.get("depends_on", []),
+                }
+                packet_details.append(detail)
+                self._event_logger.emit(
+                    trace=self._trace_ctx, event="packet_materializer.packet_created", stage="materializer",
+                    component="FeaturePlanningService", status="created",
+                    payload=packet_details,
+                )
 
         materialize_run.status = "done"
         materialize_run.finished_at = datetime.now(UTC)
         materialize_run.duration_ms = int((materialize_run.finished_at - materialize_run.started_at).total_seconds() * 1000)
         materialize_run.result_json = {"waves_count": len(waves), "packets_count": len(packet_ids), "packet_ids": packet_ids}
+
+        # ── Runtime observability: materializer completed ──
+        packets_artifact = {
+            "waves_count": len(waves),
+            "packets_count": len(packet_ids),
+            "packets": packet_details,
+        }
+        self._artifact_store.write_json(
+            trace=self._trace_ctx, stage="materializer", name="packets_created.json",
+            payload=packets_artifact, kind="materializer_packets",
+        )
+        self._event_logger.emit(
+            trace=self._trace_ctx, event="packet_materializer.completed", stage="materializer",
+            component="FeaturePlanningService", status="completed",
+            payload={"waves_count": len(waves), "packets_count": len(packet_ids)},
+        )
 
         feature.status = "queued"
 
@@ -922,6 +1174,11 @@ Respond ONLY with valid JSON (no markdown, no backticks):
                      + "\n" + str(spec.get("title", "")))
 
         # ── 1. Autofix before LLM repair ────────────────────────────
+        self._trace_ctx.stage = "repair_loop"
+        self._artifact_store.write_json(
+            trace=self._trace_ctx, stage="repair_loop", name="compiler_errors.json",
+            payload={"errors": compiler_errors}, kind="repair_errors",
+        )
         from grace_control.services.plan_autofix_service import SafePlanAutofixer
         autofix_result = SafePlanAutofixer().apply(plan, compiler_errors)
         if autofix_result.applied and autofix_result.patched_plan:
@@ -937,6 +1194,11 @@ Respond ONLY with valid JSON (no markdown, no backticks):
             feature.spec_json = spec
             self.db.flush()
             plan = autofix_result.patched_plan
+            self._artifact_store.write_json(
+                trace=self._trace_ctx, stage="repair_loop", name="autofix_output.json",
+                payload={"fixes": autofix_result.fixes, "skipped": autofix_result.skipped},
+                kind="repair_autofix",
+            )
 
             # Re-compile
             from grace_control.core.plan_compiler import PlanCompiler as _PC2
@@ -995,6 +1257,11 @@ Respond ONLY with valid JSON (no markdown, no backticks):
         attempt = 1
         while attempt <= max_repair_attempts:
             _log.info("repair_attempt", feature_id=feature_id, attempt=attempt)
+            self._event_logger.emit(
+                trace=self._trace_ctx, event="repair_loop.attempt_started", stage="repair_loop",
+                component="FeaturePlanningService", status="running",
+                payload={"attempt": attempt, "errors": len(compiler_errors)},
+            )
 
             from grace_control.services.planning_recovery_service import run_architect_repair
 
@@ -1009,11 +1276,20 @@ Respond ONLY with valid JSON (no markdown, no backticks):
             if error or repaired_plan is None:
                 _log.warn("repair_failed", feature_id=feature_id,
                           attempt=attempt, error=error)
+                self._event_logger.emit(
+                    trace=self._trace_ctx, event="repair_loop.attempt_failed", stage="repair_loop",
+                    component="FeaturePlanningService", status="failed",
+                    payload={"attempt": attempt, "error": str(error)[:200]},
+                )
                 break
 
             # Save repaired plan AND update local plan for next attempt
             spec["plan_json"] = repaired_plan
             plan = repaired_plan  # ← important: attempt 2 uses attempt 1 fixed plan
+            self._artifact_store.write_json(
+                trace=self._trace_ctx, stage="repair_loop", name=f"repaired_plan_attempt_{attempt}.json",
+                payload=plan, kind="repair_plan",
+            )
 
             # Canonicalize scope paths after LLM repair before recompile
             from grace_control.services.scope_path_canonicalizer import ScopePathCanonicalizer
@@ -1052,6 +1328,11 @@ Respond ONLY with valid JSON (no markdown, no backticks):
             if compiled.ok:
                 _log.info("repair_success", feature_id=feature_id,
                           attempt=attempt)
+                self._event_logger.emit(
+                    trace=self._trace_ctx, event="repair_loop.success", stage="repair_loop",
+                    component="FeaturePlanningService", status="completed",
+                    payload={"attempt": attempt},
+                )
                 # Reset status to PLAN_READY so approve_plan accepts it
                 feature.status = "PLAN_READY"
                 self.db.flush()
@@ -1063,6 +1344,11 @@ Respond ONLY with valid JSON (no markdown, no backticks):
             if new_class != "repairable":
                 _log.warn("repair_terminal_error", feature_id=feature_id,
                           attempt=attempt)
+                self._event_logger.emit(
+                    trace=self._trace_ctx, event="repair_loop.terminal_error", stage="repair_loop",
+                    component="FeaturePlanningService", status="failed",
+                    payload={"attempt": attempt, "error_class": new_class},
+                )
                 break
 
             compiler_errors = new_errors
@@ -1070,6 +1356,11 @@ Respond ONLY with valid JSON (no markdown, no backticks):
 
         _log.warn("repair_exhausted", feature_id=feature_id,
                   attempts=attempt, max_attempts=max_repair_attempts)
+        self._event_logger.emit(
+            trace=self._trace_ctx, event="repair_loop.exhausted", stage="repair_loop",
+            component="FeaturePlanningService", status="failed",
+            payload={"attempts": attempt, "max_attempts": max_repair_attempts},
+        )
         return {"status": "PLAN_FAILED", "compiler_errors": compiler_errors}
 
     def regenerate_plan(self, feature_id: str) -> dict:

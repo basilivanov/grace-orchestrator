@@ -50,14 +50,29 @@ class GraceKnowledgeGraphExtract(BaseModel):
 
 class GraceKnowledgeGraphService:
 
+    def __init__(self, trace=None, event_logger=None, artifact_store=None):
+        self._trace = trace
+        self._event_logger = event_logger
+        self._artifact_store = artifact_store
+
+    def _emit(self, event: str, **kw):
+        if self._event_logger and self._trace:
+            self._event_logger.emit(
+                trace=self._trace, event=event, stage="knowledge_graph",
+                component="GraceKnowledgeGraphService", **kw,
+            )
+
     def load(self, target_repo_root: Path) -> GraceKnowledgeGraph | None:
         """Parse grace/knowledge-graph.xml from target repo."""
         kg_path = target_repo_root / "grace" / "knowledge-graph.xml"
         if not kg_path.exists():
             _log.info("kg_not_found", path=str(kg_path))
+            self._emit(event="knowledge_graph.load_missing", status="missing",
+                       payload={"path": str(kg_path)})
             return None
 
         try:
+            self._emit(event="knowledge_graph.load_started", status="started")
             tree = ET.parse(kg_path)
             root = tree.getroot()
             project = root.get("project", "")
@@ -91,10 +106,14 @@ class GraceKnowledgeGraphService:
 
             kg = GraceKnowledgeGraph(project=project, updated=updated, modules=modules, slices=slices)
             _log.info("kg_loaded", project=project, modules=len(modules), slices=len(slices))
+            self._emit(event="knowledge_graph.load_completed", status="completed",
+                       payload={"project": project, "module_count": len(modules), "slice_count": len(slices)})
             return kg
 
         except Exception as e:
             _log.warn("kg_parse_error", error=str(e)[:200])
+            self._emit(event="knowledge_graph.load_missing", status="error",
+                       payload={"error": str(e)[:200]})
             return None
 
     def extract_relevant_modules(
@@ -143,6 +162,23 @@ class GraceKnowledgeGraphService:
         for mod in extract.relevant_modules:
             _log.info("kg_relevant_module", module_id=mod.id, paths=mod.paths)
 
+        # Persist observability artifacts
+        if self._artifact_store and self._trace:
+            extract_payload = {
+                "project": graph.project,
+                "updated": graph.updated,
+                "module_count": len(graph.modules),
+                "relevant_modules": [m.id for m in extract.relevant_modules],
+                "canonical_paths": list(set(p for m in extract.relevant_modules for p in m.paths)),
+                "warnings": extract.warnings,
+            }
+            self._artifact_store.write_json(
+                trace=self._trace, stage="knowledge_graph", name="extract.json",
+                payload=extract_payload, kind="kg_extract",
+            )
+        self._emit(event="knowledge_graph.extract_completed", status="completed",
+                   payload={"relevant_modules": len(extract.relevant_modules)})
+
         return extract
 
     def build_kg_prompt_block(
@@ -177,7 +213,10 @@ class GraceKnowledgeGraphService:
         # Build concrete path manifest generically (no hardcoded service names)
         from grace_control.services.feature_path_manifest_service import FeaturePathManifestBuilder
         from grace_control.services.grace_knowledge_graph_service import GraceKnowledgeGraph
-        manifest = FeaturePathManifestBuilder().build(
+        manifest_builder = FeaturePathManifestBuilder(
+            trace=self._trace, event_logger=self._event_logger, artifact_store=self._artifact_store,
+        )
+        manifest = manifest_builder.build(
             feature_text=feature_text,
             context_paths=context_paths or [],
             kg=GraceKnowledgeGraph(
@@ -186,8 +225,18 @@ class GraceKnowledgeGraphService:
                 slices=extract.relevant_slices,
             ) if extract.relevant_modules else None,
         )
-        manifest_block = FeaturePathManifestBuilder().build_prompt_block(manifest)
+        manifest_block = manifest_builder.build_prompt_block(manifest)
         if manifest_block:
             parts.append(manifest_block)
 
-        return "\n".join(parts)
+        # Persist prompt block artifact
+        block_text = "\n".join(parts)
+        if self._artifact_store and self._trace:
+            self._artifact_store.write_text(
+                trace=self._trace, stage="knowledge_graph", name="prompt_block.txt",
+                content=block_text, kind="kg_prompt_block",
+            )
+        self._emit(event="knowledge_graph.prompt_block_built", status="completed",
+                   payload={"block_length": len(block_text)})
+
+        return block_text

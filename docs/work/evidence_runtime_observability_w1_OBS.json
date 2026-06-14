@@ -1,0 +1,15 @@
+{
+  "trace_id_present": true,
+  "events_jsonl_created": true,
+  "artifact_refs_have_sha256": true,
+  "context_builder_artifacts": true,
+  "knowledge_graph_artifacts": true,
+  "feature_path_manifest_artifacts": true,
+  "architect_artifacts": true,
+  "plan_compiler_artifacts": true,
+  "scope_canonicalizer_artifacts": true,
+  "materializer_artifacts": true,
+  "secret_redaction_tested": true,
+  "existing_tests_pass": true,
+  "new_tests_pass": true
+}
