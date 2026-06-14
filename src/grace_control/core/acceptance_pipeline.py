@@ -553,19 +553,28 @@ class AcceptancePipeline:
         base_path = (cwd or self._root).resolve()
 
         # Explicit commands from architect (complete, not extra)
-        explicit = packet.verification.get("t1", [])
-
-        if explicit:
-            # When architect provides explicit T1, use ONLY those commands.
-            all_cmds = [shlex.split(c) if isinstance(c, str) else c for c in explicit]
-            all_origins = ["architect:verification"] * len(explicit)
+        explicit_raw = packet.verification.get("t1")
+        if isinstance(explicit_raw, list) and "t1" in packet.verification:
+            # Architect explicitly provided T1 (even if empty list).
+            # Empty list means "no T1 verification" — do NOT use defaults.
+            all_cmds = [shlex.split(c) if isinstance(c, str) else c for c in explicit_raw]
+            all_origins = ["architect:verification"] * len(explicit_raw) if explicit_raw else []
         else:
             # No explicit T1 — use auto defaults from gate resolver
             defaults = resolve_default_gates(changed_files, packet.acceptance_profile.value, base_path)
             all_cmds = defaults["t1"]["commands"]
             all_origins = defaults["t1"]["origins"]
 
-        commands = [self._runner.run(cmd, output_dir=run_dir, cwd=cwd) for cmd in all_cmds]
+        # Filter out guardrails.sh from T1 — same as T2 filter
+        _filter_out_t1 = ("guardrails.sh", "check_frontmatter", "check_secrets")
+        filtered_cmds, filtered_origins = [], []
+        for cmd, origin in zip(all_cmds, all_origins):
+            joined = " ".join(cmd) if isinstance(cmd, list) else str(cmd)
+            if any(f in joined for f in _filter_out_t1):
+                continue
+            filtered_cmds.append(cmd)
+            filtered_origins.append(origin)
+        all_cmds, all_origins = filtered_cmds, filtered_origins
 
         if not all_cmds:
             if packet.acceptance_profile == AcceptanceProfile.FAST:
