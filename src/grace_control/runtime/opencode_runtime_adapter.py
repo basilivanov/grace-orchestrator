@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import os
+import signal
 import time
 from pathlib import Path
 from typing import Callable
@@ -11,6 +12,7 @@ from typing import Callable
 from grace_control.agent.backend import ExecutionBackend, ExecutionRequest, ExecutionResult
 from grace_control.config.settings import settings
 from grace_control.core.runtime_artifacts import RuntimeArtifactRef, RuntimeArtifactStore
+from grace_control.core.runtime_events import RuntimeEventLogger
 from grace_control.core.runtime_redaction import RuntimeRedactor
 from grace_control.core.runtime_trace import RuntimeTraceContext
 from grace_control.core.structured_logger import GraceLogger
@@ -119,11 +121,20 @@ class OpenCodeRuntimeAdapter(AgentExecutionAdapter):
                 exit_code = await proc.wait()
         except asyncio.TimeoutError:
             try:
-                proc.kill()
+                proc.terminate()
             except Exception:
                 pass
             try:
                 await asyncio.wait_for(proc.wait(), timeout=grace_s)
+            except asyncio.TimeoutError:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                try:
+                    await asyncio.wait_for(proc.wait(), timeout=grace_s)
+                except Exception:
+                    pass
             except Exception:
                 pass
             exit_code = None
@@ -183,6 +194,16 @@ class OpenCodeRuntimeAdapter(AgentExecutionAdapter):
         packet_id: str,
     ) -> tuple[AgentExecutionAdapterResult, list[RuntimeArtifactRef]]:
         result = await self.run(contract, prompt)
+        refs = await self._write_opencode_artifacts(result, prompt, trace, packet_id)
+        return result, refs
+
+    async def _write_opencode_artifacts(
+        self,
+        result: AgentExecutionAdapterResult,
+        prompt: str,
+        trace: RuntimeTraceContext,
+        packet_id: str,
+    ) -> list[RuntimeArtifactRef]:
         refs: list[RuntimeArtifactRef] = []
 
         try:
@@ -233,10 +254,13 @@ class OpenCodeRuntimeAdapter(AgentExecutionAdapter):
 
         if result.raw_events:
             try:
-                payload = [self._redactor.redact_payload(ev) for ev in result.raw_events]
-                r = self._store.write_packet_json(
+                lines = "\n".join(
+                    json.dumps(self._redactor.redact_payload(ev), ensure_ascii=False)
+                    for ev in result.raw_events
+                )
+                r = self._store.write_packet_text(
                     trace=trace, packet_id=packet_id,
-                    name="raw_opencode_events.jsonl", payload=payload, kind="opencode_events",
+                    name="raw_opencode_events.jsonl", content=lines, kind="opencode_events",
                 )
                 if r:
                     refs.append(r)
@@ -254,18 +278,32 @@ class OpenCodeRuntimeAdapter(AgentExecutionAdapter):
         except Exception:
             _log.warn("write_result_failed")
 
-        return result, refs
+        return refs
 
 
 class OpenCodeExecutionBackend:
     """Implements ExecutionBackend Protocol — wraps OpenCodeRuntimeAdapter.
 
-    Builds AgentRuntimeContract from ExecutionRequest at run time so the
-    existing PacketExecutionAdapter._call_executor worktree logic is reused.
+    Builds AgentRuntimeContract from ExecutionRequest, builds the full prompt
+    from the materialized packet file, writes all W4 artifacts via the
+    RuntimeArtifactStore, and emits packet.opencode_* events.
     """
 
     def __init__(self, adapter: OpenCodeRuntimeAdapter | None = None):
         self._adapter = adapter or OpenCodeRuntimeAdapter()
+        self._trace: RuntimeTraceContext | None = None
+        self._store: RuntimeArtifactStore | None = None
+        self._events: RuntimeEventLogger | None = None
+
+    def set_observability(
+        self,
+        trace: RuntimeTraceContext,
+        store: RuntimeArtifactStore | None = None,
+        events: RuntimeEventLogger | None = None,
+    ) -> None:
+        self._trace = trace
+        self._store = store
+        self._events = events
 
     async def run(self, request: ExecutionRequest) -> ExecutionResult:
         executor = request.executor or {}
@@ -287,8 +325,37 @@ class OpenCodeExecutionBackend:
             timeout_seconds=request.timeout_s or 1800,
         )
 
-        prompt = _build_prompt_from_request(request)
-        adapter_result = await self._adapter.run(contract, prompt)
+        prompt = _build_full_prompt(request)
+        package_id = request.packet_id
+        trace = self._trace
+        store = self._store
+        events = self._events
+
+        all_refs: list[RuntimeArtifactRef] = []
+
+        if trace and store:
+            adapter_result, all_refs = await self._adapter.run_with_artifacts(
+                contract, prompt, trace, package_id,
+            )
+        else:
+            adapter_result = await self._adapter.run(contract, prompt)
+
+        if trace and events:
+            if adapter_result.ok:
+                events.emit(
+                    trace=trace, event="packet.opencode_process_completed",
+                    stage="opencode_run", component="opencode_adapter",
+                    status="completed", duration_ms=adapter_result.duration_ms,
+                    artifact_refs=all_refs if all_refs else None,
+                )
+            else:
+                events.emit(
+                    trace=trace, event="packet.opencode_process_failed",
+                    stage="opencode_run", component="opencode_adapter",
+                    status="failed", message=adapter_result.failure_summary or "",
+                    duration_ms=adapter_result.duration_ms,
+                    artifact_refs=all_refs if all_refs else None,
+                )
 
         return _map_adapter_result(adapter_result, request)
 
@@ -296,23 +363,42 @@ class OpenCodeExecutionBackend:
         pass
 
 
-def _build_prompt_from_request(request: ExecutionRequest) -> str:
+def _build_full_prompt(request: ExecutionRequest) -> str:
+    """Build prompt from materialized packet file + scope/frozen skeleton."""
+    prompts: list[str] = []
+
+    session_dir = request.session_dir
+    if session_dir:
+        packet_file = Path(session_dir) / "packets" / request.packet_id / "EXECUTION_PACKET.md"
+        if packet_file.exists():
+            try:
+                prompts.append(packet_file.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+
     spec = request.spec or {}
     scope = spec.get("allowed_write_scope") or request.scope_paths or []
     frozen = spec.get("frozen_scope") or []
-    lines = [f"# Packet: {request.packet_id}"]
-    lines.append("")
-    lines.append("## Scope")
-    for s in scope:
-        lines.append(f"- {s}")
-    lines.append("")
-    lines.append("## Frozen scope")
-    for s in frozen:
-        lines.append(f"- {s}")
-    lines.append("")
-    lines.append("Implement the required changes within the allowed scope.")
-    lines.append("Do NOT modify frozen scope files.")
-    return "\n".join(lines)
+    if scope or frozen:
+        lines = []
+        if not prompts:
+            lines.append(f"# Packet: {request.packet_id}")
+            lines.append("")
+        if scope:
+            lines.append("## Allowed scope")
+            for s in scope:
+                lines.append(f"- {s}")
+        if frozen:
+            lines.append("## Frozen scope — do NOT modify")
+            for s in frozen:
+                lines.append(f"- {s}")
+        if lines:
+            prompts.append("\n".join(lines))
+
+    if not prompts:
+        return f"# Packet: {request.packet_id}\n\nExecute the required changes."
+
+    return "\n\n".join(prompts)
 
 
 def _map_adapter_result(ar: AgentExecutionAdapterResult, request: ExecutionRequest) -> ExecutionResult:

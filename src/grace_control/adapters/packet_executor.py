@@ -36,7 +36,10 @@ from grace_control.core.runtime_trace import (
 )
 from grace_control.runtime.agent_runtime_contract import AgentRuntimeContractBuilder
 from grace_control.runtime.agent_runtime_selftest import AgentRuntimeSelftest
-from grace_control.runtime.opencode_runtime_adapter import OpenCodeRuntimeAdapter
+from grace_control.runtime.opencode_runtime_adapter import (
+    OpenCodeExecutionBackend,
+    OpenCodeRuntimeAdapter,
+)
 from grace_control.core.structured_logger import GraceLogger
 from grace_control.db import get_db
 from grace_control.db.schema import Packet, PacketRun
@@ -397,6 +400,15 @@ class PacketExecutionAdapter:
 
             # ── W2: agent_started before executor ──────────────────────────
             self._obs_event("packet.agent_started", status="started")
+
+            # W4: pass observability to OpenCodeExecutionBackend for artifacts/events
+            if isinstance(getattr(self, "_backend", None), OpenCodeExecutionBackend):
+                self._backend.set_observability(
+                    trace=self._obs_trace,
+                    store=self._obs_store if not getattr(self, "_obs_disabled", True) else None,
+                    events=self._obs_events if not getattr(self, "_obs_disabled", True) else None,
+                )
+
             result = await self._call_executor(packet_path, pkt_contract, run_number, base_ref, base_sha, executor, evidence_dir)
             _log.debug("executor_run_completed", packet_id=packet_id, ok=result.ok, errors=result.errors[:2])
 
