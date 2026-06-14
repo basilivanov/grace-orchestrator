@@ -70,6 +70,20 @@ class TestManifestForLLMService:
         assert not manifest.found
         assert manifest.package_path is None
 
+    def test_bare_filename_selects_matching_context_not_first_service(self):
+        """horary_service.py matches its own path, not first service file."""
+        builder = FeaturePathManifestBuilder()
+        manifest = builder.build(
+            feature_text="Split horary_service.py into package",
+            context_paths=[
+                "apps/api/app/services/llm_service.py",
+                "apps/api/app/services/horary_service.py",
+            ],
+        )
+        assert manifest.source_path == "apps/api/app/services/horary_service.py"
+        assert manifest.found
+        assert manifest.package_path == "apps/api/app/services/horary/"
+
     def test_manifest_uses_longest_kg_prefix(self):
         """Builder selects M-BACKEND-SERVICES by longest path match."""
         kg = _kg_with_backend_services()
