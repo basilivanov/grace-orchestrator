@@ -11,6 +11,9 @@ Tests cover:
 3. No selected profile uses legacy architect schema
 4. Critical exceptions are logged, not silently passed
 5. No release endpoint without lease fencing
+6. (regression) _real_shell runs git commands with shell=False
+7. (regression) _real_shell handles paths with spaces
+8. (regression) selftest CHECK_GIT_ROOT passes with real repo
 """
 
 from __future__ import annotations
@@ -210,3 +213,126 @@ def test_no_release_endpoint_without_lease_fencing():
     assert len(violations) == 0, \
         f"Found release endpoints without lease fencing:\n" + \
         "\n".join(violations)
+
+
+# ─── Test 6 (regression): _real_shell runs git commands with shell=False ────
+
+def test_real_shell_runs_git_command_with_shell_false():
+    """W10 regression: _real_shell() uses shlex.split() + shell=False and
+    must be able to successfully execute a real git command against a real
+    git repository.  This prevents the breakage where changing shell=True
+    to shell=False without splitting the command string caused
+    FileNotFoundError for commands like 'git -C /repo rev-parse ...'."""
+    import subprocess
+    import tempfile
+    from grace_control.runtime.agent_runtime_selftest import _real_shell
+
+    with tempfile.TemporaryDirectory() as td:
+        # Create a real git repo
+        init_rc, _, init_err = _real_shell(f"git init {td}")
+        assert init_rc == 0, f"git init failed: {init_err}"
+
+        # Verify git rev-parse --show-toplevel works via _real_shell
+        rc, out, err = _real_shell(f"git -C {td} rev-parse --show-toplevel")
+        assert rc == 0, f"git rev-parse failed (rc={rc}): {err}"
+        # The output should match the repo root (git may append newline)
+        assert out.strip() == td.strip(), \
+            f"git root mismatch: expected {td!r}, got {out!r}"
+
+
+def test_real_shell_handles_path_with_spaces():
+    """W10 regression: shlex.quote() + shlex.split() must correctly handle
+    repository paths that contain spaces."""
+    import shlex
+    import tempfile
+    from grace_control.runtime.agent_runtime_selftest import _real_shell
+
+    with tempfile.TemporaryDirectory(prefix="repo with spaces ") as td:
+        # Create a real git repo in a path with spaces
+        init_rc, _, init_err = _real_shell(f"git init {shlex.quote(td)}")
+        assert init_rc == 0, f"git init failed in path with spaces: {init_err}"
+
+        # Verify git rev-parse works with the quoted path
+        rc, out, err = _real_shell(
+            f"git -C {shlex.quote(td)} rev-parse --show-toplevel"
+        )
+        assert rc == 0, f"git rev-parse failed for path with spaces: {err}"
+        assert out.strip() == td, \
+            f"git root mismatch for path with spaces: expected {td!r}, got {out!r}"
+
+
+def test_selftest_git_check_passes_with_real_repo():
+    """W10 regression: AgentRuntimeSelftest CHECK_GIT_ROOT_EQUALS_WORKTREE_ROOT
+    must pass against a real temporary git repo using the production
+    _real_shell runner (shell=False)."""
+    import subprocess
+    import tempfile
+    from pathlib import Path
+    from grace_control.config.settings import settings
+    from grace_control.runtime.agent_runtime_selftest import (
+        AgentRuntimeSelftest,
+        CHECK_GIT_ROOT_EQUALS_WORKTREE_ROOT,
+    )
+    from grace_control.runtime.agent_runtime_contract import AgentRuntimeContract
+    from grace_control.core.runtime_trace import RuntimeTraceContext
+
+    original_cwd = settings.agent_runtime_fail_on_bad_cwd
+    original_git = settings.agent_runtime_fail_on_bad_git_root
+    try:
+        settings.agent_runtime_fail_on_bad_cwd = False
+        settings.agent_runtime_fail_on_bad_git_root = True
+
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            wt = td_path / "wt"
+            wt.mkdir()
+
+            # Initialize a real git repo
+            subprocess.run(
+                ["git", "init", td],
+                capture_output=True, text=True, check=True,
+            )
+
+            trace = RuntimeTraceContext(
+                trace_id="test-trace-w10-reg",
+                feature_id="feat_w10",
+                packet_id="pkt_w10_reg",
+                wave_id="wave_w10",
+                runtime_run_id="pkt_w10_reg-R01",
+            )
+            contract = AgentRuntimeContract(
+                runtime_run_id="r1",
+                feature_id="feat_w10",
+                wave_id="wave_w10",
+                packet_id="pkt_w10_reg",
+                role="coder",
+                adapter="opencode",
+                target_repo_root=td,
+                orchestrator_repo_root=td,
+                worktree_root=str(wt),
+                cwd=str(wt),
+                shell="/bin/sh",
+                executor_id="test-executor",
+                agent_name="test-agent",
+                provider="deepseek",
+                model="deepseek-v4-flash",
+                packet_scope=["src/foo"],
+                frozen_scope=["src/frozen"],
+                acceptance_profile="FAST",
+                runtime_artifacts_dir=str(td_path / ".grace" / "runs" / "artifacts"),
+                timeout_seconds=600,
+                created_at=None,
+            )
+
+            selftest = AgentRuntimeSelftest()  # uses _real_shell by default
+            result = selftest.run(contract, trace)
+
+            git_check = [c for c in result.checks
+                         if c.check_id == CHECK_GIT_ROOT_EQUALS_WORKTREE_ROOT]
+            assert git_check, "CHECK_GIT_ROOT_EQUALS_WORKTREE_ROOT not in results"
+            assert git_check[0].ok, \
+                f"git root check should pass for real repo: " \
+                f"expected={git_check[0].expected!r} actual={git_check[0].actual!r}"
+    finally:
+        settings.agent_runtime_fail_on_bad_cwd = original_cwd
+        settings.agent_runtime_fail_on_bad_git_root = original_git

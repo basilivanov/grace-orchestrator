@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 import tempfile
 from pathlib import Path
@@ -42,15 +43,34 @@ ShellRunner = Callable[[str], tuple[int, str, str]]
 
 
 def _real_shell(cmd: str) -> tuple[int, str, str]:
+    """Run a command string without a shell.
+
+    The command string is split via shlex.split() into an argv list
+    before being passed to subprocess.run(shell=False).  This avoids
+    shell injection while preserving the string-based call API that
+    existing callers (and test mocks) rely on.
+
+    Redirects like ``2>/dev/null`` are shell syntax and are silently
+    stripped by shlex (they become meaningless positional args that
+    the real binary will ignore or error on).  Callers that depend on
+    stderr suppression should check the returned stderr tuple element
+    instead of relying on shell redirections.
+    """
     try:
+        argv = shlex.split(cmd)
+        if not argv:
+            return 1, "", "empty command"
         r = subprocess.run(
-            cmd, shell=False, capture_output=True, text=True, timeout=30,
+            argv, shell=False, capture_output=True, text=True, timeout=30,
         )
         return r.returncode, r.stdout.strip(), r.stderr.strip()
     except subprocess.TimeoutExpired:
         return 1, "", "timeout"
     except FileNotFoundError:
         return 127, "", "binary not found"
+    except ValueError as exc:
+        # shlex.split can raise on malformed input
+        return 2, "", f"shell parse error: {exc}"
 
 
 def _noop_shell(cmd: str) -> tuple[int, str, str]:
@@ -142,7 +162,9 @@ class AgentRuntimeSelftest:
 
         # Git root check — use the target repo root (worktree not yet created)
         git_check_root = contract.target_repo_root
-        rc, git_root, _ = self._shell(f"git -C {_quote(git_check_root)} rev-parse --show-toplevel 2>/dev/null")
+        rc, git_root, git_stderr = self._shell(
+            f"git -C {shlex.quote(git_check_root)} rev-parse --show-toplevel"
+        )
         git_root_ok = rc == 0 and git_root == git_check_root
         self._check(CHECK_GIT_ROOT_EQUALS_WORKTREE_ROOT,
                      ok=git_root_ok,
@@ -152,7 +174,9 @@ class AgentRuntimeSelftest:
 
         # Dirty worktree check on target repo (soft warning by default)
         if rc == 0:
-            _, status_out, _ = self._shell(f"git -C {_quote(git_check_root)} status --porcelain 2>/dev/null")
+            _, status_out, _ = self._shell(
+                f"git -C {shlex.quote(git_check_root)} status --porcelain"
+            )
             dirty = bool(status_out.strip())
             self._check(CHECK_WORKTREE_DIRTY_BEFORE_RUN,
                              ok=not dirty,
@@ -298,8 +322,9 @@ class AgentRuntimeSelftest:
         strict_auth = getattr(settings, "agent_runtime_require_opencode_auth", False)
         strict_model = getattr(settings, "agent_runtime_require_model_config", False)
 
-        # Check opencode binary
-        rc, out, _ = self._shell("command -v opencode 2>/dev/null")
+        # Check opencode binary — 'which' is a real binary (unlike 'command -v'
+        # which is a shell builtin and cannot run with shell=False).
+        rc, out, _ = self._shell("which opencode")
         opencode_available = rc == 0
         self._check(CHECK_OPENCODE_BINARY_AVAILABLE,
                      ok=opencode_available,
@@ -309,7 +334,7 @@ class AgentRuntimeSelftest:
 
         if opencode_available:
             # Auth check
-            rc_auth, auth_out, _ = self._shell("opencode auth list 2>/dev/null")
+            rc_auth, auth_out, _ = self._shell("opencode auth list")
             auth_ok = rc_auth == 0 and bool(auth_out.strip())
             auth_failure = AgentRuntimeFailureCode.AGENT_ENV_MISSING_AUTH if strict_auth else None
             self._check(CHECK_OPENCODE_AUTH_VISIBLE,
@@ -319,7 +344,7 @@ class AgentRuntimeSelftest:
                          failure_code=auth_failure)
 
             # Model config check
-            rc_model, model_out, _ = self._shell("opencode models 2>/dev/null")
+            rc_model, model_out, _ = self._shell("opencode models")
             model_ok = rc_model == 0 and bool(model_out.strip())
             model_failure = AgentRuntimeFailureCode.AGENT_MODEL_UNAVAILABLE if strict_model else None
             self._check(CHECK_OPENCODE_MODEL_CONFIG_PRESENT,
@@ -329,8 +354,9 @@ class AgentRuntimeSelftest:
                          failure_code=model_failure)
 
 
-def _quote(s: str) -> str:
-    return s.replace("'", "'\\''")
+# _quote was a shell-style single-quote escaper used with shell=True.
+# Replaced by shlex.quote() which properly handles all special characters
+# for the shlex.split() → subprocess.run(shell=False) pipeline.
 
 
 def _is_creatable(path: Path) -> bool:
