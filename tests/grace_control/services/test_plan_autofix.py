@@ -119,7 +119,8 @@ class TestImportScopeAutofix:
         scope = patched["waves"][0]["packets"][0]["scope"]
         assert "apps/api/app/services/natal_report_service.py" in scope
 
-    def test_import_scope_autofix_skips_when_too_many_refs(self):
+    def test_import_scope_autofix_creates_migration_packet_for_many_refs(self):
+        """With >8 refs, autofix creates a dedicated import-migration packet."""
         many_refs = [f"apps/api/tests/test_{i}.py" for i in range(10)]
         plan = _make_plan([_pkt("Refactor", scope=["apps/api/app/services/llm/x.py"])])
         errors = [
@@ -127,10 +128,11 @@ class TestImportScopeAutofix:
              "message": f"active references outside scope: {many_refs[0]}"}
         ]
         report = SafePlanAutofixer().apply(plan, errors)
-        # With 10 refs from the message (all extracted), it exceeds 8
-        assert not report.applied
+        assert report.applied
+        assert any(f["code"] == "AUTO_CREATE_IMPORT_MIGRATION_PACKET" for f in report.fixes)
 
-    def test_import_scope_autofix_skips_when_no_packet_found(self):
+    def test_import_scope_autofix_creates_migration_packet_when_no_coder_packet(self):
+        """With no coder packets at all, autofix creates a dedicated migration packet."""
         plan = _make_plan([
             _pkt("Verifier", scope=["apps/api/app/services/x.py"], role="verifier"),
         ])
@@ -140,7 +142,12 @@ class TestImportScopeAutofix:
                         "apps/api/app/services/natal_report_service.py"}
         ]
         report = SafePlanAutofixer().apply(plan, errors)
-        assert not report.applied
+        assert report.applied
+        assert any(f["code"] == "AUTO_CREATE_IMPORT_MIGRATION_PACKET" for f in report.fixes)
+        # Verify the migration packet was added to the wave
+        patched = report.patched_plan
+        pkts = patched["waves"][0]["packets"]
+        assert any(p["title"].startswith("Migrate imports") for p in pkts)
 
 
 class TestUnsupportedErrors:
