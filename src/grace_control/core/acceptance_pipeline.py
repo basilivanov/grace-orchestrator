@@ -32,6 +32,8 @@ import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
+import re as _re
+
 from grace_control.core.command_runner import CommandRunner
 from grace_control.core.contracts import (
     AcceptanceProfile,
@@ -48,6 +50,9 @@ from grace_control.core.contracts import (
 from grace_control.core.evidence import EvidenceCollector, check_expected_evidence
 from grace_control.core.gate_resolver import resolve_default_gates, resolve_default_t0, resolve_touched_areas
 from grace_control.core.scope_guard import ScopeGuard, get_changed_files
+
+# W06: Pattern to detect shell operators in command strings
+_SHELL_OPS_PATTERN = _re.compile(r'(&&|\|\||[|<>;])')
 
 
 @dataclass(frozen=True)
@@ -520,7 +525,8 @@ class AcceptancePipeline:
             t0_cmds, t0_origins = self._build_t0_commands(packet, cf, cwd=cwd or self._root)
 
         for cmd in t0_cmds:
-            r = self._runner.run(cmd, output_dir=output_dir, cwd=cwd)
+            # W06: Detect shell operators and pass shell=True explicitly
+            r = self._runner.run(cmd, output_dir=output_dir, cwd=cwd, shell=self._needs_shell(cmd))
             commands.append(r)
             if not r.passed:
                 _log.info("t0_command_failed",
@@ -547,6 +553,12 @@ class AcceptancePipeline:
                 summary=summary,
                 commands=commands, command_origins=t0_origins),
             scope_violations=violations)
+
+    @staticmethod
+    def _needs_shell(cmd) -> bool:
+        """W06: Detect if a command needs shell=True."""
+        cmd_str = " ".join(cmd) if isinstance(cmd, list) else str(cmd)
+        return bool(_SHELL_OPS_PATTERN.search(cmd_str))
 
     def _run_t1(self, packet: ExecutionPacketContract, changed_files: list[str],
                 *, run_dir: Path | None = None, cwd: Path | None = None) -> StageResult:
@@ -576,7 +588,8 @@ class AcceptancePipeline:
             filtered_origins.append(origin)
         all_cmds, all_origins = filtered_cmds, filtered_origins
 
-        commands = [self._runner.run(cmd, output_dir=run_dir, cwd=cwd) for cmd in all_cmds]
+        # W06: Detect shell operators and pass shell=True explicitly
+        commands = [self._runner.run(cmd, output_dir=run_dir, cwd=cwd, shell=self._needs_shell(cmd)) for cmd in all_cmds]
 
         if not all_cmds:
             if packet.acceptance_profile == AcceptanceProfile.FAST:
@@ -655,7 +668,8 @@ class AcceptancePipeline:
                               skipped_reason="FAST profile skips T2",
                               command_origins=[])
 
-        commands = [self._runner.run(cmd, output_dir=run_dir, cwd=cwd) for cmd in all_cmds]
+        # W06: Detect shell operators and pass shell=True explicitly
+        commands = [self._runner.run(cmd, output_dir=run_dir, cwd=cwd, shell=self._needs_shell(cmd)) for cmd in all_cmds]
         failed = [c for c in commands if not c.passed]
         if failed:
             for c in failed:

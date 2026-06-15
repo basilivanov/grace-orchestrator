@@ -89,6 +89,11 @@ class CommandResult:
     stderr_path: str = ""
     timed_out: bool = False
     duration_ms: int | None = None
+    # W06: Process supervisor / command runner diagnostics
+    killed_pgid: int | None = None
+    wait_after_kill_timed_out: bool = False
+    command_preview: str = ""
+    shell_mode: bool = False
 
     @property
     def passed(self) -> bool:
