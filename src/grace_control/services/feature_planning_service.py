@@ -514,7 +514,7 @@ class FeaturePlanningService:
                         plan = json.loads(raw)
 
                         # Normalize plan structure (including W03 canonicalization)
-                        normalize_architect_plan(plan)
+                        plan = normalize_architect_plan(plan)
 
                         # Persist parsed plan
                         self._artifact_store.write_json(
