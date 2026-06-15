@@ -482,8 +482,15 @@ class PacketExecutionAdapter:
                     "skipped": False
                 }
 
-            wt_ok, agent_commit_sha = self._inspected_worktree(result, pkt_contract, packet_id, packet_data["attempt_count"])
-            if not wt_ok: return self._fast_reject("Worktree issue", executor.get("executor_id",""), run_id, start)
+            wt_status, agent_commit_sha = self._inspected_worktree(result, pkt_contract, packet_id, packet_data["attempt_count"])
+            if wt_status == "worktree_missing":
+                return self._fast_reject("Worktree missing after agent run", executor.get("executor_id",""), run_id, start)
+            elif wt_status == "no_changes":
+                if getattr(_settings, "agent_runtime_fail_on_no_changes", False):
+                    _log.info("no_changes_rejected", packet_id=packet_id)
+                    return self._fast_reject("Agent produced no changes", executor.get("executor_id",""), run_id, start)
+                _log.info("no_changes_accepted_as_noop", packet_id=packet_id,
+                           reason="agent made no changes — continuing to acceptance")
             if agent_commit_sha:
                 self._obs_event("packet.diff_captured", status="completed")
 
@@ -587,11 +594,16 @@ class PacketExecutionAdapter:
         pd["_executor"] = ex; pd["_tier"] = tier.value; return ex
 
     def _inspected_worktree(self, result, pkt_contract, packet_id, attempt_count):
-        if not result.worktree_path or not Path(result.worktree_path).exists(): return False, ""
+        """Return (status, sha). status: 'committed'|'no_changes'|'worktree_missing'|'not_git'."""
+        if not result.worktree_path or not Path(result.worktree_path).exists():
+            return "worktree_missing", ""
         wt = Path(result.worktree_path)
-        if not self._inspector.is_git_worktree(wt): return True, ""
-        if not self._inspector.has_changes(wt, pkt_contract.allowed_write_scope): return False, ""
-        sha = self._committer.commit(wt, packet_id, attempt_count); return bool(sha), sha
+        if not self._inspector.is_git_worktree(wt):
+            return "not_git", ""
+        if not self._inspector.has_changes(wt, pkt_contract.allowed_write_scope):
+            return "no_changes", ""
+        sha = self._committer.commit(wt, packet_id, attempt_count)
+        return "committed", sha
 
     def _self_evolution_guard(self, pd, accept_report, safe_data, run_id, executor, start):
         spec = pd.get("spec_json") or {}

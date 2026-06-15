@@ -609,6 +609,97 @@ class TestTargetRepoRootPropagation:
             _s.agent_runtime_allow_non_git_scope_skip = orig_non_git
 
 
+class TestNoChangeClassification:
+    """W9: no-change is not Worktree issue — explicit AGENT_NO_CHANGES_PRODUCED."""
+
+    async def test_no_changes_not_worktree_issue(self):
+        """Valid worktree + no changes = AGENT_NO_CHANGES_PRODUCED, not Worktree issue."""
+        from grace_control.config.settings import settings as _s
+        orig_fail = _s.agent_runtime_fail_on_no_changes
+        try:
+            _s.agent_runtime_fail_on_no_changes = True
+            from unittest.mock import MagicMock, patch
+            from grace_control.adapters.packet_executor import PacketExecutionAdapter
+            from grace_control.agent.backend import ExecutionResult as BackendResult
+            from pathlib import Path
+
+            adapter = PacketExecutionAdapter(
+                project_root=Path("/tmp"), state_root=Path("/tmp"), worktree_root=Path("/tmp"),
+            )
+            adapter._inspector = MagicMock()
+            adapter._inspector.is_git_worktree.return_value = True
+            adapter._inspector.has_changes.return_value = False
+            adapter._committer = MagicMock()
+            adapter._evidence = MagicMock()
+
+            pkt_contract = MagicMock()
+            pkt_contract.allowed_write_scope = []
+
+            result = adapter._inspected_worktree(
+                BackendResult(accepted=True, domain_status="accepted",
+                              worktree_path=Path("/tmp"), branch_name="agent/test",
+                              commit_sha="", stdout="", stderr="", duration_ms=100),
+                pkt_contract, "pkt-test", 1,
+            )
+            status, sha = result
+            assert status == "no_changes", f"expected no_changes, got {status}"
+        finally:
+            _s.agent_runtime_fail_on_no_changes = orig_fail
+
+    async def test_no_changes_continues_when_not_failing(self):
+        """No changes without fail_on_no_changes should NOT reject."""
+        from unittest.mock import MagicMock
+        from grace_control.adapters.packet_executor import PacketExecutionAdapter
+        from grace_control.agent.backend import ExecutionResult as BackendResult
+        from pathlib import Path
+
+        adapter = PacketExecutionAdapter(
+            project_root=Path("/tmp"), state_root=Path("/tmp"), worktree_root=Path("/tmp"),
+        )
+        adapter._inspector = MagicMock()
+        adapter._inspector.is_git_worktree.return_value = True
+        adapter._inspector.has_changes.return_value = True
+        adapter._committer = MagicMock()
+        adapter._committer.commit.return_value = "a" * 40
+        adapter._evidence = MagicMock()
+
+        pkt_contract = MagicMock()
+        pkt_contract.allowed_write_scope = []
+
+        result = adapter._inspected_worktree(
+            BackendResult(accepted=True, domain_status="accepted",
+                          worktree_path=Path("/tmp"), branch_name="agent/test",
+                          commit_sha="", stdout="", stderr="", duration_ms=100),
+            pkt_contract, "pkt-test", 1,
+        )
+        status, sha = result
+        assert status == "committed", f"expected committed, got {status}"
+
+    async def test_missing_worktree_still_worktree_issue(self):
+        """Missing worktree path must still be classified as worktree_missing."""
+        from unittest.mock import MagicMock
+        from grace_control.adapters.packet_executor import PacketExecutionAdapter
+        from grace_control.agent.backend import ExecutionResult as BackendResult
+        from pathlib import Path
+
+        adapter = PacketExecutionAdapter(
+            project_root=Path("/tmp"), state_root=Path("/tmp"), worktree_root=Path("/tmp"),
+        )
+        adapter._inspector = MagicMock()
+        adapter._committer = MagicMock()
+        adapter._evidence = MagicMock()
+
+        result = adapter._inspected_worktree(
+            BackendResult(accepted=True, domain_status="accepted",
+                          worktree_path=Path("/nonexistent/path"),
+                          branch_name="agent/test", commit_sha="",
+                          stdout="", stderr="", duration_ms=100),
+            None, "pkt-test", 1,
+        )
+        status, sha = result
+        assert status == "worktree_missing", f"expected worktree_missing, got {status}"
+
+
 class TestRejectedPacket:
     async def test_rejected_packet_still_creates_some_artifacts(self):
         with tempfile.TemporaryDirectory() as _td:
