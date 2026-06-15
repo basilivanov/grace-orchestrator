@@ -245,8 +245,11 @@ agents:
     - '{model}'
     - --effort
     - '{effort}'
+    - 'Read the task from {packet_path} and execute it.'
     cwd: '{worktree_path}'
     effort: medium
+    input:
+      mode: file
     model: gemini-3.5-flash
     timeout_seconds: 900
   coder-opencode:

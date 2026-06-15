@@ -251,7 +251,12 @@ class AgentRunService:
         cwd_template = str(executor.get("cwd", "{worktree_path}"))
         cwd_str = self._renderer.render([cwd_template], ctx)[0]
         cwd = worktree_path if cwd_str == str(worktree_path) else Path(cwd_str)
-        cwd.mkdir(parents=True, exist_ok=True)
+        if not cwd.exists():
+            raise RuntimeError(
+                f"CWD does not exist: {cwd}. "
+                f"The worktree or target directory must exist before agent execution. "
+                f"Check worktree routing and that the packet scope paths resolve correctly."
+            )
 
         result = await self._supervisor.run(
             command, cwd=cwd, env=env, timeout_seconds=timeout_seconds, stdin_text=stdin_text,

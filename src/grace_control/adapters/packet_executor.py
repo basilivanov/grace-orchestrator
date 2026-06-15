@@ -429,12 +429,31 @@ class PacketExecutionAdapter:
 
             # ── end W3 ─────────────────────────────────────────────────────
 
-            packet_path = self._materializer.materialize(packet_data, self.state_root)
+            # W04: pass effective target root for file tree/previews enrichment
+            _mat_target = self._resolve_materializer_target(packet_data)
+            packet_path = self._materializer.materialize(packet_data, self.state_root, target_root=_mat_target)
             from grace_control.core.contracts import build_packet_contract
             pkt_contract = build_packet_contract(packet_data)
             base_ref = _settings.base_branch
             base_sha = self._inspector.base_sha(self.project_root, base_ref)
             evidence_dir = self.state_root / "packets" / packet_id / "runs" / f"R{run_number:02d}"
+
+            # ── W04: Block blind NORMAL/STRICT coder packets without context ─
+            _pkt_spec = packet_data.get("spec_json") or {}
+            if isinstance(_pkt_spec, str):
+                _pkt_spec = {}
+            _prof = pkt_contract.acceptance_profile.value if hasattr(pkt_contract, "acceptance_profile") else ""
+            _role = executor.get("role", "coder")
+            _skip_ctx = executor.get("skip_context_builder", False)
+            _ctx_not_required = _pkt_spec.get("context_not_required", False)
+            if _role == "coder" and _prof in ("NORMAL", "STRICT") and _skip_ctx and not _ctx_not_required:
+                err_msg = (
+                    f"Context required for {_prof} coder packet but context builder was skipped "
+                    f"(skip_context_builder=true). Set context_not_required=true in spec to override."
+                )
+                _log.warn("context_required_blocked", packet_id=packet_id, profile=_prof)
+                return self._fast_reject(err_msg, executor.get("executor_id", ""), run_id, start,
+                    failure_code="AGENT_CONTEXT_REQUIRED", failure_stage="pre_agent_run")
 
             # ── W2: agent_started before executor ──────────────────────────
             self._obs_event("packet.agent_started", status="started")
@@ -598,6 +617,22 @@ class PacketExecutionAdapter:
             ex = match.to_dict() if match else select_executor("coder", attempt=max(pd.get("attempt_count", 0), 1))
         else: ex = select_executor("coder", attempt=max(pd.get("attempt_count", 0), 1))
         pd["_executor"] = ex; pd["_tier"] = tier.value; return ex
+
+    def _resolve_materializer_target(self, packet_data: dict) -> Path | None:
+        """Resolve the effective target root for EXECUTION_PACKET.md enrichment."""
+        from grace_control.config.settings import settings as _s
+        pkt_spec = packet_data.get("spec_json") or {}
+        if isinstance(pkt_spec, str):
+            pkt_spec = {}
+        pkt_repo = pkt_spec.get("target_repo_root", "")
+        effective = pkt_repo or _s.target_repo_root or ""
+        if effective:
+            t = Path(effective)
+            if t.exists():
+                return t
+        if self.project_root.exists():
+            return self.project_root
+        return None
 
     def _inspected_worktree(self, result, pkt_contract, packet_id, attempt_count):
         """Return (status, sha). status: 'committed'|'no_changes'|'worktree_missing'|'not_git'."""
@@ -1348,11 +1383,12 @@ class PacketExecutionAdapter:
         if workspace_mode == "scoped_copy":
             from grace_control.services.agent_workspace_builder import AgentWorkspaceBuilder
             builder = AgentWorkspaceBuilder(target_root=target_root)
+            from grace_control.services.packet_materializer import PacketMaterializer
             ws = builder.build_scoped_copy(
                 scope_paths=list(eff or []),
                 workspace_root=wt_root,
                 slug=slug,
-                config_allowlist=["pyproject.toml"],
+                config_allowlist=PacketMaterializer.CONFIG_ALLOWLIST,
             )
             wt_path = ws.workspace_path
             base_sha = ws.base_sha

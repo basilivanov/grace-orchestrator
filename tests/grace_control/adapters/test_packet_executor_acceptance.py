@@ -94,7 +94,7 @@ def _make_mock_packet(attempt_count=1, profile="NORMAL"):
     p.slug = "test-packet"
     p.title = "Test Packet"
     p.description = "Test"
-    p.spec_json = {"scope": ["src/"], "verification": {"t1": [["echo", "ok"]]}}
+    p.spec_json = {"scope": ["src/"], "verification": {"t1": [["echo", "ok"]]}, "context_not_required": True}
     p.state = "pending"
     p.acceptance_profile = profile
     p.attempt_count = attempt_count
