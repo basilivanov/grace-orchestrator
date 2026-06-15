@@ -488,15 +488,12 @@ class PacketExecutionAdapter:
             elif wt_status == "no_changes":
                 if getattr(_settings, "agent_runtime_fail_on_no_changes", False):
                     _log.info("no_changes_rejected", packet_id=packet_id)
-                    er = self._fast_reject("Agent produced no changes", executor.get("executor_id",""), run_id, start)
-                    try:
-                        object.__setattr__(er, "evidence", {
-                            "failure_code": AgentRuntimeFailureCode.AGENT_NO_CHANGES_PRODUCED,
-                            "failure_stage": "post_execution_inspection",
-                        })
-                    except Exception:
-                        pass
-                    return er
+                    return self._fast_reject(
+                        "Agent produced no changes",
+                        executor.get("executor_id", ""), run_id, start,
+                        failure_code=AgentRuntimeFailureCode.AGENT_NO_CHANGES_PRODUCED,
+                        failure_stage="post_execution_inspection",
+                    )
                 _log.info("no_changes_accepted_as_noop", packet_id=packet_id,
                            reason="agent made no changes — continuing to acceptance")
             if agent_commit_sha:
@@ -799,21 +796,25 @@ class PacketExecutionAdapter:
             return Path(pkt_repo)
         return self.project_root
 
-    def _fast_reject(self, reason, executor_id, run_id, start):
+    def _fast_reject(self, reason, executor_id, run_id, start,
+                     failure_code: str | None = None,
+                     failure_stage: str | None = None):
         er = ExecutionResult(accepted=False, domain_status="rejected", reason=reason, evidence_path="", duration_ms=int((time.time()-start)*1000))
         # Synthesize a minimal diagnostics surface so result_json["diagnostics"]
         # has the same shape as terminal runs (failure_class, failure_stage,
         # stderr_tail). Redact secrets defensively.
         try:
             _diag = {
-                "failure_stage": "pre_acceptance",
-                "failure_class": classify_failure("", reason, None, "pre_acceptance"),
+                "failure_stage": failure_stage or "pre_acceptance",
+                "failure_class": classify_failure("", reason, None, failure_stage or "pre_acceptance"),
                 "stderr_tail": _redact_secrets(_tail(reason or "", _STDERR_TAIL_LIMIT)),
                 "exit_code": None,
                 "duration_ms": er.duration_ms,
             }
+            if failure_code:
+                _diag["failure_code"] = failure_code
         except Exception:
-            _diag = {"failure_stage": "pre_acceptance", "failure_class": "unknown"}
+            _diag = {"failure_stage": failure_stage or "pre_acceptance", "failure_class": "unknown"}
         try: self._evidence.update_run_result(run_id=run_id, status="rejected", legacy_result={"error":"pre-acceptance failure","reason":reason},
             acceptance_report=None, evidence_verifier_report=skipped_evidence_report(reason), reviewer_report=skipped_reviewer_report(reason),
             evidence_path="", duration_ms=er.duration_ms, executor_id=executor_id, diagnostics=_diag)

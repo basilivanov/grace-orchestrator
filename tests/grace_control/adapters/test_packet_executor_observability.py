@@ -726,6 +726,13 @@ class TestNoChangeClassification:
                     "max_attempts": 3,
                 }
 
+                diagnostics_captured = {}
+
+                def _capture_diagnostics(run_id, **kwargs):
+                    diagnostics_captured.update(kwargs.get("diagnostics", {}))
+
+                adapter._evidence.update_run_result = _capture_diagnostics
+
                 with patch.object(PacketExecutionAdapter, "_call_executor", _fake_call):
                     with patch.object(PacketExecutionAdapter, "_run_acceptance", _fake_acc):
                         with patch("grace_control.adapters.packet_executor.get_db") as mock_db:
@@ -735,12 +742,10 @@ class TestNoChangeClassification:
                             result = await adapter.execute("pkt-w9", "w1", claim_data=claim_data)
 
                 assert not result.accepted, "no_changes with fail flag must reject"
-                try:
-                    fc = result.evidence.get("failure_code", "NOT_FOUND")
-                except Exception:
-                    fc = "NOT_FOUND"
-                assert fc == "AGENT_NO_CHANGES_PRODUCED", \
-                    f"expected AGENT_NO_CHANGES_PRODUCED, got {fc}"
+                # Check diagnostics captured by _fast_reject via update_run_result
+                captured_fc = diagnostics_captured.get("failure_code", "NOT_CAPTURED")
+                assert captured_fc == "AGENT_NO_CHANGES_PRODUCED", \
+                    f"persisted diagnostics should contain AGENT_NO_CHANGES_PRODUCED, got {captured_fc}"
         finally:
             _s.agent_runtime_fail_on_no_changes = orig_fail
             _s.agent_runtime_allow_non_git_scope_skip = orig_non_git
