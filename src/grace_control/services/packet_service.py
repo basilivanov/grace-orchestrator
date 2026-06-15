@@ -309,24 +309,57 @@ class PacketService:
         if not target:
             raise ValueError(f"Unknown release status: {status}")
         with self._db_factory() as db:
-            # W01: Lease fencing — verify the caller owns the current lease
+            # W01: Lease fencing — verify the caller owns the current lease.
+            # FAIL-CLOSED: if a lease exists, ALL three fencing tokens are
+            # required. Missing any token is treated as a stale lease attempt.
             lease = db.query(Lease).filter_by(packet_id=packet_id).first()
             if lease is not None:
-                fencing_failed = False
-                fencing_reason = ""
-                if worker_id and lease.worker_id != worker_id:
-                    fencing_failed = True
+                # W01: Fail-closed — missing tokens are rejected, not skipped
+                if not worker_id:
+                    _record_event(db, "packet_release_rejected_missing_token", packet_id, {
+                        "reason": "worker_id is required when lease exists",
+                        "lease_id": lease_id,
+                        "claimed_attempt": claimed_attempt,
+                    })
+                    db.commit()
+                    raise StaleLeaseError(
+                        "worker_id is required for release of leased packet"
+                    )
+                if lease_id is None:
+                    _record_event(db, "packet_release_rejected_missing_token", packet_id, {
+                        "reason": "lease_id is required when lease exists",
+                        "worker_id": worker_id,
+                        "claimed_attempt": claimed_attempt,
+                    })
+                    db.commit()
+                    raise StaleLeaseError(
+                        "lease_id is required for release of leased packet"
+                    )
+                if claimed_attempt is None:
+                    _record_event(db, "packet_release_rejected_missing_token", packet_id, {
+                        "reason": "claimed_attempt is required when lease exists",
+                        "worker_id": worker_id,
+                        "lease_id": lease_id,
+                    })
+                    db.commit()
+                    raise StaleLeaseError(
+                        "claimed_attempt is required for release of leased packet"
+                    )
+
+                # All three tokens present — now verify they match
+                if lease.worker_id != worker_id:
                     fencing_reason = f"worker_id mismatch: lease={lease.worker_id}, release={worker_id}"
-                elif lease_id is not None and lease.id != lease_id:
-                    fencing_failed = True
+                elif lease.id != lease_id:
                     fencing_reason = f"lease_id mismatch: lease={lease.id}, release={lease_id}"
-                elif claimed_attempt is not None and lease.claimed_attempt != claimed_attempt:
-                    fencing_failed = True
+                elif lease.claimed_attempt != claimed_attempt:
                     fencing_reason = (
                         f"claimed_attempt mismatch: lease={lease.claimed_attempt}, "
                         f"release={claimed_attempt}"
                     )
-                if fencing_failed:
+                else:
+                    fencing_reason = ""
+
+                if fencing_reason:
                     _record_event(db, "packet_release_rejected_stale_lease", packet_id, {
                         "worker_id": worker_id,
                         "lease_id": lease_id,

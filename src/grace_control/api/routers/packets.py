@@ -146,6 +146,7 @@ async def claim_packet(request: dict) -> dict:
             "packet_id": result.packet_id,
             "spec": result.spec,
             "lease_id": result.lease_id,
+            "claimed_attempt": result.claimed_attempt,
             "expires_at": result.expires_at.isoformat() + "Z",
             "attempt": result.attempt,
             "feature_id": result.feature_id,
@@ -167,6 +168,9 @@ async def release_packet(packet_id: str, request: dict) -> dict:
     W01: Release now requires worker_id, lease_id, and claimed_attempt for
     lease fencing. If any check fails, returns 409 with stale_lease detail.
     """
+    # W01: Fencing tokens are REQUIRED for release of leased packets.
+    # The service layer will reject missing tokens when a lease exists.
+    # API-level validation: reject clearly malformed requests early.
     worker_id = request.get("worker_id", "")
     status = request["status"]
     result = request.get("result", {})

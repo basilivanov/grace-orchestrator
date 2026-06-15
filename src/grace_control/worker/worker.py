@@ -138,31 +138,41 @@ class Worker:
                             duration_ms=result.duration_ms)
 
                         status = release_status_from_result(result)
-                        await self._release_with_fencing(packet_id, status, result.model_dump())
-                        self.log.info("packet_released", packet_id=packet_id, status=status)
+                        release_result = await self._release_with_fencing(packet_id, status, result.model_dump())
 
-                        if status == "accepted":
-                            target_repo = str(self._git_context.target_repo_root)
-                            self.log.info("merging", packet_id=packet_id,
-                                worktree=result.worktree_path, branch=result.branch_name,
-                                target_repo=target_repo, sha=result.commit_sha[:12])
-                            try:
-                                await self.api.merge_packet(packet_id,
-                                    target_repo_root=target_repo,
-                                    worktree_path=result.worktree_path,
-                                    branch_name=result.branch_name,
-                                    commit_sha=result.commit_sha)
-                                self.log.info("merged", packet_id=packet_id)
-                            except Exception:
-                                self.log.warn("merge_failed_keep_accepted", packet_id=packet_id,
-                                    error=traceback.format_exc()[:200])
+                        # W01: If release was stale (lease expired, another worker
+                        # claimed), we MUST NOT merge, retry, or recovery-handle.
+                        # The packet is no longer ours — abandon the result.
+                        if release_result.get("stale_lease"):
+                            self.log.warn("release_stale_abandoning_result",
+                                packet_id=packet_id, status=status,
+                                worker_id=self.worker_id)
+                            # Skip merge, retry, recovery — packet is not ours
+                        else:
+                            self.log.info("packet_released", packet_id=packet_id, status=status)
 
-                        if status == "rejected":
-                            self.log.warn("packet_rejected", packet_id=packet_id, reason=result.reason)
-                            await self._handle_rejection(packet_id)
-                        elif status == "blocked":
-                            self.log.warn("packet_blocked", packet_id=packet_id, reason=result.reason)
-                            await self._maybe_apply_recovery(packet_id)
+                            if status == "accepted":
+                                target_repo = str(self._git_context.target_repo_root)
+                                self.log.info("merging", packet_id=packet_id,
+                                    worktree=result.worktree_path, branch=result.branch_name,
+                                    target_repo=target_repo, sha=result.commit_sha[:12])
+                                try:
+                                    await self.api.merge_packet(packet_id,
+                                        target_repo_root=target_repo,
+                                        worktree_path=result.worktree_path,
+                                        branch_name=result.branch_name,
+                                        commit_sha=result.commit_sha)
+                                    self.log.info("merged", packet_id=packet_id)
+                                except Exception:
+                                    self.log.warn("merge_failed_keep_accepted", packet_id=packet_id,
+                                        error=traceback.format_exc()[:200])
+
+                            if status == "rejected":
+                                self.log.warn("packet_rejected", packet_id=packet_id, reason=result.reason)
+                                await self._handle_rejection(packet_id)
+                            elif status == "blocked":
+                                self.log.warn("packet_blocked", packet_id=packet_id, reason=result.reason)
+                                await self._maybe_apply_recovery(packet_id)
 
                     except asyncio.TimeoutError:
                         self.log.error("execution_timed_out", packet_id=packet_id,
@@ -207,15 +217,21 @@ class Worker:
     ) -> dict:
         """W01: Release packet with lease fencing tokens.
 
-        If the release returns 409 (stale lease), the worker logs and
-        abandons the result — it does NOT retry the release blindly.
+        Returns a dict with:
+          - "stale_lease": True if release was rejected due to stale lease.
+            Caller MUST NOT proceed to merge/retry/recovery in this case.
+          - "released": True if release succeeded.
         """
         try:
-            return await self.api.release_packet(
+            resp = await self.api.release_packet(
                 packet_id, self.worker_id, status, result,
                 lease_id=self._active_lease_id,
                 claimed_attempt=self._active_claimed_attempt,
             )
+            # Successful release — flatten response for caller check
+            resp["stale_lease"] = False
+            resp["released"] = True
+            return resp
         except Exception as e:
             # Check if this is a stale lease rejection (409)
             err_str = str(e)
@@ -226,8 +242,9 @@ class Worker:
                     lease_id=self._active_lease_id,
                     claimed_attempt=self._active_claimed_attempt,
                     error=err_str[:200])
-                # W01: Do not retry — another worker owns this packet now
-                return {"data": {"packet_id": packet_id, "stale_lease": True, "released": False}}
+                # W01: Do not retry — another worker owns this packet now.
+                # Return stale_lease flag so caller knows NOT to merge.
+                return {"stale_lease": True, "released": False}
             raise
 
     async def _handle_rejection(self, packet_id: str):

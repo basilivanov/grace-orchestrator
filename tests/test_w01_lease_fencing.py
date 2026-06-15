@@ -558,11 +558,78 @@ def test_claim_includes_fencing_tokens(test_db):
     assert claim.expires_at is not None
 
 
-# ─── Test 12: Release without fencing tokens still works (backward compat) ─
+# ─── Test 12: Release without fencing tokens fails when lease exists (P0-1) ─
 
-def test_release_without_fencing_tokens_backwards_compat(test_db):
-    """For backward compatibility, release without lease_id/claimed_attempt
-    should still work if no lease exists (lease already cleaned up)."""
+def test_release_without_worker_id_fails_when_lease_exists(test_db):
+    """W01 P0-1 fix: Release with missing worker_id must be rejected if lease exists."""
+    with get_db() as db:
+        _make_running_packet(db, "PKT-001", "w1", attempt_count=1)
+
+    svc = PacketService()
+    with pytest.raises(StaleLeaseError, match="worker_id is required"):
+        asyncio.get_event_loop().run_until_complete(
+            svc.release(
+                "PKT-001", "rejected", {"accepted": False},
+                # worker_id missing — must be rejected
+                lease_id=1,
+                claimed_attempt=1,
+            )
+        )
+
+    # Packet state must NOT be mutated
+    with get_db() as db:
+        p = db.query(Packet).filter_by(id="PKT-001").first()
+        assert p.state == PacketState.RUNNING.value
+
+
+def test_release_without_lease_id_fails_when_lease_exists(test_db):
+    """W01 P0-1 fix: Release with missing lease_id must be rejected if lease exists."""
+    with get_db() as db:
+        _make_running_packet(db, "PKT-001", "w1", attempt_count=1)
+
+    svc = PacketService()
+    with pytest.raises(StaleLeaseError, match="lease_id is required"):
+        asyncio.get_event_loop().run_until_complete(
+            svc.release(
+                "PKT-001", "rejected", {"accepted": False},
+                worker_id="w1",
+                # lease_id missing
+                claimed_attempt=1,
+            )
+        )
+
+    with get_db() as db:
+        p = db.query(Packet).filter_by(id="PKT-001").first()
+        assert p.state == PacketState.RUNNING.value
+
+
+def test_release_without_claimed_attempt_fails_when_lease_exists(test_db):
+    """W01 P0-1 fix: Release with missing claimed_attempt must be rejected if lease exists."""
+    with get_db() as db:
+        _make_running_packet(db, "PKT-001", "w1", attempt_count=1)
+
+    svc = PacketService()
+    with get_db() as db:
+        lease = db.query(Lease).filter_by(packet_id="PKT-001").first()
+
+    with pytest.raises(StaleLeaseError, match="claimed_attempt is required"):
+        asyncio.get_event_loop().run_until_complete(
+            svc.release(
+                "PKT-001", "rejected", {"accepted": False},
+                worker_id="w1",
+                lease_id=lease.id,
+                # claimed_attempt missing
+            )
+        )
+
+    with get_db() as db:
+        p = db.query(Packet).filter_by(id="PKT-001").first()
+        assert p.state == PacketState.RUNNING.value
+
+
+def test_release_without_lease_succeeds(test_db):
+    """Release without fencing tokens should work if no lease exists
+    (lease already cleaned up — e.g. scanner reclaimed it)."""
     svc = PacketService()
 
     with get_db() as db:
@@ -572,7 +639,7 @@ def test_release_without_fencing_tokens_backwards_compat(test_db):
         svc.claim("PKT-001", "w1")
     )
 
-    # Manually delete the lease (simulating a race or cleanup)
+    # Manually delete the lease (simulating scanner cleanup)
     with get_db() as db:
         lease = db.query(Lease).filter_by(packet_id="PKT-001").first()
         if lease:
@@ -583,7 +650,7 @@ def test_release_without_fencing_tokens_backwards_compat(test_db):
     asyncio.get_event_loop().run_until_complete(
         svc.release(
             "PKT-001", "rejected", {"accepted": False},
-            # no worker_id, lease_id, or claimed_attempt
+            # no worker_id, lease_id, or claimed_attempt — OK because no lease
         )
     )
 
@@ -610,3 +677,124 @@ def test_lease_renewal_fails_for_non_running_packet(test_db):
         asyncio.get_event_loop().run_until_complete(
             svc.renew_lease("PKT-001", "w1", 1)
         )
+
+
+# ─── Test 14: Worker stale release does NOT merge (P0-3 fix) ──────────────
+
+def test_worker_stale_release_does_not_merge(test_db):
+    """W01 P0-3 fix: If release returns stale_lease=True, worker must NOT merge.
+
+    Simulates the worker._main_loop logic: after _release_with_fencing
+    returns stale, the merge path must be skipped.
+    """
+    # Set up: claim a packet, then simulate another worker reclaiming it
+    svc = PacketService()
+
+    with get_db() as db:
+        _make_ready_packet(db, "PKT-001", max_attempts=3)
+
+    claim_a = asyncio.get_event_loop().run_until_complete(
+        svc.claim("PKT-001", "wA")
+    )
+    lease_a_id = claim_a.lease_id
+    attempt_a = claim_a.claimed_attempt
+
+    # Expire lease and reclaim by worker B
+    with get_db() as db:
+        lease = db.query(Lease).filter_by(packet_id="PKT-001").first()
+        lease.expires_at = datetime.now(UTC) - timedelta(minutes=1)
+        db.commit()
+
+    check_expired_leases()
+
+    claim_b = asyncio.get_event_loop().run_until_complete(
+        svc.claim("PKT-001", "wB")
+    )
+
+    # Worker A tries to release — should be rejected (StaleLeaseError)
+    with pytest.raises(StaleLeaseError):
+        asyncio.get_event_loop().run_until_complete(
+            svc.release(
+                "PKT-001", "accepted", {"accepted": True},
+                worker_id="wA",
+                lease_id=lease_a_id,
+                claimed_attempt=attempt_a,
+            )
+        )
+
+    # Packet must still be RUNNING with worker B — NOT ACCEPTED (not merged)
+    with get_db() as db:
+        p = db.query(Packet).filter_by(id="PKT-001").first()
+        assert p.state == PacketState.RUNNING.value
+        lease = db.query(Lease).filter_by(packet_id="PKT-001").first()
+        assert lease.worker_id == "wB"
+
+
+# ─── Test 15: Missing token event is observable ────────────────────────────
+
+def test_missing_fencing_token_records_event(test_db):
+    """W01: Missing fencing token rejections should be observable in the event log."""
+    with get_db() as db:
+        _make_running_packet(db, "PKT-001", "w1", attempt_count=1)
+
+    svc = PacketService()
+    with pytest.raises(StaleLeaseError, match="worker_id is required"):
+        asyncio.get_event_loop().run_until_complete(
+            svc.release(
+                "PKT-001", "rejected", {"accepted": False},
+                # worker_id missing
+                lease_id=1,
+                claimed_attempt=1,
+            )
+        )
+
+    with get_db() as db:
+        event = db.query(Event).filter_by(
+            event_type="packet_release_rejected_missing_token"
+        ).first()
+        assert event is not None
+        assert "worker_id is required" in event.payload_json["reason"]
+
+
+# ─── Test 16: Grace period in scanner ─────────────────────────────────────
+
+def test_scanner_grace_period_prevents_premature_reclaim(test_db):
+    """W01 P2 fix: Scanner should not reclaim a lease that only just expired
+    within the grace period."""
+    svc = PacketService()
+
+    with get_db() as db:
+        _make_ready_packet(db, "PKT-001")
+
+    claim = asyncio.get_event_loop().run_until_complete(
+        svc.claim("PKT-001", "w1")
+    )
+
+    # Set lease to expire 10 seconds ago (within 30s grace period)
+    with get_db() as db:
+        lease = db.query(Lease).filter_by(packet_id="PKT-001").first()
+        lease.expires_at = datetime.now(UTC) - timedelta(seconds=10)
+        db.commit()
+
+    # Scanner should NOT reclaim — within grace period
+    count = check_expired_leases()
+    assert count == 0
+
+    # Packet should still be RUNNING
+    with get_db() as db:
+        p = db.query(Packet).filter_by(id="PKT-001").first()
+        assert p.state == PacketState.RUNNING.value
+
+    # Now set lease to expire 60 seconds ago (beyond grace period)
+    with get_db() as db:
+        lease = db.query(Lease).filter_by(packet_id="PKT-001").first()
+        lease.expires_at = datetime.now(UTC) - timedelta(seconds=60)
+        db.commit()
+
+    # Scanner should now reclaim
+    count = check_expired_leases()
+    assert count == 1
+
+    with get_db() as db:
+        p = db.query(Packet).filter_by(id="PKT-001").first()
+        assert p.state == PacketState.READY.value

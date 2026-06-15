@@ -24,7 +24,7 @@ class PacketClaim(BaseModel):
     lease_id: int
     expires_at: str
     attempt: int
-    claimed_attempt: int = 0  # W01: fencing token
+    claimed_attempt: int  # W01: fencing token — required, no default
     feature_id: str = ""
     wave_id: str = ""
     slug: str = ""

@@ -61,8 +61,15 @@ def _record_lease_event(db, event_type: str, lease: Lease, **extra) -> None:
 def check_expired_leases() -> int:
     count = 0
     with get_db() as db:
+        # W01: Use grace period from settings — don't reclaim a lease
+        # immediately on expiry, give the worker a short window for
+        # in-flight renewal to land.
+        from grace_control.config.settings import settings as _settings
+        grace_seconds = getattr(_settings, "lease_expiration_grace_seconds", 30)
+        cutoff = datetime.now(UTC) - timedelta(seconds=grace_seconds)
+
         expired = db.query(Lease).filter(
-            Lease.expires_at < datetime.now(UTC)
+            Lease.expires_at < cutoff
         ).all()
 
         for lease in expired:
