@@ -64,7 +64,7 @@ _templates.env.globals["dev_tools_enabled"] = _settings.dev_tools_enabled
 _templates.env.globals["dev_keep_failed_worktrees"] = _settings.dev_keep_failed_worktrees
 
 # Tabs that can be swapped via HTMX (each one is a single hx-get endpoint)
-_TABS = ("timeline", "spec", "runs", "sessions", "evidence", "logs", "artifacts")
+_TABS = ("timeline", "spec", "runs", "sessions", "evidence", "logs", "artifacts", "diagnostics")
 
 
 def _features_data() -> dict:
@@ -615,6 +615,7 @@ def partial_tab(
     evidence: dict | None = None
     logs_text = ""
     artifacts: dict | None = None
+    diagnostic_data: dict | None = None
 
     # The aggregation service expects run_id to be the suffix (run_number),
     # not the full id "pkt_xxx-N". Extract run_number from runs_summary.
@@ -644,6 +645,34 @@ def partial_tab(
         elif tab == "artifacts":
             if last_run_number:
                 artifacts = _svc.get_packet_artifacts(db, packet_id, last_run_number)
+        elif tab == "diagnostics":
+            if last_run_number:
+                run = _svc.get_packet_run(db, packet_id, last_run_number)
+            else:
+                run = None
+            if run:
+                rj = run.get("result_json") or {}
+                diag_evidence = (rj.get("diagnostics") or {}).get("evidence", {}) or rj.get("evidence", {})
+                scope = diag_evidence.get("scope_enforcement", {})
+                details = ""
+                if isinstance(scope, dict):
+                    if scope.get("out_of_scope_files"):
+                        details = f"Files outside scope: {scope['out_of_scope_files']}"
+                    elif scope.get("frozen_touched_files"):
+                        details = f"Frozen scope changes: {scope['frozen_touched_files']}"
+                    if scope.get("summary"):
+                        details = details or scope["summary"]
+                diagnostic_data = {
+                    "failure_code": diag_evidence.get("failure_code"),
+                    "details": details,
+                    "changed_files": diag_evidence.get("changed_files", []),
+                    "artifact_refs": diag_evidence.get("artifact_refs", []),
+                    "scope_enforcement": scope,
+                    "diff_inspection": diag_evidence.get("diff_inspection", {}),
+                }
+            else:
+                diagnostic_data = {"failure_code": None, "details": "No runs for this packet",
+                                   "changed_files": [], "artifact_refs": []}
 
     return _templates.TemplateResponse(request, "_tab.html", {
         "request": request,
@@ -656,6 +685,7 @@ def partial_tab(
         "evidence": evidence,
         "logs_text": logs_text,
         "artifacts": artifacts,
+        "diagnostic_data": diagnostic_data,
         "shell_url": _shell_url,
     })
 

@@ -1,0 +1,49 @@
+{# Runtime Diagnostics tab — per-packet scope/diff/failure data. #}
+<div class="tab-h">Runtime Diagnostics</div>
+
+{% if not diagnostic_data or diagnostic_data.failure_code is none and not diagnostic_data.changed_files %}
+  <div class="tab-empty-state">
+    <div class="tab-empty-icon">🔍</div>
+    <div class="tab-empty-text">No runtime runs yet</div>
+    <div class="tab-empty-hint muted small">Runtime diagnostics appear after the first agent run with scope enforcement.</div>
+  </div>
+
+{% elif diagnostic_data.failure_code %}
+  <div class="diagnostics-block diagnostics-failed">
+    <div class="diagnostics-header">
+      <span class="diagnostics-badge diagnostics-badge-fail">{{ diagnostic_data.failure_code }}</span>
+      <span class="diagnostics-title">Runtime failure</span>
+    </div>
+    {% if diagnostic_data.details %}
+    <div class="diagnostics-details">{{ diagnostic_data.details }}</div>
+    {% endif %}
+    <table class="diagnostics-table">
+      <tr><td class="diag-label">Changed files</td><td class="diag-value">
+        <ul class="diag-file-list">{% for f in diagnostic_data.changed_files %}<li><code>{{ f }}</code></li>{% endfor %}</ul>
+      </td></tr>
+    </table>
+    {% if diagnostic_data.artifact_refs %}
+    <details><summary>Artifact refs ({{ diagnostic_data.artifact_refs | length }})</summary>
+      <ul>{% for ref in diagnostic_data.artifact_refs %}<li><code>{{ ref }}</code></li>{% endfor %}</ul>
+    </details>
+    {% endif %}
+  </div>
+
+{% else %}
+  <div class="diagnostics-block diagnostics-passed">
+    <div class="diagnostics-header">
+      <span class="diagnostics-badge diagnostics-badge-pass">PASS</span>
+      <span class="diagnostics-title">Scope enforcement passed</span>
+    </div>
+    <table class="diagnostics-table">
+      <tr><td class="diag-label">Changed files</td><td class="diag-value">
+        <ul class="diag-file-list">{% for f in diagnostic_data.changed_files %}<li><code>{{ f }}</code></li>{% endfor %}</ul>
+      </td></tr>
+    </table>
+    {% if diagnostic_data.artifact_refs %}
+    <details><summary>Artifact refs ({{ diagnostic_data.artifact_refs | length }})</summary>
+      <ul>{% for ref in diagnostic_data.artifact_refs %}<li><code>{{ ref }}</code></li>{% endfor %}</ul>
+    </details>
+    {% endif %}
+  </div>
+{% endif %}
