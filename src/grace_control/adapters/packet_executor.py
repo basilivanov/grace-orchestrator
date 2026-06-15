@@ -938,6 +938,7 @@ class PacketExecutionAdapter:
             worktree_root=str(wt_path),
             base_ref=base_sha or base_ref,
         )
+        diff_result = await inspector.inspect(diff_req)
         if events and trace:
             try:
                 events.emit(trace=trace, event="packet.diff_inspection_started",
@@ -1037,13 +1038,13 @@ class PacketExecutionAdapter:
                                 payload={"out_of_scope_count": len(scope_result.out_of_scope_files),
                                          "frozen_touched_count": len(scope_result.frozen_touched_files)})
             except Exception as _emit_err:
-                _log.warn("obs_event_emit_failed", event="scope_enforcement_completed", error=str(_emit_err)[:200])(_s, "opencode_runtime_mode", "direct")
+                _log.warn("obs_event_emit_failed", event="scope_enforcement_completed", error=str(_emit_err)[:200])
         diag = RuntimeDiagnosticsBuilder.build(
             runtime_run_id=run_id,
             packet_id=packet_id,
             trace_id=trace.trace_id if trace else "",
             adapter="opencode",
-            runtime_mode=mode,
+            runtime_mode=getattr(_s, "opencode_runtime_mode", "direct"),
             duration_ms=int((time.time() - start) * 1000),
             accepted=scope_result.ok,
             failure_code=scope_result.failure_code,

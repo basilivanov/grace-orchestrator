@@ -85,6 +85,8 @@ _SQLITE_COLUMN_MIGRATIONS: list[tuple[str, str, str]] = [
     # status in admin. Add column to existing DBs.
     ("feature_planning_runs", "last_heartbeat",
      "ALTER TABLE feature_planning_runs ADD COLUMN last_heartbeat DATETIME"),
+    ("leases", "claimed_attempt",
+     "ALTER TABLE leases ADD COLUMN claimed_attempt INTEGER NOT NULL DEFAULT 0"),
 ]
 # Tables that may be missing on existing DBs (added after initial create_all).
 _SQLITE_TABLE_CREATIONS: list[str] = [
