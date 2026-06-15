@@ -25,6 +25,7 @@ END_MODULE_MAP
 """
 from __future__ import annotations
 
+import fnmatch
 import os
 import shutil
 from dataclasses import dataclass, field
@@ -99,9 +100,28 @@ class AgentWorkspaceBuilder:
         omitted: list[str] = []
         all_rel_paths: list[str] = []
 
+        # W04: secret file patterns that must NEVER be copied.
+        # .env.example IS excluded — it's a safe template in CONFIG_ALLOWLIST.
+        # .env.* is intentionally omitted to avoid blocking .env.example;
+        # instead we enumerate the known secret patterns explicitly.
+        _secret_patterns: list[str] = [
+            ".env",
+            ".env.local",
+            ".env.production",
+            ".env.development",
+        ]
+
+        def _is_secret(rel_path: str) -> bool:
+            name = Path(rel_path).name
+            return any(fnmatch.fnmatch(name, pat) for pat in _secret_patterns)
+
         # Resolve scope paths and copy them preserving relative structure.
         # Paths outside target_root are omitted, not copied.
+        # Secret files (.env, .env.*) are also omitted.
         for sp in scope_paths:
+            if _is_secret(sp):
+                omitted.append(f"secret_file_denied:{sp}")
+                continue
             src = Path(sp)
             if not src.is_absolute():
                 src = resolved_target / sp
@@ -114,6 +134,9 @@ class AgentWorkspaceBuilder:
             if ".." in rel.parts:
                 omitted.append(f"unsafe_relative_path:{sp}")
                 continue
+            if _is_secret(str(rel)):
+                omitted.append(f"secret_file_denied:{sp}")
+                continue
             if not resolved_src.exists():
                 omitted.append(f"file_not_found:{sp}")
                 continue
@@ -125,9 +148,25 @@ class AgentWorkspaceBuilder:
             copied.append({"original": str(rel), "workspace": str(rel)})
             all_rel_paths.append(str(rel))
 
-        # Copy config allowlist files if they exist in target root
-        config_files = config_allowlist or []
+        # Copy config allowlist files if they exist in target root.
+        # Supports glob patterns (entries with *, ?, [) that are expanded
+        # against target_root. Secret files are never copied.
+        config_files: list[str] = []
+        for cf in (config_allowlist or []):
+            if any(c in cf for c in ("*", "?", "[")):
+                matched = list(resolved_target.glob(cf))
+                if not matched:
+                    omitted.append(f"config_glob_no_match:{cf}")
+                for m in matched:
+                    m_rel = str(m.relative_to(resolved_target))
+                    if m_rel not in config_files:
+                        config_files.append(m_rel)
+            else:
+                config_files.append(cf)
         for cf in config_files:
+            if _is_secret(cf):
+                omitted.append(f"secret_file_denied:{cf}")
+                continue
             src = resolved_target / cf
             if src.exists() and cf not in all_rel_paths:
                 dst = wt_path / cf

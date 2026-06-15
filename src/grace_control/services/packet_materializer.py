@@ -78,6 +78,10 @@ class PacketMaterializer:
         "yarn.lock",
         "pnpm-lock.yaml",
         "tsconfig.json",
+        "tsconfig.*.json",
+        "vite.config.*",
+        "vitest.config.*",
+        "playwright.config.*",
         "conftest.py",
         ".env.example",
     ]
@@ -315,17 +319,19 @@ Mode: {workspace_mode}
             return "- (target root unavailable)"
         found = []
         for cf in self.CONFIG_ALLOWLIST:
-            p = target_root / cf
-            if p.exists():
-                found.append(f"- {cf} (available)")
+            if any(c in cf for c in ("*", "?", "[")):
+                matches = list(target_root.glob(cf))
+                if matches:
+                    for m in matches:
+                        found.append(f"- {m.name} (available)")
+                else:
+                    found.append(f"- {cf} (no match)")
             else:
-                found.append(f"- {cf} (not found)")
-        # Check for glob-style patterns
-        for pattern in ["tsconfig.*.json", "vite.config.*", "vitest.config.*", "playwright.config.*"]:
-            matches = list(target_root.glob(pattern))
-            if matches:
-                for m in matches:
-                    found.append(f"- {m.name} (available)")
+                p = target_root / cf
+                if p.exists():
+                    found.append(f"- {cf} (available)")
+                else:
+                    found.append(f"- {cf} (not found)")
         return "\n".join(found)
 
     def _render_import_hints(self, scope: list[str], target_root: Path | None) -> str:

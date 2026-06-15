@@ -179,3 +179,72 @@ class TestWorkspaceBuilder:
         assert d["workspace_mode"] == "target_repo_worktree"
         assert d["commit_semantics"] == "target_repo_commit"
         assert d["target_repo_root"] == str(target_root)
+
+    # ── W04 rework: .env denylist ──────────────────────────────────────
+
+    def test_env_files_never_copied_from_scope(self, target_root: Path, tmp_path: Path):
+        """.env and .env.* files in scope must be omitted with secret_file_denied."""
+        (target_root / ".env").write_text("SECRET=1")
+        (target_root / ".env.local").write_text("LOCAL=1")
+        builder = AgentWorkspaceBuilder(target_root=target_root)
+        ws = builder.build_scoped_copy(
+            scope_paths=["main.py", ".env", ".env.local"],
+            workspace_root=tmp_path,
+            slug="test-env-scope",
+        )
+        assert not (ws.workspace_path / ".env").exists()
+        assert not (ws.workspace_path / ".env.local").exists()
+        assert any("secret_file_denied:.env" in o for o in ws.omitted_files)
+        assert any("secret_file_denied:.env.local" in o for o in ws.omitted_files)
+        assert (ws.workspace_path / "main.py").exists()
+
+    def test_env_files_never_copied_from_config(self, target_root: Path, tmp_path: Path):
+        """.env in config_allowlist must be omitted, not copied."""
+        (target_root / ".env.example").write_text("EXAMPLE=1")
+        (target_root / ".env.production").write_text("PROD=1")
+        builder = AgentWorkspaceBuilder(target_root=target_root)
+        ws = builder.build_scoped_copy(
+            scope_paths=["main.py"],
+            workspace_root=tmp_path,
+            slug="test-env-config",
+            config_allowlist=[".env.example", ".env.production"],
+        )
+        # .env.production is secret and must NOT be copied
+        assert not (ws.workspace_path / ".env.production").exists()
+        assert any("secret_file_denied:.env.production" in o for o in ws.omitted_files)
+        # .env.example is explicitly allowed and must be copied
+        assert (ws.workspace_path / ".env.example").exists()
+
+    # ── W04 rework: glob config patterns ───────────────────────────────
+
+    def test_glob_config_patterns_resolved_and_copied(self, target_root: Path, tmp_path: Path):
+        """Glob patterns in config_allowlist must be resolved and copied."""
+        (target_root / "tsconfig.base.json").write_text('{"compilerOptions": {}}')
+        (target_root / "tsconfig.app.json").write_text('{"extends": "./tsconfig.base.json"}')
+        (target_root / "vite.config.ts").write_text("export default {}")
+        builder = AgentWorkspaceBuilder(target_root=target_root)
+        ws = builder.build_scoped_copy(
+            scope_paths=["main.py"],
+            workspace_root=tmp_path,
+            slug="test-globs",
+            config_allowlist=["tsconfig.*.json", "vite.config.*"],
+        )
+        assert (ws.workspace_path / "tsconfig.base.json").exists()
+        assert (ws.workspace_path / "tsconfig.app.json").exists()
+        assert (ws.workspace_path / "vite.config.ts").exists()
+        # Verify they appear in copied_files
+        copied_originals = [c["original"] for c in ws.copied_files]
+        assert "tsconfig.base.json" in copied_originals
+        assert "tsconfig.app.json" in copied_originals
+        assert "vite.config.ts" in copied_originals
+
+    def test_glob_config_pattern_no_match_omitted(self, target_root: Path, tmp_path: Path):
+        """Glob pattern with no matching files must be recorded as omitted."""
+        builder = AgentWorkspaceBuilder(target_root=target_root)
+        ws = builder.build_scoped_copy(
+            scope_paths=["main.py"],
+            workspace_root=tmp_path,
+            slug="test-globs-nomatch",
+            config_allowlist=["vitest.config.*", "playwright.config.*"],
+        )
+        assert any("config_glob_no_match:vitest.config.*" in o for o in ws.omitted_files)
