@@ -174,11 +174,19 @@ class SafePlanAutofixer:
         err: dict,
         report: PlanAutofixReport,
     ) -> None:
-        """Add active reference files outside scope to nearest packet."""
+        """Add active reference files outside scope. Falls back to a dedicated
+        import-migration packet when no sibling coder packet is found."""
         msg = err.get("message", "")
-        refs = [_clean_path(p) for p in _ERROR_PATH_PATTERN.findall(msg)]
-        # Reject paths that aren't under allowed dirs
-        allowed = [r for r in refs if self._is_allowed_path(r)]
+
+        # Prefer structured details over regex from message
+        details = err.get("details") if isinstance(err.get("details"), dict) else {}
+        outside_refs = details.get("outside_refs", [])
+        if outside_refs:
+            refs = [r for r in outside_refs if self._is_allowed_path(r)]
+        else:
+            refs = [_clean_path(p) for p in _ERROR_PATH_PATTERN.findall(msg)]
+            refs = [r for r in refs if self._is_allowed_path(r)]
+
         if not refs:
             report.skipped.append({
                 "code": "SKIPPED_NO_REFS",
@@ -187,27 +195,9 @@ class SafePlanAutofixer:
             })
             return
 
-        # Filter to allowed dirs only
-        allowed = [r for r in refs if self._is_allowed_path(r)]
-        if len(refs) != len(allowed):
-            report.skipped.append({
-                "code": "SKIPPED_REF_OUTSIDE_ALLOWED",
-                "reason": f"{len(refs) - len(allowed)} refs outside allowed dirs",
-                "file": refs[0] if refs else None,
-            })
-            refs = allowed
-
-        if len(refs) > 8:
-            report.skipped.append({
-                "code": "SKIPPED_TOO_MANY_REFS",
-                "reason": f"{len(refs)} refs exceeds limit of 8",
-                "error_code": "E_IMPORT_MIGRATION_SCOPE_INCOMPLETE",
-                "file": refs[0] if refs else None,
-            })
-            return
-
-        # Find nearest coder packet
         waves = plan.get("waves", [])
+
+        # Try to find an existing coder packet with sibling scope files
         best_packet = None
         for wi, wave in enumerate(waves):
             for pi, pkt in enumerate(wave.get("packets", [])):
@@ -219,34 +209,86 @@ class SafePlanAutofixer:
                 if self._has_sibling_imports(scope, refs):
                     best_packet = (wi, pi)
 
-        if best_packet is None:
+        if best_packet is not None:
+            wi, pi = best_packet
+            pkt = waves[wi]["packets"][pi]
+            scope = pkt.get("scope", []) or []
+            new_refs = [r for r in refs if r not in scope
+                        and not self._is_table(plan, "frozen_scope", r)]
+            if not new_refs:
+                return
+            if len(scope) + len(new_refs) > MAX_AUTO_SCOPE_FILES:
+                # Take first batch
+                new_refs = new_refs[:max(0, MAX_AUTO_SCOPE_FILES - len(scope))]
+            pkt["scope"] = scope + new_refs
+            report.fixes.append({
+                "code": "AUTO_ADD_IMPORT_REFERENCE_FILES",
+                "reason": "E_IMPORT_MIGRATION_SCOPE_INCOMPLETE",
+                "files": new_refs,
+                "packet_title": pkt.get("title", f"wave-{wi}-pkt-{pi}"),
+            })
+            return
+
+        # No sibling packet — create a dedicated import-migration packet
+        new_refs = [r for r in refs
+                    if not self._is_table(plan, "frozen_scope", r)]
+        if not new_refs:
             report.skipped.append({
-                "code": "SKIPPED_NO_PACKET_FOR_REFS",
-                "reason": "no packet found with sibling import files",
+                "code": "SKIPPED_ALL_REFS_FROZEN",
+                "reason": "all reference files are in frozen_scope",
                 "error_code": "E_IMPORT_MIGRATION_SCOPE_INCOMPLETE",
             })
             return
 
-        wi, pi = best_packet
-        pkt = waves[wi]["packets"][pi]
-        scope = pkt.get("scope", []) or []
+        # Collect frozen_scope from existing coder packets
+        existing_frozen: set[str] = set()
+        for w in waves:
+            for p in w.get("packets", []):
+                if p.get("role") == "coder":
+                    for f in (p.get("frozen_scope") or []):
+                        existing_frozen.add(f)
 
-        new_refs = [r for r in refs if r not in scope and not self._is_table(plan, "frozen_scope", r)]
-        if not new_refs:
-            return
-        if len(scope) + len(new_refs) > MAX_AUTO_SCOPE_FILES:
-            report.skipped.append({
-                "code": "SKIPPED_SCOPE_EXCEEDS_LIMIT",
-                "reason": "adding refs would exceed MAX_AUTO_SCOPE_FILES",
-            })
-            return
+        # Collect existing verification from first existing coder packet as template
+        v0 = {"t0": [], "t1": [], "t2": []}
+        depends_on: list[str] = []
+        for w in waves:
+            for p in w.get("packets", []):
+                if p.get("role") == "coder":
+                    v0 = p.get("verification", v0) or v0
+                    depends_on.append(p.get("title", ""))
+                    break
+            if depends_on:
+                break
 
-        pkt["scope"] = scope + new_refs
+        # Find or create a wave to put the migration packet in
+        target_wave = waves[-1] if waves else None
+        if target_wave is None:
+            target_wave = {"title": "Migration", "packets": []}
+            waves.append(target_wave)
+
+        migration_pkt = {
+            "title": "Migrate imports from old LLM service",
+            "role": "coder",
+            "scope": new_refs,
+            "frozen_scope": sorted(existing_frozen) if existing_frozen else [],
+            "depends_on": depends_on,
+            "acceptance_profile": "NORMAL",
+            "coder_instructions": [
+                "Update active consumers to import from the new package structure "
+                "or keep the old module as a compatibility shim. Do NOT change behavior."
+            ],
+            "acceptance_criteria": [
+                "All consumer files updated to use correct import paths",
+            ],
+            "verification": {"t0": [], "t1": [], "t2": []},
+        }
+        target_wave.setdefault("packets", [])
+        target_wave["packets"].append(migration_pkt)
         report.fixes.append({
-            "code": "AUTO_ADD_IMPORT_REFERENCE_FILES",
+            "code": "AUTO_CREATE_IMPORT_MIGRATION_PACKET",
             "reason": "E_IMPORT_MIGRATION_SCOPE_INCOMPLETE",
             "files": new_refs,
-            "packet_title": pkt.get("title", f"wave-{wi}-pkt-{pi}"),
+            "packet_title": migration_pkt["title"],
         })
 
     # ── Utility methods ────────────────────────────────────────────

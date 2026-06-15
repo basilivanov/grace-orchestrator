@@ -45,6 +45,7 @@ class CompileError(BaseModel):
     field_path: str
     message: str
     suggestion: str | None = None
+    details: dict | None = None
 
     model_config = {"frozen": False}
 
@@ -94,6 +95,7 @@ def _add_error(
     message: str,
     packet_title: str | None = None,
     suggestion: str | None = None,
+    details: dict | None = None,
 ) -> None:
     result.errors.append(
         CompileError(
@@ -103,6 +105,7 @@ def _add_error(
             field_path=field_path,
             message=message,
             suggestion=suggestion,
+            details=details,
         )
     )
     result.ok = False
@@ -499,6 +502,11 @@ class PlanCompiler:
                             outside.add(r.path)
                     if outside:
                         ref_paths = sorted(outside)[:10]
+                        import_details = {
+                            "old_import": old_imp,
+                            "source_path": src,
+                            "outside_refs": sorted(outside),
+                        }
                         _add_error(
                             result, "E_IMPORT_MIGRATION_SCOPE_INCOMPLETE",
                             "scope",
@@ -509,6 +517,7 @@ class PlanCompiler:
                             "Include all active reference files in scope, split import "
                             "migration into another packet, or keep old module as shim "
                             "and relax T0 to allow shim-only reference.",
+                            details=import_details,
                         )
 
     def _validate_cmd(

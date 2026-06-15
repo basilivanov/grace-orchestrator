@@ -1078,30 +1078,39 @@ Other files (paths only):
                      + "\n" + str(spec.get("description", ""))
                      + "\n" + str(spec.get("title", "")))
 
-        # ── 1. Autofix before LLM repair ────────────────────────────
+        # ── 1. Autofix before LLM repair (iterative, up to 3 passes) ─
         self._trace_ctx.stage = "repair_loop"
         self._artifact_store.write_json(
             trace=self._trace_ctx, stage="repair_loop", name="compiler_errors.json",
             payload={"errors": compiler_errors}, kind="repair_errors",
         )
         from grace_control.services.plan_autofix_service import SafePlanAutofixer
-        autofix_result = SafePlanAutofixer().apply(plan, compiler_errors)
-        if autofix_result.applied and autofix_result.patched_plan:
+
+        autofix_attempt = 0
+        while autofix_attempt < 3:
+            autofix_attempt += 1
+            autofix_result = SafePlanAutofixer().apply(plan, compiler_errors)
+            if not (autofix_result.applied and autofix_result.patched_plan):
+                _log.info("autofix_noop", feature_id=feature_id,
+                          attempt=autofix_attempt, skipped=len(autofix_result.skipped))
+                break
+
             _log.info("autofix_applied", feature_id=feature_id,
-                      fixes=len(autofix_result.fixes))
+                      attempt=autofix_attempt, fixes=len(autofix_result.fixes))
             spec["plan_json"] = autofix_result.patched_plan
             spec["_plan_autofix"] = {
                 "applied": True,
                 "fixes": autofix_result.fixes,
                 "skipped": autofix_result.skipped,
-                "attempt": 1,
+                "attempt": autofix_attempt,
             }
             feature.spec_json = spec
             self.db.flush()
             plan = autofix_result.patched_plan
             self._artifact_store.write_json(
                 trace=self._trace_ctx, stage="repair_loop", name="autofix_output.json",
-                payload={"fixes": autofix_result.fixes, "skipped": autofix_result.skipped},
+                payload={"fixes": autofix_result.fixes, "skipped": autofix_result.skipped,
+                         "attempt": autofix_attempt},
                 kind="repair_autofix",
             )
 
@@ -1116,16 +1125,22 @@ Other files (paths only):
                 "errors": [e.model_dump() for e in compiled.errors],
                 "warnings": [w.model_dump() for w in compiled.warnings],
                 "autofix": True,
+                "attempt": autofix_attempt,
             }
             feature.spec_json = spec
             self.db.flush()
             if compiled.ok:
-                _log.info("autofix_success", feature_id=feature_id)
+                _log.info("autofix_success", feature_id=feature_id,
+                          attempt=autofix_attempt)
                 feature.status = "PLAN_READY"
                 self.db.flush()
                 return self.approve_plan(feature_id)
             compiler_errors = [e.model_dump() for e in compiled.errors]
             error_class = classify_compiler_result(compiler_errors)
+            if error_class != "repairable":
+                _log.info("repair_skipped_after_autofix", feature_id=feature_id,
+                          error_class=error_class, attempt=autofix_attempt)
+                break
 
         # If after autofix it's still repairable → LLM repair
         if error_class != "repairable":
