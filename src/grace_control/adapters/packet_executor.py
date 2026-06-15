@@ -356,6 +356,12 @@ class PacketExecutionAdapter:
             run_id, packet_data, run_number = self._load_packet(packet_id, worker_id)
         executor = self._resolve_executor(packet_data); agent_commit_sha = ""
         self._init_observability(packet_data, run_id)
+        # Store effective target_repo_root for cleanup (honors feature spec override)
+        pkt_spec = packet_data.get("spec_json") or {}
+        if isinstance(pkt_spec, str):
+            pkt_spec = {}
+        from grace_control.config.settings import settings as __s
+        self._packet_target_repo = pkt_spec.get("target_repo_root", "") or __s.target_repo_root or ""
         self._obs_event("packet.execution_started", status="started")
         try:
             from grace_control.config.settings import settings as _settings
@@ -367,13 +373,17 @@ class PacketExecutionAdapter:
                 worktree_path = _resolve_worktree_for_contract(
                     packet_data, executor, _settings, self.project_root, self.worktree_root,
                 )
+                pkt_spec = packet_data.get("spec_json") or {}
+                if isinstance(pkt_spec, str):
+                    pkt_spec = {}
+                pkt_target_repo = pkt_spec.get("target_repo_root", "") or _settings.target_repo_root or ""
                 contract = AgentRuntimeContractBuilder.build(
                     packet_data=packet_data,
                     executor=executor,
                     run_id=run_id,
                     trace=self._obs_trace,
                     project_root=self.project_root,
-                    target_repo_root=_settings.target_repo_root or "",
+                    target_repo_root=pkt_target_repo,
                     worktree_path=worktree_path,
                     settings=_settings,
                 )
@@ -752,11 +762,15 @@ class PacketExecutionAdapter:
 
     def _effective_cleanup_root(self, executor: dict) -> Path:
         from grace_control.config.settings import settings
+        # Check packet-level target_repo_root first (feature spec override)
+        pkt_repo = getattr(self, "_packet_target_repo", None) or settings.target_repo_root
         workspace_mode = executor.get("workspace_mode") or settings.workspace_mode or "full_git_worktree"
         if executor.get("minimal_repo"):
             workspace_mode = "scoped_copy"
         if workspace_mode == "target_repo_worktree":
-            return Path(settings.target_repo_root or self.project_root)
+            return Path(pkt_repo or self.project_root)
+        if pkt_repo and str(pkt_repo) != str(self.project_root):
+            return Path(pkt_repo)
         return self.project_root
 
     def _fast_reject(self, reason, executor_id, run_id, start):
@@ -1248,16 +1262,15 @@ class PacketExecutionAdapter:
         if is_minimal:
             workspace_mode = "scoped_copy"
 
-        # Prefer the constructor-provided worktree_root (may be absolute from
-        # git_context resolution) over the settings default (which is relative
-        # .grace/worktrees). When the settings value is used and is relative,
-        # resolve it against target_root for target_repo_worktree mode so that
-        # git worktree add + existence checks agree on the same absolute path.
+        # Resolve worktree path to absolute. Relative paths break when the
+        # worker CWD differs from the target_repo_root (e.g. feature spec
+        # overrides target_repo_root but worker CWD is still the old repo).
+        # Always resolve relative worktree_root against the effective target.
         if self.worktree_root.is_absolute():
             wt_root = self.worktree_root
         else:
             wt_root = Path(_s.worktree_root)
-        if workspace_mode == "target_repo_worktree" and not wt_root.is_absolute():
+        if not wt_root.is_absolute():
             wt_root = target_root / wt_root
         wt_path = wt_root / slug
 

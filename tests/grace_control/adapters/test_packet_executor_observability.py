@@ -501,6 +501,102 @@ class TestOpenCodeAdapterIntegration:
             _s.agent_runtime_use_opencode_adapter = original
 
 
+class TestTargetRepoRootPropagation:
+    """Regression: feature spec target_repo_root must override global settings."""
+
+    async def test_target_repo_root_from_spec_overrides_settings(self):
+        from grace_control.config.settings import settings as _s
+        import tempfile
+        tempdir = Path(tempfile.mkdtemp())
+        try:
+            mock_target = Path(tempdir) / "target"
+            mock_target.mkdir(parents=True, exist_ok=True)
+
+            orig_repo = _s.target_repo_root
+            orig_git = _s.agent_runtime_fail_on_bad_git_root
+            orig_non_git = _s.agent_runtime_allow_non_git_scope_skip
+            _s.agent_runtime_fail_on_bad_git_root = False
+            _s.agent_runtime_allow_non_git_scope_skip = True
+            _s.target_repo_root = "/opt/solarsage-astro"
+
+            from grace_control.adapters.packet_executor import PacketExecutionAdapter
+            from grace_control.agent.backend import ExecutionRequest, ExecutionResult as BackendResult
+            from grace_control.core.contracts import build_packet_contract
+            from unittest.mock import patch, MagicMock as _MM
+
+            adapter = PacketExecutionAdapter(
+                project_root=mock_target, state_root=mock_target,
+                worktree_root=mock_target,
+            )
+            adapter._inspector = _MM()
+            adapter._inspector.is_git_worktree.return_value = True
+            adapter._inspector.has_changes.return_value = True
+            adapter._inspector.base_sha.return_value = "a" * 40
+            adapter._committer = _MM()
+            adapter._committer.commit.return_value = "b" * 40
+
+            # Mock _call_executor to bypass real git
+            async def _fake_call(self, *a, **kw):
+                return BackendResult(
+                    accepted=True, domain_status="accepted",
+                    worktree_path=mock_target, branch_name="agent/test",
+                    commit_sha="", stdout="", stderr="", duration_ms=100,
+                )
+
+            async def _fake_acc(self, *a, **kw):
+                from grace_control.core.contracts import AcceptanceReport, FinalVerdict, StageName, StageResult, StageStatus
+                return AcceptanceReport(
+                    packet_id="pkt-repo-test",
+                    final_verdict=FinalVerdict.ACCEPTED,
+                    profile=_MM(),
+                    stages=[StageResult(name=StageName.T0_SCOPE_AND_LINT,
+                                        status=StageStatus.PASSED, summary="ok")],
+                    summary="passed",
+                ), "", {"ok": True}, ["file1.py"], mock_target, mock_target / "runs"
+
+            claim_data = {
+                "attempt": 1, "feature_id": "f1", "wave_id": "w1",
+                "slug": "test", "title": "Test",
+                "acceptance_profile": "NORMAL",
+                "spec": {"target_repo_root": str(mock_target),
+                          "scope": ["src/"], "frozen_scope": [],
+                          "verification": {"t0": ["echo ok"]}},
+                "max_attempts": 3,
+            }
+
+            with patch.object(PacketExecutionAdapter, "_call_executor", _fake_call):
+                with patch.object(PacketExecutionAdapter, "_run_acceptance", _fake_acc):
+                    with patch("grace_control.adapters.packet_executor.get_db") as mock_db:
+                        db = _MM()
+                        mock_db.return_value.__enter__.return_value = db
+                        db.query.return_value.filter_by.return_value.first.return_value = None
+
+                        # Verify contract preserves target_repo_root
+                        packet_data = {
+                            "id": "pkt-repo-test", "feature_id": "f1", "wave_id": "w1",
+                            "spec_json": {"target_repo_root": str(mock_target), "scope": ["src/"]},
+                        }
+                        pkt_contract = build_packet_contract(packet_data)
+                        assert pkt_contract.metadata.get("target_repo_root") == str(mock_target)
+
+                        result = await adapter.execute("pkt-repo-test", "w1", claim_data=claim_data)
+
+            assert result.accepted, f"expected accepted, got {result.reason}"
+
+            assert adapter._packet_target_repo == str(mock_target), \
+                f"expected {mock_target}, got {adapter._packet_target_repo}"
+            cleanup = adapter._effective_cleanup_root({})
+            assert str(mock_target) in str(cleanup), \
+                f"cleanup root should contain target, got {cleanup}"
+
+        finally:
+            import shutil
+            shutil.rmtree(str(tempdir), ignore_errors=True)
+            _s.target_repo_root = orig_repo
+            _s.agent_runtime_fail_on_bad_git_root = orig_git
+            _s.agent_runtime_allow_non_git_scope_skip = orig_non_git
+
+
 class TestRejectedPacket:
     async def test_rejected_packet_still_creates_some_artifacts(self):
         with tempfile.TemporaryDirectory() as _td:
