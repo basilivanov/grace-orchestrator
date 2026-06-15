@@ -101,18 +101,18 @@ class AgentWorkspaceBuilder:
         all_rel_paths: list[str] = []
 
         # W04: secret file patterns that must NEVER be copied.
-        # .env.example IS excluded — it's a safe template in CONFIG_ALLOWLIST.
-        # .env.* is intentionally omitted to avoid blocking .env.example;
-        # instead we enumerate the known secret patterns explicitly.
+        # Blocks .env and any .env.* file, except .env.example which is a safe
+        # template explicitly listed in CONFIG_ALLOWLIST.
         _secret_patterns: list[str] = [
             ".env",
-            ".env.local",
-            ".env.production",
-            ".env.development",
+            ".env.*",
         ]
+        _secret_exceptions: set[str] = {".env.example"}
 
         def _is_secret(rel_path: str) -> bool:
             name = Path(rel_path).name
+            if name in _secret_exceptions:
+                return False
             return any(fnmatch.fnmatch(name, pat) for pat in _secret_patterns)
 
         # Resolve scope paths and copy them preserving relative structure.
