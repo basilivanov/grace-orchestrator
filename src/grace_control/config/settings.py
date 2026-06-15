@@ -116,10 +116,6 @@ class GraceSettings(BaseSettings):
     api_auth_allow_unauthenticated_localhost: bool = True
     api_auth_public_openapi: bool = False
 
-    # ── opencode server attach (extras) ──
-    opencode_server_url: str = ""
-    opencode_server_password: str = ""
-
     # ── Runtime observability (W1) ──
     runtime_observability_enabled: bool = True
     runtime_debug_payload_capture_enabled: bool = False

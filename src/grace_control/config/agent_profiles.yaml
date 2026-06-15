@@ -32,9 +32,8 @@ agents:
       - verification (object with t0, t1, t2 arrays)
       - expected_evidence (structured evidence requirements)
 
-      Legacy fields (allowed_files, forbidden_files, write_scope, inputs)
-      are NOT part of the canonical schema and will be canonicalized with
-      warnings at parse time.
+      Pre-canonicalization fields are NOT part of the canonical schema
+      and will be mapped with warnings at parse time if present.
 
       Read the business task and context from {packet_path}.
       Output ONLY one valid JSON object. No markdown. No prose. No code fences.
@@ -78,9 +77,8 @@ agents:
       - verification (object with t0, t1, t2 arrays)
       - expected_evidence (structured evidence requirements)
 
-      Legacy fields (allowed_files, forbidden_files, write_scope, inputs)
-      are NOT part of the canonical schema and will be canonicalized with
-      warnings at parse time.
+      Pre-canonicalization fields are NOT part of the canonical schema
+      and will be mapped with warnings at parse time if present.
 
       Read the user/spec packet from {packet_path} and output ONLY valid JSON.
       No prose, no markdown fences.

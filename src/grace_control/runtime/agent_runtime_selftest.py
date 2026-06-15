@@ -44,7 +44,7 @@ ShellRunner = Callable[[str], tuple[int, str, str]]
 def _real_shell(cmd: str) -> tuple[int, str, str]:
     try:
         r = subprocess.run(
-            cmd, shell=True, capture_output=True, text=True, timeout=30,
+            cmd, shell=False, capture_output=True, text=True, timeout=30,
         )
         return r.returncode, r.stdout.strip(), r.stderr.strip()
     except subprocess.TimeoutExpired:

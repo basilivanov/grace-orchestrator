@@ -870,7 +870,8 @@ class PacketExecutionAdapter:
         try: self._evidence.update_run_result(run_id=run_id, status="rejected", legacy_result={"error":"pre-acceptance failure","reason":reason},
             acceptance_report=None, evidence_verifier_report=skipped_evidence_report(reason), reviewer_report=skipped_reviewer_report(reason),
             evidence_path="", duration_ms=er.duration_ms, executor_id=executor_id, diagnostics=_diag)
-        except: pass
+        except Exception as _evidence_err:
+            _log.warn("pre_acceptance_evidence_update_failed", run_id=run_id, error=str(_evidence_err)[:500])
         # Clean up worktree + agent/* branches for terminal rejection.
         # Extract packet_id and run_number from run_id (e.g. "pkt_xxx-R01").
         from grace_control.config.settings import settings
@@ -884,8 +885,8 @@ class PacketExecutionAdapter:
                     executor_dict = prof.to_dict() if prof else {}
                     effective_target_root = self._effective_cleanup_root(executor_dict)
                     self._terminal_cleanup.run(pkt, attempt=rn, project_root=effective_target_root)
-            except Exception:
-                pass
+            except Exception as _cleanup_err:
+                _log.warn("terminal_cleanup_failed", run_id=run_id, error=str(_cleanup_err)[:500])
         self._obs_event("packet.execution_failed", status="rejected", message=reason[:200])
         return er
 
@@ -921,8 +922,8 @@ class PacketExecutionAdapter:
             er = self._fast_reject(reason, executor.get("executor_id", ""), run_id, start)
             try:
                 er.evidence["failure_code"] = AgentRuntimeFailureCode.AGENT_WORKTREE_NOT_GIT
-            except Exception:
-                pass
+            except Exception as _fc_err:
+                _log.warn("failure_code_set_failed", packet_id=packet_id, error=str(_fc_err)[:200])
             return er
 
         store = getattr(self, "_obs_store", None)
@@ -941,9 +942,8 @@ class PacketExecutionAdapter:
             try:
                 events.emit(trace=trace, event="packet.diff_inspection_started",
                             stage="post_execution", component="scope_enforcer", status="started")
-            except Exception:
-                pass
-        diff_result = await inspector.inspect(diff_req)
+            except Exception as _emit_err:
+                _log.warn("obs_event_emit_failed", event="diff_inspection_started", error=str(_emit_err)[:200])
         if events and trace:
             try:
                 if diff_result.ok:
@@ -954,8 +954,8 @@ class PacketExecutionAdapter:
                     events.emit(trace=trace, event="packet.diff_inspection_failed",
                                 stage="post_execution", component="scope_enforcer",
                                 status="failed", message=diff_result.summary)
-            except Exception:
-                pass
+            except Exception as _emit_err:
+                _log.warn("obs_event_emit_failed", event="diff_inspection_completed", error=str(_emit_err)[:200])
 
         # Hard reject on diff failure — can't enforce scope without trustworthy diff
         if not diff_result.ok:
@@ -997,24 +997,16 @@ class PacketExecutionAdapter:
                         payload=redactor.redact_payload({"changed_files": []}),
                         kind="changed_files",
                     )
-                except Exception:
-                    pass
-                if events and trace:
-                    try:
-                        events.emit(trace=trace, event="packet.runtime_diagnostics_created",
-                                    stage="post_execution", component="scope_enforcer",
-                                    status="failed",
-                                    message=diff_result.summary)
-                    except Exception:
-                        pass
+                except Exception as _emit_err:
+                    _log.warn("obs_event_emit_failed", event="changed_files_persist", error=str(_emit_err)[:200])
 
             er = self._fast_reject(reason, executor.get("executor_id", ""), run_id, start)
             try:
                 er.evidence["diff_inspection"] = diff_result.model_dump()
                 er.evidence["runtime_diagnostics"] = diag.model_dump()
                 er.evidence["failure_code"] = diff_result.failure_code
-            except Exception:
-                pass
+            except Exception as _diag_err:
+                _log.warn("diff_diag_set_failed", packet_id=packet_id, error=str(_diag_err)[:200])
             return er
 
         allowed = list(pkt_contract.allowed_write_scope or [])
@@ -1024,8 +1016,8 @@ class PacketExecutionAdapter:
             try:
                 events.emit(trace=trace, event="packet.scope_enforcement_started",
                             stage="post_execution", component="scope_enforcer", status="started")
-            except Exception:
-                pass
+            except Exception as _emit_err:
+                _log.warn("obs_event_emit_failed", event="scope_enforcement_started", error=str(_emit_err)[:200])
         scope_result = RuntimeScopeEnforcer.enforce(
             changed_files=diff_result.changed_files,
             allowed_scope=allowed,
@@ -1044,10 +1036,8 @@ class PacketExecutionAdapter:
                                 status="failed", message=scope_result.summary,
                                 payload={"out_of_scope_count": len(scope_result.out_of_scope_files),
                                          "frozen_touched_count": len(scope_result.frozen_touched_files)})
-            except Exception:
-                pass
-
-        mode = getattr(_s, "opencode_runtime_mode", "direct")
+            except Exception as _emit_err:
+                _log.warn("obs_event_emit_failed", event="scope_enforcement_completed", error=str(_emit_err)[:200])(_s, "opencode_runtime_mode", "direct")
         diag = RuntimeDiagnosticsBuilder.build(
             runtime_run_id=run_id,
             packet_id=packet_id,
@@ -1074,8 +1064,8 @@ class PacketExecutionAdapter:
                     events.emit(trace=trace, event="packet.runtime_diagnostics_created",
                                 stage="post_execution", component="scope_enforcer", status="completed",
                                 artifact_refs=refs)
-                except Exception:
-                    pass
+                except Exception as _emit_err:
+                    _log.warn("obs_event_emit_failed", event="runtime_diagnostics_created", error=str(_emit_err)[:200])
 
         if not scope_result.ok:
             reason = scope_result.summary
@@ -1088,8 +1078,8 @@ class PacketExecutionAdapter:
                 er.evidence["diff_inspection"] = diff_result.model_dump()
                 er.evidence["runtime_diagnostics"] = diag.model_dump()
                 er.evidence["failure_code"] = scope_result.failure_code
-            except Exception:
-                pass
+            except Exception as _diag_err:
+                _log.warn("scope_diag_set_failed", packet_id=packet_id, error=str(_diag_err)[:200])
             return er
 
         return None
@@ -1139,8 +1129,8 @@ class PacketExecutionAdapter:
                 artifact_refs=artifact_refs,
                 payload=payload,
             )
-        except Exception:
-            pass
+        except Exception as _obs_err:
+            _log.warn("obs_event_failed", error=str(_obs_err)[:200])
 
     def _obs_write_artifact(self, name: str, content: str, kind: str) -> RuntimeArtifactRef | None:
         if getattr(self, "_obs_disabled", True):
@@ -1151,7 +1141,8 @@ class PacketExecutionAdapter:
                 trace=self._obs_trace, packet_id=self._obs_trace.packet_id,
                 name=name, content=redacted, kind=kind,
             )
-        except Exception:
+        except Exception as _write_err:
+            _log.warn("obs_artifact_write_failed", name=name, error=str(_write_err)[:200])
             return None
 
     def _obs_write_json_artifact(self, name: str, payload: dict | list, kind: str) -> RuntimeArtifactRef | None:
@@ -1163,7 +1154,8 @@ class PacketExecutionAdapter:
                 trace=self._obs_trace, packet_id=self._obs_trace.packet_id,
                 name=name, payload=redacted_payload, kind=kind,
             )
-        except Exception:
+        except Exception as _write_err:
+            _log.warn("obs_json_artifact_write_failed", name=name, error=str(_write_err)[:200])
             return None
 
     def _capture_prompt_artifact(self, result) -> RuntimeArtifactRef | None:
@@ -1171,8 +1163,8 @@ class PacketExecutionAdapter:
             prompt = getattr(result, "prompt", None) or ""
             if prompt:
                 return self._obs_write_artifact("prompt.txt", prompt, "prompt")
-        except Exception:
-            pass
+        except Exception as _capture_err:
+            _log.warn("obs_prompt_capture_failed", error=str(_capture_err)[:200])
         return None
 
     def _capture_agent_output_artifact(self, result) -> list[RuntimeArtifactRef]:
@@ -1188,8 +1180,8 @@ class PacketExecutionAdapter:
                 r = self._obs_write_artifact("agent_stderr.txt", stderr, "agent_stderr")
                 if r:
                     refs.append(r)
-        except Exception:
-            pass
+        except Exception as _capture_err:
+            _log.warn("obs_output_capture_failed", error=str(_capture_err)[:200])
         return refs
 
     def _capture_test_output_artifact(self, accept_report) -> RuntimeArtifactRef | None:
@@ -1198,7 +1190,8 @@ class PacketExecutionAdapter:
         try:
             payload = accept_report.to_dict() if hasattr(accept_report, "to_dict") else {"summary": str(accept_report)}
             return self._obs_write_json_artifact("test_output.txt", payload, "test_output")
-        except Exception:
+        except Exception as _capture_err:
+            _log.warn("obs_test_output_capture_failed", error=str(_capture_err)[:200])
             return None
 
     def _capture_diff_patch_artifact(self, wt_path, run_dir, base_sha) -> RuntimeArtifactRef | None:
@@ -1211,8 +1204,8 @@ class PacketExecutionAdapter:
             if patch_src.exists():
                 content = patch_src.read_text(encoding="utf-8")
                 return self._obs_write_artifact("diff.patch", content, "diff")
-        except Exception:
-            pass
+        except Exception as _capture_err:
+            _log.warn("obs_diff_patch_capture_failed", error=str(_capture_err)[:200])
         return None
 
     def _capture_evidence_artifact(self, packet_id: str, run_id: str, run_number: int,
