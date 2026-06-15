@@ -220,6 +220,112 @@ class TestRuntimeFailureCodes:
 class TestIdempotency:
     """Idempotency: same original + source must not create duplicate rework packets."""
 
+    def test_maybe_create_skips_when_rework_exists(self, db, tmp_path):
+        """_maybe_create_rework_packet skips when existing rework packet is found."""
+        from unittest.mock import MagicMock, patch
+        from grace_control.adapters.packet_executor import PacketExecutionAdapter
+        from grace_control.core.uid import generate_unique_id, new_packet_uid
+
+        with get_db() as d:
+            original = Packet(
+                id="pkt-idem-adapter-001",
+                feature_id="feat-idem",
+                wave_id="W01",
+                slug="idem-pkt",
+                title="Idempotency Test",
+                spec_json={"scope": ["src/"]},
+                acceptance_profile="NORMAL",
+                attempt_count=1, max_attempts=3,
+                state=PacketState.REJECTED.value,
+            )
+            d.add(original)
+
+            existing_rework = Packet(
+                id="pkt-existing-rework",
+                feature_id="feat-idem",
+                wave_id="W01",
+                slug="idem-pkt-rework",
+                title="Rework: Idempotency Test",
+                spec_json={
+                    "origin": "review_rework",
+                    "parent_packet_id": "pkt-idem-adapter-001",
+                    "rework_source": "reviewer",
+                },
+                acceptance_profile="NORMAL",
+                attempt_count=0, max_attempts=3,
+                state=PacketState.READY.value,
+            )
+            d.add(existing_rework)
+            d.commit()
+
+        adapter = PacketExecutionAdapter(
+            project_root=tmp_path,
+            state_root=tmp_path,
+            worktree_root=tmp_path,
+            backend=MagicMock(),
+        )
+
+        with patch("grace_control.config.settings.settings.agent_runtime_rework_packets_enabled", True):
+            adapter._maybe_create_rework_packet(
+                "pkt-idem-adapter-001",
+                verdict_source="reviewer",
+                summary="fix it",
+                blocking_issues=["issue"],
+            )
+
+        with get_db() as d:
+            rework_packets = [
+                p for p in d.query(Packet).all()
+                if (p.spec_json or {}).get("origin") == "review_rework"
+            ]
+            assert len(rework_packets) == 1
+            assert rework_packets[0].id == "pkt-existing-rework"
+
+    def test_maybe_create_creates_when_no_existing_rework(self, db, tmp_path):
+        """_maybe_create_rework_packet creates when no existing rework packet found."""
+        from unittest.mock import MagicMock, patch
+        from grace_control.adapters.packet_executor import PacketExecutionAdapter
+
+        with get_db() as d:
+            original = Packet(
+                id="pkt-idem-adapter-002",
+                feature_id="feat-idem",
+                wave_id="W01",
+                slug="idem-pkt-2",
+                title="Idempotency Test 2",
+                spec_json={"scope": ["src/"]},
+                acceptance_profile="NORMAL",
+                attempt_count=1, max_attempts=3,
+                state=PacketState.REJECTED.value,
+            )
+            d.add(original)
+            d.commit()
+
+        adapter = PacketExecutionAdapter(
+            project_root=tmp_path,
+            state_root=tmp_path,
+            worktree_root=tmp_path,
+            backend=MagicMock(),
+        )
+
+        with patch("grace_control.config.settings.settings.agent_runtime_rework_packets_enabled", True):
+            adapter._maybe_create_rework_packet(
+                "pkt-idem-adapter-002",
+                verdict_source="reviewer",
+                summary="fix it",
+                blocking_issues=["issue"],
+            )
+
+        with get_db() as d:
+            rework_packets = [
+                p for p in d.query(Packet).all()
+                if (p.spec_json or {}).get("origin") == "review_rework"
+            ]
+            assert len(rework_packets) == 1
+            spec = rework_packets[0].spec_json
+            assert spec["parent_packet_id"] == "pkt-idem-adapter-002"
+            assert spec["rework_source"] == "reviewer"
+
     def test_create_rework_packet_twice_produces_two_packets(self, db):
         """Service layer has no guard — _maybe_create_rework_packet owns idempotency."""
         with get_db() as d:

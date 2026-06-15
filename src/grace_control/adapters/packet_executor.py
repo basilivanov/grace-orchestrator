@@ -1670,11 +1670,10 @@ class PacketExecutionAdapter:
                     return
 
                 # Idempotency: skip if a rework packet for this original + source already exists
-                from sqlalchemy import cast, String as _Str
                 existing_rework = db.query(Packet).filter(
-                    cast(Packet.spec_json["origin"], _Str) == "review_rework",
-                    cast(Packet.spec_json["parent_packet_id"], _Str) == original_packet_id,
-                    cast(Packet.spec_json["rework_source"], _Str) == verdict_source,
+                    Packet.spec_json["origin"].as_string() == "review_rework",
+                    Packet.spec_json["parent_packet_id"].as_string() == original_packet_id,
+                    Packet.spec_json["rework_source"].as_string() == verdict_source,
                     Packet.state.in_(["ready", "running", "rejected"]),
                 ).first()
                 if existing_rework is not None:
