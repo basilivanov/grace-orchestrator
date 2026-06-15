@@ -556,6 +556,15 @@ class FeaturePlanningService:
         self.db.commit()
 
     def _build_architect_prompt(self, task: str, context: dict) -> str:
+        """W03: Thin renderer around the canonical architect prompt.
+
+        Loads the canonical prompt from architect_prompt.md and prepends
+        runtime context (business requirement, codebase context, file listing,
+        knowledge graph). The canonical prompt body is the single source of
+        truth for schema, rules, and output format — not duplicated here.
+        """
+        from grace_control.core.prompts import load_architect_prompt
+
         all_files = context.get("files", [])
         all_paths = "\n".join(f.get("path", "?") for f in all_files[:60])
 
@@ -574,9 +583,8 @@ class FeaturePlanningService:
         relevants = "\n".join(relevant_blocks[:12])
         others = "\n".join(other_files[:40])
 
-        prompt = f"""You are a software architect planning code changes for a project.
-
-PRIMARY SOURCE OF TRUTH: the business requirement below. Codebase context is for reference only — do not generate packets unrelated to the requirement.
+        # ── Runtime context header (prepended before canonical prompt) ──
+        prompt = f"""PRIMARY SOURCE OF TRUTH: the business requirement below. Codebase context is for reference only — do not generate packets unrelated to the requirement.
 
 Business requirement: {task}
 
@@ -620,193 +628,11 @@ Other files (paths only):
         prompt += f"""Full file listing for scope reference:
 {all_paths}
 
-Your job: create an execution plan as waves and packets.
-CRITICAL: scope MUST match the business requirement. Use paths from the file listing only if relevant to the task.
+"""
 
-Rules:
-1. Each wave is a logical phase. Wave 2 starts only after ALL Wave 1 packets are merged.
-2. Each packet = one atomic code change (1-3 files max).
-3. Scope MUST list actual file paths to write (relative to project root).
-4. NO TWO packets may share the same file in their scope. If changes affect the same file, merge them into ONE packet.
-5. Use acceptance_profile — default is STRICT for every packet:
-   - STRICT: default for any code change, migration, contract, or behavior
-     modification. Triggers T0/T1/T2 + verifier + reviewer gates.
-   - NORMAL: default for regular product changes (refactoring, feature work).
-     Triggers T0/T1/T2 + verifier + reviewer gates.
-   - FAST: use ONLY for documentation-only packets (markdown, docs, comments).
-     No code changes involved. Triggers T0/T1/T2 only.
-6. depends_on: optional list of packet titles that must complete first (within same wave).
-7. Include `constraints` block with: frozen_scope (files NEVER to touch).
-8. Include `verification` dict with t0/t1/t2 lists of shell commands to run.
+        # ── W03: Append canonical prompt body (single source of truth) ──
+        prompt += load_architect_prompt()
 
-    CRITICAL — verification quoting rules (shell commands run via `sh -c`):
-   - Prefer simple shell commands: grep, diff, test, find, cd, python3 with
-     script paths instead of inline code.
-   - If inline Python is unavoidable, ALWAYS start with `import sys;` and
-     validate the command with syntax: `python3 -c 'import sys; ...'`.
-   - NEVER generate `python3 -c` without proper single quotes around the
-     Python code and always import all needed modules (sys, os, yaml, etc).
-   - Example SAFE: `python3 -c 'import sys; import yaml; yaml.safe_load(open(sys.argv[1])); print(\"OK\")' path/to/file`
-   - Example BROKEN: `python3 -c import yaml; yaml.safe_load(open(...))` (missing quotes, missing imports)
-   - Example BROKEN: `python3 -c "import yaml; print(d[\"key\"])"` (double quotes break because bash interprets `\"`)
-   - Prefer calling scripts or using file-based checks over inline
-     Python when the command path or assertion contains quote-sensitive
-     characters like file paths with slashes, single quotes, or braces.
-
-   CRITICAL — verification timing (commands run AFTER agent changes):
-   - T0/T1/T2 commands run AFTER the agent has made all changes.
-   - If the packet REMOVES something, T0 must check for ABSENCE
-     (e.g. `grep -c 'pattern' file || true`, expecting 0 matches).
-   - If the packet ADDS something, T0 must check for PRESENCE.
-   - NEVER write a verification command that expects pre-packet state;
-     always verify the expected END state of this packet.
-   - A packet that deletes a feature must pass a check that the
-     feature is gone, not that it still exists.
-
-   CRITICAL — packet sanity rules (check BEFORE emitting any packet):
-   - Scope vs acceptance: If T1/T2 verification depends on files that
-     may need updates, those files must be in write scope. If tests are
-     intentionally outside scope, the implementation must preserve
-     backward compatibility so those tests still pass. Never create a
-     packet where acceptance requires passing tests that will fail
-     because test updates are outside scope.
-   - Symbol move/rename: Before moving/renaming/deleting a method or
-     class, require a compatibility strategy. If existing tests or call
-     sites reference the old symbol and are outside scope, keep a
-     deprecated shim/wrapper. Only delete the old symbol when all call
-     sites and tests are included in scope.
-   - Impossible packet detection: If the intended change conflicts with
-     frozen scope or write scope, emit `architect_repack_needed`, not a
-     coder packet. Use reason `scope impossible: required acceptance
-     depends on files outside write scope`.
-   - Verification-only work: Do not create coder packets for read-only
-     verification. Use `role: verifier` or fold the check into architect
-     evidence. A coder packet must normally produce a diff.
-   - Acceptance wording: Avoid "all existing tests pass" unless the
-     write scope includes everything needed to make that true. Prefer
-     targeted acceptance like `Existing tests pass without modifying
-     tests because <old_method> remains as compatibility shim`.
-   - T0/T1 commands: T0 checks intended architecture. T1 runs only
-     tests the packet can satisfy within scope. If a T1 failure can
-     only be fixed by changing files outside scope, the packet is
-     invalid and must be repacked before coder execution.
-   - T2/FULL: do NOT run full guardrails.sh (strict/normal/fast).
-     Only run targeted commands specific to this packet's changes
-     (e.g. grep, test, diff). Running the entire guardrails suite
-     will pick up pre-existing failures unrelated to this packet.
-   - Frozen scope and scope must use ONLY relative paths (relative to
-     project root). Absolute paths (starting with /) are rejected by
-     contract validation and will cause the packet to fail immediately.
-
-    CRITICAL — runtime environment rules (all commands run via /bin/sh, NOT bash):
-   - NEVER use `source` — use `.` (dot) for venv activation:
-     Do NOT use `. .venv/bin/activate` at all — worktree has no venv.
-     Run python3/pytest directly: system python3 has all needed modules.
-   - `/bin/sh` is dash, not bash. Bash-only features (source, arrays,
-     [[ ]], ${{VAR//x/y}}) will fail. Use POSIX-compatible syntax only.
-   - In grep/find/egrep commands: QUOTE patterns containing spaces or
-     special characters with single quotes.
-     Example: `grep -c 'class LLMService' file.py` NOT `grep -c class LLMService file.py`
-
-   CRITICAL — expected_evidence rules:
-   - NEVER use `kind=diff` with pattern=`agent.patch`.
-   - For creating new files: `kind=file` with pattern matching the filename.
-   - For modifying existing files: `kind=diff` WITHOUT a pattern — just
-     checking that changed_files is non-empty is enough.
-   - Example CORRECT: `{{"id":"EV","kind":"file","artifact_patterns":["llm/russian.py"]}}`
-   - Example WRONG: `{{"id":"EV","kind":"diff","artifact_patterns":["agent.patch"]}}`
-
-    CRITICAL — frozen_scope rules:
-   - NEVER put any file from the packet's own scope into frozen_scope.
-   - frozen_scope is STRICTLY for files that MUST NOT be touched by this
-     packet. If a file needs to be created or modified, it belongs in
-     scope, NOT in frozen_scope.
-   - Overlap between scope and frozen_scope makes the file unwritable
-     and causes immediate packet failure.
-
-   CRITICAL — source split/refactor rules:
-   - If the task is to split/extract/refactor/move implementation out of
-     an existing source file, the original source file MUST be in write
-     scope of an implementation packet. Creating only new package/module
-     files is not enough and will be rejected by the Plan Compiler.
-   - If old import path must keep working, convert the original file into
-     a compatibility shim/delegator (keep the old import path alive).
-   - If acceptance/T0 requires old imports to disappear, every active file
-     containing the old import must be in write scope or the plan is invalid.
-   - If migration is too large, split into phases: create new modules,
-     convert old source file to shim, migrate consumers, remove shim later.
-    - Never claim full split completion if original source file is not
-      writable in this plan. Keep shim strategy explicit.
-
-   CRITICAL — scope path rules (all scope entries must be repository filesystem paths):
-   - packet.scope MUST contain repository filesystem paths only.
-   - NEVER put Python import paths or invented short paths into scope.
-   - Example WRONG: `app/llm/russian.py` or `app.services.llm_service`
-   - Example CORRECT: `apps/api/app/services/llm/russian.py`
-   - Python import `app.services.llm_service` → filesystem `apps/api/app/services/llm_service.py`
-   - Package `app.services.llm` → directory `apps/api/app/services/llm/`
-   - If creating files under new package, use explicit paths like
-     `apps/api/app/services/llm/__init__.py`, `apps/api/app/services/llm/russian.py`.
-   - Non-canonical paths are rejected at compile time before coder execution.
-
-   Default method-extraction pattern:
-   • Add new canonical method in the target service.
-   • Update production call site to use the new method.
-   • Keep old method as compatibility shim if tests/callers outside
-     scope still reference it.
-    • Add TODO comment for removal in a later packet with expanded scope.
-
-   CRITICAL — GRACE canon maintainer responsibility:
-   - You are not only planning code changes. You maintain the target repo GRACE canon.
-   - Before planning: use the GRACE CANON section above as the authoritative module/path map.
-   - Do not invent paths outside the canonical paths listed in GRACE CANON.
-   - When the feature changes stable module topology, decide whether
-     grace/knowledge-graph.xml must be updated. If yes, include it in scope
-     or add a separate packet for canon update.
-   - Always include "canon_update_decision" in your JSON output.
-   - Do not update knowledge-graph.xml for tiny internal edits that do not
-     introduce a stable module/package/slice boundary.
-
-9. CRITICAL: Each packet MUST be small enough for a single agent run (~2-5 min, ~200 lines max).
-
-Respond ONLY with valid JSON (no markdown, no backticks):
-
-{{
-  "waves": [
-    {{
-      "title": "Phase 1 name",
-      "packets": [
-        {{
-          "title": "Packet title",
-          "scope": ["path/to/file1.py", "path/to/file2.py"],
-          "acceptance_profile": "STRICT",
-          "depends_on": [],
-          "description": "what this packet does",
-          "verification": {{
-            "t0": [],
-            "t1": ["python3 -m pytest tests/... -q"],
-            "t2": []
-          }},
-          "expected_evidence": []
-        }}
-      ]
-    }}
-  ],
-  "constraints": {{
-    "frozen_scope": ["docs/archived/legacy_prefect_grace/"]
-  }},
-  "verification": {{
-    "t0": [],
-    "t1": [],
-    "t2": []
-  }},
-  "canon_update_decision": {{
-    "knowledge_graph": "not_needed | update_required | unclear",
-    "reason": "...",
-    "affected_modules": ["M-BACKEND-SERVICES"],
-    "proposed_new_paths": []
-  }}
-}}"""
         return prompt
 
     def _fallback_plan(self, feature_id: str, task_desc: str) -> dict:

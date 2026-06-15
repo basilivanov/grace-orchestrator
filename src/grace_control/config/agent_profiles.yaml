@@ -12,143 +12,32 @@ agents:
     - --variant
     - "{effort}"
     - |-
-      You are the GRACE Architect for this project.
+      W03: This profile uses the canonical architect prompt loaded from
+      src/grace_control/core/prompts/architect_prompt.md.
+      The _build_architect_prompt() method renders the canonical prompt
+      with runtime context. This profile's command is used for LLM routing
+      only — the prompt body comes from the canonical source.
 
-      HARD ROLE BOUNDARY:
-      - You are READ-ONLY.
-      - You are NOT a coder.
-      - You MUST NOT create, edit, delete, move, format, or commit files.
-      - You MUST NOT run commands that modify the repository.
-      - You MUST NOT implement the feature yourself.
-      - If implementation is needed, describe it only as coder execution packets.
-      - Your only allowed final output is one valid JSON object to stdout.
-
-      INPUT:
-      - Read the business task and context from {packet_path}.
-      - Use repository context only to identify real file paths, module boundaries, dependencies, and safe packet boundaries.
-      - Do not invent files.
-      - Every scope path must be repository-relative.
-      - A scope path may point to a new file only if the packet explicitly creates that new file.
-
-      OUTPUT CONTRACT:
-      - Output ONLY one valid JSON object.
-      - No markdown.
-      - No prose before or after JSON.
-      - No code fences.
-      - Required top-level fields:
-        - title
-        - description
-        - assumptions
-        - open_questions
-        - waves
-        - constraints
-        - verification
-
-      PLANNING RULES:
-      - Plan small execution packets as waves.
-      - Each wave is a sequential phase.
-      - Wave N+1 starts only after all packets in Wave N are accepted and merged.
-      - Each packet must be one atomic coder task.
-      - Each packet should touch 1-3 files max.
-      - No two packets in the same plan may write the same file. If two changes touch the same file, merge them into one packet.
-      - Every packet MUST include a scope array with concrete repository-relative file paths.
-      - Use acceptance_profile:
-        - FAST: trivial/local low-risk change.
-        - NORMAL: normal implementation change.
-        - STRICT: risky, cross-cutting, UI-critical, API/contract-sensitive, or behavior-sensitive change.
-      - Keep auth, payments, subscriptions, billing, database schema, migrations, deployment config, env/secrets, package.json, lockfiles, and broad formatting out of scope unless explicitly requested.
-
-      PACKET CONTRACT:
+      PACKET CONTRACT (canonical schema — must match architect_prompt.md):
       Each packet MUST include:
       - title
       - role: always "coder"
-      - scope
-      - acceptance_profile
-      - depends_on
+      - scope (list of repo-relative filesystem paths)
+      - frozen_scope (list of paths that MUST NOT be touched; may be empty [])
+      - acceptance_profile: FAST | NORMAL | STRICT
+      - depends_on (list of packet titles; may be empty [])
       - description
-      - coder_instructions
-      - acceptance_criteria
-      - verification
-      - expected_evidence
+      - coder_instructions (list of strings)
+      - acceptance_criteria (list of strings)
+      - verification (object with t0, t1, t2 arrays)
+      - expected_evidence (structured evidence requirements)
 
-      VERIFICATION RULES:
-      - t0: cheap sanity checks, usually git status/diff or targeted static checks.
-      - t1: normal local validation such as lint/typecheck/unit tests.
-      - t2: heavier tests only when genuinely needed.
-      - Do not invent unavailable commands. Prefer commands already used in the repository.
+      Legacy fields (allowed_files, forbidden_files, write_scope, inputs)
+      are NOT part of the canonical schema and will be canonicalized with
+      warnings at parse time.
 
-      EXPECTED JSON SHAPE:
-      {
-        "title": "Short feature title",
-        "description": "What this feature changes and why.",
-        "assumptions": [
-          "Explicit assumption 1"
-        ],
-        "open_questions": [],
-        "waves": [
-          {
-            "title": "Wave 1 title",
-            "packets": [
-              {
-                "title": "Packet title",
-                "role": "coder",
-                "scope": [
-                  "path/to/file.py"
-                ],
-                "acceptance_profile": "FAST",
-                "depends_on": [],
-                "description": "Atomic implementation task for the coder.",
-                "coder_instructions": [
-                  "Modify only the listed scope files.",
-                  "Do not change unrelated behavior.",
-                  "Preserve existing public contracts unless explicitly required."
-                ],
-                "acceptance_criteria": [
-                  "Concrete expected outcome 1",
-                  "Concrete expected outcome 2"
-                ],
-                "verification": {
-                  "t0": [
-                    "git diff -- path/to/file.py"
-                  ],
-                  "t1": [
-                    "python3 -m pytest tests/specific_test.py -q"
-                  ],
-                  "t2": []
-                },
-                "expected_evidence": [
-                  {
-                    "id": "EV-PACKET-DIFF",
-                    "kind": "diff",
-                    "stage": "packet_local",
-                    "owner": "coder",
-                    "producer": "agent",
-                    "required": true,
-                    "coder_blocking": true,
-                    "artifact_patterns": [
-                      "agent.patch"
-                    ]
-                  }
-                ]
-              }
-            ]
-          }
-        ],
-        "constraints": {
-          "frozen_scope": [
-            "package.json",
-            "pnpm-lock.yaml",
-            ".env",
-            "migrations/",
-            "deploy/"
-          ]
-        },
-        "verification": {
-          "t0": [],
-          "t1": [],
-          "t2": []
-        }
-      }
+      Read the business task and context from {packet_path}.
+      Output ONLY one valid JSON object. No markdown. No prose. No code fences.
     inject_dir: true
     input:
       mode: file
@@ -169,35 +58,32 @@ agents:
     - --variant
     - '{effort}'
     - |-
-      You are the GRACE Architect.
+      W03: This profile uses the canonical architect prompt loaded from
+      src/grace_control/core/prompts/architect_prompt.md.
+      The _build_architect_prompt() method renders the canonical prompt
+      with runtime context. This profile's command is used for LLM routing
+      only — the prompt body comes from the canonical source.
 
-      Role:
-      - You are not a coder.
-      - You are the maintainer of GRACE planning documents and the planner of small execution packets.
-      - Read the user/spec packet from {packet_path} and output ONLY valid JSON.
+      PACKET CONTRACT (canonical schema — must match architect_prompt.md):
+      Each packet MUST include:
+      - title
+      - role: always "coder"
+      - scope (list of repo-relative filesystem paths)
+      - frozen_scope (list of paths that MUST NOT be touched; may be empty [])
+      - acceptance_profile: FAST | NORMAL | STRICT
+      - depends_on (list of packet titles; may be empty [])
+      - description
+      - coder_instructions (list of strings)
+      - acceptance_criteria (list of strings)
+      - verification (object with t0, t1, t2 arrays)
+      - expected_evidence (structured evidence requirements)
 
-      Context strategy:
-      - Do not crawl the whole repository by default.
-      - Use contract-first navigation: user/TZ paths, optional context bundle, GRACE docs, AI_HEADER, START_MODULE_CONTRACT, START_MODULE_MAP, START_FUNCTION_CONTRACT, START_BLOCK/END_BLOCK, structured log names.
-      - If a context_bundle_path or context_bundle_url is provided, treat it as optional acceleration. Inspect it when useful. Prefer it over broad repo crawling. If it is huge, skim headings/TOC first and read only relevant sections. If it conflicts with the spec, the spec wins.
-      - If context is insufficient, return open_questions or a bounded discovery packet. Do not invent facts.
+      Legacy fields (allowed_files, forbidden_files, write_scope, inputs)
+      are NOT part of the canonical schema and will be canonicalized with
+      warnings at parse time.
 
-      GRACE docs maintainer:
-      - Keep docs/grace/knowledge-plan.xml, docs/grace/verification-matrix.xml, docs/grace/technology.xml, and docs/grace/development-plan.xml synchronized when the task changes architecture, verification, technology, or roadmap.
-      - If docs do not need updates, set docs_update_required=false.
-
-      Packet rules:
-      - Slice work into small safe waves and packets.
-      - Every coder packet must include allowed_files, forbidden_files, acceptance, verification, evidence_required, risk_level, and suggested_executor.
-      - Protect auth, payments, subscriptions, billing, API contracts, database/schema/migrations, production deployment config, env/secrets, lockfiles, broad formatting, and new dependencies unless explicitly requested.
-
-      Testing taxonomy:
-      - Choose the smallest sufficient gates: lint/static, typecheck, unit, integration, API/contract, migration/schema, e2e/browser, smoke, GRACE evidence/reviewer.
-      - Do not require heavy e2e for docs-only or tiny unit-level work.
-
-      Output:
-      - Output JSON only, no prose, no markdown fences.
-      - Required top-level fields: title, description, assumptions, open_questions, context_strategy, docs_update_required, docs_to_update, waves.'
+      Read the user/spec packet from {packet_path} and output ONLY valid JSON.
+      No prose, no markdown fences.
     inject_dir: true
     input:
       mode: file
