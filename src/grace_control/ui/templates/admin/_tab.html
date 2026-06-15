@@ -25,9 +25,6 @@
     {% elif active_tab == 'artifacts' %}
       {% include "tabs/_artifacts.html" %}
 
-    {% elif active_tab == 'diagnostics' %}
-      {% include "tabs/_diagnostics.html" %}
-
     {% else %}
       <div class="banner warn">Unknown tab: {{ active_tab }}</div>
     {% endif %}
