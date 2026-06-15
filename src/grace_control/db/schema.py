@@ -32,7 +32,7 @@ import enum
 from datetime import datetime
 
 from sqlalchemy import Boolean, Column, DateTime, Integer, JSON, String, Text
-from sqlalchemy.orm import declarative_base
+from sqlalchemy.orm import declarative_base, relationship
 
 Base = declarative_base()
 
@@ -156,13 +156,19 @@ class Worker(Base):
 
 
 class Lease(Base):
-    """Lease table — exclusive packet claim, SQLite-safe."""
+    """Lease table — exclusive packet claim with fencing token, SQLite-safe.
+
+    W01: Added claimed_attempt column for lease fencing. A stale worker
+    cannot release a packet after its lease has been reclaimed by another
+    worker because the claimed_attempt won't match.
+    """
 
     __tablename__ = "leases"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     packet_id = Column(String, nullable=False, unique=True, index=True)
     worker_id = Column(String, nullable=False, index=True)
+    claimed_attempt = Column(Integer, nullable=False, default=0)
     acquired_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     expires_at = Column(DateTime, nullable=False, index=True)
     heartbeat_at = Column(DateTime, default=datetime.utcnow, nullable=False)

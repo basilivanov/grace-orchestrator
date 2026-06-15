@@ -81,6 +81,11 @@ class GraceSettings(BaseSettings):
     # ── Recovery / observability ──
     recovery_controller_enabled: bool = False
 
+    # ── W01: Lease fencing & renewal ──
+    lease_ttl_seconds: int = 300            # 5 min — lease lifetime
+    lease_renew_interval_seconds: int = 30   # heartbeat renews every 30s
+    lease_expiration_grace_seconds: int = 30  # grace period before scanner reclaims
+
     # ── Telegram (optional notification channel) ──
     telegram_token: str = ""
     telegram_chat_id: str = ""

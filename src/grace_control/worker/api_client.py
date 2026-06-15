@@ -23,6 +23,8 @@ class PacketClaim(BaseModel):
     spec: dict
     lease_id: int
     expires_at: str
+    attempt: int
+    claimed_attempt: int = 0  # W01: fencing token
     feature_id: str = ""
     wave_id: str = ""
     slug: str = ""
@@ -61,12 +63,46 @@ class WorkerAPIClient:
         r.raise_for_status()
         return r.json()
 
-    async def release_packet(self, packet_id: str, worker_id: str, status: str, result: dict) -> dict:
-        r = await self.client.post(f"/api/packets/{packet_id}/release", json={
-            "worker_id": worker_id, "status": status, "result": result,
-        })
+    async def release_packet(
+        self,
+        packet_id: str,
+        worker_id: str,
+        status: str,
+        result: dict,
+        *,
+        lease_id: int | None = None,
+        claimed_attempt: int | None = None,
+    ) -> dict:
+        """W01: Release packet with lease fencing tokens."""
+        payload = {
+            "worker_id": worker_id,
+            "status": status,
+            "result": result,
+        }
+        if lease_id is not None:
+            payload["lease_id"] = lease_id
+        if claimed_attempt is not None:
+            payload["claimed_attempt"] = claimed_attempt
+        r = await self.client.post(f"/api/packets/{packet_id}/release", json=payload)
         r.raise_for_status()
         return r.json()
+
+    async def renew_lease(
+        self,
+        packet_id: str,
+        worker_id: str,
+        lease_id: int,
+    ) -> dict | None:
+        """W01: Renew active lease. Returns new expires_at or None on failure."""
+        try:
+            r = await self.client.post(
+                f"/api/packets/{packet_id}/renew-lease",
+                json={"worker_id": worker_id, "lease_id": lease_id},
+            )
+            r.raise_for_status()
+            return r.json()
+        except httpx.HTTPStatusError:
+            return None
 
     async def close(self):
         await self.client.aclose()

@@ -162,18 +162,35 @@ async def claim_packet(request: dict) -> dict:
 
 @router.post("/{packet_id}/release")
 async def release_packet(packet_id: str, request: dict) -> dict:
-    """Release packet after execution. Delegates state transition to PacketService."""
-    worker_id = request["worker_id"]
+    """Release packet after execution. Delegates state transition to PacketService.
+
+    W01: Release now requires worker_id, lease_id, and claimed_attempt for
+    lease fencing. If any check fails, returns 409 with stale_lease detail.
+    """
+    worker_id = request.get("worker_id", "")
     status = request["status"]
     result = request.get("result", {})
+    lease_id = request.get("lease_id")
+    claimed_attempt = request.get("claimed_attempt")
 
     if status == "accepted" and not result.get("accepted"):
         status = "rejected"
 
-    from grace_control.services.packet_service import PacketService, PacketNotFoundError
+    from grace_control.services.packet_service import PacketService, PacketNotFoundError, StaleLeaseError
     svc = PacketService()
     try:
-        await svc.release(packet_id, status, result)
+        await svc.release(
+            packet_id, status, result,
+            worker_id=worker_id,
+            lease_id=lease_id,
+            claimed_attempt=claimed_attempt,
+        )
+    except StaleLeaseError as e:
+        raise HTTPException(status_code=409, detail={
+            "stale_lease": True,
+            "reason": str(e),
+            "packet_id": packet_id,
+        })
     except PacketNotFoundError:
         raise HTTPException(status_code=404, detail="Packet not found")
     except ValueError as e:
@@ -190,6 +207,44 @@ async def release_packet(packet_id: str, request: dict) -> dict:
     _log.info("packet_released", packet_id=packet_id, state=new_state, worker_id=worker_id)
     return {
         "data": {"packet_id": packet_id, "state": new_state, "released": True},
+        "timestamp": datetime.now(UTC).isoformat() + "Z",
+    }
+
+
+@router.post("/{packet_id}/renew-lease")
+async def renew_lease(packet_id: str, request: dict) -> dict:
+    """W01: Renew active lease for a packet. Only matching worker+lease can renew.
+
+    Extends the lease TTL. Returns new expires_at on success.
+    Returns 409 on stale/expired lease or ownership mismatch.
+    """
+    worker_id = request.get("worker_id", "")
+    lease_id = request.get("lease_id")
+
+    if not worker_id or lease_id is None:
+        raise HTTPException(status_code=422,
+            detail="worker_id and lease_id are required for lease renewal")
+
+    from grace_control.services.packet_service import PacketService, StaleLeaseError, PacketNotFoundError
+    svc = PacketService()
+    try:
+        new_expires = await svc.renew_lease(packet_id, worker_id, lease_id)
+    except StaleLeaseError as e:
+        raise HTTPException(status_code=409, detail={
+            "stale_lease": True,
+            "reason": str(e),
+            "packet_id": packet_id,
+        })
+    except PacketNotFoundError:
+        raise HTTPException(status_code=404, detail="Packet not found")
+
+    return {
+        "data": {
+            "packet_id": packet_id,
+            "lease_id": lease_id,
+            "expires_at": new_expires.isoformat() + "Z",
+            "renewed": True,
+        },
         "timestamp": datetime.now(UTC).isoformat() + "Z",
     }
 

@@ -1,6 +1,7 @@
 # ############################################################################
 # AI_HEADER: worker
-# ROLE: Worker loop — claim→execute→release with heartbeat and full observability.
+# ROLE: Worker loop — claim→execute→release with heartbeat, lease renewal,
+#       fencing tokens, and correct retry semantics.
 # ############################################################################
 
 from __future__ import annotations
@@ -17,11 +18,18 @@ from grace_control.core.structured_logger import GraceLogger, trace_context
 from grace_control.worker.api_client import WorkerAPIClient
 
 
-def release_status_from_result(result: ExecutionResult) -> str:
+def release_status_from_result(result: ExecutionResult, *, max_attempts: int = 0, attempt_count: int = 0) -> str:
+    """Determine release status from execution result.
+
+    W01: Timeout/runtime failure with attempts remaining → "rejected" (retryable),
+    not "failed" (terminal). Only truly terminal cases become "failed".
+    """
     if result.accepted:
         return "accepted"
     if result.domain_status == "blocked":
         return "blocked"
+    # W01: Default to rejected (retryable) rather than failed (terminal).
+    # The queue/owner will decide if attempts are exhausted and mark FAILED.
     return "rejected"
 
 
@@ -42,6 +50,11 @@ class Worker:
         self.heartbeat_interval = heartbeat_interval
         self.running = False
         self.log = GraceLogger("worker")
+
+        # W01: Active claim fencing tokens — stored after claim, used in release
+        self._active_packet_id: str | None = None
+        self._active_lease_id: int | None = None
+        self._active_claimed_attempt: int | None = None
 
         effective_target_repo: str | Path = (
             _settings.target_repo_root
@@ -101,7 +114,15 @@ class Worker:
                     continue
 
                 packet_id = claim.packet_id
-                self.log.info("packet_claimed", worker_id=self.worker_id, packet_id=packet_id)
+                # W01: Store fencing tokens for this claim
+                self._active_packet_id = packet_id
+                self._active_lease_id = claim.lease_id
+                self._active_claimed_attempt = claim.claimed_attempt
+
+                self.log.info("packet_claimed", worker_id=self.worker_id,
+                    packet_id=packet_id, lease_id=claim.lease_id,
+                    claimed_attempt=claim.claimed_attempt,
+                    attempt=claim.attempt)
 
                 with trace_context(packet_id):
                     try:
@@ -117,7 +138,7 @@ class Worker:
                             duration_ms=result.duration_ms)
 
                         status = release_status_from_result(result)
-                        await self.api.release_packet(packet_id, self.worker_id, status, result.model_dump())
+                        await self._release_with_fencing(packet_id, status, result.model_dump())
                         self.log.info("packet_released", packet_id=packet_id, status=status)
 
                         if status == "accepted":
@@ -146,30 +167,68 @@ class Worker:
                     except asyncio.TimeoutError:
                         self.log.error("execution_timed_out", packet_id=packet_id,
                             timeout_s=agent_timeout)
+                        # W01: Timeout with attempts remaining → retryable (rejected),
+                        # not terminal (failed). Let queue semantics decide.
                         try:
-                            await self.api.release_packet(packet_id, self.worker_id, "failed", {"accepted": False, "reason": "timeout"})
+                            await self._release_with_fencing(
+                                packet_id, "rejected",
+                                {"accepted": False, "reason": "timeout", "retryable": True},
+                            )
                         except Exception:
-                            pass
+                            self.log.warn("release_after_timeout_failed",
+                                packet_id=packet_id, error=traceback.format_exc()[:200])
+
                     except Exception:
                         self.log.error("execution_failed", packet_id=packet_id,
                             error=traceback.format_exc()[:5000])
+                        # W01: Runtime failure with attempts remaining → retryable (rejected)
                         try:
-                            already_released = status not in ("", "running")
-                        except UnboundLocalError:
-                            already_released = False
-                        if not already_released:
-                            try:
-                                await self.api.release_packet(packet_id, self.worker_id, "failed", {"accepted": False})
-                                self.log.info("released_as_failed", packet_id=packet_id)
-                            except Exception:
-                                pass
-                    except Exception:
-                            self.log.error("release_failed_on_error", packet_id=packet_id)
+                            await self._release_with_fencing(
+                                packet_id, "rejected",
+                                {"accepted": False, "reason": "execution_error", "retryable": True},
+                            )
+                            self.log.info("released_as_rejected_retryable", packet_id=packet_id)
+                        except Exception:
+                            self.log.warn("release_after_error_failed",
+                                packet_id=packet_id, error=traceback.format_exc()[:200])
 
             except Exception:
                 self.log.error("main_loop_error", worker_id=self.worker_id,
                     error=traceback.format_exc()[:500])
                 await asyncio.sleep(10)
+            finally:
+                # W01: Clear active claim tokens
+                self._active_packet_id = None
+                self._active_lease_id = None
+                self._active_claimed_attempt = None
+
+    async def _release_with_fencing(
+        self, packet_id: str, status: str, result: dict,
+    ) -> dict:
+        """W01: Release packet with lease fencing tokens.
+
+        If the release returns 409 (stale lease), the worker logs and
+        abandons the result — it does NOT retry the release blindly.
+        """
+        try:
+            return await self.api.release_packet(
+                packet_id, self.worker_id, status, result,
+                lease_id=self._active_lease_id,
+                claimed_attempt=self._active_claimed_attempt,
+            )
+        except Exception as e:
+            # Check if this is a stale lease rejection (409)
+            err_str = str(e)
+            if "409" in err_str or "stale_lease" in err_str:
+                self.log.warn("release_rejected_stale_lease",
+                    packet_id=packet_id,
+                    worker_id=self.worker_id,
+                    lease_id=self._active_lease_id,
+                    claimed_attempt=self._active_claimed_attempt,
+                    error=err_str[:200])
+                # W01: Do not retry — another worker owns this packet now
+                return {"data": {"packet_id": packet_id, "stale_lease": True, "released": False}}
+            raise
 
     async def _handle_rejection(self, packet_id: str):
         # Let the API handle retry — avoids DB visibility races between
@@ -211,10 +270,36 @@ class Worker:
             )
 
     async def _heartbeat_loop(self):
+        """W01: Heartbeat now also renews the active lease if a packet is running."""
         while self.running:
             try:
                 await self.api.heartbeat(self.worker_id)
                 self.log.debug("heartbeat_sent", worker_id=self.worker_id)
+
+                # W01: Renew active lease during execution
+                if self._active_packet_id and self._active_lease_id is not None:
+                    try:
+                        renew_result = await self.api.renew_lease(
+                            self._active_packet_id,
+                            self.worker_id,
+                            self._active_lease_id,
+                        )
+                        if renew_result:
+                            self.log.debug("lease_renewed",
+                                packet_id=self._active_packet_id,
+                                expires_at=renew_result.get("data", {}).get("expires_at", ""),
+                            )
+                        else:
+                            self.log.warn("lease_renewal_failed",
+                                packet_id=self._active_packet_id,
+                                lease_id=self._active_lease_id,
+                            )
+                    except Exception as e:
+                        self.log.warn("lease_renewal_error",
+                            packet_id=self._active_packet_id,
+                            error=str(e)[:200],
+                        )
+
             except Exception:
                 self.log.warn("heartbeat_failed", worker_id=self.worker_id)
             await asyncio.sleep(self.heartbeat_interval)

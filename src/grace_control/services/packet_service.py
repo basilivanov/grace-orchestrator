@@ -45,6 +45,15 @@ class MaxRetriesReachedError(StateTransitionError):
     """Raised when a packet has reached its max_attempts and cannot retry."""
 
 
+class StaleLeaseError(Exception):
+    """W01: Raised when a release uses a stale or mismatched lease.
+
+    This means the worker's lease has expired and been reclaimed by another
+    worker, or the worker_id / lease_id / claimed_attempt don't match.
+    The release must be rejected and the worker must abandon the result.
+    """
+
+
 @dataclass(frozen=True)
 class ClaimResult:
     """Session-safe DTO returned by PacketService.claim().
@@ -53,6 +62,9 @@ class ClaimResult:
     `expire_on_commit=True`; using a frozen dataclass here means callers
     (e.g. packets router) can serialize fields without triggering
     `DetachedInstanceError`.
+
+    W01: Added claimed_attempt for lease fencing. The worker must echo
+    this back on release to prove it still owns the current lease.
     """
     packet_id: str
     lease_id: int
@@ -60,6 +72,7 @@ class ClaimResult:
     expires_at: datetime
     spec: dict[str, Any]
     attempt: int
+    claimed_attempt: int = 0  # W01: fencing token — attempt count at claim time
     # Full packet fields so executor doesn't re-query DB (avoids WAL visibility races)
     feature_id: str = ""
     wave_id: str = ""
@@ -188,14 +201,30 @@ class PacketService:
 
             existing = db.query(Lease).filter_by(packet_id=packet_id).first()
             if existing:
-                if existing.expires_at > datetime.now(UTC):
+                # W01: handle offset-naive datetimes from SQLite
+                existing_expiry = existing.expires_at
+                if existing_expiry.tzinfo is None:
+                    existing_expiry = existing_expiry.replace(tzinfo=UTC)
+                if existing_expiry > datetime.now(UTC):
                     raise StateTransitionError(f"Packet {packet_id} already leased to {existing.worker_id}")
+                # W01: record stale lease expiry for observability
+                _record_event(db, "lease_expired_before_reclaim", packet_id, {
+                    "old_worker_id": existing.worker_id,
+                    "old_lease_id": existing.id,
+                    "old_claimed_attempt": existing.claimed_attempt,
+                    "new_worker_id": worker_id,
+                })
                 db.delete(existing)
 
-            expires_at = datetime.now(UTC) + timedelta(minutes=15)
+            # W01: lease TTL from settings, default 5 min
+            from grace_control.config.settings import settings as _settings
+            lease_ttl_seconds = getattr(_settings, "lease_ttl_seconds", 300)
+            expires_at = datetime.now(UTC) + timedelta(seconds=lease_ttl_seconds)
+            claimed_attempt = packet.attempt_count
             lease = Lease(
                 packet_id=packet_id,
                 worker_id=worker_id,
+                claimed_attempt=claimed_attempt,
                 expires_at=expires_at,
             )
             db.add(lease)
@@ -213,6 +242,7 @@ class PacketService:
                 expires_at=expires_at,
                 spec=dict(packet.spec_json or {}),
                 attempt=packet.attempt_count,
+                claimed_attempt=claimed_attempt,
                 feature_id=packet.feature_id or "",
                 wave_id=packet.wave_id or "",
                 slug=packet.slug or "",
@@ -223,7 +253,8 @@ class PacketService:
             )
 
             _record_event(db, "packet_claimed", packet_id, {
-                "worker_id": worker_id, "attempt": packet.attempt_count
+                "worker_id": worker_id, "attempt": packet.attempt_count,
+                "claimed_attempt": claimed_attempt,
             })
 
             db.flush()  # populate lease.id without committing yet
@@ -235,6 +266,14 @@ class PacketService:
                     expires_at=result.expires_at,
                     spec=result.spec,
                     attempt=result.attempt,
+                    claimed_attempt=claimed_attempt,
+                    feature_id=result.feature_id,
+                    wave_id=result.wave_id,
+                    slug=result.slug,
+                    title=result.title,
+                    description=result.description,
+                    acceptance_profile=result.acceptance_profile,
+                    max_attempts=result.max_attempts,
                 )
 
             _log.info("packet_claimed", packet_id=packet_id, worker_id=worker_id,
@@ -243,8 +282,22 @@ class PacketService:
             asyncio.create_task(self._broadcast(packet_id, "running", f"claim:{worker_id}"))
             return result
 
-    async def release(self, packet_id: str, status: str, result: dict[str, Any]) -> None:
-        """Release a packet from RUNNING to terminal/next state based on status."""
+    async def release(
+        self,
+        packet_id: str,
+        status: str,
+        result: dict[str, Any],
+        *,
+        worker_id: str = "",
+        lease_id: int | None = None,
+        claimed_attempt: int | None = None,
+    ) -> None:
+        """Release a packet from RUNNING to terminal/next state based on status.
+
+        W01: Lease fencing — release must prove ownership via worker_id,
+        lease_id, and claimed_attempt. If any check fails, StaleLeaseError
+        is raised and the packet state is NOT mutated.
+        """
         status_to_state = {
             "accepted": PacketState.ACCEPTED,
             "rejected": PacketState.REJECTED,
@@ -256,8 +309,52 @@ class PacketService:
         if not target:
             raise ValueError(f"Unknown release status: {status}")
         with self._db_factory() as db:
-            await self._transition_in_session(db, packet_id, target, reason=f"release:{status}")
+            # W01: Lease fencing — verify the caller owns the current lease
             lease = db.query(Lease).filter_by(packet_id=packet_id).first()
+            if lease is not None:
+                fencing_failed = False
+                fencing_reason = ""
+                if worker_id and lease.worker_id != worker_id:
+                    fencing_failed = True
+                    fencing_reason = f"worker_id mismatch: lease={lease.worker_id}, release={worker_id}"
+                elif lease_id is not None and lease.id != lease_id:
+                    fencing_failed = True
+                    fencing_reason = f"lease_id mismatch: lease={lease.id}, release={lease_id}"
+                elif claimed_attempt is not None and lease.claimed_attempt != claimed_attempt:
+                    fencing_failed = True
+                    fencing_reason = (
+                        f"claimed_attempt mismatch: lease={lease.claimed_attempt}, "
+                        f"release={claimed_attempt}"
+                    )
+                if fencing_failed:
+                    _record_event(db, "packet_release_rejected_stale_lease", packet_id, {
+                        "worker_id": worker_id,
+                        "lease_id": lease_id,
+                        "claimed_attempt": claimed_attempt,
+                        "actual_worker_id": lease.worker_id,
+                        "actual_lease_id": lease.id,
+                        "actual_claimed_attempt": lease.claimed_attempt,
+                        "reason": fencing_reason,
+                    })
+                    _log.warn("packet_release_rejected_stale_lease",
+                        packet_id=packet_id, reason=fencing_reason)
+                    # W01: commit the event before raising, so it's observable
+                    db.commit()
+                    raise StaleLeaseError(fencing_reason)
+
+            # Verify packet is in RUNNING state
+            packet = db.query(Packet).filter_by(id=packet_id).first()
+            if packet and PacketStateMachine.normalize_state(packet.state) != PacketState.RUNNING:
+                _record_event(db, "packet_release_rejected_not_running", packet_id, {
+                    "worker_id": worker_id,
+                    "current_state": packet.state,
+                    "status": status,
+                })
+                raise StaleLeaseError(
+                    f"Packet {packet_id} is not RUNNING (state={packet.state})"
+                )
+
+            await self._transition_in_session(db, packet_id, target, reason=f"release:{status}")
             if lease:
                 db.delete(lease)
             db.commit()
@@ -308,6 +405,89 @@ class PacketService:
         """Move packet to BLOCKED_RECOVERABLE (retryable) or BLOCKED_FINAL (terminal)."""
         target = PacketState.BLOCKED_RECOVERABLE if recoverable else PacketState.BLOCKED_FINAL
         return await self.transition(packet_id, target, reason=reason)
+
+    async def renew_lease(
+        self,
+        packet_id: str,
+        worker_id: str,
+        lease_id: int,
+    ) -> datetime:
+        """W01: Renew an active lease — extends expires_at by lease_ttl_seconds.
+
+        Only the matching worker_id + lease_id can renew. Renewal fails if:
+        - packet is not RUNNING
+        - lease is missing or stale (different worker/lease)
+        - lease already expired
+
+        Returns the new expires_at datetime on success.
+        Raises StaleLeaseError on fencing failure.
+        """
+        from grace_control.config.settings import settings as _settings
+        lease_ttl_seconds = getattr(_settings, "lease_ttl_seconds", 300)
+
+        with self._db_factory() as db:
+            packet = db.query(Packet).filter_by(id=packet_id).first()
+            if not packet:
+                raise PacketNotFoundError(packet_id)
+
+            if PacketStateMachine.normalize_state(packet.state) != PacketState.RUNNING:
+                raise StaleLeaseError(
+                    f"Cannot renew lease for packet {packet_id} in state {packet.state}"
+                )
+
+            lease = db.query(Lease).filter_by(packet_id=packet_id).first()
+            if lease is None:
+                raise StaleLeaseError(f"No lease found for packet {packet_id}")
+
+            if lease.worker_id != worker_id:
+                _record_event(db, "lease_renewal_rejected_worker_mismatch", packet_id, {
+                    "requesting_worker_id": worker_id,
+                    "lease_worker_id": lease.worker_id,
+                })
+                raise StaleLeaseError(
+                    f"Worker mismatch: lease={lease.worker_id}, request={worker_id}"
+                )
+
+            if lease.id != lease_id:
+                _record_event(db, "lease_renewal_rejected_lease_mismatch", packet_id, {
+                    "request_lease_id": lease_id,
+                    "actual_lease_id": lease.id,
+                })
+                raise StaleLeaseError(
+                    f"Lease ID mismatch: lease={lease.id}, request={lease_id}"
+                )
+
+            # W01: handle offset-naive datetimes from SQLite
+            lease_expiry = lease.expires_at
+            if lease_expiry.tzinfo is None:
+                lease_expiry = lease_expiry.replace(tzinfo=UTC)
+            now_utc = datetime.now(UTC)
+
+            if lease_expiry < now_utc:
+                _record_event(db, "lease_renewal_rejected_expired", packet_id, {
+                    "worker_id": worker_id,
+                    "lease_id": lease_id,
+                    "expired_at": lease.expires_at.isoformat(),
+                })
+                raise StaleLeaseError(
+                    f"Lease already expired at {lease_expiry.isoformat()}"
+                )
+
+            new_expires = datetime.now(UTC) + timedelta(seconds=lease_ttl_seconds)
+            lease.expires_at = new_expires
+            lease.heartbeat_at = datetime.now(UTC)
+
+            _record_event(db, "lease_renewed", packet_id, {
+                "worker_id": worker_id,
+                "lease_id": lease.id,
+                "new_expires_at": new_expires.isoformat(),
+                "claimed_attempt": lease.claimed_attempt,
+            })
+            _log.info("lease_renewed", packet_id=packet_id,
+                worker_id=worker_id, new_expires_at=new_expires.isoformat())
+
+            db.commit()
+            return new_expires
 
     TERMINAL_STATES: frozenset[PacketState] = frozenset({
         PacketState.MERGED,
