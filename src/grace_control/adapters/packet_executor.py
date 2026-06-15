@@ -82,13 +82,19 @@ def _resolve_worktree_for_contract(
     _effective_target_repo = pkt_target_repo or _s.target_repo_root or ""
     workspace_mode = pkt_workspace_mode or executor.get("workspace_mode") or _s.workspace_mode or "full_git_worktree"
 
+    # Sync with _call_executor: if target repo differs from orchestrator
+    # project_root, default to target_repo_worktree mode.
+    if _effective_target_repo and str(_effective_target_repo) != str(project_root):
+        if not pkt_workspace_mode and not executor.get("workspace_mode"):
+            workspace_mode = "target_repo_worktree"
+
     target_root = Path(_effective_target_repo) if _effective_target_repo else Path(_s.target_repo_root or project_root)
 
     if worktree_root.is_absolute():
         wt_root = worktree_root
     else:
         wt_root = Path(_s.worktree_root)
-    if workspace_mode == "target_repo_worktree" and not wt_root.is_absolute():
+    if not wt_root.is_absolute():
         wt_root = target_root / wt_root
 
     return wt_root / slug

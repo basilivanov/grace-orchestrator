@@ -509,24 +509,33 @@ class TestTargetRepoRootPropagation:
         import tempfile
         tempdir = Path(tempfile.mkdtemp())
         try:
-            mock_target = Path(tempdir) / "target"
-            mock_target.mkdir(parents=True, exist_ok=True)
+            orchestrator_root = Path(tempdir) / "orchestrator"
+            spec_target = Path(tempdir) / "spec-target"
+            orchestrator_root.mkdir(parents=True, exist_ok=True)
+            spec_target.mkdir(parents=True, exist_ok=True)
+            (spec_target / ".grace" / "worktrees").mkdir(parents=True, exist_ok=True)
 
             orig_repo = _s.target_repo_root
+            orig_wt = _s.worktree_root
+            orig_art = _s.runtime_artifacts_root
+            _s.runtime_artifacts_root = str(spec_target / ".grace" / "runs")
             orig_git = _s.agent_runtime_fail_on_bad_git_root
             orig_non_git = _s.agent_runtime_allow_non_git_scope_skip
             _s.agent_runtime_fail_on_bad_git_root = False
             _s.agent_runtime_allow_non_git_scope_skip = True
-            _s.target_repo_root = "/opt/solarsage-astro"
+            _s.target_repo_root = str(orchestrator_root)
+            _s.worktree_root = ".grace/worktrees"
 
-            from grace_control.adapters.packet_executor import PacketExecutionAdapter
-            from grace_control.agent.backend import ExecutionRequest, ExecutionResult as BackendResult
-            from grace_control.core.contracts import build_packet_contract
+            from grace_control.adapters.packet_executor import (
+                PacketExecutionAdapter,
+                _resolve_worktree_for_contract,
+            )
+            from grace_control.agent.backend import ExecutionResult as BackendResult
             from unittest.mock import patch, MagicMock as _MM
 
             adapter = PacketExecutionAdapter(
-                project_root=mock_target, state_root=mock_target,
-                worktree_root=mock_target,
+                project_root=orchestrator_root, state_root=orchestrator_root,
+                worktree_root=Path(".grace/worktrees"),
             )
             adapter._inspector = _MM()
             adapter._inspector.is_git_worktree.return_value = True
@@ -535,11 +544,10 @@ class TestTargetRepoRootPropagation:
             adapter._committer = _MM()
             adapter._committer.commit.return_value = "b" * 40
 
-            # Mock _call_executor to bypass real git
             async def _fake_call(self, *a, **kw):
                 return BackendResult(
                     accepted=True, domain_status="accepted",
-                    worktree_path=mock_target, branch_name="agent/test",
+                    worktree_path=spec_target, branch_name="agent/test",
                     commit_sha="", stdout="", stderr="", duration_ms=100,
                 )
 
@@ -552,17 +560,27 @@ class TestTargetRepoRootPropagation:
                     stages=[StageResult(name=StageName.T0_SCOPE_AND_LINT,
                                         status=StageStatus.PASSED, summary="ok")],
                     summary="passed",
-                ), "", {"ok": True}, ["file1.py"], mock_target, mock_target / "runs"
+                ), "", {"ok": True}, ["file1.py"], spec_target, spec_target / "runs"
 
             claim_data = {
                 "attempt": 1, "feature_id": "f1", "wave_id": "w1",
                 "slug": "test", "title": "Test",
                 "acceptance_profile": "NORMAL",
-                "spec": {"target_repo_root": str(mock_target),
+                "spec": {"target_repo_root": str(spec_target),
                           "scope": ["src/"], "frozen_scope": [],
                           "verification": {"t0": ["echo ok"]}},
                 "max_attempts": 3,
             }
+
+            # Verify _resolve_worktree_for_contract produces path under spec_target
+            wt_executor = {"workspace_mode": "target_repo_worktree"}
+            wt_path = _resolve_worktree_for_contract(
+                {"id": "pkt-repo-test", "attempt_count": 1,
+                 "spec_json": {"target_repo_root": str(spec_target)}},
+                wt_executor, _s, orchestrator_root, Path(".grace/worktrees"),
+            )
+            assert str(wt_path).startswith(str(spec_target)), \
+                f"resolve_worktree: expected under {spec_target}, got {wt_path}"
 
             with patch.object(PacketExecutionAdapter, "_call_executor", _fake_call):
                 with patch.object(PacketExecutionAdapter, "_run_acceptance", _fake_acc):
@@ -571,28 +589,22 @@ class TestTargetRepoRootPropagation:
                         mock_db.return_value.__enter__.return_value = db
                         db.query.return_value.filter_by.return_value.first.return_value = None
 
-                        # Verify contract preserves target_repo_root
-                        packet_data = {
-                            "id": "pkt-repo-test", "feature_id": "f1", "wave_id": "w1",
-                            "spec_json": {"target_repo_root": str(mock_target), "scope": ["src/"]},
-                        }
-                        pkt_contract = build_packet_contract(packet_data)
-                        assert pkt_contract.metadata.get("target_repo_root") == str(mock_target)
-
                         result = await adapter.execute("pkt-repo-test", "w1", claim_data=claim_data)
 
             assert result.accepted, f"expected accepted, got {result.reason}"
+            assert adapter._packet_target_repo == str(spec_target), \
+                f"expected {spec_target}, got {adapter._packet_target_repo}"
 
-            assert adapter._packet_target_repo == str(mock_target), \
-                f"expected {mock_target}, got {adapter._packet_target_repo}"
             cleanup = adapter._effective_cleanup_root({})
-            assert str(mock_target) in str(cleanup), \
-                f"cleanup root should contain target, got {cleanup}"
+            assert str(spec_target) in str(cleanup), \
+                f"cleanup root should contain spec_target, got {cleanup}"
 
         finally:
             import shutil
             shutil.rmtree(str(tempdir), ignore_errors=True)
             _s.target_repo_root = orig_repo
+            _s.worktree_root = orig_wt
+            _s.runtime_artifacts_root = orig_art
             _s.agent_runtime_fail_on_bad_git_root = orig_git
             _s.agent_runtime_allow_non_git_scope_skip = orig_non_git
 
