@@ -238,3 +238,18 @@ def test_agent_run_service_rejects_cwd_escaping_worktree():
                 state_root=Path(tmpdir) / "state",
                 packet_markdown="test",
             ))
+
+
+# ─── Regression: live executor profile cannot select disabled profile ───────
+
+def test_live_executor_profile_cannot_select_disabled_profile():
+    """W09 regression: GRACE_LIVE_EXECUTOR_PROFILE must not select a disabled
+    profile. Setting GRACE_LIVE_EXECUTOR_PROFILE=opencode (which is disabled)
+    must raise ValueError — fail-closed, not silently returned."""
+    from grace_control.core.executor_selector import select_executor
+
+    reset_cache()
+
+    with patch.dict("os.environ", {"GRACE_LIVE_EXECUTOR_PROFILE": "opencode"}):
+        with pytest.raises(ValueError, match="selects a disabled profile"):
+            select_executor("coder")

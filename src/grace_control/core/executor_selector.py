@@ -25,6 +25,14 @@ def select_executor(role: str, attempt: int = 1) -> dict[str, Any]:
         if live_profile:
             match = get_agent_profile(live_profile)
             if match:
+                # W09: Fail-closed — reject disabled profiles even via live override.
+                if match.disabled:
+                    raise ValueError(
+                        f"GRACE_LIVE_EXECUTOR_PROFILE={live_profile!r} selects a "
+                        f"disabled profile. Disabled profiles must not be used for "
+                        f"execution. Either enable the profile in agent_profiles.yaml "
+                        f"or choose a different live profile."
+                    )
                 return match.to_dict()
 
     profiles = list(load_agent_profiles().values())
