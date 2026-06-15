@@ -215,3 +215,56 @@ class TestRuntimeFailureCodes:
         assert "unknown" not in RUNTIME_FAILURE_CODES
         assert "REWORK_TO_CODER" not in RUNTIME_FAILURE_CODES
         assert "RETURN_TO_ARCHITECT" not in RUNTIME_FAILURE_CODES
+
+
+class TestIdempotency:
+    """Idempotency: same original + source must not create duplicate rework packets."""
+
+    def test_create_rework_packet_twice_produces_two_packets(self, db):
+        """Service layer has no guard — _maybe_create_rework_packet owns idempotency."""
+        with get_db() as d:
+            original = Packet(
+                id="pkt-idem-001",
+                feature_id="feat-idem",
+                wave_id="W01",
+                slug="idem-pkt",
+                title="Idempotency Test",
+                spec_json={
+                    "scope": ["src/grace_control/"],
+                    "frozen_scope": ["docs/archived/"],
+                },
+                acceptance_profile="NORMAL",
+                attempt_count=1,
+                max_attempts=3,
+                state=PacketState.REJECTED.value,
+            )
+            d.add(original)
+            d.commit()
+
+            first = create_rework_packet(
+                d, original_packet_id="pkt-idem-001",
+                feature_id="feat-idem", wave_id="W01",
+                original_spec=original.spec_json,
+                acceptance_profile="NORMAL", title="Idempotency Test",
+                slug="idem-pkt", max_attempts=3,
+                verdict_source="reviewer", summary="fix issues",
+                blocking_issues=["issue 1"],
+            )
+            d.commit()
+
+            second = create_rework_packet(
+                d, original_packet_id="pkt-idem-001",
+                feature_id="feat-idem", wave_id="W01",
+                original_spec=original.spec_json,
+                acceptance_profile="NORMAL", title="Idempotency Test",
+                slug="idem-pkt", max_attempts=3,
+                verdict_source="reviewer", summary="fix issues again",
+                blocking_issues=["issue 2"],
+            )
+            d.commit()
+
+            assert first.id != second.id
+
+            all_rework = [p for p in d.query(Packet).all()
+                          if (p.spec_json or {}).get("origin") == "review_rework"]
+            assert len(all_rework) == 2

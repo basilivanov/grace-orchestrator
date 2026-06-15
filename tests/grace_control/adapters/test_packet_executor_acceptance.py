@@ -172,6 +172,9 @@ async def _run_adapter_test(mock_legacy, mock_get_db, mock_pipeline,
         ]
         mock_get_db.return_value.__enter__.return_value.query.return_value.filter_by.return_value.first.side_effect = side_effect_values
 
+        # Make the idempotency check's .filter(args..).first() return None (no existing rework)
+        mock_get_db.return_value.__enter__.return_value.query.return_value.filter.return_value.first.return_value = None
+
         adapter = PacketExecutionAdapter(
             project_root=Path(td), state_root=Path(td), worktree_root=Path(td),
             backend=_FakeBackend())
@@ -743,6 +746,26 @@ class TestCallExecutorTargetRepoWorktree:
             assert kwargs["project_root"] == target_dir
 
 
+def _make_verifier_rework_with_failed_checks():
+    from grace_control.core.evidence_verifier import EvidenceVerifierReport, EvidenceVerifierVerdict
+    return EvidenceVerifierReport(
+        verdict=EvidenceVerifierVerdict.REWORK_TO_CODER,
+        summary="verifier says rework",
+        failed_checks=["test_foo fails", "missing evidence for X"],
+        coder_instructions=["fix test_foo", "add evidence for X"],
+    )
+
+
+def _make_reviewer_rework_with_required_changes():
+    from grace_control.core.reviewer_gate import ReviewerReport, ReviewerVerdict
+    return ReviewerReport(
+        verdict=ReviewerVerdict.REWORK_TO_CODER,
+        summary="reviewer says rework",
+        required_changes=["fix the import order", "add error handling"],
+        risks=["risk of breaking existing tests"],
+    )
+
+
 class TestW10ReworkPackets:
     """W10: Reviewer Rework Packets — verify rework packet creation in _route_after."""
 
@@ -754,7 +777,7 @@ class TestW10ReworkPackets:
     @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_executor")
     async def test_verifier_rework_creates_rework_packet(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer, mock_create_rework):
         """Evidence verifier REWORK_TO_CODER → create_rework_packet called with correct args."""
-        mock_verifier.return_value = _make_verifier_rework()
+        mock_verifier.return_value = _make_verifier_rework_with_failed_checks()
         with patch("grace_control.config.settings.settings.agent_runtime_rework_packets_enabled", True):
             result = await _run_adapter_test(
                 mock_legacy, mock_get_db, mock_pipeline,
@@ -768,7 +791,8 @@ class TestW10ReworkPackets:
         _, kwargs = mock_create_rework.call_args
         assert kwargs["original_packet_id"] == "pkt-001"
         assert kwargs["verdict_source"] == "evidence_verifier"
-        assert "verifier says rework" in kwargs["summary"]
+        assert kwargs["blocking_issues"] == ["test_foo fails", "missing evidence for X"]
+        assert kwargs["coder_instructions"] == ["fix test_foo", "add evidence for X"]
 
     @patch("grace_control.adapters.packet_executor.create_rework_packet")
     @patch("grace_control.adapters.packet_executor.run_reviewer_gate")
@@ -799,7 +823,7 @@ class TestW10ReworkPackets:
     async def test_reviewer_rework_creates_rework_packet(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer, mock_create_rework):
         """Reviewer REWORK_TO_CODER → create_rework_packet called with correct args."""
         mock_verifier.return_value = _make_verifier_pass()
-        mock_reviewer.return_value = _make_reviewer_rework()
+        mock_reviewer.return_value = _make_reviewer_rework_with_required_changes()
         with patch("grace_control.config.settings.settings.agent_runtime_rework_packets_enabled", True):
             result = await _run_adapter_test(
                 mock_legacy, mock_get_db, mock_pipeline,
@@ -813,7 +837,8 @@ class TestW10ReworkPackets:
         _, kwargs = mock_create_rework.call_args
         assert kwargs["original_packet_id"] == "pkt-001"
         assert kwargs["verdict_source"] == "reviewer"
-        assert "reviewer says rework" in kwargs["summary"]
+        assert kwargs["blocking_issues"] == ["fix the import order", "add error handling"]
+        assert kwargs["coder_instructions"] == ["risk of breaking existing tests"]
 
     @patch("grace_control.adapters.packet_executor.create_rework_packet")
     @patch("grace_control.adapters.packet_executor.run_reviewer_gate")
@@ -873,3 +898,48 @@ class TestW10ReworkPackets:
                 profile="NORMAL",
             )
         mock_create_rework.assert_not_called()
+
+    @patch("grace_control.adapters.packet_executor.create_rework_packet")
+    @patch("grace_control.adapters.packet_executor.run_reviewer_gate")
+    @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
+    @patch("grace_control.adapters.packet_executor.get_db")
+    @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
+    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_executor")
+    async def test_verifier_rework_failed_checks_in_blocking_issues(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer, mock_create_rework):
+        """Verifier REWORK_TO_CODER: failed_checks → blocking_issues, coder_instructions preserved."""
+        mock_verifier.return_value = _make_verifier_rework_with_failed_checks()
+        with patch("grace_control.config.settings.settings.agent_runtime_rework_packets_enabled", True):
+            result = await _run_adapter_test(
+                mock_legacy, mock_get_db, mock_pipeline,
+                pipeline_report=_make_accepted_report(),
+                expect_accepted=False,
+                mock_verifier=mock_verifier, mock_reviewer=mock_reviewer,
+                profile="NORMAL",
+            )
+        mock_create_rework.assert_called_once()
+        _, kwargs = mock_create_rework.call_args
+        assert kwargs["blocking_issues"] == ["test_foo fails", "missing evidence for X"]
+        assert kwargs["coder_instructions"] == ["fix test_foo", "add evidence for X"]
+
+    @patch("grace_control.adapters.packet_executor.create_rework_packet")
+    @patch("grace_control.adapters.packet_executor.run_reviewer_gate")
+    @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
+    @patch("grace_control.adapters.packet_executor.get_db")
+    @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
+    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_executor")
+    async def test_reviewer_rework_required_changes_in_blocking_issues(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer, mock_create_rework):
+        """Reviewer REWORK_TO_CODER: required_changes → blocking_issues, risks → coder_instructions."""
+        mock_verifier.return_value = _make_verifier_pass()
+        mock_reviewer.return_value = _make_reviewer_rework_with_required_changes()
+        with patch("grace_control.config.settings.settings.agent_runtime_rework_packets_enabled", True):
+            result = await _run_adapter_test(
+                mock_legacy, mock_get_db, mock_pipeline,
+                pipeline_report=_make_accepted_report(),
+                expect_accepted=False,
+                mock_verifier=mock_verifier, mock_reviewer=mock_reviewer,
+                profile="STRICT",
+            )
+        mock_create_rework.assert_called_once()
+        _, kwargs = mock_create_rework.call_args
+        assert kwargs["blocking_issues"] == ["fix the import order", "add error handling"]
+        assert kwargs["coder_instructions"] == ["risk of breaking existing tests"]

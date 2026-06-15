@@ -50,7 +50,7 @@ from grace_control.core.structured_logger import GraceLogger
 from grace_control.db import get_db
 from grace_control.db.schema import Packet, PacketRun
 from grace_control.services.agent_commit_service import AgentCommitService
-from grace_control.services.rework_packet_service import RUNTIME_FAILURE_CODES, create_rework_packet
+from grace_control.services.rework_packet_service import create_rework_packet
 from grace_control.services.worktree_cleanup_service import WorktreeCleanupService
 from grace_control.services.worktree_inspector import WorktreeInspector
 
@@ -723,16 +723,26 @@ class PacketExecutionAdapter:
             worktree_path=wt_path, run_dir=run_dir, changed_files=changed_files, artifacts=art)
         if evr.verdict in (EvidenceVerifierVerdict.REWORK_TO_CODER, EvidenceVerifierVerdict.RETURN_TO_ARCHITECT):
             if evr.verdict == EvidenceVerifierVerdict.REWORK_TO_CODER:
-                self._maybe_create_rework_packet(packet_id, "evidence_verifier", evr.summary,
-                    evr.coder_instructions, evr.failed_checks)
+                self._maybe_create_rework_packet(
+                    packet_id,
+                    verdict_source="evidence_verifier",
+                    summary=evr.summary,
+                    blocking_issues=evr.failed_checks,
+                    coder_instructions=evr.coder_instructions,
+                )
             return _rej("rejected" if evr.verdict==EvidenceVerifierVerdict.REWORK_TO_CODER else "blocked", evr.summary, evr, skipped_reviewer_report("ev reject"))
         rvr = await run_reviewer_gate(packet=pkt_contract, acceptance_report=accept_report,
             evidence_verifier_report=evr, worktree_path=wt_path, run_dir=run_dir, changed_files=changed_files, artifacts=art)
         if rvr.verdict == ReviewerVerdict.PASS: return _acc(_mk(True, "accepted"), evr, rvr)
         if rvr.verdict in (ReviewerVerdict.REWORK_TO_CODER, ReviewerVerdict.RETURN_TO_ARCHITECT):
             if rvr.verdict == ReviewerVerdict.REWORK_TO_CODER:
-                self._maybe_create_rework_packet(packet_id, "reviewer", rvr.summary,
-                    rvr.required_changes, rvr.risks)
+                self._maybe_create_rework_packet(
+                    packet_id,
+                    verdict_source="reviewer",
+                    summary=rvr.summary,
+                    blocking_issues=rvr.required_changes,
+                    coder_instructions=rvr.risks,
+                )
             return _rej("rejected" if rvr.verdict==ReviewerVerdict.REWORK_TO_CODER else "blocked", rvr.summary, evr, rvr)
         _log.error("unexpected_reviewer_verdict", packet_id=packet_id, verdict=rvr.verdict.value)
         raise RuntimeError(f"Unexpected reviewer verdict: {rvr.verdict.value}")
@@ -1642,9 +1652,10 @@ class PacketExecutionAdapter:
     def _maybe_create_rework_packet(
         self,
         original_packet_id: str,
+        *,
         verdict_source: str,
         summary: str,
-        blocking_issues: list[str],
+        blocking_issues: list[str] | None = None,
         coder_instructions: list[str] | None = None,
     ) -> None:
         from grace_control.config.settings import settings as _s
@@ -1657,6 +1668,22 @@ class PacketExecutionAdapter:
                 if not orig:
                     _log.warn("rework_original_not_found", original_packet_id=original_packet_id)
                     return
+
+                # Idempotency: skip if a rework packet for this original + source already exists
+                from sqlalchemy import cast, String as _Str
+                existing_rework = db.query(Packet).filter(
+                    cast(Packet.spec_json["origin"], _Str) == "review_rework",
+                    cast(Packet.spec_json["parent_packet_id"], _Str) == original_packet_id,
+                    cast(Packet.spec_json["rework_source"], _Str) == verdict_source,
+                    Packet.state.in_(["ready", "running", "rejected"]),
+                ).first()
+                if existing_rework is not None:
+                    _log.info("rework_packet_already_exists",
+                              original_packet_id=original_packet_id,
+                              existing_rework_id=existing_rework.id,
+                              verdict_source=verdict_source)
+                    return
+
                 create_rework_packet(
                     db,
                     original_packet_id=original_packet_id,
@@ -1669,7 +1696,7 @@ class PacketExecutionAdapter:
                     max_attempts=orig.max_attempts or 3,
                     verdict_source=verdict_source,
                     summary=summary,
-                    blocking_issues=blocking_issues,
+                    blocking_issues=blocking_issues or [],
                     coder_instructions=coder_instructions,
                 )
                 db.commit()
