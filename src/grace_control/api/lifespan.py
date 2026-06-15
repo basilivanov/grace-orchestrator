@@ -33,6 +33,7 @@ from fastapi import FastAPI
 from grace_control.config.settings import settings
 from grace_control.core.feature_gate import check_feature_completion
 from grace_control.core.lease_manager import lease_expiration_loop
+from grace_control.core.stuck_scanner import stuck_scan_loop
 from grace_control.core.structured_logger import GraceLogger
 from grace_control.core.wave_gate import check_wave_gates
 from grace_control.db import init_db
@@ -74,6 +75,8 @@ async def lifespan(app: FastAPI):
     db_url = os.environ.get("GRACE_DB_URL") or settings.database_url
     init_db(db_url)
     _lease_task = asyncio.create_task(lease_expiration_loop())
+    # W08: Stuck scanner background loop
+    asyncio.create_task(stuck_scan_loop())
     asyncio.create_task(_safe_loop(
         "wave_gate", check_wave_gates, settings.wave_gate_interval_seconds))
     asyncio.create_task(_safe_loop(

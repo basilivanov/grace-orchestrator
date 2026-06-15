@@ -37,6 +37,14 @@ RECOVERY_EVENT_TYPES = frozenset([
     "recovery_block_feature",
     "recovery_no_action",
     "recovery_apply_failed",
+    # W08: Stuck scanner events
+    "stuck_running_recovered",
+    "worker_stale_heartbeat_deactivated",
+    "worker_packet_mismatch_cleaned",
+    "orphan_lease_cleaned",
+    "blocked_recoverable_waiting",
+    "plan_failed_repairable_detected",
+    "feature_no_progress_detected",
 ])
 
 

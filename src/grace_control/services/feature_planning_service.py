@@ -989,15 +989,41 @@ Other files (paths only):
 
         Returns the final approval result dict (same shape as approve_plan).
         Never raises — returns PLAN_FAILED if repair exhausted.
+
+        W08 fix: approve_plan() raises ValueError on compiler rejection.
+        We catch that exception and extract compiler errors from the feature's
+        _plan_compiler metadata so the repair path is reachable instead of
+        becoming an unhandled error that leaves the feature stuck in PLAN_FAILED.
         """
-        result = self.approve_plan(feature_id)
-        status = result.get("status", "")
+        try:
+            result = self.approve_plan(feature_id)
+            status = result.get("status", "")
+        except ValueError as exc:
+            # W08: approve_plan raises ValueError on compiler rejection.
+            # The feature is now in PLAN_FAILED with compiler errors in spec.
+            _log.info("approve_plan_compiler_rejection_caught",
+                feature_id=feature_id, error=str(exc)[:200])
+            status = "PLAN_FAILED"
+            result = {"status": "PLAN_FAILED"}
 
         # If plan passed compiler or failed for a reason other than repairable → return
         if status != "PLAN_FAILED":
             return result
 
         compiler_errors = result.get("compiler_errors", [])
+        if not compiler_errors:
+            # W08: When approve_plan raised ValueError, compiler errors are
+            # stored in feature.spec_json._plan_compiler.errors, not in the
+            # result dict. Extract them so the repair path is reachable.
+            feature = self.db.query(Feature).filter_by(id=feature_id).first()
+            if feature:
+                spec = feature.spec_json or {}
+                compiler_data = spec.get("_plan_compiler", {})
+                errors = compiler_data.get("errors", [])
+                if errors:
+                    compiler_errors = errors
+                    _log.info("compiler_errors_extracted_from_spec",
+                        feature_id=feature_id, error_count=len(compiler_errors))
         if not compiler_errors:
             return result
 
@@ -1018,6 +1044,16 @@ Other files (paths only):
 
         spec = feature.spec_json or {}
         plan = spec.get("plan_json", {}) or {}
+
+        # W08: Reset feature status to PLAN_READY so that repair attempts
+        # can re-approve. approve_plan() set it to PLAN_FAILED when it
+        # raised ValueError, but the repair loop needs PLAN_READY to
+        # call approve_plan() again after fixing the plan.
+        if feature.status == "PLAN_FAILED":
+            feature.status = "PLAN_READY"
+            self.db.flush()
+            _log.info("feature_status_reset_for_repair",
+                feature_id=feature_id)
 
         feature_title = getattr(feature, "title", "") or spec.get("title", "")
         feature_desc = getattr(feature, "description", "") or spec.get("description", "")
