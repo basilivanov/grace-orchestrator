@@ -453,14 +453,21 @@ def build_packet_contract(packet_data: dict) -> ExecutionPacketContract:
             )
             expected_evidence.append(EvidenceRequirement(id=item, kind="command"))
 
+    # W05 rework: Validate evidence shape against profile in the build path.
+    # STRICT profiles reject string/legacy evidence at build time.
+    acceptance_profile = AcceptanceProfile(
+        packet_data.get("acceptance_profile", "NORMAL")
+    )
+    evidence_errors = validate_evidence_for_profile(expected_evidence, acceptance_profile)
+    if evidence_errors:
+        raise ScopeContractError(evidence_errors)
+
     return ExecutionPacketContract(
         packet_id=packet_data.get("id", packet_data.get("packet_id", "")),
         title=packet_data.get("title", ""),
         allowed_write_scope=scope_list,
         frozen_scope=frozen,
-        acceptance_profile=AcceptanceProfile(
-            packet_data.get("acceptance_profile", "NORMAL")
-        ),
+        acceptance_profile=acceptance_profile,
         verification={
             "t0": t0, "t1": t1, "t2": t2,
             "t2_browser": verification_raw.get("t2_browser", []) if isinstance(verification_raw, dict) else [],

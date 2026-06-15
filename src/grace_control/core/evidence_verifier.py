@@ -128,13 +128,101 @@ async def run_evidence_verifier(
     artifacts: list[str] | None = None,
 ) -> EvidenceVerifierReport:
     from grace_control.core.llm_runner import run_llm
+    from grace_control.core.contracts import (
+        check_artifact_patterns,
+        route_missing_evidence,
+        AcceptanceProfile,
+        validate_evidence_for_profile,
+    )
 
+    # ── W05 rework: Deterministic pre-checks before LLM ──────────────
+    # 1. Validate evidence shape against profile (STRICT enforcement)
+    profile = getattr(packet, "acceptance_profile", None)
+    if profile is None:
+        profile = AcceptanceProfile.NORMAL
+
+    evidence_errors = validate_evidence_for_profile(
+        getattr(packet, "expected_evidence", []), profile
+    )
+    if evidence_errors:
+        # STRICT evidence validation failure — fail-closed, no LLM needed
+        return EvidenceVerifierReport(
+            verdict=EvidenceVerifierVerdict.REWORK_TO_CODER,
+            summary="Evidence validation failed for profile: " + "; ".join(evidence_errors),
+            failed_checks=evidence_errors,
+            suggested_next_owner="coder",
+        )
+
+    # 2. Check artifact patterns deterministically
+    artifact_warnings = check_artifact_patterns(
+        getattr(packet, "expected_evidence", []),
+        artifacts or [],
+    )
+    # Collect IDs of evidence whose patterns are unmatched
+    missing_from_patterns: list[str] = []
+    for w in artifact_warnings:
+        # Extract evidence ID from warning: "Evidence 'EV-ID'..."
+        m = re.search(r"Evidence '([^']+)'", w)
+        if m:
+            missing_from_patterns.append(m.group(1))
+
+    # 3. If deterministic checks found missing required evidence, route
+    if missing_from_patterns:
+        next_owner = route_missing_evidence(
+            missing_from_patterns,
+            getattr(packet, "expected_evidence", []),
+        )
+        if next_owner == "architect":
+            deterministic_verdict = EvidenceVerifierVerdict.RETURN_TO_ARCHITECT
+        elif next_owner == "verifier":
+            # Verifier-owned issue — still REWORK_TO_CODER but with
+            # suggested_next_owner=verifier for downstream routing
+            deterministic_verdict = EvidenceVerifierVerdict.REWORK_TO_CODER
+        else:
+            deterministic_verdict = EvidenceVerifierVerdict.REWORK_TO_CODER
+
+        # Build deterministic report — the LLM may refine but cannot
+        # override the deterministic routing for missing evidence.
+        deterministic_report = EvidenceVerifierReport(
+            verdict=deterministic_verdict,
+            summary=f"Deterministic check: {len(missing_from_patterns)} evidence patterns unmatched",
+            missing_evidence=missing_from_patterns,
+            failed_checks=artifact_warnings,
+            suggested_next_owner=next_owner,
+        )
+        # If ALL missing evidence is deterministic, skip the LLM call.
+        # If there are also acceptance issues, let the LLM add context.
+        acceptance_ok = (
+            hasattr(acceptance_report, "final_verdict")
+            and acceptance_report.final_verdict.value == "accepted"
+        )
+        if acceptance_ok:
+            return deterministic_report
+        # Otherwise continue to LLM for richer context, but merge
+        # deterministic findings into the LLM report below.
+
+    # ── LLM-based verification (existing path, enhanced) ─────────────
     prompt_parts: list[str] = []
     prompt_parts.append(f"Packet: {packet.packet_id} — {getattr(packet, 'title', '')}")
     prompt_parts.append(f"Allowed write scope: {packet.allowed_write_scope}")
     prompt_parts.append(f"Frozen scope: {packet.frozen_scope}")
     prompt_parts.append(f"Verification: {packet.verification}")
-    prompt_parts.append(f"Expected evidence: {packet.expected_evidence}")
+
+    # W05 rework: Include structured expected evidence in the prompt
+    expected_ev = getattr(packet, "expected_evidence", [])
+    if expected_ev:
+        ev_lines = []
+        for ev in expected_ev:
+            ev_lines.append(
+                f"  - {ev.id}: kind={ev.kind}, owner={ev.owner}, "
+                f"stage={ev.stage}, coder_blocking={ev.coder_blocking}, "
+                f"artifact_patterns={ev.artifact_patterns}, "
+                f"description={ev.description}"
+            )
+        prompt_parts.append("Expected evidence (structured):\n" + "\n".join(ev_lines))
+    else:
+        prompt_parts.append(f"Expected evidence: {expected_ev}")
+
     prompt_parts.append(f"Acceptance verdict: {acceptance_report.final_verdict.value}")
     prompt_parts.append(f"Acceptance summary: {acceptance_report.summary}")
     prompt_parts.append(f"Stages: {[{'name': s.name.value, 'status': s.status.value, 'summary': s.summary} for s in acceptance_report.stages]}")
@@ -144,6 +232,10 @@ async def run_evidence_verifier(
         prompt_parts.append(f"Changed files ({len(changed_files)}): {changed_files[:20]}")
     if artifacts:
         prompt_parts.append(f"Artifacts: {artifacts[:20]}")
+
+    # W05 rework: Include deterministic artifact pattern warnings
+    if artifact_warnings:
+        prompt_parts.append(f"Artifact pattern warnings (deterministic): {artifact_warnings}")
 
     prompt_path = Path(__file__).resolve().parent / "prompts" / "evidence_verifier_prompt.md"
     try:
@@ -156,12 +248,12 @@ async def run_evidence_verifier(
     try:
         from grace_control.config.agent_profiles import get_agent_profile, load_agent_profiles
         # Find the verifier profile — prefer verifier-cheap, fallback to any verifier
-        profile = get_agent_profile("verifier-cheap")
-        if not profile:
+        agent_profile = get_agent_profile("verifier-cheap")
+        if not agent_profile:
             profs = load_agent_profiles()
-            profile = next((p for k, p in profs.items() if "verif" in k.lower()), None)
-        is_multimodal = profile.multimodal if profile else False
-        model = profile.model if profile else "deepseek/deepseek-v4-flash"
+            agent_profile = next((p for k, p in profs.items() if "verif" in k.lower()), None)
+        is_multimodal = agent_profile.multimodal if agent_profile else False
+        model = agent_profile.model if agent_profile else "deepseek/deepseek-v4-flash"
         # Collect multimodal evidence if available
         multimodal_ctx = ""
         if is_multimodal:
@@ -169,8 +261,44 @@ async def run_evidence_verifier(
         full_prompt = prompt_template + "\n\n## Context\n\n" + "\n".join(prompt_parts) + multimodal_ctx
         raw = await run_llm(full_prompt, role="verifier", model=model,
                             cli="verifier-cheap")
-        return parse_evidence_verifier_json(raw)
+        llm_report = parse_evidence_verifier_json(raw)
+
+        # W05 rework: Merge deterministic findings into LLM report
+        if missing_from_patterns:
+            # Deterministic missing evidence takes priority — the LLM
+            # cannot override the routing for deterministically-missing
+            # evidence, but it can add context.
+            merged_missing = list(set(
+                llm_report.missing_evidence + missing_from_patterns
+            ))
+            merged_failed = list(set(
+                llm_report.failed_checks + artifact_warnings
+            ))
+            # Use deterministic routing for suggested_next_owner
+            next_owner = route_missing_evidence(
+                merged_missing,
+                expected_ev,
+            )
+            if next_owner == "architect":
+                merged_verdict = EvidenceVerifierVerdict.RETURN_TO_ARCHITECT
+            else:
+                merged_verdict = llm_report.verdict
+            return EvidenceVerifierReport(
+                verdict=merged_verdict,
+                summary=llm_report.summary or f"Deterministic + LLM: {len(merged_missing)} missing",
+                missing_evidence=merged_missing,
+                failed_checks=merged_failed,
+                spec_conflicts=llm_report.spec_conflicts,
+                coder_instructions=llm_report.coder_instructions,
+                architect_questions=llm_report.architect_questions,
+                suggested_next_owner=next_owner,
+            )
+
+        return llm_report
     except Exception as e:
+        # If LLM fails but we had deterministic findings, return those
+        if missing_from_patterns:
+            return deterministic_report  # type: ignore[possibly-undefined]
         return skipped_evidence_report(f"evidence verifier error: {e}")
 
 

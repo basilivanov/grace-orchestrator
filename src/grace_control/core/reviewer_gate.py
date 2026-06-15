@@ -182,6 +182,8 @@ def _build_reviewer_evidence_bundle(
     changed_files: list[str] | None = None,
     acceptance_report=None,
     artifacts: list[str] | None = None,
+    expected_evidence: list | None = None,
+    verifier_route_classification: str | None = None,
 ) -> dict:
     bundle: dict = {}
 
@@ -205,6 +207,26 @@ def _build_reviewer_evidence_bundle(
     if artifacts:
         bundle["evidence_paths"] = artifacts[:MAX_EVIDENCE_PATHS]
 
+    # W05 rework: Include structured expected evidence in the bundle
+    if expected_evidence:
+        serialized_evidence = []
+        for ev in expected_evidence:
+            ev_dict = {
+                "id": getattr(ev, "id", ""),
+                "kind": getattr(ev, "kind", ""),
+                "stage": getattr(ev, "stage", ""),
+                "owner": getattr(ev, "owner", ""),
+                "coder_blocking": getattr(ev, "coder_blocking", True),
+                "artifact_patterns": getattr(ev, "artifact_patterns", []),
+                "description": getattr(ev, "description", ""),
+            }
+            serialized_evidence.append(ev_dict)
+        bundle["expected_evidence"] = serialized_evidence
+
+    # W05 rework: Include verifier route classification
+    if verifier_route_classification:
+        bundle["verifier_route_classification"] = verifier_route_classification
+
     return bundle
 
 
@@ -223,6 +245,23 @@ def _render_reviewer_evidence_bundle(bundle: dict) -> str:
     cf = bundle.get("changed_files")
     if cf:
         parts.append(f"Changed files ({len(cf)}): {cf}")
+
+    # W05 rework: Structured expected evidence
+    expected_ev = bundle.get("expected_evidence")
+    if expected_ev:
+        parts.append("Expected evidence (structured):")
+        for ev in expected_ev:
+            parts.append(
+                f"  - {ev['id']}: kind={ev['kind']}, owner={ev['owner']}, "
+                f"stage={ev['stage']}, coder_blocking={ev['coder_blocking']}, "
+                f"artifact_patterns={ev['artifact_patterns']}, "
+                f"description={ev['description']}"
+            )
+
+    # W05 rework: Verifier route classification
+    route_class = bundle.get("verifier_route_classification")
+    if route_class:
+        parts.append(f"Evidence route classification: {route_class}")
 
     ep = bundle.get("evidence_paths")
     if ep:
@@ -254,12 +293,19 @@ async def run_reviewer_gate(
     from grace_control.core.llm_runner import run_llm
 
     # ── Build evidence bundle ───────────────────────────────────────
+    # W05 rework: Include structured expected evidence and verifier
+    # route classification in the reviewer bundle.
+    expected_ev = getattr(packet, "expected_evidence", None)
+    verifier_route = getattr(evidence_verifier_report, "suggested_next_owner", None)
+
     bundle = _build_reviewer_evidence_bundle(
         worktree_path=worktree_path,
         run_dir=run_dir,
         changed_files=changed_files,
         acceptance_report=acceptance_report,
         artifacts=artifacts,
+        expected_evidence=expected_ev,
+        verifier_route_classification=verifier_route,
     )
     evidence_block = _render_reviewer_evidence_bundle(bundle)
 

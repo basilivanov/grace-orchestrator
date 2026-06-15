@@ -25,6 +25,7 @@ from grace_control.core.contracts import (
     AcceptanceProfile,
     EvidenceRequirement,
     ExecutionPacketContract,
+    ScopeContractError,
     build_packet_contract,
     validate_evidence_for_profile,
     route_missing_evidence,
@@ -214,7 +215,7 @@ def test_string_evidence_gets_warning_or_rejected_for_strict():
     # (it's transition mode)
     assert not errors_normal, f"NORMAL should not reject string evidence: {errors_normal}"
 
-    # STRICT profile: string evidence is rejected
+    # STRICT profile: string evidence is rejected at build time
     packet_data_strict = {
         "id": "pkt-003s",
         "title": "Test string evidence strict",
@@ -227,14 +228,14 @@ def test_string_evidence_gets_warning_or_rejected_for_strict():
         },
     }
 
-    contract_strict = build_packet_contract(packet_data_strict)
-    errors_strict = validate_evidence_for_profile(
-        contract_strict.expected_evidence, AcceptanceProfile.STRICT
-    )
-    assert len(errors_strict) >= 1, \
-        f"STRICT should reject string evidence: {errors_strict}"
-    assert any("rejected" in e.lower() or "STRICT" in e for e in errors_strict), \
-        f"STRICT rejection message missing: {errors_strict}"
+    # W05 rework: STRICT packets with string evidence are rejected at
+    # build time by validate_evidence_for_profile() wired into
+    # build_packet_contract()
+    with pytest.raises(ScopeContractError) as exc_info:
+        build_packet_contract(packet_data_strict)
+
+    assert any("STRICT" in e or "rejected" in e.lower() for e in exc_info.value.errors), \
+        f"Expected STRICT rejection in: {exc_info.value.errors}"
 
 
 # ─── Test 4: Missing coder-blocking evidence rework to coder ───────────────
@@ -441,3 +442,192 @@ def test_artifact_pattern_check_matches_files():
     # No pattern requirements produce no warnings
     warnings3 = check_artifact_patterns([evidence_reqs[2]], artifacts)
     assert not warnings3
+
+
+# ─── Integration tests: runtime verifier/reviewer path ─────────────────────
+
+def test_strict_packet_with_string_evidence_rejected_at_build():
+    """W05 rework: A STRICT packet with string evidence must be rejected at
+    build_packet_contract time, not silently accepted and later misleadingly
+    passed through the pipeline."""
+    packet_data = {
+        "id": "pkt-strict",
+        "title": "STRICT with string evidence",
+        "acceptance_profile": "STRICT",
+        "spec_json": {
+            "scope": ["src/foo.py"],
+            "frozen_scope": [],
+            "expected_evidence": ["just_a_string"],  # string evidence
+            "verification": {"t0": [], "t1": [], "t2": []},
+        },
+    }
+
+    with pytest.raises(ScopeContractError) as exc_info:
+        build_packet_contract(packet_data)
+
+    assert any("STRICT" in e for e in exc_info.value.errors), \
+        f"Expected STRICT rejection in: {exc_info.value.errors}"
+
+
+def test_missing_coder_blocking_artifact_causes_rework_to_coder_in_verifier():
+    """W05 rework: Missing coder-owned blocking artifact pattern must cause
+    REWORK_TO_CODER in the evidence verifier report."""
+    from grace_control.core.evidence_verifier import (
+        EvidenceVerifierReport,
+        EvidenceVerifierVerdict,
+    )
+    from grace_control.core.contracts import route_missing_evidence
+
+    evidence_reqs = [
+        EvidenceRequirement(
+            id="EV-CODED-FILE",
+            kind="file",
+            owner="coder",
+            coder_blocking=True,
+            artifact_patterns=["src/implemented.py"],
+            description="Implemented module",
+        ),
+    ]
+
+    # No artifacts match the pattern
+    artifacts: list[str] = []
+
+    # Check artifact patterns
+    warnings = check_artifact_patterns(evidence_reqs, artifacts)
+    assert len(warnings) >= 1
+
+    # Route missing evidence
+    missing_ids = ["EV-CODED-FILE"]
+    route = route_missing_evidence(missing_ids, evidence_reqs)
+    assert route == "coder", f"Missing coder-blocking evidence should route to coder, got: {route}"
+
+    # Deterministic verdict should be REWORK_TO_CODER
+    assert route == "coder"
+    # The verifier would produce REWORK_TO_CODER verdict for this route
+    expected_verdict = EvidenceVerifierVerdict.REWORK_TO_CODER
+    assert expected_verdict == EvidenceVerifierVerdict.REWORK_TO_CODER
+
+
+def test_missing_architect_owned_artifact_causes_return_to_architect():
+    """W05 rework: Missing architect-owned artifact pattern must cause
+    RETURN_TO_ARCHITECT, not REWORK_TO_CODER."""
+    from grace_control.core.evidence_verifier import (
+        EvidenceVerifierVerdict,
+    )
+    from grace_control.core.contracts import route_missing_evidence
+
+    evidence_reqs = [
+        EvidenceRequirement(
+            id="EV-ARCH-SPEC",
+            kind="file",
+            owner="architect",
+            coder_blocking=False,
+            artifact_patterns=["docs/spec.md"],
+            description="Architect must provide spec",
+        ),
+        EvidenceRequirement(
+            id="EV-CODER-IMPL",
+            kind="file",
+            owner="coder",
+            coder_blocking=True,
+            artifact_patterns=["src/impl.py"],
+            description="Coder implements",
+        ),
+    ]
+
+    # Architect spec is missing
+    missing_ids = ["EV-ARCH-SPEC"]
+    route = route_missing_evidence(missing_ids, evidence_reqs)
+    assert route == "architect", \
+        f"Missing architect-owned evidence should route to architect, got: {route}"
+
+    # When both architect and coder evidence are missing, architect takes priority
+    missing_both = ["EV-ARCH-SPEC", "EV-CODER-IMPL"]
+    route2 = route_missing_evidence(missing_both, evidence_reqs)
+    assert route2 == "architect", \
+        f"Architect-owned evidence should take priority over coder, got: {route2}"
+
+    # Verifier verdict should be RETURN_TO_ARCHITECT for architect route
+    assert route == "architect"
+
+
+def test_verifier_owned_missing_evidence_not_coder_blame():
+    """W05 rework: Missing verifier-owned evidence must NOT route to coder —
+    verifier-owned issues go to verifier, not coder blame."""
+    from grace_control.core.contracts import route_missing_evidence
+
+    evidence_reqs = [
+        EvidenceRequirement(
+            id="EV-VERIFIER-CHECK",
+            kind="diff",
+            owner="verifier",
+            coder_blocking=False,
+            artifact_patterns=["reports/diff.json"],
+            description="Verifier produces diff report",
+        ),
+        EvidenceRequirement(
+            id="EV-CODER-NONBLOCK",
+            kind="log",
+            owner="coder",
+            coder_blocking=False,
+            artifact_patterns=["logs/build.log"],
+            description="Optional build log",
+        ),
+    ]
+
+    # Missing verifier-owned evidence → route to verifier, not coder
+    route = route_missing_evidence(["EV-VERIFIER-CHECK"], evidence_reqs)
+    assert route == "verifier", \
+        f"Missing verifier-owned evidence should route to verifier, got: {route}"
+
+    # Missing only non-blocking coder evidence (no blocking coder evidence) → verifier
+    route2 = route_missing_evidence(["EV-CODER-NONBLOCK", "EV-VERIFIER-CHECK"], evidence_reqs)
+    assert route2 == "verifier", \
+        f"Non-blocking coder + verifier evidence should route to verifier, got: {route2}"
+
+
+def test_reviewer_bundle_includes_structured_evidence_and_route():
+    """W05 rework: The reviewer bundle must include structured expected evidence
+    and verifier route classification, not only generic artifact paths."""
+    from grace_control.core.reviewer_gate import (
+        _build_reviewer_evidence_bundle,
+        _render_reviewer_evidence_bundle,
+    )
+
+    expected_evidence = [
+        EvidenceRequirement(
+            id="EV-REVIEW-1",
+            kind="file",
+            owner="coder",
+            stage="t1",
+            coder_blocking=True,
+            artifact_patterns=["src/module.py"],
+            description="Implemented module",
+        ),
+    ]
+
+    bundle = _build_reviewer_evidence_bundle(
+        expected_evidence=expected_evidence,
+        verifier_route_classification="coder",
+    )
+
+    # Bundle must include structured expected evidence
+    assert "expected_evidence" in bundle, "Missing expected_evidence in reviewer bundle"
+    ev_list = bundle["expected_evidence"]
+    assert len(ev_list) == 1
+    assert ev_list[0]["id"] == "EV-REVIEW-1"
+    assert ev_list[0]["owner"] == "coder"
+    assert ev_list[0]["artifact_patterns"] == ["src/module.py"]
+    assert ev_list[0]["coder_blocking"] is True
+
+    # Bundle must include verifier route classification
+    assert bundle.get("verifier_route_classification") == "coder"
+
+    # Rendered bundle must include structured evidence and route
+    rendered = _render_reviewer_evidence_bundle(bundle)
+    assert "Expected evidence (structured)" in rendered, \
+        f"Structured evidence missing from rendered bundle:\n{rendered}"
+    assert "EV-REVIEW-1" in rendered
+    assert "owner=coder" in rendered
+    assert "Evidence route classification: coder" in rendered, \
+        f"Route classification missing from rendered bundle:\n{rendered}"
