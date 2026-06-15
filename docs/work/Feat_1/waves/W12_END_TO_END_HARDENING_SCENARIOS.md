@@ -1,0 +1,48 @@
+# W12 — End-to-End Hardening Scenarios
+
+Status: READY
+
+Parent TZ: `docs/work/TZ_GRACE_ORCHESTRATOR_RUNTIME_SCOPE_CONTEXT_HARDENING.md`
+
+## Goal
+
+Prove the complete hardened pipeline works safely across planner, materializer, worker, executor, acceptance, verifier/reviewer, and recovery.
+
+## Scope
+
+- E2E/integration tests
+- planner/materializer/runtime/recovery flows
+- docs/work evidence
+
+## Required scenarios
+
+1. Happy path small code packet.
+2. Invalid empty scope rejected before READY.
+3. Stale release race rejected safely.
+4. Long-running agent renews lease.
+5. Coder insufficient context blocked before launch.
+6. Missing evidence artifact routes to coder rework.
+7. Process timeout kills group and becomes retryable.
+8. Recovery scanner detects worker death and recovers safely.
+
+## Acceptance
+
+- No scenario requires manual DB mutation.
+- Every failure state has diagnostics explaining what happened.
+- Invalid packets never reach executable READY state.
+- Stale workers cannot mutate or merge after ownership loss.
+- Recovery scanner repairs only deterministic safe cases.
+
+## Verification
+
+Run the full E2E hardening suite, or a documented subset if infrastructure is unavailable:
+
+```bash
+python3 -m pytest tests -q
+```
+
+Submission must include exact commands and output.
+
+## Submission
+
+Create `docs/work/Feat_1/exchange/inbox/W12_001_SUBMISSION.md` when done.
