@@ -11,6 +11,10 @@ Tests cover:
 3. Architect profiles match canonical schema
 4. Legacy allowed_files schema is rejected or canonicalized
 5. Architect output schema required fields
+6. Integration: normalize_architect_plan canonicalizes allowed_files → scope
+   (and forbidden_files → frozen_scope, write_scope → scope, inputs → coder_instructions)
+7. Integration: canonicalization warnings are persisted under _architect_schema_warnings
+8. Non-blocking: deepseek-v4-pro architect profile matches canonical schema
 """
 
 from __future__ import annotations
@@ -233,3 +237,221 @@ def test_architect_output_schema_required_fields():
     for legacy_field in LEGACY_FIELD_MAP:
         assert legacy_field not in CANONICAL_PACKET_FIELDS, \
             f"Legacy field '{legacy_field}' should not be in CANONICAL_PACKET_FIELDS"
+
+
+# ─── Test 6: Integration — allowed_files becomes scope before compiler ────
+
+def test_normalize_architect_plan_canonicalizes_allowed_files_to_scope():
+    """W03 integration: A parsed plan with allowed_files on a packet must
+    have scope (not allowed_files) after normalize_architect_plan(), before
+    the plan compiler runs."""
+    from grace_control.services.feature_planning_service import normalize_architect_plan
+    from grace_control.core.plan_compiler import PlanCompiler
+
+    raw_plan = {
+        "waves": [
+            {
+                "title": "Wave 1",
+                "packets": [
+                    {
+                        "title": "Implement auth",
+                        "role": "coder",
+                        "allowed_files": ["src/auth.py", "src/auth_test.py"],
+                        "description": "Add auth module",
+                        "coder_instructions": ["Write auth code"],
+                        "acceptance_criteria": ["Tests pass"],
+                        "verification": {"t0": ["run tests"], "t1": [], "t2": []},
+                        "expected_evidence": ["test output"],
+                    },
+                ],
+            },
+        ],
+    }
+
+    normalized = normalize_architect_plan(raw_plan)
+
+    # The packet must now have 'scope' instead of 'allowed_files'
+    pkt = normalized["waves"][0]["packets"][0]
+    assert "scope" in pkt, "allowed_files was not canonicalized to scope"
+    assert pkt["scope"] == ["src/auth.py", "src/auth_test.py"], \
+        f"scope value wrong: {pkt['scope']}"
+    assert "allowed_files" not in pkt, \
+        "allowed_files still present after canonicalization"
+
+    # The plan must pass the compiler without E_CODER_EMPTY_SCOPE
+    compiler = PlanCompiler()
+    result = compiler.compile_plan(normalized)
+    scope_errors = [e for e in result.errors if e.get("code") == "E_CODER_EMPTY_SCOPE"]
+    assert not scope_errors, \
+        f"Packet with canonicalized scope still gets E_CODER_EMPTY_SCOPE: {scope_errors}"
+
+
+def test_normalize_architect_plan_canonicalizes_forbidden_files_to_frozen_scope():
+    """W03 integration: forbidden_files must become frozen_scope after normalization."""
+    from grace_control.services.feature_planning_service import normalize_architect_plan
+
+    raw_plan = {
+        "waves": [
+            {
+                "title": "Wave 1",
+                "packets": [
+                    {
+                        "title": "Fix bug",
+                        "role": "coder",
+                        "scope": ["src/bug.py"],
+                        "forbidden_files": ["docs/", "config/"],
+                        "description": "Fix the bug",
+                    },
+                ],
+            },
+        ],
+    }
+
+    normalized = normalize_architect_plan(raw_plan)
+    pkt = normalized["waves"][0]["packets"][0]
+    assert "frozen_scope" in pkt, "forbidden_files not canonicalized to frozen_scope"
+    assert pkt["frozen_scope"] == ["docs/", "config/"], \
+        f"frozen_scope value wrong: {pkt['frozen_scope']}"
+    assert "forbidden_files" not in pkt, \
+        "forbidden_files still present after canonicalization"
+
+
+def test_normalize_architect_plan_canonicalizes_write_scope_and_inputs():
+    """W03 integration: write_scope → scope and inputs → coder_instructions."""
+    from grace_control.services.feature_planning_service import normalize_architect_plan
+
+    raw_plan = {
+        "waves": [
+            {
+                "title": "Wave 1",
+                "packets": [
+                    {
+                        "title": "Refactor module",
+                        "role": "coder",
+                        "write_scope": ["src/module.py"],
+                        "inputs": ["Read existing code first", "Preserve API compatibility"],
+                        "description": "Refactor the module",
+                    },
+                ],
+            },
+        ],
+    }
+
+    normalized = normalize_architect_plan(raw_plan)
+    pkt = normalized["waves"][0]["packets"][0]
+    assert "scope" in pkt, "write_scope not canonicalized to scope"
+    assert pkt["scope"] == ["src/module.py"], f"scope value wrong: {pkt['scope']}"
+    assert "coder_instructions" in pkt, "inputs not canonicalized to coder_instructions"
+    assert pkt["coder_instructions"] == ["Read existing code first", "Preserve API compatibility"], \
+        f"coder_instructions value wrong: {pkt['coder_instructions']}"
+    assert "write_scope" not in pkt
+    assert "inputs" not in pkt
+
+
+# ─── Test 7: Integration — warnings are persisted ─────────────────────────
+
+def test_normalize_architect_plan_persists_schema_warnings():
+    """W03: Canonicalization warnings must be visible in
+    plan['_architect_schema_warnings'] after normalization."""
+    from grace_control.services.feature_planning_service import normalize_architect_plan
+
+    raw_plan = {
+        "waves": [
+            {
+                "title": "Wave 1",
+                "packets": [
+                    {
+                        "title": "Packet A",
+                        "role": "coder",
+                        "allowed_files": ["src/a.py"],
+                        "description": "Do A",
+                    },
+                    {
+                        "title": "Packet B",
+                        "role": "coder",
+                        "scope": ["src/b.py"],
+                        "forbidden_files": ["docs/"],
+                        "description": "Do B",
+                    },
+                ],
+            },
+        ],
+    }
+
+    normalized = normalize_architect_plan(raw_plan)
+
+    # Warnings must be persisted under _architect_schema_warnings
+    assert "_architect_schema_warnings" in normalized, \
+        "No _architect_schema_warnings key in normalized plan"
+    warnings = normalized["_architect_schema_warnings"]
+    assert len(warnings) >= 2, \
+        f"Expected at least 2 warnings, got {len(warnings)}: {warnings}"
+
+    # Warnings must include the packet location prefix
+    assert any("waves[0].packets[0]" in w for w in warnings), \
+        f"No warning for waves[0].packets[0] in: {warnings}"
+    assert any("waves[0].packets[1]" in w for w in warnings), \
+        f"No warning for waves[0].packets[1] in: {warnings}"
+
+    # Warning content must mention the legacy and canonical field names
+    assert any("allowed_files" in w and "scope" in w for w in warnings), \
+        f"No warning mentioning allowed_files→scope in: {warnings}"
+    assert any("forbidden_files" in w and "frozen_scope" in w for w in warnings), \
+        f"No warning mentioning forbidden_files→frozen_scope in: {warnings}"
+
+
+def test_normalize_architect_plan_no_warnings_when_canonical():
+    """W03: A plan using only canonical fields must NOT have _architect_schema_warnings."""
+    from grace_control.services.feature_planning_service import normalize_architect_plan
+
+    raw_plan = {
+        "waves": [
+            {
+                "title": "Wave 1",
+                "packets": [
+                    {
+                        "title": "Packet A",
+                        "role": "coder",
+                        "scope": ["src/a.py"],
+                        "frozen_scope": [],
+                        "description": "Do A",
+                    },
+                ],
+            },
+        ],
+    }
+
+    normalized = normalize_architect_plan(raw_plan)
+    assert "_architect_schema_warnings" not in normalized, \
+        "Unexpected _architect_schema_warnings when all fields are canonical"
+
+
+# ─── Test 8: Non-blocking — deepseek-v4-pro profile coverage ──────────────
+
+def test_deepseek_v4_pro_architect_profile_matches_canonical_schema():
+    """W03: deepseek-v4-pro is used as architect executor and must match the
+    canonical schema, even though its profile id does not contain 'architect'."""
+    from grace_control.config.agent_profiles import load_agent_profiles
+
+    profiles = load_agent_profiles()
+
+    # The profile used as architect executor in run_architect()
+    assert "deepseek-v4-pro" in profiles, \
+        "deepseek-v4-pro profile not found — it is used as architect executor"
+
+    profile = profiles["deepseek-v4-pro"]
+    command_text = " ".join(str(c) for c in profile.command)
+
+    # Must reference canonical schema
+    assert "scope" in command_text.lower(), \
+        "deepseek-v4-pro command does not reference 'scope'"
+
+    # Must reference the canonical prompt source
+    assert "architect_prompt.md" in command_text or "canonical" in command_text.lower(), \
+        "deepseek-v4-pro does not reference the canonical prompt source"
+
+    # Must NOT use legacy field names as primary (without canonicalization warning)
+    for legacy_field in LEGACY_FIELD_MAP:
+        if legacy_field in command_text:
+            assert "Legacy" in command_text or "canonicalized" in command_text.lower() or "NOT part" in command_text, \
+                f"deepseek-v4-pro uses legacy field '{legacy_field}' without canonicalization warning"

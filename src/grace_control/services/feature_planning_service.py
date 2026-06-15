@@ -65,6 +65,69 @@ def _git_reset_hard(repo_root: Path, head_sha: str) -> None:
         pass
 
 
+def normalize_architect_plan(plan: dict) -> dict:
+    """Normalize a raw architect plan dict into canonical form.
+
+    This is the shared normalization path used by run_architect() before
+    the plan is persisted or passed to the compiler.  It:
+
+    1. Unwraps nested ``plan.waves`` if the LLM wrapped its output.
+    2. Wraps bare ``packets`` into a single wave.
+    3. Ensures every wave has a ``packets`` list.
+    4. Sets ``acceptance_profile`` / ``depends_on`` defaults.
+    5. **W03**: Canonicalizes legacy packet fields (``allowed_files`` →
+       ``scope``, etc.) with visible warnings.
+    6. **W03**: Persists canonicalization warnings under
+       ``plan["_architect_schema_warnings"]``.
+
+    Returns the same plan dict (mutated in-place for efficiency).
+    """
+    from grace_control.core.prompts import canonicalize_packet_fields
+
+    # Unwrap nested structure
+    if "plan" in plan and isinstance(plan["plan"], dict) and plan["plan"].get("waves"):
+        plan["waves"] = plan["plan"]["waves"]
+    if "packets" in plan and not plan.get("waves"):
+        plan["waves"] = [{"title": "Phase 1", "packets": plan["packets"]}]
+    if "waves" not in plan:
+        plan["waves"] = []
+
+    # W03: Collect schema canonicalization warnings across all packets
+    _schema_warnings: list[str] = []
+
+    for wi, w in enumerate(plan.get("waves", [])):
+        if "packets" not in w:
+            w["packets"] = []
+        for pi, pkt in enumerate(w["packets"]):
+            # W02: Do NOT setdefault("scope", []) — empty
+            # scope must be caught by the plan compiler as
+            # E_CODER_EMPTY_SCOPE, not hidden by a default.
+            pkt.setdefault("acceptance_profile", "NORMAL")
+            pkt.setdefault("depends_on", [])
+
+            # W03: Canonicalize legacy packet fields with visible warnings.
+            # This runs BEFORE the plan compiler so that legacy fields
+            # (allowed_files, forbidden_files, write_scope, inputs) are
+            # mapped to canonical equivalents (scope, frozen_scope,
+            # coder_instructions) before validation.
+            canon_pkt, pkt_warnings = canonicalize_packet_fields(pkt)
+            w["packets"][pi] = canon_pkt
+            for _w in pkt_warnings:
+                _schema_warnings.append(
+                    f"waves[{wi}].packets[{pi}]: {_w}"
+                )
+
+    # W03: Persist canonicalization warnings on the plan so they are
+    # visible in parsed_plan.json and downstream artifacts.
+    if _schema_warnings:
+        plan["_architect_schema_warnings"] = _schema_warnings
+
+    plan.setdefault("constraints", {})
+    plan.setdefault("verification", {"t0": [], "t1": [], "t2": []})
+
+    return plan
+
+
 class FeaturePlanningService:
     """Orchestrate feature planning stages."""
 
@@ -446,25 +509,8 @@ class FeaturePlanningService:
 
                         plan = json.loads(raw)
 
-                        # Normalize plan structure
-                        if "plan" in plan and isinstance(plan["plan"], dict) and plan["plan"].get("waves"):
-                            plan["waves"] = plan["plan"]["waves"]
-                        if "packets" in plan and not plan.get("waves"):
-                            plan["waves"] = [{"title": "Phase 1", "packets": plan["packets"]}]
-                        if "waves" not in plan:
-                            plan["waves"] = []
-                        for w in plan.get("waves", []):
-                            if "packets" not in w:
-                                w["packets"] = []
-                            for pkt in w["packets"]:
-                                # W02: Do NOT setdefault("scope", []) — empty
-                                # scope must be caught by the plan compiler as
-                                # E_CODER_EMPTY_SCOPE, not hidden by a default.
-                                pkt.setdefault("acceptance_profile", "NORMAL")
-                                pkt.setdefault("depends_on", [])
-
-                        plan.setdefault("constraints", {})
-                        plan.setdefault("verification", {"t0": [], "t1": [], "t2": []})
+                        # Normalize plan structure (including W03 canonicalization)
+                        normalize_architect_plan(plan)
 
                         # Persist parsed plan
                         self._artifact_store.write_json(
