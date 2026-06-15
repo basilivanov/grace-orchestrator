@@ -50,6 +50,7 @@ from grace_control.core.structured_logger import GraceLogger
 from grace_control.db import get_db
 from grace_control.db.schema import Packet, PacketRun
 from grace_control.services.agent_commit_service import AgentCommitService
+from grace_control.services.rework_packet_service import RUNTIME_FAILURE_CODES, create_rework_packet
 from grace_control.services.worktree_cleanup_service import WorktreeCleanupService
 from grace_control.services.worktree_inspector import WorktreeInspector
 
@@ -721,11 +722,17 @@ class PacketExecutionAdapter:
         evr = await run_evidence_verifier(packet=pkt_contract, acceptance_report=accept_report,
             worktree_path=wt_path, run_dir=run_dir, changed_files=changed_files, artifacts=art)
         if evr.verdict in (EvidenceVerifierVerdict.REWORK_TO_CODER, EvidenceVerifierVerdict.RETURN_TO_ARCHITECT):
+            if evr.verdict == EvidenceVerifierVerdict.REWORK_TO_CODER:
+                self._maybe_create_rework_packet(packet_id, "evidence_verifier", evr.summary,
+                    evr.coder_instructions, evr.failed_checks)
             return _rej("rejected" if evr.verdict==EvidenceVerifierVerdict.REWORK_TO_CODER else "blocked", evr.summary, evr, skipped_reviewer_report("ev reject"))
         rvr = await run_reviewer_gate(packet=pkt_contract, acceptance_report=accept_report,
             evidence_verifier_report=evr, worktree_path=wt_path, run_dir=run_dir, changed_files=changed_files, artifacts=art)
         if rvr.verdict == ReviewerVerdict.PASS: return _acc(_mk(True, "accepted"), evr, rvr)
         if rvr.verdict in (ReviewerVerdict.REWORK_TO_CODER, ReviewerVerdict.RETURN_TO_ARCHITECT):
+            if rvr.verdict == ReviewerVerdict.REWORK_TO_CODER:
+                self._maybe_create_rework_packet(packet_id, "reviewer", rvr.summary,
+                    rvr.required_changes, rvr.risks)
             return _rej("rejected" if rvr.verdict==ReviewerVerdict.REWORK_TO_CODER else "blocked", rvr.summary, evr, rvr)
         _log.error("unexpected_reviewer_verdict", packet_id=packet_id, verdict=rvr.verdict.value)
         raise RuntimeError(f"Unexpected reviewer verdict: {rvr.verdict.value}")
@@ -1631,6 +1638,48 @@ class PacketExecutionAdapter:
             "created_at": datetime.now(UTC).isoformat() + "Z",
         }
         return metadata
+
+    def _maybe_create_rework_packet(
+        self,
+        original_packet_id: str,
+        verdict_source: str,
+        summary: str,
+        blocking_issues: list[str],
+        coder_instructions: list[str] | None = None,
+    ) -> None:
+        from grace_control.config.settings import settings as _s
+        if not getattr(_s, "agent_runtime_rework_packets_enabled", True):
+            _log.info("rework_packets_disabled", original_packet_id=original_packet_id)
+            return
+        try:
+            with get_db() as db:
+                orig = db.query(Packet).filter_by(id=original_packet_id).first()
+                if not orig:
+                    _log.warn("rework_original_not_found", original_packet_id=original_packet_id)
+                    return
+                create_rework_packet(
+                    db,
+                    original_packet_id=original_packet_id,
+                    feature_id=orig.feature_id,
+                    wave_id=orig.wave_id,
+                    original_spec=orig.spec_json or {},
+                    acceptance_profile=orig.acceptance_profile or "NORMAL",
+                    title=orig.title or "",
+                    slug=orig.slug or "",
+                    max_attempts=orig.max_attempts or 3,
+                    verdict_source=verdict_source,
+                    summary=summary,
+                    blocking_issues=blocking_issues,
+                    coder_instructions=coder_instructions,
+                )
+                db.commit()
+                _log.info("rework_packet_committed",
+                          original_packet_id=original_packet_id,
+                          verdict_source=verdict_source)
+        except Exception as e:
+            _log.error("rework_packet_creation_failed",
+                       original_packet_id=original_packet_id,
+                       error=str(e)[:300])
 
     def _write_agent_patch(self, wt_path: Path | None, run_dir: Path | None, base_sha: str | None) -> None:
         if not wt_path or not run_dir or not base_sha:

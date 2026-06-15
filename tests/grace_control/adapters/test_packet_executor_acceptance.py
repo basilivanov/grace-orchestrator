@@ -741,3 +741,135 @@ class TestCallExecutorTargetRepoWorktree:
             mock_cleanup_run.assert_called_once()
             _, kwargs = mock_cleanup_run.call_args
             assert kwargs["project_root"] == target_dir
+
+
+class TestW10ReworkPackets:
+    """W10: Reviewer Rework Packets — verify rework packet creation in _route_after."""
+
+    @patch("grace_control.adapters.packet_executor.create_rework_packet")
+    @patch("grace_control.adapters.packet_executor.run_reviewer_gate")
+    @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
+    @patch("grace_control.adapters.packet_executor.get_db")
+    @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
+    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_executor")
+    async def test_verifier_rework_creates_rework_packet(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer, mock_create_rework):
+        """Evidence verifier REWORK_TO_CODER → create_rework_packet called with correct args."""
+        mock_verifier.return_value = _make_verifier_rework()
+        with patch("grace_control.config.settings.settings.agent_runtime_rework_packets_enabled", True):
+            result = await _run_adapter_test(
+                mock_legacy, mock_get_db, mock_pipeline,
+                pipeline_report=_make_accepted_report(),
+                expect_accepted=False,
+                mock_verifier=mock_verifier, mock_reviewer=mock_reviewer,
+                profile="NORMAL",
+            )
+        assert result.domain_status == "rejected"
+        mock_create_rework.assert_called_once()
+        _, kwargs = mock_create_rework.call_args
+        assert kwargs["original_packet_id"] == "pkt-001"
+        assert kwargs["verdict_source"] == "evidence_verifier"
+        assert "verifier says rework" in kwargs["summary"]
+
+    @patch("grace_control.adapters.packet_executor.create_rework_packet")
+    @patch("grace_control.adapters.packet_executor.run_reviewer_gate")
+    @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
+    @patch("grace_control.adapters.packet_executor.get_db")
+    @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
+    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_executor")
+    async def test_verifier_architect_does_not_create_rework(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer, mock_create_rework):
+        """Evidence verifier RETURN_TO_ARCHITECT → create_rework_packet NOT called."""
+        mock_verifier.return_value = _make_verifier_architect()
+        with patch("grace_control.config.settings.settings.agent_runtime_rework_packets_enabled", True):
+            result = await _run_adapter_test(
+                mock_legacy, mock_get_db, mock_pipeline,
+                pipeline_report=_make_accepted_report(),
+                expect_accepted=False,
+                mock_verifier=mock_verifier, mock_reviewer=mock_reviewer,
+                profile="NORMAL",
+            )
+        assert result.domain_status == "blocked"
+        mock_create_rework.assert_not_called()
+
+    @patch("grace_control.adapters.packet_executor.create_rework_packet")
+    @patch("grace_control.adapters.packet_executor.run_reviewer_gate")
+    @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
+    @patch("grace_control.adapters.packet_executor.get_db")
+    @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
+    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_executor")
+    async def test_reviewer_rework_creates_rework_packet(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer, mock_create_rework):
+        """Reviewer REWORK_TO_CODER → create_rework_packet called with correct args."""
+        mock_verifier.return_value = _make_verifier_pass()
+        mock_reviewer.return_value = _make_reviewer_rework()
+        with patch("grace_control.config.settings.settings.agent_runtime_rework_packets_enabled", True):
+            result = await _run_adapter_test(
+                mock_legacy, mock_get_db, mock_pipeline,
+                pipeline_report=_make_accepted_report(),
+                expect_accepted=False,
+                mock_verifier=mock_verifier, mock_reviewer=mock_reviewer,
+                profile="STRICT",
+            )
+        assert result.domain_status == "rejected"
+        mock_create_rework.assert_called_once()
+        _, kwargs = mock_create_rework.call_args
+        assert kwargs["original_packet_id"] == "pkt-001"
+        assert kwargs["verdict_source"] == "reviewer"
+        assert "reviewer says rework" in kwargs["summary"]
+
+    @patch("grace_control.adapters.packet_executor.create_rework_packet")
+    @patch("grace_control.adapters.packet_executor.run_reviewer_gate")
+    @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
+    @patch("grace_control.adapters.packet_executor.get_db")
+    @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
+    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_executor")
+    async def test_reviewer_architect_does_not_create_rework(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer, mock_create_rework):
+        """Reviewer RETURN_TO_ARCHITECT → create_rework_packet NOT called."""
+        mock_verifier.return_value = _make_verifier_pass()
+        mock_reviewer.return_value = _make_reviewer_architect()
+        with patch("grace_control.config.settings.settings.agent_runtime_rework_packets_enabled", True):
+            result = await _run_adapter_test(
+                mock_legacy, mock_get_db, mock_pipeline,
+                pipeline_report=_make_accepted_report(),
+                expect_accepted=False,
+                mock_verifier=mock_verifier, mock_reviewer=mock_reviewer,
+                profile="STRICT",
+            )
+        assert result.domain_status == "blocked"
+        mock_create_rework.assert_not_called()
+
+    @patch("grace_control.adapters.packet_executor.create_rework_packet")
+    @patch("grace_control.adapters.packet_executor.run_reviewer_gate")
+    @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
+    @patch("grace_control.adapters.packet_executor.get_db")
+    @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
+    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_executor")
+    async def test_verifier_rework_disabled_no_rework_packet(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer, mock_create_rework):
+        """agent_runtime_rework_packets_enabled=False → no rework packet created."""
+        mock_verifier.return_value = _make_verifier_rework()
+        with patch("grace_control.config.settings.settings.agent_runtime_rework_packets_enabled", False):
+            result = await _run_adapter_test(
+                mock_legacy, mock_get_db, mock_pipeline,
+                pipeline_report=_make_accepted_report(),
+                expect_accepted=False,
+                mock_verifier=mock_verifier, mock_reviewer=mock_reviewer,
+                profile="NORMAL",
+            )
+        assert result.domain_status == "rejected"
+        mock_create_rework.assert_not_called()
+
+    @patch("grace_control.adapters.packet_executor.create_rework_packet")
+    @patch("grace_control.adapters.packet_executor.run_reviewer_gate")
+    @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
+    @patch("grace_control.adapters.packet_executor.get_db")
+    @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
+    @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_executor")
+    async def test_acceptance_failure_no_rework_packet(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer, mock_create_rework):
+        """Acceptance failure (deterministic) → no rework packet created (never reaches _route_after)."""
+        with patch("grace_control.config.settings.settings.agent_runtime_rework_packets_enabled", True):
+            result = await _run_adapter_test(
+                mock_legacy, mock_get_db, mock_pipeline,
+                pipeline_report=_make_rework_report(),
+                expect_accepted=False,
+                mock_verifier=mock_verifier, mock_reviewer=mock_reviewer,
+                profile="NORMAL",
+            )
+        mock_create_rework.assert_not_called()

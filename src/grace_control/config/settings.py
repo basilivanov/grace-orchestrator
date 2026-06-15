@@ -156,6 +156,9 @@ class GraceSettings(BaseSettings):
     agent_runtime_allow_non_git_scope_skip: bool = False
     opencode_server_kill_grace_seconds: int = 5
 
+    # ── W10 Reviewer Rework Packets ──
+    agent_runtime_rework_packets_enabled: bool = True
+
     # ── Dev tools / replay ──
     dev_tools_enabled: bool = False
     dev_keep_failed_worktrees: bool = False
