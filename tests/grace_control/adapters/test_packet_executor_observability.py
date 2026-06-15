@@ -646,8 +646,8 @@ class TestNoChangeClassification:
         finally:
             _s.agent_runtime_fail_on_no_changes = orig_fail
 
-    async def test_no_changes_continues_when_not_failing(self):
-        """No changes without fail_on_no_changes should NOT reject."""
+    async def test_changes_committed_status(self):
+        """When has_changes=True, status should be 'committed'."""
         from unittest.mock import MagicMock
         from grace_control.adapters.packet_executor import PacketExecutionAdapter
         from grace_control.agent.backend import ExecutionResult as BackendResult
@@ -674,6 +674,76 @@ class TestNoChangeClassification:
         )
         status, sha = result
         assert status == "committed", f"expected committed, got {status}"
+
+    async def test_no_changes_with_fail_rejected_and_has_failure_code(self):
+        """No changes + fail_on_no_changes=True → reject with AGENT_NO_CHANGES_PRODUCED."""
+        from grace_control.config.settings import settings as _s
+        orig_fail = _s.agent_runtime_fail_on_no_changes
+        orig_non_git = _s.agent_runtime_allow_non_git_scope_skip
+        try:
+            _s.agent_runtime_fail_on_no_changes = True
+            _s.agent_runtime_allow_non_git_scope_skip = True
+            from unittest.mock import MagicMock, patch
+            from grace_control.adapters.packet_executor import PacketExecutionAdapter
+            from grace_control.agent.backend import ExecutionResult as BackendResult
+            from grace_control.core.contracts import AcceptanceReport, FinalVerdict, StageName, StageResult, StageStatus
+            from pathlib import Path
+            import tempfile
+
+            with tempfile.TemporaryDirectory() as td:
+                td_path = Path(td)
+                adapter = PacketExecutionAdapter(
+                    project_root=td_path, state_root=td_path, worktree_root=td_path,
+                )
+                adapter._inspector = MagicMock()
+                adapter._inspector.is_git_worktree.return_value = True
+                adapter._inspector.has_changes.return_value = False
+                adapter._inspector.base_sha.return_value = "a" * 40
+                adapter._committer = MagicMock()
+                adapter._evidence = MagicMock()
+
+                async def _fake_call(self, *a, **kw):
+                    return BackendResult(
+                        accepted=True, domain_status="accepted",
+                        worktree_path=td_path, branch_name="agent/test",
+                        commit_sha="", stdout="", stderr="", duration_ms=100,
+                    )
+
+                async def _fake_acc(self, *a, **kw):
+                    return AcceptanceReport(
+                        packet_id="pkt-w9",
+                        final_verdict=FinalVerdict.ACCEPTED, profile=MagicMock(),
+                        stages=[StageResult(name=StageName.T0_SCOPE_AND_LINT,
+                                            status=StageStatus.PASSED, summary="ok")],
+                        summary="passed",
+                    ), "", {"ok": True}, [], td_path, td_path / "runs"
+
+                claim_data = {
+                    "attempt": 1, "feature_id": "f1", "wave_id": "w1",
+                    "slug": "test", "title": "Test", "acceptance_profile": "NORMAL",
+                    "spec": {"scope": ["src/"], "frozen_scope": [],
+                             "verification": {"t0": ["echo ok"]}},
+                    "max_attempts": 3,
+                }
+
+                with patch.object(PacketExecutionAdapter, "_call_executor", _fake_call):
+                    with patch.object(PacketExecutionAdapter, "_run_acceptance", _fake_acc):
+                        with patch("grace_control.adapters.packet_executor.get_db") as mock_db:
+                            db = MagicMock()
+                            mock_db.return_value.__enter__.return_value = db
+                            db.query.return_value.filter_by.return_value.first.return_value = None
+                            result = await adapter.execute("pkt-w9", "w1", claim_data=claim_data)
+
+                assert not result.accepted, "no_changes with fail flag must reject"
+                try:
+                    fc = result.evidence.get("failure_code", "NOT_FOUND")
+                except Exception:
+                    fc = "NOT_FOUND"
+                assert fc == "AGENT_NO_CHANGES_PRODUCED", \
+                    f"expected AGENT_NO_CHANGES_PRODUCED, got {fc}"
+        finally:
+            _s.agent_runtime_fail_on_no_changes = orig_fail
+            _s.agent_runtime_allow_non_git_scope_skip = orig_non_git
 
     async def test_missing_worktree_still_worktree_issue(self):
         """Missing worktree path must still be classified as worktree_missing."""

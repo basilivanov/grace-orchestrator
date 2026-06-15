@@ -488,7 +488,15 @@ class PacketExecutionAdapter:
             elif wt_status == "no_changes":
                 if getattr(_settings, "agent_runtime_fail_on_no_changes", False):
                     _log.info("no_changes_rejected", packet_id=packet_id)
-                    return self._fast_reject("Agent produced no changes", executor.get("executor_id",""), run_id, start)
+                    er = self._fast_reject("Agent produced no changes", executor.get("executor_id",""), run_id, start)
+                    try:
+                        object.__setattr__(er, "evidence", {
+                            "failure_code": AgentRuntimeFailureCode.AGENT_NO_CHANGES_PRODUCED,
+                            "failure_stage": "post_execution_inspection",
+                        })
+                    except Exception:
+                        pass
+                    return er
                 _log.info("no_changes_accepted_as_noop", packet_id=packet_id,
                            reason="agent made no changes — continuing to acceptance")
             if agent_commit_sha:
