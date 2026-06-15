@@ -89,6 +89,10 @@ def normalize_architect_plan(plan: dict) -> dict:
         plan["waves"] = plan["plan"]["waves"]
     if "packets" in plan and not plan.get("waves"):
         plan["waves"] = [{"title": "Phase 1", "packets": plan["packets"]}]
+    # Architect sometimes outputs a raw packet (has scope + role) instead of plan
+    if "scope" in plan and "role" in plan and not plan.get("waves"):
+        packet = dict(plan)
+        plan = {"title": packet.get("title", "Phase 1"), "waves": [{"title": packet.get("title", "Phase 1"), "packets": [packet]}]}
     if "waves" not in plan:
         plan["waves"] = []
 
