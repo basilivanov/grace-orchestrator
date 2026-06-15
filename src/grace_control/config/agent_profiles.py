@@ -25,6 +25,7 @@ _cache: dict[str, dict] | None = None
 class AgentProfile:
     def __init__(self, executor_id: str, raw: dict[str, Any]) -> None:
         self.executor_id = executor_id
+        self.disabled = bool(raw.get("disabled", False))
         self.backend = raw.get("backend", "cli")
         self.command = raw.get("command", [])
         self.extras = raw.get("extras", [])
@@ -55,6 +56,10 @@ class AgentProfile:
         self._validate()
 
     def _validate(self) -> None:
+        # W09: Disabled profiles skip validation — they are not used at runtime.
+        if self.disabled:
+            return
+
         if isinstance(self.command, str):
             raise ValueError(
                 f"Agent '{self.executor_id}': `command` must be a list of strings, "
@@ -76,9 +81,41 @@ class AgentProfile:
             if not isinstance(part, str):
                 raise ValueError(f"Agent '{self.executor_id}': extras[{i}] must be a string, got {type(part).__name__}")
 
+        # ── W09: Profile input mode validation ──────────────────────────────
+        # Every enabled coder profile must have explicit packet input.
+        # File-input profiles must reference {packet_path} in command.
+        # Stdin-input profiles must include {packet_markdown} in template.
+        is_coder = "coder" in self.executor_id.lower()
+
+        if is_coder and self.input_mode == "none":
+            raise ValueError(
+                f"Agent '{self.executor_id}': coder profiles must have "
+                f"explicit packet input (input.mode must be 'file' or 'stdin'), "
+                f"got 'none'. Either add a valid input mode or set disabled: true."
+            )
+
+        if self.input_mode == "file":
+            command_text = " ".join(self.command)
+            if "{packet_path}" not in command_text:
+                raise ValueError(
+                    f"Agent '{self.executor_id}': file-input profiles must reference "
+                    f"'{{packet_path}}' in command, but command does not contain it. "
+                    f"Either add {{packet_path}} to the command or set disabled: true."
+                )
+
+        if self.input_mode == "stdin":
+            if "{packet_markdown}" not in (self.input_template or ""):
+                raise ValueError(
+                    f"Agent '{self.executor_id}': stdin-input profiles must include "
+                    f"'{{packet_markdown}}' in input.template, but template does not "
+                    f"contain it. Either add {{packet_markdown}} to the template or "
+                    f"set disabled: true."
+                )
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "executor_id": self.executor_id,
+            "disabled": self.disabled,
             "backend": self.backend,
             "command": list(self.command),
             "extras": list(self.extras),

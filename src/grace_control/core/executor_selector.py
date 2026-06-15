@@ -28,6 +28,8 @@ def select_executor(role: str, attempt: int = 1) -> dict[str, Any]:
                 return match.to_dict()
 
     profiles = list(load_agent_profiles().values())
+    # W09: Skip disabled profiles — they must not be selected for execution.
+    profiles = [p for p in profiles if not p.disabled]
     if not profiles:
         return {"executor_id": "default", "model": "gemini-3.5-flash",
                 "command": ["agy", "run"], "effort": "medium", "cwd": "{worktree_path}",
@@ -65,6 +67,8 @@ def _profile_matches_role(executor_id: str, role: str) -> bool:
 
 def get_escalation(role: str) -> list[dict[str, Any]]:
     profiles = list(load_agent_profiles().values())
+    # W09: Skip disabled profiles
+    profiles = [p for p in profiles if not p.disabled]
     matching = [p for p in profiles if _profile_matches_role(p.executor_id, role)]
     matching.sort(key=lambda p: p.timeout_seconds, reverse=False)
     return [p.to_dict() for p in matching]
@@ -79,6 +83,8 @@ def resolve_model(role: str) -> dict[str, Any]:
     identifies the exact agent profile for profile lookup in run_llm.
     """
     profiles = list(load_agent_profiles().values())
+    # W09: Skip disabled profiles
+    profiles = [p for p in profiles if not p.disabled]
     matching = [p for p in profiles if _profile_matches_role(p.executor_id, role)]
     if not matching:
         return {"model": "gemini-3.5-flash", "command": "opencode", "kind": "opencode", "executor_id": "opencode"}

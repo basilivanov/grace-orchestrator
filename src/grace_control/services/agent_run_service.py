@@ -142,6 +142,20 @@ class AgentRunService:
             cmd = [cmd, "{packet_markdown}"]
         command = self._renderer.render(cmd, ctx)
 
+        # W09: Reject unresolved template placeholders after render.
+        # Any remaining {word} patterns indicate a variable that was not
+        # provided in the context — this is a fail-closed check.
+        _UNRESOLVED_RE = re.compile(r'\{([a-z_]+)\}')
+        for part in command:
+            unresolved = _UNRESOLVED_RE.findall(part)
+            if unresolved:
+                raise RuntimeError(
+                    f"Unresolved template placeholder(s) in command: {unresolved}. "
+                    f"Command fragment: '{part[:80]}'. "
+                    f"All placeholders must be resolved before execution. "
+                    f"Check profile command template and context variables."
+                )
+
         # Inject --dir <worktree_path> for backends that require it (e.g. opencode
         # which connects to a server and would otherwise use the server's cwd).
         # Controlled by the profile field `inject_dir: true` — avoids hardcoding
@@ -257,6 +271,25 @@ class AgentRunService:
                 f"The worktree or target directory must exist before agent execution. "
                 f"Check worktree routing and that the packet scope paths resolve correctly."
             )
+
+        # W09: Ensure execution cwd stays inside the intended worktree.
+        # This prevents path-escape attacks where a crafted cwd template
+        # points outside the worktree (e.g. /etc, /tmp, ../../).
+        try:
+            resolved_cwd = cwd.resolve()
+            resolved_worktree = worktree_path.resolve()
+            if not resolved_cwd.is_relative_to(resolved_worktree):
+                raise RuntimeError(
+                    f"CWD {cwd} escapes worktree {worktree_path}. "
+                    f"The execution directory must be inside the intended worktree. "
+                    f"Check the profile cwd template and worktree routing."
+                )
+        except RuntimeError:
+            raise
+        except Exception:
+            # If path resolution fails for any reason, the existing
+            # exists check above is the primary guard.
+            pass
 
         result = await self._supervisor.run(
             command, cwd=cwd, env=env, timeout_seconds=timeout_seconds, stdin_text=stdin_text,

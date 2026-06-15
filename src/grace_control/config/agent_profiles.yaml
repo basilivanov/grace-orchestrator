@@ -401,6 +401,7 @@ agents:
     model: deepseek/deepseek-v4-flash
     timeout_seconds: 120
   opencode:
+    disabled: true  # W09: generic profile without specific role; disabled until covered by tests
     backend: cli
     command:
     - opencode
