@@ -138,13 +138,16 @@ def resolve_linter_mode(worktree_path: Path) -> str:
 def enrich_packet(pkt_spec: dict, dep_ids: list[str] | None = None) -> dict:
     """Enrich a packet spec with auto-resolved defaults.
 
-    Sets depends_on from resolved dep_ids, ensures scope/default fields exist.
+    Sets depends_on from resolved dep_ids, ensures default fields exist.
     Used by architect router _persist_plan after DAG id resolution.
+
+    W02: Does NOT setdefault("scope", []) — empty scope must be caught
+    by the plan compiler, not hidden by a default value.
     """
     enriched = dict(pkt_spec)
     if dep_ids:
         enriched["depends_on"] = dep_ids
-    enriched.setdefault("scope", [])
+    # W02: No enriched.setdefault("scope", []) — missing scope is an error
     enriched.setdefault("depends_on", [])
     enriched.setdefault("acceptance_profile", "NORMAL")
     return enriched

@@ -457,7 +457,9 @@ class FeaturePlanningService:
                             if "packets" not in w:
                                 w["packets"] = []
                             for pkt in w["packets"]:
-                                pkt.setdefault("scope", [])
+                                # W02: Do NOT setdefault("scope", []) — empty
+                                # scope must be caught by the plan compiler as
+                                # E_CODER_EMPTY_SCOPE, not hidden by a default.
                                 pkt.setdefault("acceptance_profile", "NORMAL")
                                 pkt.setdefault("depends_on", [])
 
@@ -808,28 +810,19 @@ Respond ONLY with valid JSON (no markdown, no backticks):
         return prompt
 
     def _fallback_plan(self, feature_id: str, task_desc: str) -> dict:
+        """W02: Architect fallback does NOT create executable coder packets.
+
+        When the architect LLM fails, we set PLAN_FAILED instead of creating
+        a coder packet with empty scope. The fallback plan is non-executable —
+        it records that planning failed but does not enqueue unsafe work.
+        """
         return {
-            "waves": [
-                {
-                    "id": f"wave_{uuid.uuid4().hex[:12]}",
-                    "title": "Implementation",
-                    "packets": [
-                        {
-                            "id": f"pkt_{uuid.uuid4().hex[:12]}",
-                            "title": "Initial implementation",
-                            "scope": [],
-                            "acceptance_profile": "FAST",
-                            "depends_on": [],
-                            "description": task_desc[:500],
-                            "verification": {"t0": [], "t1": [], "t2": []},
-                            "expected_evidence": [],
-                        }
-                    ],
-                }
-            ],
-            "summary": f"Fallback plan for feature {feature_id} — architect LLM unavailable",
+            "waves": [],
+            "summary": f"PLAN_FAILED: architect LLM unavailable for feature {feature_id}",
             "constraints": {"frozen_scope": []},
             "verification": {"t0": [], "t1": [], "t2": []},
+            "_fallback": True,
+            "_fallback_reason": "architect_llm_unavailable",
         }
 
     def approve_plan(self, feature_id: str) -> dict:

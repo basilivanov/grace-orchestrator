@@ -216,6 +216,7 @@ class MultimodalEvidencePack:
 
 
 def _has_abs_or_parent(path: str) -> bool:
+    """W02: Check for absolute or parent-traversal paths in scope."""
     return path.startswith("/") or ".." in Path(path).parts
 
 
@@ -245,6 +246,15 @@ def validate_packet_contract(packet: ExecutionPacketContract) -> list[str]:
     for p in packet.allowed_write_scope:
         if _has_abs_or_parent(p):
             errors.append(f"allowed_write_scope path invalid: {p}")
+        if _has_python_import_path(p):
+            errors.append(f"allowed_write_scope is Python import path: {p} — use filesystem path")
+    for p in packet.frozen_scope:
+        if _has_abs_or_parent(p):
+            errors.append(f"frozen_scope path invalid: {p}")
+    # W02: scope/frozen overlap is an error
+    overlap = set(packet.allowed_write_scope) & set(packet.frozen_scope)
+    if overlap:
+        errors.append(f"scope/frozen_scope overlap: {sorted(overlap)} — cannot be both writable and frozen")
     # NORMAL/STRICT no longer requires verification.t1 — auto defaults
     # from gate_resolver fill in when architect does not provide them.
     # validate_packet_contract is called before resolution, so skip
@@ -282,21 +292,75 @@ def validate_acceptance_report(report: AcceptanceReport) -> list[str]:
     return errors
 
 
+class ScopeContractError(ValueError):
+    """W02: Raised when scope contract validation fails."""
+
+    def __init__(self, errors: list[str]):
+        self.errors = errors
+        super().__init__("; ".join(errors))
+
+
+def _has_python_import_path(path: str) -> bool:
+    """W02: Check for Python import-style paths (dot-separated, no slashes)."""
+    return "." in path and "/" not in path and not path.startswith(".")
+
+
+def validate_scope_paths(scope_list: list[str], frozen_list: list[str] | None = None) -> list[str]:
+    """W02: Validate scope and frozen paths. Returns list of error strings.
+
+    Checks:
+    - Absolute paths -> error (not silently stripped)
+    - Parent paths (..) -> error
+    - Python import paths -> error
+    - Scope/frozen overlap -> error (not silently stripped)
+    """
+    errors: list[str] = []
+
+    for p in scope_list:
+        if p.startswith("/"):
+            errors.append(f"absolute path in scope: {p} — must be repo-relative")
+        if ".." in Path(p).parts:
+            errors.append(f"parent path in scope: {p} — must be within repo")
+        if _has_python_import_path(p):
+            errors.append(f"Python import path in scope: {p} — use filesystem path instead")
+
+    if frozen_list:
+        for p in frozen_list:
+            if p.startswith("/"):
+                errors.append(f"absolute path in frozen_scope: {p} — must be repo-relative")
+            if ".." in Path(p).parts:
+                errors.append(f"parent path in frozen_scope: {p} — must be within repo")
+
+        # W02: Overlap is an error, not silently stripped
+        overlap = set(scope_list) & set(frozen_list)
+        if overlap:
+            errors.append(f"scope/frozen_scope overlap: {sorted(overlap)} — a file cannot be both writable and frozen")
+
+    return errors
+
+
 def build_packet_contract(packet_data: dict) -> ExecutionPacketContract:
     spec = packet_data.get("spec_json") or {}
     scope_list = spec.get("scope", [])
     if isinstance(scope_list, str):
         scope_list = [scope_list]
-    scope_list = scope_list or ["src/grace_control/"]
-    frozen = spec.get("frozen_scope", ["docs/archived/legacy_prefect_grace/"])
-    # Strip absolute paths from scope/frozen lists — they come from the
-    # architect but break contract validation (must be repo-relative).
-    scope_list = [s for s in scope_list if not s.startswith("/")]
-    frozen = [s for s in frozen if not s.startswith("/")]
 
-    # Remove from frozen_scope any entries that overlap with allowed_write_scope.
-    # The architect sometimes puts target files in both, making them unwritable.
-    frozen = [s for s in frozen if s not in scope_list]
+    # W02: No default fallback to src/grace_control/ — if scope is empty,
+    # it stays empty. The plan compiler will catch it as E_CODER_EMPTY_SCOPE.
+    # Callers that need non-empty scope must provide it explicitly.
+
+    frozen = spec.get("frozen_scope", [])
+    if isinstance(frozen, str):
+        frozen = [frozen]
+
+    # W02: Validate scope paths — reject instead of silently stripping
+    scope_errors = validate_scope_paths(scope_list, frozen)
+    if scope_errors:
+        raise ScopeContractError(scope_errors)
+
+    # W02: No longer silently strip absolute paths from scope or frozen.
+    # Absolute paths are rejected above via ScopeContractError.
+    # No longer silently remove frozen_scope overlap — rejected above.
 
     verification_raw = spec.get("verification", {})
     if isinstance(verification_raw, list):

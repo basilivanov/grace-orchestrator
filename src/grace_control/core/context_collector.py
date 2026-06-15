@@ -96,7 +96,7 @@ class ContextCollector:
         project_root: Path | None = None,
     ) -> CodebaseContext:
         root = project_root or self._root
-        scope = target_scope or ["src/grace_control/"]
+        scope = target_scope or ["src/grace_control/"]  # W02: read-only context default, not write scope
 
         files = _scan_files(root, scope)
         _log.debug("context_scan_done", file_count=len(files))

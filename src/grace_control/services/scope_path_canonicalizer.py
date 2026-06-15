@@ -86,6 +86,44 @@ class ScopePathCanonicalizer:
                 scope = pkt.get("scope", []) or []
                 new_scope: list[str] = []
                 for si, path in enumerate(scope):
+                    # W02: Reject absolute paths, parent paths, and Python import paths
+                    if not isinstance(path, str):
+                        result.errors.append({
+                            "code": "E_SCOPE_PATH_NOT_STRING",
+                            "message": f"scope entry must be a string, got {type(path).__name__}",
+                            "packet_title": pkt.get("title", f"wave-{wi}-pkt-{pi}"),
+                            "scope_index": si,
+                        })
+                        continue
+                    if path.startswith("/"):
+                        result.errors.append({
+                            "code": "E_SCOPE_ABSOLUTE_PATH",
+                            "message": f"scope path '{path}' is absolute — scope must be repo-relative",
+                            "packet_title": pkt.get("title", f"wave-{wi}-pkt-{pi}"),
+                            "scope_index": si,
+                        })
+                        # Do NOT silently strip — keep as-is and let compiler catch it
+                        new_scope.append(path)
+                        continue
+                    if ".." in Path(path).parts:
+                        result.errors.append({
+                            "code": "E_SCOPE_PARENT_PATH",
+                            "message": f"scope path '{path}' contains '..' — scope must be within repo",
+                            "packet_title": pkt.get("title", f"wave-{wi}-pkt-{pi}"),
+                            "scope_index": si,
+                        })
+                        new_scope.append(path)
+                        continue
+                    if "." in path and "/" not in path and not path.startswith("."):
+                        result.errors.append({
+                            "code": "E_SCOPE_PYTHON_IMPORT_PATH",
+                            "message": f"scope path '{path}' looks like a Python import path — use filesystem path",
+                            "packet_title": pkt.get("title", f"wave-{wi}-pkt-{pi}"),
+                            "scope_index": si,
+                        })
+                        new_scope.append(path)
+                        continue
+
                     canonical = self._canonicalize(path)
                     if canonical != path:
                         result.changed = True

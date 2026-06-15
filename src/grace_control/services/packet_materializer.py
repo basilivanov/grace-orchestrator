@@ -34,10 +34,15 @@ BRANCH_FORMAT = "agent/default/{packet_id}/{attempt_slug}"
 
 
 class PacketMaterializer:
-    """Renders EXECUTION_PACKET.md from a packet DB row."""
+    """Renders EXECUTION_PACKET.md from a packet DB row.
 
-    DEFAULT_SCOPE = "src/"
-    DEFAULT_FROZEN = ["docs/archived/legacy_prefect_grace/"]
+    W02: No DEFAULT_SCOPE — executable packets must have explicit scope.
+    Missing scope raises ValueError instead of falling back to 'src/'.
+    """
+
+    # W02: DEFAULT_SCOPE removed — no silent fallback for executable packets.
+    # The plan compiler enforces non-empty scope for coder packets.
+    DEFAULT_FROZEN: list[str] = []  # No default frozen scope either
     DEFAULT_VERIFICATION = "pytest -v\npython3 scripts/grace_lint.py"
 
     def materialize(self, packet_data: dict, state_root: Path) -> Path:
@@ -47,15 +52,25 @@ class PacketMaterializer:
 
         spec_json = packet_data["spec_json"] if isinstance(packet_data["spec_json"], dict) else {}
         spec_str = yaml.dump(spec_json, default_flow_style=False, allow_unicode=True)
-        scope = spec_json.get("scope", self.DEFAULT_SCOPE)
+
+        scope = spec_json.get("scope", [])
         if isinstance(scope, str):
             scope = [scope]
+
+        # W02: Fail-closed — refuse to materialize executable packet without scope
+        if not scope:
+            raise ValueError(
+                f"Packet {packet_id} has no write scope — "
+                f"every executable packet must have explicit scope. "
+                f"The plan compiler should have caught this."
+            )
+
         scope_lines = "\n".join(f"- {s}" for s in scope)
 
-        frozen = spec_json.get("frozen_scope", self.DEFAULT_FROZEN)
+        frozen = spec_json.get("frozen_scope", [])
         if isinstance(frozen, str):
             frozen = [frozen]
-        frozen_lines = "\n".join(f"- {s}" for s in frozen)
+        frozen_lines = "\n".join(f"- {s}" for s in frozen) if frozen else "- (none)"
 
         verification_text = self._render_verification(spec_json.get("verification", {}))
 

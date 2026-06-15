@@ -267,14 +267,69 @@ class PlanCompiler:
             for pi, packet in enumerate(wave.get("packets", [])):
                 title = packet.get("title", f"wave-{wi}-pkt-{pi}")
                 scope = packet.get("scope", [])
-                # Check for non-canonical scope paths
+                role = packet.get("role", "coder")
+
+                # ── W02: Fail-closed scope validation ────────────────
+                # Coder packets MUST have explicit, non-empty scope.
+                # Missing/empty scope = compiler error, not a default fallback.
+                if role == "coder" and not scope:
+                    _add_error(
+                        result, "E_CODER_EMPTY_SCOPE",
+                        f"waves[{wi}].packets[{pi}].scope",
+                        f"coder packet '{title}' has no write scope — "
+                        f"every coder packet must specify explicit repo-relative scope",
+                        title,
+                        "add target files/directories to scope (e.g. ['src/grace_control/services/'])",
+                    )
+
+                # W02: Validate each scope path
                 for si, sp in enumerate(scope):
+                    if not isinstance(sp, str):
+                        _add_error(
+                            result, "E_SCOPE_PATH_NOT_STRING",
+                            f"waves[{wi}].packets[{pi}].scope[{si}]",
+                            f"scope entry must be a string, got {type(sp).__name__}",
+                            title,
+                        )
+                        continue
+
+                    # W02: Reject absolute paths (not silently stripped)
+                    if sp.startswith("/"):
+                        _add_error(
+                            result, "E_SCOPE_ABSOLUTE_PATH",
+                            f"waves[{wi}].packets[{pi}].scope[{si}]",
+                            f"scope path '{sp}' is absolute — scope must be repo-relative",
+                            title,
+                            f"remove leading '/': '{sp.lstrip("/")}'",
+                        )
+
+                    # W02: Reject parent paths (..)
+                    if ".." in Path(sp).parts:
+                        _add_error(
+                            result, "E_SCOPE_PARENT_PATH",
+                            f"waves[{wi}].packets[{pi}].scope[{si}]",
+                            f"scope path '{sp}' contains '..' — scope must be within repo",
+                            title,
+                            "use repo-relative path without parent references",
+                        )
+
+                    # W02: Reject Python import paths (dot-separated, no /)
+                    if "." in sp and "/" not in sp and not sp.startswith("."):
+                        _add_error(
+                            result, "E_SCOPE_PYTHON_IMPORT_PATH",
+                            f"waves[{wi}].packets[{pi}].scope[{si}]",
+                            f"scope path '{sp}' looks like a Python import path — "
+                            f"scope must be filesystem paths (e.g. 'src/grace_control/services/')",
+                            title,
+                            f"convert to filesystem path: replace dots with '/' and add '.py' or '/'",
+                        )
+
+                    # Existing: non-canonical scope paths (app/, app.)
                     if isinstance(sp, str) and (
                         sp.startswith("app/")
                         or sp.startswith("app.")
                         or (".services" in sp and "/" not in sp)
                     ):
-                        # Non-canonical — compiler will catch via canonicalizer
                         _add_error(
                             result, "E_SCOPE_PATH_NOT_CANONICAL",
                             f"waves[{wi}].packets[{pi}].scope[{si}]",
@@ -282,6 +337,20 @@ class PlanCompiler:
                             f"apps/api/app/services/... not app/... or app.services...)",
                             title,
                             f"replace '{sp}' with the full filesystem path",
+                        )
+
+                # W02: Reject scope/frozen_scope overlap (not silently strip)
+                frozen = packet.get("frozen_scope", []) or []
+                if scope and frozen:
+                    overlap = set(scope) & set(frozen)
+                    if overlap:
+                        _add_error(
+                            result, "E_SCOPE_FROZEN_OVERLAP",
+                            f"waves[{wi}].packets[{pi}].scope",
+                            f"scope and frozen_scope overlap: {sorted(overlap)} — "
+                            f"a file cannot be both writable and frozen",
+                            title,
+                            f"remove overlapping paths from either scope or frozen_scope",
                         )
                 verification = packet.get("verification", {})
                 evidence = packet.get("expected_evidence", [])
@@ -634,7 +703,9 @@ class PlanCompiler:
         scope: list[str],
         description: str,
     ) -> None:
-        # Coder packets must have scope
+        # W02: Empty coder scope is now checked in compile_plan() main loop
+        # with more detail (wave/packet index). Keep the old check as a
+        # safety net for direct _validate_role_scope() callers.
         if role == "coder" and not scope:
             _add_error(
                 result, "E_CODER_EMPTY_SCOPE",
@@ -654,8 +725,8 @@ class PlanCompiler:
                 title, "change role to 'verifier' or add files to modify",
             )
 
-        # Frozen scope vs scope overlap
-        pass  # handled by _strip_frozen_overlap in build_packet_contract
+        # W02: Frozen scope vs scope overlap is now checked in compile_plan()
+        # main loop as E_SCOPE_FROZEN_OVERLAP (not silently stripped).
 
 
 # ── Public convenience function ────────────────────────────────────────

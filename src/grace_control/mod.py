@@ -80,7 +80,7 @@ def process(task_description: str,
             "summary": "Validation failed",
             "errors": errors,
         }
-    scope = target_scope or ["src/grace_control/"]
+    scope = target_scope or ["src/grace_control/"]  # W02: read-only context default, not write scope
     meta = metadata or {}
     feature_type = meta.get("feature_type", "")
     if feature_type and feature_type in _handler_registry:
