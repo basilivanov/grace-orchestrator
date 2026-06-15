@@ -306,8 +306,9 @@ class Worker:
                 # ── Phase 3: RELEASE ────────────────────────────────────
                 await self._phase_release(exec_state, result)
 
-                # ── Phase 4: MERGE (only on accepted) ───────────────────
-                if exec_state.release_status == "accepted":
+                # ── Phase 4: MERGE (only on accepted, not stale) ────────
+                if (exec_state.release_status == "accepted"
+                        and exec_state.failure_type != WorkerFailureType.STALE_LEASE):
                     await self._phase_merge(exec_state, result)
 
                 # ── Phase 5: POST-RELEASE (retry/recovery) ──────────────
@@ -360,6 +361,11 @@ class Worker:
 
             # Set release status from result
             exec_state.release_status = release_status_from_result(result)
+            # W07-rework: Classify failure for non-accepted results so the
+            # classification propagates into the release payload.
+            if not result.accepted:
+                exec_state.failure_type = classify_worker_failure(result=result)
+                exec_state.error_message = result.reason or ""
             exec_state.result_data = result.model_dump()
             return result
 
@@ -407,8 +413,12 @@ class Worker:
             )
 
             if release_result.get("stale_lease"):
-                # W07: Stale lease — classify and abandon
+                # W07-rework: Stale lease — classify, abandon, and clear
+                # release_status so it cannot remain "accepted" and allow
+                # merge to proceed.  This is the W01/W07 fencing invariant:
+                # stale release must be handled once and must not merge.
                 exec_state.failure_type = WorkerFailureType.STALE_LEASE
+                exec_state.release_status = ""  # prevent merge branch
                 self.log.warn("release_stale_abandoning_result",
                     packet_id=packet_id, status=status,
                     worker_id=self.worker_id)

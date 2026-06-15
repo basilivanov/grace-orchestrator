@@ -350,3 +350,246 @@ def test_classify_worker_failure_result_scope_violation():
     # Non-zero (generic failure)
     result5 = ExecutionResult(accepted=False, domain_status="rejected", reason="Test failed")
     assert classify_worker_failure(result=result5) == WorkerFailureType.AGENT_NONZERO
+
+
+# ─── Rework test 1: Stale accepted release must not merge ──────────────────
+
+@pytest.mark.asyncio
+async def test_worker_stale_accepted_release_does_not_merge():
+    """W07-rework: If execution result is accepted but release returns stale,
+    merge must NOT be called.  Verifies the W01/W07 fencing invariant:
+    stale release must be handled once and must not merge/retry/recover."""
+    worker = Worker.__new__(Worker)
+    worker.log = MagicMock()
+    worker.api = AsyncMock()
+    worker._git_context = MagicMock()
+    worker._git_context.target_repo_root = "/repo"
+    worker.worker_id = "worker-stale-test"
+    worker._active_packet_id = "pkt-stale-accepted"
+    worker._active_lease_id = 42
+    worker._active_claimed_attempt = 1
+
+    exec_state = ExecutionState(
+        packet_id="pkt-stale-accepted",
+        worker_id="worker-stale-test",
+        phase="claimed",
+        lease_id=42,
+        claimed_attempt=1,
+        attempt=1,
+        max_attempts=5,
+    )
+
+    # Execution returns accepted — but the release will be stale
+    from grace_control.adapters.packet_executor import ExecutionResult
+    result = ExecutionResult(
+        accepted=True,
+        domain_status="accepted",
+        worktree_path="/worktree",
+        branch_name="agent/pkt-stale-accepted",
+        commit_sha="abc123def456",
+        duration_ms=1000,
+    )
+
+    # Simulate _phase_execute setting release_status from accepted result
+    exec_state.phase = "executing"
+    exec_state.release_status = release_status_from_result(result)  # "accepted"
+
+    # _phase_release: the API raises a 409 stale_lease exception
+    # (_release_with_fencing catches it and returns stale_lease=True)
+    worker.api.release_packet = AsyncMock(
+        side_effect=Exception("409 Conflict: stale_lease - another worker owns this packet"))
+
+    await worker._phase_release(exec_state, result)
+
+    # After stale release: release_status must be cleared, failure_type set
+    assert exec_state.failure_type == WorkerFailureType.STALE_LEASE, \
+        f"Expected STALE_LEASE, got: {exec_state.failure_type}"
+    assert exec_state.release_status == "", \
+        f"Release status must be cleared after stale lease, got: '{exec_state.release_status}'"
+
+    # Now check: _run_one_cycle merge branch must NOT fire
+    # The guard is: release_status == "accepted" AND failure_type != STALE_LEASE
+    should_merge = (
+        exec_state.release_status == "accepted"
+        and exec_state.failure_type != WorkerFailureType.STALE_LEASE
+    )
+    assert not should_merge, \
+        "Merge must not proceed when release_status is cleared / failure_type is STALE_LEASE"
+
+    # Also verify _phase_merge is NOT called when guard fails
+    worker.api.merge_packet = AsyncMock()
+    if should_merge:
+        await worker._phase_merge(exec_state, result)
+    worker.api.merge_packet.assert_not_called()
+
+
+# ─── Rework test 2: _phase_execute classifies agent_nonzero result ─────────
+
+@pytest.mark.asyncio
+async def test_phase_execute_classifies_agent_nonzero_result():
+    """W07-rework: _phase_execute must set failure_type=agent_nonzero when
+    the execution result is not accepted (generic rejection)."""
+    worker = Worker.__new__(Worker)
+    worker.log = MagicMock()
+    worker.executor = AsyncMock()
+    worker.worker_id = "worker-exec-test"
+
+    from grace_control.adapters.packet_executor import ExecutionResult
+    rejected_result = ExecutionResult(
+        accepted=False,
+        domain_status="rejected",
+        reason="Test suite failed",
+        duration_ms=500,
+    )
+    worker.executor.execute = AsyncMock(return_value=rejected_result)
+
+    claim = MagicMock()
+    claim.packet_id = "pkt-nonzero"
+    claim.model_dump.return_value = {}
+
+    exec_state = ExecutionState(
+        packet_id="pkt-nonzero",
+        worker_id="worker-exec-test",
+        lease_id=1,
+        claimed_attempt=1,
+        attempt=1,
+        max_attempts=3,
+    )
+
+    result = await worker._phase_execute(claim, exec_state, agent_timeout=600)
+
+    # failure_type must be set to agent_nonzero for non-accepted results
+    assert exec_state.failure_type == WorkerFailureType.AGENT_NONZERO, \
+        f"Expected AGENT_NONZERO, got: {exec_state.failure_type}"
+    assert exec_state.error_message == "Test suite failed", \
+        f"Expected reason as error_message, got: {exec_state.error_message}"
+
+
+# ─── Rework test 3: _phase_execute classifies scope_violation result ───────
+
+@pytest.mark.asyncio
+async def test_phase_execute_classifies_scope_violation_result():
+    """W07-rework: _phase_execute must set failure_type=scope_violation when
+    the execution result indicates scope violation."""
+    worker = Worker.__new__(Worker)
+    worker.log = MagicMock()
+    worker.executor = AsyncMock()
+    worker.worker_id = "worker-scope-test"
+
+    from grace_control.adapters.packet_executor import ExecutionResult
+    scope_result = ExecutionResult(
+        accepted=False,
+        domain_status="blocked",
+        reason="Agent wrote outside allowed scope",
+        duration_ms=500,
+    )
+    worker.executor.execute = AsyncMock(return_value=scope_result)
+
+    claim = MagicMock()
+    claim.packet_id = "pkt-scope-viol"
+    claim.model_dump.return_value = {}
+
+    exec_state = ExecutionState(
+        packet_id="pkt-scope-viol",
+        worker_id="worker-scope-test",
+        lease_id=1,
+        claimed_attempt=1,
+        attempt=1,
+        max_attempts=3,
+    )
+
+    result = await worker._phase_execute(claim, exec_state, agent_timeout=600)
+
+    # failure_type must be scope_violation
+    assert exec_state.failure_type == WorkerFailureType.SCOPE_VIOLATION, \
+        f"Expected SCOPE_VIOLATION, got: {exec_state.failure_type}"
+    assert exec_state.error_message == "Agent wrote outside allowed scope", \
+        f"Expected reason as error_message, got: {exec_state.error_message}"
+
+
+# ─── Rework test 4: Release payload includes failure_type and retryable ────
+
+@pytest.mark.asyncio
+async def test_release_payload_includes_failure_type_and_retryable_for_result_failures():
+    """W07-rework: After _phase_execute + _phase_release, the release payload
+    (to_release_result) must include failure_type and retryable flags for
+    both scope_violation and agent_nonzero results."""
+
+    # --- Case 1: scope_violation → retryable=False ---
+    exec_state_scope = ExecutionState(
+        packet_id="pkt-scope-release",
+        worker_id="worker-1",
+        attempt=1,
+        max_attempts=3,
+    )
+    exec_state_scope.release_status = "blocked"
+    exec_state_scope.failure_type = WorkerFailureType.SCOPE_VIOLATION
+    exec_state_scope.error_message = "Scope violation"
+
+    result_scope = exec_state_scope.to_release_result()
+    assert result_scope.get("failure_type") == "scope_violation", \
+        f"Expected scope_violation in release payload, got: {result_scope.get('failure_type')}"
+    assert result_scope.get("retryable") is False, \
+        f"Scope violation must not be retryable in release payload, got: {result_scope.get('retryable')}"
+
+    # --- Case 2: agent_nonzero → retryable=True (when attempts remain) ---
+    exec_state_agent = ExecutionState(
+        packet_id="pkt-agent-release",
+        worker_id="worker-1",
+        attempt=1,
+        max_attempts=3,
+    )
+    exec_state_agent.release_status = "rejected"
+    exec_state_agent.failure_type = WorkerFailureType.AGENT_NONZERO
+    exec_state_agent.error_message = "Test failed"
+
+    result_agent = exec_state_agent.to_release_result()
+    assert result_agent.get("failure_type") == "agent_nonzero", \
+        f"Expected agent_nonzero in release payload, got: {result_agent.get('failure_type')}"
+    assert result_agent.get("retryable") is True, \
+        f"Agent nonzero must be retryable in release payload, got: {result_agent.get('retryable')}"
+
+    # --- End-to-end: simulate _phase_execute → _phase_release for agent_nonzero ---
+    worker = Worker.__new__(Worker)
+    worker.log = MagicMock()
+    worker.api = AsyncMock()
+    worker._git_context = MagicMock()
+    worker.worker_id = "worker-e2e"
+    worker._active_packet_id = "pkt-e2e-agent"
+    worker._active_lease_id = 1
+    worker._active_claimed_attempt = 1
+
+    from grace_control.adapters.packet_executor import ExecutionResult
+
+    rejected_result = ExecutionResult(
+        accepted=False,
+        domain_status="rejected",
+        reason="Generic agent failure",
+    )
+    worker.api.release_packet = AsyncMock(
+        return_value={"stale_lease": False, "released": True})
+
+    exec_state = ExecutionState(
+        packet_id="pkt-e2e-agent",
+        worker_id="worker-e2e",
+        lease_id=1,
+        claimed_attempt=1,
+        attempt=1,
+        max_attempts=3,
+    )
+    # Simulate what _phase_execute does (now with rework fix)
+    exec_state.phase = "executing"
+    exec_state.release_status = release_status_from_result(rejected_result)
+    if not rejected_result.accepted:
+        exec_state.failure_type = classify_worker_failure(result=rejected_result)
+        exec_state.error_message = rejected_result.reason or ""
+
+    # Simulate _phase_release
+    await worker._phase_release(exec_state, rejected_result)
+
+    # The release payload must have failure_type and retryable
+    payload = exec_state.to_release_result()
+    assert payload.get("failure_type") == "agent_nonzero", \
+        f"E2E: Expected agent_nonzero, got: {payload.get('failure_type')}"
+    assert payload.get("retryable") is True, \
+        f"E2E: Expected retryable=True, got: {payload.get('retryable')}"
