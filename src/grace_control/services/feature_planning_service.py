@@ -708,7 +708,7 @@ Other files (paths only):
         if feature.status != "PLAN_READY":
             raise ValueError(f"Cannot approve plan in status {feature.status}. Must be PLAN_READY.")
 
-        spec = feature.spec_json or {}
+        spec = dict(feature.spec_json) if feature.spec_json else {}
         plan = spec.get("plan_json", {}) if isinstance(spec, dict) else {}
         waves = plan.get("waves", []) if isinstance(plan, dict) else []
 
@@ -855,7 +855,7 @@ Other files (paths only):
                 self.db.add(materialize_run)
                 feature.status = "PLAN_FAILED"
                 materialize_run.error = f"plan compiler rejected: {len(compiled.errors)} errors"
-                self.db.add(materialize_run)
+                self.db.flush()
                 self.db.commit()
                 raise ValueError(
                     f"Plan compiler found {len(compiled.errors)} errors: "
