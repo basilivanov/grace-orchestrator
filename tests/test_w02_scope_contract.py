@@ -12,6 +12,8 @@ Tests cover:
 4. Absolute scope path is error, not silently stripped
 5. Scope/frozen overlap is error
 6. Architect fallback does not enqueue empty-scope coder packet
+7. Plan compiler rejects non-list scope (string, dict, int)
+8. Root constraints.frozen_scope overlap with packet scope is error
 """
 
 from __future__ import annotations
@@ -363,3 +365,154 @@ def test_architect_fallback_does_not_enqueue_empty_scope_packet():
             if role == "coder":
                 scope = pkt.get("scope", [])
                 assert scope, f"Coder packet '{pkt.get('title')}' has empty scope in fallback plan"
+
+
+# ─── Test 7: Plan compiler rejects string scope ──────────────────────────
+
+def test_plan_compiler_rejects_scope_string():
+    """W02: A string scope is truthy but iterates as characters — must be rejected."""
+    plan = {
+        "waves": [
+            {
+                "title": "Test Wave",
+                "packets": [
+                    {
+                        "title": "String scope coder",
+                        "scope": "src/grace_control/services/",
+                        "role": "coder",
+                        "description": "Implement something",
+                        "verification": {"t0": [], "t1": [], "t2": []},
+                        "expected_evidence": [],
+                    }
+                ],
+            }
+        ],
+    }
+
+    result = PlanCompiler().compile_plan(plan)
+    assert not result.ok
+    error_codes = [e.code for e in result.errors]
+    assert "E_SCOPE_NOT_LIST" in error_codes
+    # Must NOT produce per-character path errors — the type error is sufficient
+    per_char_errors = [e for e in result.errors if e.code in (
+        "E_SCOPE_ABSOLUTE_PATH", "E_SCOPE_PYTHON_IMPORT_PATH", "E_SCOPE_PARENT_PATH",
+    )]
+    assert len(per_char_errors) == 0, (
+        f"String scope should be rejected as type error, not iterated as characters; "
+        f"got per-character errors: {[e.message for e in per_char_errors]}"
+    )
+
+
+def test_plan_compiler_rejects_scope_dict():
+    """W02: A dict scope must be rejected with E_SCOPE_NOT_LIST."""
+    plan = {
+        "waves": [
+            {
+                "title": "Test Wave",
+                "packets": [
+                    {
+                        "title": "Dict scope coder",
+                        "scope": {"path": "src/grace_control/"},
+                        "role": "coder",
+                        "description": "Implement something",
+                        "verification": {"t0": [], "t1": [], "t2": []},
+                        "expected_evidence": [],
+                    }
+                ],
+            }
+        ],
+    }
+
+    result = PlanCompiler().compile_plan(plan)
+    assert not result.ok
+    error_codes = [e.code for e in result.errors]
+    assert "E_SCOPE_NOT_LIST" in error_codes
+
+
+def test_plan_compiler_rejects_scope_int():
+    """W02: An int scope must be rejected with E_SCOPE_NOT_LIST."""
+    plan = {
+        "waves": [
+            {
+                "title": "Test Wave",
+                "packets": [
+                    {
+                        "title": "Int scope coder",
+                        "scope": 42,
+                        "role": "coder",
+                        "description": "Implement something",
+                        "verification": {"t0": [], "t1": [], "t2": []},
+                        "expected_evidence": [],
+                    }
+                ],
+            }
+        ],
+    }
+
+    result = PlanCompiler().compile_plan(plan)
+    assert not result.ok
+    error_codes = [e.code for e in result.errors]
+    assert "E_SCOPE_NOT_LIST" in error_codes
+
+
+# ─── Test 8: Root constraints frozen_scope overlap ────────────────────────
+
+def test_plan_compiler_rejects_root_constraints_scope_overlap():
+    """W02: Packet scope overlapping root constraints.frozen_scope must be rejected.
+
+    Root constraints.frozen_scope is applied during materialization AFTER compiler
+    validation. Without this check, a packet with scope overlapping root frozen_scope
+    would silently become a READY packet that violates the scope contract.
+    """
+    plan = {
+        "constraints": {
+            "frozen_scope": ["src/grace_control/services/"],
+        },
+        "waves": [
+            {
+                "title": "Test Wave",
+                "packets": [
+                    {
+                        "title": "Overlap with root frozen",
+                        "scope": ["src/grace_control/services/"],
+                        "role": "coder",
+                        "description": "Implement something",
+                        "verification": {"t0": [], "t1": [], "t2": []},
+                        "expected_evidence": [],
+                    }
+                ],
+            }
+        ],
+    }
+
+    result = PlanCompiler().compile_plan(plan)
+    assert not result.ok
+    error_codes = [e.code for e in result.errors]
+    assert "E_ROOT_FROZEN_SCOPE_OVERLAP" in error_codes
+
+
+def test_plan_compiler_allows_non_overlapping_root_frozen():
+    """W02: Packet scope that does NOT overlap root constraints.frozen_scope is OK."""
+    plan = {
+        "constraints": {
+            "frozen_scope": ["docs/archived/"],
+        },
+        "waves": [
+            {
+                "title": "Test Wave",
+                "packets": [
+                    {
+                        "title": "No overlap with root frozen",
+                        "scope": ["src/grace_control/services/"],
+                        "role": "coder",
+                        "description": "Implement something",
+                        "verification": {"t0": [], "t1": [], "t2": []},
+                        "expected_evidence": [],
+                    }
+                ],
+            }
+        ],
+    }
+
+    result = PlanCompiler().compile_plan(plan)
+    assert result.ok

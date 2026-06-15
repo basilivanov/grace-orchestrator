@@ -269,6 +269,22 @@ class PlanCompiler:
                 scope = packet.get("scope", [])
                 role = packet.get("role", "coder")
 
+                # ── W02: Fail-closed scope type validation ──────────────
+                # Scope MUST be a list. A string scope is truthy but iterates
+                # as characters (e.g. "src/foo/" → ["s","r","c","/","f","o","o","/"]),
+                # producing misleading per-character errors. Reject early.
+                if scope is not None and not isinstance(scope, list):
+                    _add_error(
+                        result, "E_SCOPE_NOT_LIST",
+                        f"waves[{wi}].packets[{pi}].scope",
+                        f"scope must be a list of strings, got {type(scope).__name__} — "
+                        f"string scope iterates as characters instead of file paths",
+                        title,
+                        "use a list of strings: ['path/to/file.py', 'path/to/dir/']",
+                    )
+                    # Reset to empty list to avoid iterating non-list
+                    scope = []
+
                 # ── W02: Fail-closed scope validation ────────────────
                 # Coder packets MUST have explicit, non-empty scope.
                 # Missing/empty scope = compiler error, not a default fallback.
@@ -314,7 +330,14 @@ class PlanCompiler:
                         )
 
                     # W02: Reject Python import paths (dot-separated, no /)
-                    if "." in sp and "/" not in sp and not sp.startswith("."):
+                    # Exclude filenames with common extensions (e.g. "file.py", "config.yaml")
+                    # which are valid filesystem paths, not Python imports.
+                    _FILE_EXTENSIONS = (
+                        ".py", ".yaml", ".yml", ".json", ".toml", ".txt", ".md",
+                        ".cfg", ".ini", ".sh", ".bash", ".sql", ".html", ".css",
+                        ".js", ".ts", ".tsx", ".jsx", ".rs", ".go",
+                    )
+                    if "." in sp and "/" not in sp and not sp.startswith(".") and not sp.endswith(_FILE_EXTENSIONS):
                         _add_error(
                             result, "E_SCOPE_PYTHON_IMPORT_PATH",
                             f"waves[{wi}].packets[{pi}].scope[{si}]",
@@ -352,6 +375,26 @@ class PlanCompiler:
                             title,
                             f"remove overlapping paths from either scope or frozen_scope",
                         )
+
+                # W02: Reject root constraints.frozen_scope overlap with packet scope.
+                # Root frozen_scope is applied during materialization AFTER compiler
+                # validation — so a packet with scope overlapping root frozen_scope
+                # would silently become a READY packet that violates scope contract.
+                root_constraints = plan.get("constraints", {})
+                root_frozen = root_constraints.get("frozen_scope", []) or []
+                if scope and root_frozen:
+                    root_overlap = set(scope) & set(root_frozen)
+                    if root_overlap:
+                        _add_error(
+                            result, "E_ROOT_FROZEN_SCOPE_OVERLAP",
+                            f"waves[{wi}].packets[{pi}].scope",
+                            f"scope overlaps with root constraints.frozen_scope: "
+                            f"{sorted(root_overlap)} — root frozen paths are applied "
+                            f"during materialization and cannot be writable",
+                            title,
+                            "remove overlapping paths from packet scope or root constraints.frozen_scope",
+                        )
+
                 verification = packet.get("verification", {})
                 evidence = packet.get("expected_evidence", [])
                 role = packet.get("role", "coder")
