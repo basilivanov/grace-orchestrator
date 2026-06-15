@@ -376,6 +376,145 @@ def test_recovery_scanner_does_not_apply_unsafe_llm_repair_by_default():
             "LLM repair should be disabled for non-'true' values"
 
 
+# ─── Regression: Lease for DRAFT packet is cleaned ──────────────────────────
+
+def test_lease_for_draft_packet_is_cleaned():
+    """W08 regression: A lease attached to a DRAFT packet must be cleaned.
+    DRAFT was not in the original hard-coded allowlist, so the scanner
+    would have silently left it in place. After switching to the invariant
+    check (packet.state != RUNNING), DRAFT packets are correctly handled."""
+    from grace_control.db import get_db, init_db
+    from grace_control.db.schema import Feature, Lease, Packet, PacketState, Worker
+
+    init_db("sqlite:///:memory:")
+
+    with get_db() as db:
+        feature = Feature(
+            id="feat-draft-orphan",
+            slug="draft-orphan-test",
+            title="Draft Orphan Test",
+            spec_json={},
+            status="IN_PROGRESS",
+        )
+        db.add(feature)
+
+        # Create a DRAFT packet with a lease — this is an orphan
+        packet = Packet(
+            id="pkt-draft-orphan",
+            feature_id="feat-draft-orphan",
+            wave_id="wave-1",
+            slug="draft-orphan-pkt",
+            title="Draft Orphan Packet",
+            state=PacketState.DRAFT.value,
+            attempt_count=0,
+            spec_json={},
+        )
+        db.add(packet)
+
+        worker = Worker(
+            id="worker-draft-orphan",
+            status="active",
+            current_packet_id="pkt-draft-orphan",
+            last_heartbeat=datetime.utcnow(),
+        )
+        db.add(worker)
+
+        # Create lease for DRAFT packet (naive UTC)
+        lease = Lease(
+            packet_id="pkt-draft-orphan",
+            worker_id="worker-draft-orphan",
+            claimed_attempt=1,
+            acquired_at=datetime.utcnow() - timedelta(hours=1),
+            expires_at=datetime.utcnow() + timedelta(minutes=30),
+            heartbeat_at=datetime.utcnow(),
+        )
+        db.add(lease)
+        db.commit()
+
+    with patch("grace_control.core.stuck_scanner.record_event"):
+        counts = run_stuck_scan()
+
+    with get_db() as db:
+        lease = db.query(Lease).filter_by(packet_id="pkt-draft-orphan").first()
+        assert lease is None, "Orphan lease for DRAFT packet should be cleaned up"
+
+        worker = db.query(Worker).filter_by(id="worker-draft-orphan").first()
+        assert worker.current_packet_id is None, \
+            "Worker's current_packet_id should be cleared after orphan lease cleanup"
+
+    assert counts["orphan_leases_cleaned"] >= 1
+
+
+# ─── Regression: Lease for legacy BLOCKED packet is cleaned ──────────────────
+
+def test_lease_for_legacy_blocked_packet_is_cleaned():
+    """W08 regression: A lease attached to a legacy BLOCKED (deprecated alias)
+    packet must be cleaned. BLOCKED was not in the original hard-coded
+    allowlist, so the scanner would have silently left it in place. After
+    switching to the invariant check (packet.state != RUNNING), legacy
+    BLOCKED packets are correctly handled."""
+    from grace_control.db import get_db, init_db
+    from grace_control.db.schema import Feature, Lease, Packet, PacketState, Worker
+
+    init_db("sqlite:///:memory:")
+
+    with get_db() as db:
+        feature = Feature(
+            id="feat-legacy-blocked",
+            slug="legacy-blocked-test",
+            title="Legacy Blocked Test",
+            spec_json={},
+            status="IN_PROGRESS",
+        )
+        db.add(feature)
+
+        # Create a legacy BLOCKED packet with a lease — this is an orphan
+        packet = Packet(
+            id="pkt-legacy-blocked",
+            feature_id="feat-legacy-blocked",
+            wave_id="wave-1",
+            slug="legacy-blocked-pkt",
+            title="Legacy Blocked Packet",
+            state=PacketState.BLOCKED.value,
+            attempt_count=1,
+            spec_json={},
+        )
+        db.add(packet)
+
+        worker = Worker(
+            id="worker-legacy-blocked",
+            status="active",
+            current_packet_id="pkt-legacy-blocked",
+            last_heartbeat=datetime.utcnow(),
+        )
+        db.add(worker)
+
+        # Create lease for legacy BLOCKED packet (naive UTC)
+        lease = Lease(
+            packet_id="pkt-legacy-blocked",
+            worker_id="worker-legacy-blocked",
+            claimed_attempt=1,
+            acquired_at=datetime.utcnow() - timedelta(hours=1),
+            expires_at=datetime.utcnow() + timedelta(minutes=30),
+            heartbeat_at=datetime.utcnow(),
+        )
+        db.add(lease)
+        db.commit()
+
+    with patch("grace_control.core.stuck_scanner.record_event"):
+        counts = run_stuck_scan()
+
+    with get_db() as db:
+        lease = db.query(Lease).filter_by(packet_id="pkt-legacy-blocked").first()
+        assert lease is None, "Orphan lease for legacy BLOCKED packet should be cleaned up"
+
+        worker = db.query(Worker).filter_by(id="worker-legacy-blocked").first()
+        assert worker.current_packet_id is None, \
+            "Worker's current_packet_id should be cleared after orphan lease cleanup"
+
+    assert counts["orphan_leases_cleaned"] >= 1
+
+
 # ─── Additional: run_stuck_scan is safe (never raises) ──────────────────────
 
 def test_run_stuck_scan_never_raises():

@@ -236,26 +236,19 @@ def _scan_orphan_leases(counts: dict[str, int]) -> None:
     """W08: Detect leases for packets that are not RUNNING.
 
     An orphan lease is one where the packet is in a terminal or different
-    state (READY, ACCEPTED, MERGED, FAILED, etc.) but the lease still exists.
-    These are safe to clean up.
+    state (READY, ACCEPTED, MERGED, FAILED, DRAFT, CANCELLED, etc.) but the
+    lease still exists. These are safe to clean up.
+
+    Invariant: a lease should only exist for a RUNNING packet. Any other
+    packet state means the lease is orphaned and should be removed.
     """
     with get_db() as db:
-        non_running_states = [
-            PacketState.READY.value,
-            PacketState.ACCEPTED.value,
-            PacketState.MERGED.value,
-            PacketState.REJECTED.value,
-            PacketState.FAILED.value,
-            PacketState.BLOCKED_FINAL.value,
-            PacketState.BLOCKED_RECOVERABLE.value,
-        ]
-
         # Get all active leases
         all_leases = db.query(Lease).all()
 
         for lease in all_leases:
             packet = db.query(Packet).filter_by(id=lease.packet_id).first()
-            if packet and packet.state in non_running_states:
+            if packet and packet.state != PacketState.RUNNING.value:
                 # Lease exists but packet is not RUNNING — clean up
                 record_event("orphan_lease_cleaned", "packet", packet.id, {
                     "action": "orphan_lease_removed",
