@@ -254,3 +254,34 @@ async def test_runtime_diagnostics_success(api):
     assert data["failure_code"] is None
     assert "runtime_diagnostics.json" in data.get("artifact_refs", [])
     assert "src/ok.py" in data["changed_files"]
+
+
+@pytest.mark.asyncio
+async def test_runtime_diagnostics_top_level_failure_code(api):
+    """Endpoint must also read failure_code from top-level diagnostics
+    (not only from diagnostics.evidence), because _fast_reject writes it there."""
+    from grace_control.db import get_db
+    from grace_control.db.schema import Packet, PacketRun
+
+    with get_db() as db:
+        db.add(Packet(id="pkt-nochange-001", feature_id="f1", wave_id="w1",
+                       slug="pkt-nochange-001", title="No Change",
+                       spec_json={}, state="failed"))
+        run = PacketRun(
+            id="pkt-nochange-001-R01", packet_id="pkt-nochange-001",
+            run_number=1, worker_id="w1", status="rejected",
+            result_json={
+                "diagnostics": {
+                    "failure_code": "AGENT_NO_CHANGES_PRODUCED",
+                    "failure_stage": "post_execution_inspection",
+                }
+            },
+        )
+        db.add(run)
+        db.commit()
+
+    r = await api.get("/api/packets/pkt-nochange-001/runtime-diagnostics")
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["failure_code"] == "AGENT_NO_CHANGES_PRODUCED", \
+        f"expected AGENT_NO_CHANGES_PRODUCED, got {data.get('failure_code')}"

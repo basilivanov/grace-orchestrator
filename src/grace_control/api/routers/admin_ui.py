@@ -646,13 +646,13 @@ def partial_tab(
             if last_run_number:
                 artifacts = _svc.get_packet_artifacts(db, packet_id, last_run_number)
         elif tab == "diagnostics":
-            if last_run_number:
-                run = _svc.get_packet_run(db, packet_id, last_run_number)
-            else:
-                run = None
+            run = _svc.get_packet_run(db, packet_id, last_run_number) if last_run_number else None
             if run:
                 rj = run.get("result_json") or {}
-                diag_evidence = (rj.get("diagnostics") or {}).get("evidence", {}) or rj.get("evidence", {})
+                _diag = rj.get("diagnostics") or {}
+                diag_evidence = _diag.get("evidence") or rj.get("evidence", {})
+                if not diag_evidence:
+                    diag_evidence = _diag
                 scope = diag_evidence.get("scope_enforcement", {})
                 details = ""
                 if isinstance(scope, dict):

@@ -352,8 +352,10 @@ async def get_packet_runtime_diagnostics(packet_id: str) -> dict:
                 "timestamp": datetime.now(UTC).isoformat() + "Z"}
 
     rj = run.result_json or {}
-    diagnostics_evidence = (rj.get("diagnostics") or {}).get("evidence", {}) or rj.get("evidence", {})
-    failure_code = diagnostics_evidence.get("failure_code")
+    diagnostics = rj.get("diagnostics") or {}
+    diagnostics_evidence = diagnostics.get("evidence") or rj.get("evidence", {})
+    # Prefer evidence-embedded failure_code, fall back to top-level diagnostics key
+    failure_code = diagnostics_evidence.get("failure_code") or diagnostics.get("failure_code")
     status = "failed" if failure_code else (p.state if p else "unknown")
 
     title = _FATAL_SCOPE_TITLES.get(failure_code or "", "Runtime error") if failure_code else "Success"
