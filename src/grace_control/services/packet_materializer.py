@@ -363,7 +363,12 @@ Mode: {workspace_mode}
         return "\n".join(parts) if parts else "- (no imports found)"
 
     def _render_expected_evidence(self, expected_raw: list) -> str:
-        """Section 14: full structured evidence fields (not just IDs)."""
+        """Section 14: full structured evidence fields (not just IDs).
+
+        W05: Render all evidence fields (id, kind, stage, owner, producer,
+        profile, required, coder_blocking, artifact_patterns, description,
+        validation_hint) — not only IDs.
+        """
         if not expected_raw:
             return """- test_results (list of {command, exit_code, stdout, stderr, duration_ms})
 - lint_output (list of {tool, passed, errors, warnings})
@@ -374,16 +379,42 @@ Mode: {workspace_mode}
         for e in expected_raw:
             if isinstance(e, dict):
                 eid = e.get("id", "unknown")
-                desc = e.get("description", e.get("purpose", ""))
-                fmt = e.get("format", e.get("type", ""))
-                parts = [f"- {eid}"]
+                kind = e.get("kind", "command")
+                stage = e.get("stage", "")
+                owner = e.get("owner", "coder")
+                producer = e.get("producer", "")
+                profile = e.get("profile", "")
+                required = e.get("required", True)
+                coder_blocking = e.get("coder_blocking", True)
+                artifact_patterns = e.get("artifact_patterns", e.get("pattern", []))
+                if isinstance(artifact_patterns, str):
+                    artifact_patterns = [artifact_patterns]
+                desc = e.get("description", "")
+                validation_hint = e.get("validation_hint", "")
+
+                parts = [f"- **{eid}**"]
+                parts.append(f"  kind: {kind}")
+                if stage:
+                    parts.append(f"  stage: {stage}")
+                parts.append(f"  owner: {owner}")
+                if producer:
+                    parts.append(f"  producer: {producer}")
+                if profile:
+                    parts.append(f"  profile: {profile}")
+                parts.append(f"  required: {required}")
+                parts.append(f"  coder_blocking: {coder_blocking}")
+                if artifact_patterns:
+                    parts.append(f"  artifact_patterns: {artifact_patterns}")
                 if desc:
                     parts.append(f"  description: {desc}")
-                if fmt:
-                    parts.append(f"  format: {fmt}")
+                if validation_hint:
+                    parts.append(f"  validation_hint: {validation_hint}")
+                # W05: legacy pattern warning
+                if e.get("pattern") and not e.get("artifact_patterns"):
+                    parts.append(f"  ⚠ legacy 'pattern' field — use 'artifact_patterns'")
                 lines.append("\n".join(parts))
             else:
-                lines.append(f"- {e}  (structured fields TBD)")
+                lines.append(f"- {e}  ⚠ string evidence (legacy — use structured dict)")
         return "\n".join(lines) if lines else "- (none)"
 
     def _render_target_diagnostics(self, target_repo: str, target_root: Path | None) -> str:

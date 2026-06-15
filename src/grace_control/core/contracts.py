@@ -31,6 +31,9 @@
 #   - function: validate_stage_result
 #   - function: validate_acceptance_report
 #   - function: build_packet_contract
+#   - function: validate_evidence_for_profile  (W05)
+#   - function: route_missing_evidence  (W05)
+#   - function: check_artifact_patterns  (W05)
 # END_MODULE_MAP
 
 from __future__ import annotations
@@ -122,8 +125,18 @@ class VerificationSpec:
 class EvidenceRequirement:
     id: str
     kind: str  # command | file | diff | log | screenshot | dom_snapshot | console_log | network_log | visual_diff | a11y_report | artifact_manifest
+    stage: str = ""  # t0 | t1 | t2 | t3 | post_merge — which verification stage produces this
+    owner: str = "coder"  # coder | architect | verifier — who is responsible for producing this evidence
+    producer: str = ""  # agent that produces this (e.g. coder_run, verifier, browser_runner)
+    profile: str = ""  # acceptance profile this evidence applies to (FAST, NORMAL, STRICT, or blank = all)
     required: bool = True
-    pattern: str | None = None
+    coder_blocking: bool = True  # if missing, does this block the coder rework loop?
+    artifact_patterns: list[str] = field(default_factory=list)  # glob patterns for artifact files
+    description: str = ""  # human-readable description of what this evidence proves
+    validation_hint: str = ""  # hint for the verifier on how to validate this evidence
+    # W05: Legacy field mapping — 'pattern' maps to 'artifact_patterns'
+    # Kept for transition compatibility; canonicalize before use.
+    pattern: str | None = None  # DEPRECATED — use artifact_patterns instead
 
 
 @dataclass(frozen=True)
@@ -396,15 +409,48 @@ def build_packet_contract(packet_data: dict) -> ExecutionPacketContract:
 
     expected_raw = spec.get("expected_evidence", [])
     expected_evidence = []
+    _evidence_warnings: list[str] = []  # W05: collect canonicalization warnings
+
     for item in expected_raw:
         if isinstance(item, dict):
+            # W05: Map legacy 'pattern' to 'artifact_patterns' with warning
+            artifact_patterns = item.get("artifact_patterns", [])
+            if not artifact_patterns and isinstance(artifact_patterns, list):
+                # artifact_patterns was provided as empty list — that's fine
+                pass
+            if not artifact_patterns:
+                legacy_pattern = item.get("pattern")
+                if legacy_pattern:
+                    if isinstance(legacy_pattern, str):
+                        artifact_patterns = [legacy_pattern]
+                    elif isinstance(legacy_pattern, list):
+                        artifact_patterns = legacy_pattern
+                    _evidence_warnings.append(
+                        f"Evidence '{item.get('id', '?')}': legacy field 'pattern' "
+                        f"canonicalized to 'artifact_patterns' — use 'artifact_patterns' in future plans"
+                    )
+
             expected_evidence.append(EvidenceRequirement(
                 id=item.get("id", ""),
                 kind=item.get("kind", "command"),
+                stage=item.get("stage", ""),
+                owner=item.get("owner", "coder"),
+                producer=item.get("producer", ""),
+                profile=item.get("profile", ""),
                 required=item.get("required", True),
-                pattern=item.get("pattern"),
+                coder_blocking=item.get("coder_blocking", True),
+                artifact_patterns=artifact_patterns if isinstance(artifact_patterns, list) else [artifact_patterns],
+                description=item.get("description", ""),
+                validation_hint=item.get("validation_hint", ""),
+                pattern=item.get("pattern"),  # W05: preserve legacy for transition
             ))
         elif isinstance(item, str):
+            # W05: String evidence is allowed in transition mode but gets a warning.
+            # STRICT profiles should reject it; see validate_evidence_for_profile().
+            _evidence_warnings.append(
+                f"Evidence '{item}': string evidence is a legacy shape — "
+                f"use a dict with 'id', 'kind', 'owner', 'artifact_patterns' etc."
+            )
             expected_evidence.append(EvidenceRequirement(id=item, kind="command"))
 
     return ExecutionPacketContract(
@@ -428,5 +474,125 @@ def build_packet_contract(packet_data: dict) -> ExecutionPacketContract:
             "frontend": spec.get("frontend"),  # TZ_FRONTEND_ACCEPTANCE P0
             "target_repo_root": spec.get("target_repo_root", ""),
             "workspace_mode": spec.get("workspace_mode", ""),
+            # W05: evidence canonicalization warnings persisted in contract metadata
+            "_evidence_schema_warnings": _evidence_warnings,
         },
     )
+
+
+# ── W05: Evidence contract validation and routing ─────────────────────────
+
+def validate_evidence_for_profile(
+    evidence: list[EvidenceRequirement],
+    profile: AcceptanceProfile,
+) -> list[str]:
+    """W05: Validate evidence shape against acceptance profile.
+
+    - FAST/NORMAL: string evidence gets a warning but is allowed (transition mode).
+    - STRICT: string evidence (id-only, missing kind/owner) is rejected.
+    - Legacy 'pattern' field is always warned regardless of profile.
+
+    Returns list of error strings (empty = valid).
+    """
+    errors: list[str] = []
+    for e in evidence:
+        # STRICT: reject evidence that lacks structured fields
+        if profile == AcceptanceProfile.STRICT:
+            # Evidence created from a bare string has kind="command",
+            # no stage, no description, no producer, no validation_hint.
+            # Structured evidence will have at least description or stage set.
+            if (e.kind == "command" and not e.stage and not e.description
+                    and not e.producer and not e.validation_hint
+                    and not e.artifact_patterns):
+                errors.append(
+                    f"Evidence '{e.id}': rejected in STRICT mode — "
+                    f"must use structured dict with 'id', 'kind', 'owner', "
+                    f"'artifact_patterns', 'description'"
+                )
+            if e.pattern and not e.artifact_patterns:
+                errors.append(
+                    f"Evidence '{e.id}': legacy 'pattern' field rejected in STRICT mode — "
+                    f"use 'artifact_patterns' instead"
+                )
+    return errors
+
+
+def route_missing_evidence(
+    missing_evidence_ids: list[str],
+    evidence_requirements: list[EvidenceRequirement],
+) -> str:
+    """W05: Route missing evidence by owner/profile.
+
+    Returns the next owner for the rework loop:
+    - 'coder' if any missing evidence is coder-owned and coder_blocking
+    - 'architect' if any missing evidence is architect-owned
+    - 'verifier' if missing evidence is verifier-owned only
+    - 'coder' as default fallback
+
+    This ensures architect-owned evidence issues don't become coder blame.
+    """
+    req_by_id = {e.id: e for e in evidence_requirements}
+
+    has_coder_blocking = False
+    has_architect_owned = False
+    has_verifier_owned = False
+
+    for ev_id in missing_evidence_ids:
+        req = req_by_id.get(ev_id)
+        if req is None:
+            # Unknown evidence — default to coder rework
+            has_coder_blocking = True
+            continue
+        if req.owner == "architect":
+            has_architect_owned = True
+        elif req.owner == "verifier":
+            has_verifier_owned = True
+        else:
+            # coder-owned (default)
+            if req.coder_blocking:
+                has_coder_blocking = True
+            # Non-blocking coder evidence doesn't force coder rework
+
+    # Architect-owned evidence issue → return to architect
+    if has_architect_owned:
+        return "architect"
+
+    # Coder-owned blocking evidence → rework to coder
+    if has_coder_blocking:
+        return "coder"
+
+    # Verifier-owned issue → verifier/reviewer decision
+    if has_verifier_owned:
+        return "verifier"
+
+    # Default fallback
+    return "coder"
+
+
+def check_artifact_patterns(
+    evidence_requirements: list[EvidenceRequirement],
+    available_artifacts: list[str],
+) -> list[str]:
+    """W05: Check artifact patterns by evidence kind.
+
+    For each evidence requirement that has artifact_patterns, verify that
+    at least one matching artifact exists for each pattern.
+
+    Returns list of warnings for unmatched patterns.
+    """
+    import fnmatch
+
+    warnings: list[str] = []
+    for req in evidence_requirements:
+        if not req.artifact_patterns:
+            continue
+
+        for pattern in req.artifact_patterns:
+            matched = any(fnmatch.fnmatch(artifact, pattern) for artifact in available_artifacts)
+            if not matched:
+                kind_info = f" (kind={req.kind})" if req.kind else ""
+                warnings.append(
+                    f"Evidence '{req.id}'{kind_info}: artifact pattern '{pattern}' "
+                    f"not matched by any available artifact"
+                )
+    return warnings
