@@ -56,6 +56,8 @@ class SafePlanAutofixer:
                 self._try_fix_source_split(patched, err, report)
             elif code == "E_IMPORT_MIGRATION_SCOPE_INCOMPLETE":
                 self._try_fix_import_scope(patched, err, report)
+            elif code == "E_SCOPE_ACCEPTANCE_IMPOSSIBLE":
+                self._try_fix_acceptance_scope(patched, err, report)
             elif code == "E_SCOPE_PATH_NOT_CANONICAL":
                 self._try_fix_noncanonical_path(patched, err, report)
             else:
@@ -289,6 +291,66 @@ class SafePlanAutofixer:
             "reason": "E_IMPORT_MIGRATION_SCOPE_INCOMPLETE",
             "files": new_refs,
             "packet_title": migration_pkt["title"],
+        })
+
+    def _try_fix_acceptance_scope(
+        self,
+        plan: dict,
+        err: dict,
+        report: PlanAutofixReport,
+    ) -> None:
+        """T1/T2 runs test files outside write scope — add tests to scope."""
+        msg = err.get("message", "")
+        # Extract test file paths from error message: {'test_x.py', 'test_y.py'}
+        import re as _re
+        test_match = _re.search(r"tests \{([^}]+)\}", msg)
+        if not test_match:
+            report.skipped.append({
+                "code": "SKIPPED_NO_TEST_REFS",
+                "reason": "no test file set found in error message",
+                "error_code": "E_SCOPE_ACCEPTANCE_IMPOSSIBLE",
+            })
+            return
+        test_paths_str = test_match.group(1)
+        test_files = [
+            t.strip().strip("'").strip('"')
+            for t in test_paths_str.split(",")
+            if t.strip()
+        ]
+        if not test_files:
+            return
+
+        waves = plan.get("waves", [])
+        # Find the coder packet that the error is about (from packet_title)
+        packet_title = err.get("packet_title", "")
+        target_packet = None
+        for w in waves:
+            for p in w.get("packets", []):
+                if p.get("title") == packet_title:
+                    target_packet = p
+                    break
+            if target_packet:
+                break
+
+        if target_packet is None:
+            report.skipped.append({
+                "code": "SKIPPED_PACKET_NOT_FOUND",
+                "reason": f"packet '{packet_title}' not found in plan",
+                "error_code": "E_SCOPE_ACCEPTANCE_IMPOSSIBLE",
+            })
+            return
+
+        scope = target_packet.get("scope", []) or []
+        new_tests = [t for t in test_files if t not in scope]
+        if not new_tests:
+            return
+
+        target_packet["scope"] = scope + new_tests
+        report.fixes.append({
+            "code": "AUTO_ADD_TEST_FILES_TO_SCOPE",
+            "reason": "E_SCOPE_ACCEPTANCE_IMPOSSIBLE",
+            "files": new_tests,
+            "packet_title": packet_title,
         })
 
     # ── Utility methods ────────────────────────────────────────────
