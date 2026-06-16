@@ -389,11 +389,13 @@ Mode: {workspace_mode}
                 artifact_patterns = e.get("artifact_patterns", e.get("pattern", []))
                 if isinstance(artifact_patterns, str):
                     artifact_patterns = [artifact_patterns]
+                expectation = e.get("expectation", "exists")
                 desc = e.get("description", "")
                 validation_hint = e.get("validation_hint", "")
 
                 parts = [f"- **{eid}**"]
                 parts.append(f"  kind: {kind}")
+                parts.append(f"  expectation: {expectation}")
                 if stage:
                     parts.append(f"  stage: {stage}")
                 parts.append(f"  owner: {owner}")

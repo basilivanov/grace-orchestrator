@@ -428,6 +428,12 @@ class PlanCompiler:
                     result, title, evidence, role, description, scope
                 )
 
+                # ── 3b. Evidence–instruction contradiction ──────
+                self._validate_evidence_contradiction(
+                    result, title, evidence, coder_instructions,
+                    description, packet.get("validation_hint", ""),
+                )
+
                 # ── 4. Role/scope consistency ─────────────────────
                 self._validate_role_scope(result, title, role, scope, description)
 
@@ -750,6 +756,118 @@ class PlanCompiler:
                     "packet requires diff evidence but has empty write scope",
                     title, "add target files to scope or remove diff evidence",
                 )
+
+    # ── Remove/delete keywords for contradiction detection ─────────────
+    _REMOVE_INTENT_KEYWORDS = [
+        "remove", "delete", "consolidate", "drop", "eliminate",
+        "get rid of", "clean up", "delete the file",
+        # Russian
+        "удалить", "убрать", "избавиться", "удали",
+        "удаление", "удаляем",
+    ]
+
+    def _has_remove_intent(self, texts: list[str]) -> list[str]:
+        """Check if any text expresses intent to remove files.
+        Returns list of matched keywords for context."""
+        matched: list[str] = []
+        for text in texts:
+            t = text.lower()
+            for kw in self._REMOVE_INTENT_KEYWORDS:
+                if kw in t:
+                    matched.append(kw)
+                    break  # one match per text is enough
+        return matched
+
+    def _extract_target_paths_for_removal(
+        self, texts: list[str], evidence_paths: list[str],
+    ) -> list[str]:
+        """Extract file paths from instructions that match evidence paths
+        and are likely being removed. Looks for patterns like:
+        'delete models.py', 'remove src/foo.py', 'consolidate bar.py into'
+        """
+        targets: list[str] = []
+        for text in texts:
+            t = text.lower()
+            for ep in evidence_paths:
+                ep_lower = ep.lower()
+                ep_name = Path(ep).name.lower()
+                # Check if evidence path or filename appears near remove keyword
+                for kw in self._REMOVE_INTENT_KEYWORDS:
+                    if kw in t and (ep_lower in t or ep_name in t):
+                        targets.append(ep)
+                        break
+        return list(set(targets))
+
+    def _validate_evidence_contradiction(
+        self,
+        result: CompileResult,
+        title: str,
+        evidence: list[dict],
+        coder_instructions: list[str],
+        description: str,
+        validation_hint: str,
+    ) -> None:
+        """Detect when expected_evidence expects a file to exist ('exists')
+        but instructions tell the coder to delete/remove that same file."""
+        if not evidence:
+            return
+
+        # Collect evidence paths + their expectations
+        ev_paths: list[str] = []
+        for ev in evidence:
+            if not isinstance(ev, dict):
+                continue
+            patterns = ev.get("artifact_patterns", ev.get("pattern", []))
+            if isinstance(patterns, str):
+                patterns = [patterns]
+            ev_paths.extend(p for p in patterns if p.endswith(".py") or "." in p)
+
+        if not ev_paths:
+            return
+
+        # Check all text sources for remove intent
+        all_texts = coder_instructions + [description, validation_hint]
+        remove_kws = self._has_remove_intent(all_texts)
+        if not remove_kws:
+            return
+
+        # Find which evidence paths are targeted for removal
+        removal_targets = self._extract_target_paths_for_removal(
+            all_texts, ev_paths
+        )
+        if not removal_targets:
+            return
+
+        # For each removal target, check if evidence says 'exists' (default)
+        for ev in evidence:
+            if not isinstance(ev, dict):
+                continue
+            patterns = ev.get("artifact_patterns", ev.get("pattern", []))
+            if isinstance(patterns, str):
+                patterns = [patterns]
+            expectation = ev.get("expectation", "") or "exists"
+            ev_id = ev.get("id", "?")
+            for p in patterns:
+                if p in removal_targets and expectation == "exists":
+                    _add_error(
+                        result, "E_EVIDENCE_CONTRACTS_INSTRUCTIONS",
+                        f"expected_evidence",
+                        f"Evidence '{ev_id}' expects '{p}' to exist (expectation='exists'), "
+                        f"but instructions say to remove/delete it (keywords: {remove_kws}). "
+                        f"Change expectation to 'deleted' or 'absent', or remove this evidence entry.",
+                        title,
+                        f"Set expectation: 'deleted' for file being removed, or "
+                        f"'absent' if the file does not need to be removed by this packet.",
+                        details={
+                            "evidence_id": ev_id,
+                            "file": p,
+                            "current_expectation": expectation,
+                            "remove_keywords": remove_kws,
+                            "suggested_fix": "deleted",
+                        },
+                    )
+                elif p in removal_targets and expectation in ("deleted", "absent"):
+                    pass  # explicit deletion expectation — no contradiction
 
     def _validate_role_scope(
         self,

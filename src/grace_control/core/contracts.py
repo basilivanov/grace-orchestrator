@@ -126,6 +126,12 @@ class VerificationSpec:
     t2: list[list[str]] = field(default_factory=list)
 
 
+_EXPECTATION_VALUES = frozenset({
+    "exists", "created", "modified", "deleted", "absent",
+    "diff_contains", "test_output", "import_absent", "import_updated",
+})
+
+
 @dataclass(frozen=True)
 class EvidenceRequirement:
     id: str
@@ -142,6 +148,11 @@ class EvidenceRequirement:
     # W05: Legacy field mapping — 'pattern' maps to 'artifact_patterns'
     # Kept for transition compatibility; canonicalize before use.
     pattern: str | None = None  # DEPRECATED — use artifact_patterns instead
+    # TZ: Typed evidence expectations — what we expect to find for this file/path.
+    # Valid values: exists, created, modified, deleted, absent,
+    #               diff_contains, test_output, import_absent, import_updated.
+    # Legacy evidence without expectation defaults to 'exists' with compiler warning.
+    expectation: str = "exists"
 
 
 @dataclass(frozen=True)
@@ -435,6 +446,15 @@ def build_packet_contract(packet_data: dict) -> ExecutionPacketContract:
                         f"canonicalized to 'artifact_patterns' — use 'artifact_patterns' in future plans"
                     )
 
+            expectation = item.get("expectation", "")
+            if not expectation:
+                expectation = "exists"
+                _evidence_warnings.append(
+                    f"Evidence '{item.get('id', '?')}': no 'expectation' field — "
+                    f"defaulting to 'exists'. Set explicitly to 'created', 'modified', "
+                    f"'deleted', 'absent', etc. to match intent."
+                )
+
             expected_evidence.append(EvidenceRequirement(
                 id=item.get("id", ""),
                 kind=item.get("kind", "command"),
@@ -448,6 +468,7 @@ def build_packet_contract(packet_data: dict) -> ExecutionPacketContract:
                 description=item.get("description", ""),
                 validation_hint=item.get("validation_hint", ""),
                 pattern=item.get("pattern"),  # W05: preserve legacy for transition
+                expectation=expectation,
             ))
         elif isinstance(item, str):
             # W05: String evidence is allowed in transition mode but gets a warning.

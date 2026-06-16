@@ -60,6 +60,8 @@ class SafePlanAutofixer:
                 self._try_fix_acceptance_scope(patched, err, report)
             elif code == "E_SCOPE_PATH_NOT_CANONICAL":
                 self._try_fix_noncanonical_path(patched, err, report)
+            elif code == "E_EVIDENCE_CONTRACTS_INSTRUCTIONS":
+                self._try_fix_evidence_contradiction(patched, err, report)
             else:
                 report.skipped.append({
                     "code": "SKIPPED_UNSUPPORTED_ERROR",
@@ -466,4 +468,80 @@ class SafePlanAutofixer:
                 "reason": f"path '{bad_path}' not found in any packet scope",
                 "error_code": "E_SCOPE_PATH_NOT_CANONICAL",
                 "file": bad_path,
+            })
+
+    def _try_fix_evidence_contradiction(
+        self,
+        plan: dict,
+        err: dict,
+        report: PlanAutofixReport,
+    ) -> None:
+        """Change expectation from 'exists' to 'deleted' when instructions
+        explicitly remove the same file path. This is deterministic:
+        if the compiler flagged it, the fix is unambiguous."""
+        details = err.get("details") if isinstance(err.get("details"), dict) else {}
+        file_path = details.get("file", "")
+        evidence_id = details.get("evidence_id", "")
+        suggested = details.get("suggested_fix", "deleted")
+
+        if not file_path or not evidence_id:
+            # Fall back to parsing error message
+            import re as _re
+            msg = err.get("message", "")
+            file_m = _re.search(r"expects '([^']+)' to exist", msg)
+            if file_m:
+                file_path = file_m.group(1)
+            id_m = _re.search(r"Evidence '([^']+)'", msg)
+            if id_m:
+                evidence_id = id_m.group(1)
+
+        if not file_path or not evidence_id:
+            report.skipped.append({
+                "code": "SKIPPED_NO_EVIDENCE_REF",
+                "reason": "no evidence_id or file_path in error details or message",
+                "error_code": "E_EVIDENCE_CONTRACTS_INSTRUCTIONS",
+            })
+            return
+
+        # Find the packet containing this evidence and fix it
+        waves = plan.get("waves", [])
+        fixed = False
+        for wi, wave in enumerate(waves):
+            for pi, pkt in enumerate(wave.get("packets", [])):
+                evidence = pkt.get("expected_evidence", [])
+                if not isinstance(evidence, list):
+                    continue
+                for ei, ev in enumerate(evidence):
+                    if not isinstance(ev, dict):
+                        continue
+                    if ev.get("id") == evidence_id:
+                        patterns = ev.get("artifact_patterns", ev.get("pattern", []))
+                        if isinstance(patterns, str):
+                            patterns = [patterns]
+                        if file_path in patterns:
+                            ev["expectation"] = suggested
+                            pkt["expected_evidence"][ei] = ev
+                            fixed = True
+                            report.fixes.append({
+                                "code": "AUTO_SET_EVIDENCE_EXPECTATION",
+                                "reason": "E_EVIDENCE_CONTRACTS_INSTRUCTIONS",
+                                "evidence_id": evidence_id,
+                                "file": file_path,
+                                "packet_title": pkt.get("title", f"wave-{wi}-pkt-{pi}"),
+                                "from": "exists",
+                                "to": suggested,
+                            })
+                            break
+                if fixed:
+                    break
+            if fixed:
+                break
+
+        if not fixed:
+            report.skipped.append({
+                "code": "SKIPPED_EVIDENCE_NOT_FOUND",
+                "reason": f"evidence '{evidence_id}' with file '{file_path}' not found in plan",
+                "error_code": "E_EVIDENCE_CONTRACTS_INSTRUCTIONS",
+                "evidence_id": evidence_id,
+                "file": file_path,
             })

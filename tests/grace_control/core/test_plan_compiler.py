@@ -623,3 +623,128 @@ class TestSourceSplitDetection:
         )
         assert not result.ok
         assert any(e.code == "E_SOURCE_SPLIT_ORIGIN_MISSING" for e in result.errors)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Evidence contradiction detection
+# ══════════════════════════════════════════════════════════════════════
+
+
+class TestEvidenceContradiction:
+    """TZ: Typed evidence expectations — contradiction detection."""
+
+    def test_delete_instruction_conflicts_with_exists_evidence(self):
+        """Instructions say 'remove models.py' but evidence expects it exists → contradiction."""
+        plan = _plan(_pkt(
+            title="Remove models",
+            scope=["src/models.py"],
+            evidence=[{
+                "id": "models-exists",
+                "kind": "file",
+                "artifact_patterns": ["src/models.py"],
+                "expectation": "exists",
+            }],
+            instructions=["remove models.py and split into modules"],
+        ))
+        env = _env()
+        compiler = PlanCompiler()
+        result = compiler.compile_plan(plan, env)
+        assert not result.ok
+        assert any(e.code == "E_EVIDENCE_CONTRACTS_INSTRUCTIONS" for e in result.errors)
+
+    def test_delete_instruction_with_deleted_expectation_ok(self):
+        """Instructions say 'delete models.py' and evidence says 'deleted' → no contradiction."""
+        plan = _plan(_pkt(
+            title="Delete models",
+            scope=["src/models.py"],
+            evidence=[{
+                "id": "models-deleted",
+                "kind": "file",
+                "artifact_patterns": ["src/models.py"],
+                "expectation": "deleted",
+            }],
+            instructions=["delete models.py during refactor"],
+        ))
+        env = _env()
+        compiler = PlanCompiler()
+        result = compiler.compile_plan(plan, env)
+        assert result.ok
+        assert not any(e.code == "E_EVIDENCE_CONTRACTS_INSTRUCTIONS" for e in result.errors)
+
+    def test_no_delete_instruction_no_contradiction(self):
+        """No delete keywords in instructions → no contradiction even with exists evidence."""
+        plan = _plan(_pkt(
+            title="Add service",
+            scope=["src/service.py"],
+            evidence=[{
+                "id": "service-exists",
+                "kind": "file",
+                "artifact_patterns": ["src/service.py"],
+                "expectation": "exists",
+            }],
+            instructions=["implement the new service"],
+        ))
+        env = _env()
+        compiler = PlanCompiler()
+        result = compiler.compile_plan(plan, env)
+        assert result.ok
+
+    def test_consolidate_instruction_triggers_contradiction(self):
+        """'consolidate' implies removing old file — contradiction with 'exists' evidence."""
+        plan = _plan(_pkt(
+            title="Consolidate models",
+            scope=["src/old_models.py"],
+            evidence=[{
+                "id": "old-models",
+                "kind": "file",
+                "artifact_patterns": ["src/old_models.py"],
+                "expectation": "exists",
+            }],
+            instructions=["consolidate old_models.py into the new structure"],
+        ))
+        env = _env()
+        compiler = PlanCompiler()
+        result = compiler.compile_plan(plan, env)
+        assert not result.ok
+        assert any(e.code == "E_EVIDENCE_CONTRACTS_INSTRUCTIONS" for e in result.errors)
+
+    def test_russian_remove_triggers_contradiction(self):
+        """Russian 'удалить' keyword → contradiction with 'exists' evidence."""
+        plan = _plan(_pkt(
+            title="Удалить models",
+            scope=["src/models.py"],
+            evidence=[{
+                "id": "models-exists",
+                "kind": "file",
+                "artifact_patterns": ["src/models.py"],
+            }],
+            instructions=["удалить src/models.py"],
+        ))
+        env = _env()
+        compiler = PlanCompiler()
+        result = compiler.compile_plan(plan, env)
+        assert not result.ok
+        assert any(e.code == "E_EVIDENCE_CONTRACTS_INSTRUCTIONS" for e in result.errors)
+
+    def test_evidence_contradiction_details_include_suggested_fix(self):
+        """Error details contain suggested fix field."""
+        plan = _plan(_pkt(
+            title="Remove module",
+            scope=["src/module.py"],
+            evidence=[{
+                "id": "module-ev",
+                "kind": "file",
+                "artifact_patterns": ["src/module.py"],
+                "expectation": "exists",
+            }],
+            instructions=["delete src/module.py"],
+        ))
+        env = _env()
+        compiler = PlanCompiler()
+        result = compiler.compile_plan(plan, env)
+        assert not result.ok
+        ev_err = next(e for e in result.errors if e.code == "E_EVIDENCE_CONTRACTS_INSTRUCTIONS")
+        assert ev_err.details is not None
+        assert ev_err.details.get("suggested_fix") == "deleted"
+        assert ev_err.details.get("file") == "src/module.py"
+        assert "delete" in ev_err.details.get("remove_keywords", [])

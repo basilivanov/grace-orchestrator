@@ -63,6 +63,9 @@ def check_expected_evidence(
     return issues
 
 
+_ACTIVE_CODE_DIRS = ["apps/", "src/", "packages/", "tests/", "scripts/"]
+
+
 def _check_evidence_kind(
     req: EvidenceRequirement,
     stage_results: list[StageResult],
@@ -71,6 +74,23 @@ def _check_evidence_kind(
     *,
     run_dir: Path | None = None,
 ) -> bool:
+    # ── Dispatch by expectation (TZ typed evidence expectations) ──────
+    if req.expectation == "deleted":
+        return _check_expectation_deleted(req, worktree_path, changed_files)
+    if req.expectation == "absent":
+        return _check_expectation_absent(req, worktree_path)
+    if req.expectation == "created":
+        return _check_expectation_created(req, worktree_path, changed_files)
+    if req.expectation == "modified":
+        return _check_expectation_modified(req, worktree_path, changed_files)
+    if req.expectation == "diff_contains":
+        return _check_expectation_diff_contains(req, changed_files)
+    if req.expectation == "import_absent":
+        return _check_expectation_import_absent(req, worktree_path)
+    if req.expectation == "import_updated":
+        return _check_expectation_import_absent(req, worktree_path)
+    # Fall through for "exists" (default) and "test_output"
+
     if req.kind == "command":
         for stage in stage_results:
             for cmd in stage.commands:
@@ -87,9 +107,9 @@ def _check_evidence_kind(
     if req.kind == "file":
         if not worktree_path or not worktree_path.exists():
             return False
-        if req.pattern:
-            matches = list(worktree_path.rglob(req.pattern))
-            return len(matches) > 0
+        patterns = req.artifact_patterns or ([req.pattern] if req.pattern else [])
+        if patterns:
+            return any(list(worktree_path.rglob(p)) for p in patterns)
         return True
 
     if req.kind == "diff":
@@ -195,6 +215,135 @@ def _check_evidence_kind(
         return len(errors) == 0
 
     return False
+
+
+# ── Typed expectation helpers ──────────────────────────────────────────
+
+
+def _check_expectation_deleted(
+    req: EvidenceRequirement,
+    worktree_path: Path,
+    changed_files: list[str],
+) -> bool:
+    """Expectation=deleted: file must not exist on disk.
+    If pattern provides a specific path, check it's absent.
+    Also check git diff D status if pattern is in changed_files.
+    """
+    if not worktree_path or not worktree_path.exists():
+        return False
+    patterns = req.artifact_patterns or ([req.pattern] if req.pattern else [])
+    if not patterns:
+        # No pattern — check that ALL changed files show deletion intent
+        return len(changed_files) > 0
+    for p in patterns:
+        fpath = worktree_path / p
+        if fpath.exists():
+            return False  # file still exists — not properly deleted
+    # If in changed_files, mark as pass (file was touched)
+    for p in patterns:
+        if p in changed_files:
+            return True
+    # File absent from disk but not in changed_files — still OK for deleted
+    # (might have been absent before execution)
+    return True
+
+
+def _check_expectation_absent(
+    req: EvidenceRequirement,
+    worktree_path: Path,
+) -> bool:
+    """Expectation=absent: file must not exist on disk (no git diff needed)."""
+    if not worktree_path or not worktree_path.exists():
+        return False
+    patterns = req.artifact_patterns or ([req.pattern] if req.pattern else [])
+    if not patterns:
+        return True  # no pattern → vacuously true
+    for p in patterns:
+        fpath = worktree_path / p
+        if fpath.exists():
+            return False
+    return True
+
+
+def _check_expectation_created(
+    req: EvidenceRequirement,
+    worktree_path: Path,
+    changed_files: list[str],
+) -> bool:
+    """Expectation=created: file must exist AND be in changed_files (new)."""
+    if not worktree_path or not worktree_path.exists():
+        return False
+    patterns = req.artifact_patterns or ([req.pattern] if req.pattern else [])
+    if not patterns:
+        return True
+    for p in patterns:
+        fpath = worktree_path / p
+        if not fpath.exists():
+            return False
+        if p not in changed_files:
+            return False
+    return True
+
+
+def _check_expectation_modified(
+    req: EvidenceRequirement,
+    worktree_path: Path,
+    changed_files: list[str],
+) -> bool:
+    """Expectation=modified: file must exist AND be in changed_files."""
+    return _check_expectation_created(req, worktree_path, changed_files)
+
+
+def _check_expectation_diff_contains(
+    req: EvidenceRequirement,
+    changed_files: list[str],
+) -> bool:
+    """Expectation=diff_contains: changed_files must contain the pattern."""
+    import fnmatch
+    patterns = req.artifact_patterns or ([req.pattern] if req.pattern else [])
+    if not patterns:
+        return bool(changed_files)
+    for p in patterns:
+        matched = any(fnmatch.fnmatch(f, p) for f in changed_files)
+        if matched:
+            return True
+    return False
+
+
+def _check_expectation_import_absent(
+    req: EvidenceRequirement,
+    worktree_path: Path,
+) -> bool:
+    """Expectation=import_absent: old import path must NOT appear
+    in active code directories. Greps for the pattern (which should be
+    the old import path) across apps/, src/, packages/, tests/, scripts/.
+    Returns True when the import is absent (gone) — i.e. no matches found.
+    """
+    if not worktree_path or not worktree_path.exists():
+        return False
+    pattern = req.pattern or ""
+    if not pattern and req.artifact_patterns:
+        pattern = req.artifact_patterns[0]
+    if not pattern:
+        return True  # no import to check → vacuously true
+    exclude_dirs = {".git", ".grace", "node_modules", ".venv", "dist", "build", "coverage", "__pycache__", "archive"}
+    for rel_dir in _ACTIVE_CODE_DIRS:
+        search_root = worktree_path / rel_dir
+        if not search_root.exists():
+            continue
+        for fpath in search_root.rglob("*"):
+            if fpath.is_dir():
+                continue
+            parts = fpath.relative_to(worktree_path).parts
+            if any(ex in parts for ex in exclude_dirs):
+                continue
+            try:
+                text = fpath.read_text(encoding="utf-8", errors="replace")
+                if pattern in text:
+                    return False  # old import still present
+            except Exception:
+                continue
+    return True  # import not found — absent as expected
 
 
 class EvidenceCollector:

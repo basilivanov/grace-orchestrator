@@ -30,6 +30,7 @@ REPAIRABLE_COMPILER_ERRORS = {
     "E_EVIDENCE_DIFF_EMPTY_SCOPE",
     "E_EVIDENCE_DIFF_VERIFICATION_ONLY",
     "E_SCOPE_PATH_NOT_CANONICAL",
+    "E_EVIDENCE_CONTRACTS_INSTRUCTIONS",
 }
 
 # ── Errors that CANNOT be repaired (shell env, venv, syntax) ────────────
@@ -107,10 +108,14 @@ Description: {feature_description}
 - If E_IMPORT_MIGRATION_SCOPE_INCOMPLETE: include active reference files
   in scope, or split import migration into a separate packet.
 - If migration is too large, create phased plan:
-  1. create new modules;
-  2. convert original source file to shim/delegator;
-  3. migrate consumers;
-  4. remove shim later.
+   1. create new modules;
+   2. convert original source file to shim/delegator;
+   3. migrate consumers;
+   4. remove shim later.
+- If E_EVIDENCE_CONTRACTS_INSTRUCTIONS: evidence expects a file to exist,
+  but instructions say to delete/remove that same file. Change the evidence
+  expectation to 'deleted' (or 'absent'), or remove the delete instruction
+  from coder_instructions if the file must be kept.
 - Keep ALL other parts unchanged.
 
 Respond with the corrected JSON plan now. Start with {{"waves":"""
