@@ -650,7 +650,7 @@ class TestEvidenceContradiction:
         compiler = PlanCompiler()
         result = compiler.compile_plan(plan, env)
         assert not result.ok
-        assert any(e.code == "E_EVIDENCE_CONTRACTS_INSTRUCTIONS" for e in result.errors)
+        assert any(e.code == "E_EVIDENCE_CONTRADICTS_INSTRUCTIONS" for e in result.errors)
 
     def test_delete_instruction_with_deleted_expectation_ok(self):
         """Instructions say 'delete models.py' and evidence says 'deleted' → no contradiction."""
@@ -669,7 +669,7 @@ class TestEvidenceContradiction:
         compiler = PlanCompiler()
         result = compiler.compile_plan(plan, env)
         assert result.ok
-        assert not any(e.code == "E_EVIDENCE_CONTRACTS_INSTRUCTIONS" for e in result.errors)
+        assert not any(e.code == "E_EVIDENCE_CONTRADICTS_INSTRUCTIONS" for e in result.errors)
 
     def test_no_delete_instruction_no_contradiction(self):
         """No delete keywords in instructions → no contradiction even with exists evidence."""
@@ -706,7 +706,7 @@ class TestEvidenceContradiction:
         compiler = PlanCompiler()
         result = compiler.compile_plan(plan, env)
         assert not result.ok
-        assert any(e.code == "E_EVIDENCE_CONTRACTS_INSTRUCTIONS" for e in result.errors)
+        assert any(e.code == "E_EVIDENCE_CONTRADICTS_INSTRUCTIONS" for e in result.errors)
 
     def test_russian_remove_triggers_contradiction(self):
         """Russian 'удалить' keyword → contradiction with 'exists' evidence."""
@@ -724,7 +724,7 @@ class TestEvidenceContradiction:
         compiler = PlanCompiler()
         result = compiler.compile_plan(plan, env)
         assert not result.ok
-        assert any(e.code == "E_EVIDENCE_CONTRACTS_INSTRUCTIONS" for e in result.errors)
+        assert any(e.code == "E_EVIDENCE_CONTRADICTS_INSTRUCTIONS" for e in result.errors)
 
     def test_evidence_contradiction_details_include_suggested_fix(self):
         """Error details contain suggested fix field."""
@@ -743,8 +743,48 @@ class TestEvidenceContradiction:
         compiler = PlanCompiler()
         result = compiler.compile_plan(plan, env)
         assert not result.ok
-        ev_err = next(e for e in result.errors if e.code == "E_EVIDENCE_CONTRACTS_INSTRUCTIONS")
+        ev_err = next(e for e in result.errors if e.code == "E_EVIDENCE_CONTRADICTS_INSTRUCTIONS")
         assert ev_err.details is not None
         assert ev_err.details.get("suggested_fix") == "deleted"
         assert ev_err.details.get("file") == "src/module.py"
         assert "delete" in ev_err.details.get("remove_keywords", [])
+
+    def test_unknown_evidence_expectation_rejected_by_compiler(self):
+        """expectation value not in valid set → E_EVIDENCE_EXPECTATION_UNKNOWN."""
+        plan = _plan(_pkt(
+            title="Bad evidence",
+            scope=["src/models.py"],
+            evidence=[{
+                "id": "bad-ev",
+                "kind": "file",
+                "artifact_patterns": ["src/models.py"],
+                "expectation": "deletd",
+            }],
+            instructions=["refactor"],
+        ))
+        env = _env()
+        compiler = PlanCompiler()
+        result = compiler.compile_plan(plan, env)
+        assert not result.ok
+        assert any(e.code == "E_EVIDENCE_EXPECTATION_UNKNOWN" for e in result.errors)
+
+    def test_typod_expectation_does_not_fall_through_to_contradiction(self):
+        """Typos in expectation should be caught by enum validation, not contradiction."""
+        plan = _plan(_pkt(
+            title="Typo evidence",
+            scope=["src/models.py"],
+            evidence=[{
+                "id": "typo-ev",
+                "kind": "file",
+                "artifact_patterns": ["src/models.py"],
+                "expectation": "deletd",
+            }],
+            instructions=["delete src/models.py"],
+        ))
+        env = _env()
+        compiler = PlanCompiler()
+        result = compiler.compile_plan(plan, env)
+        assert not result.ok
+        # Must see UNKNOWN, not CONTRADICTS
+        assert any(e.code == "E_EVIDENCE_EXPECTATION_UNKNOWN" for e in result.errors)
+        assert not any(e.code == "E_EVIDENCE_CONTRADICTS_INSTRUCTIONS" for e in result.errors)

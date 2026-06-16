@@ -611,13 +611,20 @@ def check_artifact_patterns(
     For each evidence requirement that has artifact_patterns, verify that
     at least one matching artifact exists for each pattern.
 
+    Skips for deleted/absent/import_absent expectations — these explicitly
+    mean the artifact should NOT exist, so requiring it would be wrong.
+
     Returns list of warnings for unmatched patterns.
     """
     import fnmatch
 
+    _SKIP_EXPECTATIONS = frozenset({"deleted", "absent", "import_absent"})
+
     warnings: list[str] = []
     for req in evidence_requirements:
         if not req.artifact_patterns:
+            continue
+        if req.expectation in _SKIP_EXPECTATIONS:
             continue
 
         for pattern in req.artifact_patterns:

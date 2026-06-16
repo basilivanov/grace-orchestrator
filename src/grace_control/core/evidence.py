@@ -225,26 +225,23 @@ def _check_expectation_deleted(
     worktree_path: Path,
     changed_files: list[str],
 ) -> bool:
-    """Expectation=deleted: file must not exist on disk.
-    If pattern provides a specific path, check it's absent.
-    Also check git diff D status if pattern is in changed_files.
+    """Expectation=deleted: file was deleted by this change.
+    Requires: file absent from disk AND in changed_files (evidence of deletion).
+    Unlike absent, deleted demands proof the change actually removed the file.
     """
     if not worktree_path or not worktree_path.exists():
         return False
     patterns = req.artifact_patterns or ([req.pattern] if req.pattern else [])
     if not patterns:
-        # No pattern — check that ALL changed files show deletion intent
+        # No pattern — check that changed_files show deletion intent
         return len(changed_files) > 0
     for p in patterns:
         fpath = worktree_path / p
         if fpath.exists():
             return False  # file still exists — not properly deleted
-    # If in changed_files, mark as pass (file was touched)
-    for p in patterns:
-        if p in changed_files:
-            return True
-    # File absent from disk but not in changed_files — still OK for deleted
-    # (might have been absent before execution)
+        # Must be in changed_files to prove deletion happened
+        if p not in changed_files:
+            return False
     return True
 
 

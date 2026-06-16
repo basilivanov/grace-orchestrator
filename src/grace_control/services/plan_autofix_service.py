@@ -60,7 +60,7 @@ class SafePlanAutofixer:
                 self._try_fix_acceptance_scope(patched, err, report)
             elif code == "E_SCOPE_PATH_NOT_CANONICAL":
                 self._try_fix_noncanonical_path(patched, err, report)
-            elif code == "E_EVIDENCE_CONTRACTS_INSTRUCTIONS":
+            elif code == "E_EVIDENCE_CONTRADICTS_INSTRUCTIONS":
                 self._try_fix_evidence_contradiction(patched, err, report)
             else:
                 report.skipped.append({
@@ -499,7 +499,7 @@ class SafePlanAutofixer:
             report.skipped.append({
                 "code": "SKIPPED_NO_EVIDENCE_REF",
                 "reason": "no evidence_id or file_path in error details or message",
-                "error_code": "E_EVIDENCE_CONTRACTS_INSTRUCTIONS",
+                "error_code": "E_EVIDENCE_CONTRADICTS_INSTRUCTIONS",
             })
             return
 
@@ -524,7 +524,7 @@ class SafePlanAutofixer:
                             fixed = True
                             report.fixes.append({
                                 "code": "AUTO_SET_EVIDENCE_EXPECTATION",
-                                "reason": "E_EVIDENCE_CONTRACTS_INSTRUCTIONS",
+                                "reason": "E_EVIDENCE_CONTRADICTS_INSTRUCTIONS",
                                 "evidence_id": evidence_id,
                                 "file": file_path,
                                 "packet_title": pkt.get("title", f"wave-{wi}-pkt-{pi}"),
@@ -541,7 +541,7 @@ class SafePlanAutofixer:
             report.skipped.append({
                 "code": "SKIPPED_EVIDENCE_NOT_FOUND",
                 "reason": f"evidence '{evidence_id}' with file '{file_path}' not found in plan",
-                "error_code": "E_EVIDENCE_CONTRACTS_INSTRUCTIONS",
+                "error_code": "E_EVIDENCE_CONTRADICTS_INSTRUCTIONS",
                 "evidence_id": evidence_id,
                 "file": file_path,
             })

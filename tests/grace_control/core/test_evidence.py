@@ -105,23 +105,32 @@ class TestTypedEvidenceExpectations:
             profile=AcceptanceProfile.STRICT,
         )
 
-    def test_deleted_file_accepted_when_absent(self, tmp_path):
-        """expectation=deleted: file absent from disk → passes (no issues)."""
-        f = tmp_path / "old.py"
-        issues = self._make_check("deleted", "old.py", tmp_path)
+    def test_deleted_file_accepted_when_absent_and_in_changed(self, tmp_path):
+        """expectation=deleted: file absent + in changed_files → passes."""
+        issues = self._make_check("deleted", "old.py", tmp_path, changed_files=["old.py"])
         assert issues == []
+
+    def test_deleted_file_rejected_when_not_in_changed(self, tmp_path):
+        """expectation=deleted: file absent but NOT in changed_files → fails (no deletion proof)."""
+        issues = self._make_check("deleted", "never_existed.py", tmp_path, changed_files=[])
+        assert len(issues) > 0
 
     def test_deleted_file_rejected_when_still_exists(self, tmp_path):
         """expectation=deleted: file still exists → fails."""
         f = tmp_path / "old.py"
         f.write_text("still here")
-        issues = self._make_check("deleted", "old.py", tmp_path)
+        issues = self._make_check("deleted", "old.py", tmp_path, changed_files=["old.py"])
         assert len(issues) > 0
         assert "old.py" in issues[0] or "test-ev" in issues[0]
 
     def test_absent_file_accepted_when_missing(self, tmp_path):
-        """expectation=absent: file not on disk → passes."""
+        """expectation=absent: file never existed → passes (no diff evidence needed)."""
         issues = self._make_check("absent", "never_existed.py", tmp_path)
+        assert issues == []
+
+    def test_absent_file_accepted_after_deletion_without_changed(self, tmp_path):
+        """expectation=absent: file absent but not in changed_files → passes (absent != deleted)."""
+        issues = self._make_check("absent", "removed_long_ago.py", tmp_path, changed_files=[])
         assert issues == []
 
     def test_absent_file_rejected_when_present(self, tmp_path):
@@ -223,3 +232,52 @@ class TestTypedEvidenceExpectations:
         """expectation=exists (default): file missing → fails."""
         issues = self._make_check("exists", "missing.py", tmp_path)
         assert len(issues) > 0
+
+    def test_verifier_does_not_require_artifact_for_deleted_evidence(self):
+        """check_artifact_patterns skips artifact existence for deleted/absent/import_absent."""
+        from grace_control.core.contracts import check_artifact_patterns
+        req = EvidenceRequirement(
+            id="deleted-ev",
+            kind="file",
+            artifact_patterns=["apps/api/models.py"],
+            expectation="deleted",
+        )
+        warnings = check_artifact_patterns([req], available_artifacts=["other.py"])
+        assert warnings == [], "deleted evidence should not require artifact to exist"
+
+    def test_verifier_does_not_require_artifact_for_absent_evidence(self):
+        """check_artifact_patterns skips for absent expectation."""
+        from grace_control.core.contracts import check_artifact_patterns
+        req = EvidenceRequirement(
+            id="absent-ev",
+            kind="file",
+            artifact_patterns=["apps/api/models.py"],
+            expectation="absent",
+        )
+        warnings = check_artifact_patterns([req], available_artifacts=[])
+        assert warnings == []
+
+    def test_verifier_does_not_require_artifact_for_import_absent(self):
+        """check_artifact_patterns skips for import_absent expectation."""
+        from grace_control.core.contracts import check_artifact_patterns
+        req = EvidenceRequirement(
+            id="import-ev",
+            kind="file",
+            artifact_patterns=["apps/api/models.py"],
+            expectation="import_absent",
+            pattern="old_module",
+        )
+        warnings = check_artifact_patterns([req], available_artifacts=["apps/api/models.py"])
+        assert warnings == []
+
+    def test_verifier_still_requires_artifact_for_exists(self):
+        """check_artifact_patterns still checks for exists expectation."""
+        from grace_control.core.contracts import check_artifact_patterns
+        req = EvidenceRequirement(
+            id="exists-ev",
+            kind="file",
+            artifact_patterns=["apps/api/models.py"],
+            expectation="exists",
+        )
+        warnings = check_artifact_patterns([req], available_artifacts=["other.py"])
+        assert len(warnings) > 0

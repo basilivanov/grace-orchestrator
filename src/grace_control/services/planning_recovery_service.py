@@ -30,7 +30,7 @@ REPAIRABLE_COMPILER_ERRORS = {
     "E_EVIDENCE_DIFF_EMPTY_SCOPE",
     "E_EVIDENCE_DIFF_VERIFICATION_ONLY",
     "E_SCOPE_PATH_NOT_CANONICAL",
-    "E_EVIDENCE_CONTRACTS_INSTRUCTIONS",
+    "E_EVIDENCE_CONTRADICTS_INSTRUCTIONS",
 }
 
 # ── Errors that CANNOT be repaired (shell env, venv, syntax) ────────────
@@ -112,7 +112,7 @@ Description: {feature_description}
    2. convert original source file to shim/delegator;
    3. migrate consumers;
    4. remove shim later.
-- If E_EVIDENCE_CONTRACTS_INSTRUCTIONS: evidence expects a file to exist,
+- If E_EVIDENCE_CONTRADICTS_INSTRUCTIONS: evidence expects a file to exist,
   but instructions say to delete/remove that same file. Change the evidence
   expectation to 'deleted' (or 'absent'), or remove the delete instruction
   from coder_instructions if the file must be kept.

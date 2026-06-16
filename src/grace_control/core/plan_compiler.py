@@ -710,6 +710,11 @@ class PlanCompiler:
                     "or include test files in write scope",
                 )
 
+    _VALID_EXPECTATIONS = frozenset({
+        "exists", "created", "modified", "deleted", "absent",
+        "diff_contains", "test_output", "import_absent", "import_updated",
+    })
+
     def _validate_evidence(
         self,
         result: CompileResult,
@@ -725,6 +730,18 @@ class PlanCompiler:
             kind = ev.get("kind", "")
             patterns = ev.get("artifact_patterns", [])
             required = ev.get("required", True)
+
+            # Validate expectation enum
+            expectation = ev.get("expectation", "") or "exists"
+            if expectation not in self._VALID_EXPECTATIONS:
+                _add_error(
+                    result, "E_EVIDENCE_EXPECTATION_UNKNOWN",
+                    f"expected_evidence[{ei}].expectation",
+                    f"unknown expectation '{expectation}' — "
+                    f"valid values: {sorted(self._VALID_EXPECTATIONS)}",
+                    title,
+                    f"use one of: {', '.join(sorted(self._VALID_EXPECTATIONS))}",
+                )
 
             # kind=diff with pattern=agent.patch → wrong
             if kind == "diff" and required:
@@ -850,7 +867,7 @@ class PlanCompiler:
             for p in patterns:
                 if p in removal_targets and expectation == "exists":
                     _add_error(
-                        result, "E_EVIDENCE_CONTRACTS_INSTRUCTIONS",
+                        result, "E_EVIDENCE_CONTRADICTS_INSTRUCTIONS",
                         f"expected_evidence",
                         f"Evidence '{ev_id}' expects '{p}' to exist (expectation='exists'), "
                         f"but instructions say to remove/delete it (keywords: {remove_kws}). "
