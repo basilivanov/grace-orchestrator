@@ -331,8 +331,12 @@ class CommandRunner:
         cmd_str = cmd_str.replace('&& source .venv/bin/activate &&', '&&')
         if cmd_str.startswith('. .venv/bin/activate && '):
             cmd_str = cmd_str[len('. .venv/bin/activate && '):]
+        # Strip any leading '. <path>/.venv/bin/activate &&' (architect uses relative paths)
+        import re as _re2
+        cmd_str = _re2.sub(r'^\.\s+\S*\.venv/bin/activate\s*&&\s*', '', cmd_str)
+        cmd_str = _re2.sub(r'\s*&&\s*\.\s+\S*\.venv/bin/activate\s*&&', ' &&', cmd_str)
         # Replace bare 'python' with 'python3' after venv strip (worktree has no venv)
-        cmd_str = re.sub(r'(^|\s)python(\s|$)', r'\1python3\2', cmd_str)
+        cmd_str = _re2.sub(r'(^|\s)python(\s|$)', r'\1python3\2', cmd_str)
         timeout = timeout_s or self._default_timeout
         started = time.time()
         cmd_preview = cmd_str[:200]
