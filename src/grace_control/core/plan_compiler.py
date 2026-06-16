@@ -245,6 +245,11 @@ def collect_repo_references(target_root: Path, import_path: str) -> list[RepoRef
 
 class PlanCompiler:
 
+    _VALID_EXPECTATIONS = frozenset({
+        "exists", "created", "modified", "deleted", "absent",
+        "diff_contains", "test_output", "import_absent", "import_updated",
+    })
+
     def compile_plan(
         self,
         plan: dict,
@@ -709,11 +714,6 @@ class PlanCompiler:
                     "keep compatibility shim/wrapper/re-export for old symbol, "
                     "or include test files in write scope",
                 )
-
-    _VALID_EXPECTATIONS = frozenset({
-        "exists", "created", "modified", "deleted", "absent",
-        "diff_contains", "test_output", "import_absent", "import_updated",
-    })
 
     def _validate_evidence(
         self,
