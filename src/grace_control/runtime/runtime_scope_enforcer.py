@@ -19,6 +19,12 @@ class RuntimeScopeEnforcementResult(BaseModel):
 
 class RuntimeScopeEnforcer:
 
+    _EXCLUDE_PREFIXES: tuple[str, ...] = (
+        ".git/", ".grace/", ".venv/", "venv/", "node_modules/",
+        "__pycache__/", ".pytest_cache/", ".mypy_cache/", ".ruff_cache/",
+        ".next/", "dist/", "build/", ".tox/",
+    )
+
     @staticmethod
     def enforce(
         changed_files: list[str],
@@ -36,7 +42,9 @@ class RuntimeScopeEnforcer:
                 summary=f"Invalid scope paths (absolute/.. not allowed): {invalid_scope}",
             )
 
-        changed = _dedupe_ordered(changed_files)
+        # Filter out dev/build/cache directories before scope check
+        changed = [f for f in _dedupe_ordered(changed_files)
+                   if not any(f.startswith(p) or f"/{p}" in f for p in RuntimeScopeEnforcer._EXCLUDE_PREFIXES)]
 
         # Reject absolute and dotdot paths in changed_files (hardened)
         invalid = []

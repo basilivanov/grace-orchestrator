@@ -17,6 +17,17 @@ _log = GraceLogger("runtime_diff_inspector")
 # Used only for tests — production uses direct argv-based git calls
 AsyncShellRunner = Callable[[list[str]], tuple[int, str, str]]
 
+_EXCLUDE_PREFIXES: tuple[str, ...] = (
+    ".git/", ".grace/", ".venv/", "venv/", "node_modules/",
+    "__pycache__/", ".pytest_cache/", ".mypy_cache/", ".ruff_cache/",
+    ".next/", "dist/", "build/", ".tox/",
+)
+
+
+def _filter_excluded(files: list[str]) -> list[str]:
+    return [f for f in files
+            if not any(f.startswith(p) or f"/{p}" in f for p in _EXCLUDE_PREFIXES)]
+
 
 class RuntimeDiffInspectionRequest(BaseModel):
     repo_root: str
@@ -64,6 +75,7 @@ class RuntimeDiffInspector:
             diff_stat = await self._get_diff_stat(cwd, base)
 
             all_changed = _dedupe(changed + staged + unstaged + untracked)
+            all_changed = _filter_excluded(all_changed)
             return RuntimeDiffInspectionResult(
                 ok=True,
                 changed_files=all_changed,
