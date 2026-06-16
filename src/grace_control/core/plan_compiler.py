@@ -451,12 +451,16 @@ class PlanCompiler:
         if not intents:
             return
 
-        # Collect all files in scope across all packets
+        # Collect all files in scope across all packets + global frozen scope
         all_scope_files: set[str] = set()
         for wave in plan.get("waves", []):
             for pkt in wave.get("packets", []):
                 for s in pkt.get("scope", []) or []:
                     all_scope_files.add(s)
+        # Plan-level frozen_scope also counts — files that are explicitly
+        # protected from modification don't need to be in packet scope.
+        for fs in plan.get("constraints", {}).get("frozen_scope", []) or []:
+            all_scope_files.add(fs)
 
         for intent in intents:
             src = intent.source_path
