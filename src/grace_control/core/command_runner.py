@@ -315,6 +315,13 @@ class CommandRunner:
                 requoted += " " + " ".join(file_tokens)
             cmd_list = shlex.split(requoted)
 
+        # W06: Re-quote -c argument after shlex.split — the code string
+        # may contain shell metacharacters (quotes, semicolons) that were
+        # protected by single quotes. shlex.split removes the outer quotes,
+        # so we must re-quote with shlex.quote() before reconstructing.
+        if len(cmd_list) >= 3 and cmd_list[0] == "python3" and cmd_list[1] == "-c":
+            cmd_list = cmd_list[:2] + [shlex.quote(cmd_list[2])] + cmd_list[3:]
+
         cmd_str = " ".join(cmd_list)
         # Replace 'source' with '.' for dash/sh compatibility (source is bash-only)
         if cmd_str.startswith('source ') or ' && source ' in cmd_str or '; source ' in cmd_str:
@@ -324,6 +331,8 @@ class CommandRunner:
         cmd_str = cmd_str.replace('&& source .venv/bin/activate &&', '&&')
         if cmd_str.startswith('. .venv/bin/activate && '):
             cmd_str = cmd_str[len('. .venv/bin/activate && '):]
+        # Replace bare 'python' with 'python3' after venv strip (worktree has no venv)
+        cmd_str = re.sub(r'(^|\s)python(\s|$)', r'\1python3\2', cmd_str)
         timeout = timeout_s or self._default_timeout
         started = time.time()
         cmd_preview = cmd_str[:200]
