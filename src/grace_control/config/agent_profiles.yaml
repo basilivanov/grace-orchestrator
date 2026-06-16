@@ -40,7 +40,7 @@ agents:
     inject_dir: true
     input:
       mode: file
-    model: gpt-oss-120b-medium
+    model: gemini-2.5-pro
     timeout_seconds: 600
 
   architect-premium:
@@ -85,7 +85,7 @@ agents:
     inject_dir: true
     input:
       mode: file
-    model: gpt-oss-120b-medium
+    model: gemini-2.5-pro
   reviewer-premium:
     backend: cli
     resume_mode: always
@@ -103,7 +103,7 @@ agents:
     inject_dir: true
     input:
       mode: file
-    model: gpt-oss-120b-medium
+    model: gemini-2.5-pro
   coder-deepseek-flash:
     backend: cli
     resume_mode: never
@@ -454,7 +454,7 @@ codex:
     metadata:
       complexity: complex
       provider: deepseek
-    model: gpt-oss-120b-medium
+    model: gemini-2.5-pro
     priority: 10
     reasoning: max
     roles:
@@ -466,7 +466,7 @@ codex:
     metadata:
       complexity: complex
       provider: deepseek
-    model: gpt-oss-120b-medium
+    model: gemini-2.5-pro
     priority: 5
     reasoning: max
     roles:
