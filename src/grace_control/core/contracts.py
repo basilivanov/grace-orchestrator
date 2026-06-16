@@ -618,7 +618,7 @@ def check_artifact_patterns(
     """
     import fnmatch
 
-    _SKIP_EXPECTATIONS = frozenset({"deleted", "absent", "import_absent"})
+    _SKIP_EXPECTATIONS = frozenset({"deleted", "absent", "import_absent", "import_updated"})
 
     warnings: list[str] = []
     for req in evidence_requirements:

@@ -270,6 +270,19 @@ class TestTypedEvidenceExpectations:
         warnings = check_artifact_patterns([req], available_artifacts=["apps/api/models.py"])
         assert warnings == []
 
+    def test_verifier_does_not_require_artifact_for_import_updated(self):
+        """check_artifact_patterns skips for import_updated too (symmetry with import_absent)."""
+        from grace_control.core.contracts import check_artifact_patterns
+        req = EvidenceRequirement(
+            id="import-upd-ev",
+            kind="file",
+            artifact_patterns=["apps/api/new_module.py"],
+            expectation="import_updated",
+            pattern="old_module",
+        )
+        warnings = check_artifact_patterns([req], available_artifacts=["other.py"])
+        assert warnings == []
+
     def test_verifier_still_requires_artifact_for_exists(self):
         """check_artifact_patterns still checks for exists expectation."""
         from grace_control.core.contracts import check_artifact_patterns
