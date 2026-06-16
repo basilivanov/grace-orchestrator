@@ -1,6 +1,6 @@
 agents:
   deepseek-v4-pro:
-    backend: cli
+    backend: api
     resume_mode: never
     command:
     - opencode
@@ -44,7 +44,7 @@ agents:
     timeout_seconds: 600
 
   architect-premium:
-    backend: cli
+    backend: api
     resume_mode: always
     resume_flag: "--session"
     fork_flag: "--fork"
@@ -87,7 +87,7 @@ agents:
       mode: file
     model: gemini-2.5-pro
   reviewer-premium:
-    backend: cli
+    backend: api
     resume_mode: always
     resume_flag: "--session"
     fork_flag: "--fork"
@@ -105,7 +105,7 @@ agents:
       mode: file
     model: gemini-2.5-pro
   coder-deepseek-flash:
-    backend: cli
+    backend: api
     resume_mode: never
     resume_safe: false
     resume_flag: "--session"
@@ -211,7 +211,7 @@ agents:
     model: gemini-2.5-flash
     timeout_seconds: 900
   coder-sonnet:
-    backend: cli
+    backend: api
     resume_mode: on_retry
     resume_flag: "--session"
     fork_flag: "--fork"
@@ -233,7 +233,7 @@ agents:
     model: opencode/claude-sonnet-4-6
     timeout_seconds: 900
   coder_agy:
-    backend: cli
+    backend: api
     resume_mode: on_retry
     resume_flag: "--conversation"
     command:
@@ -251,7 +251,7 @@ agents:
     model: gemini-3.5-flash
     timeout_seconds: 900
   coder-opencode:
-    backend: cli
+    backend: api
     resume_mode: on_retry
     resume_flag: "--session"
     fork_flag: "--fork"
@@ -271,10 +271,10 @@ agents:
     input:
       mode: stdin
       template: '{packet_markdown}'
-    model: cliproxy/gemini-3-flash-agent
+    model: apiproxy/gemini-3-flash-agent
 
   coder-opencode-fixture:
-    backend: cli
+    backend: api
     resume_mode: never
     resume_safe: false
     resume_flag: "--session"
@@ -312,7 +312,7 @@ agents:
       collect_stdout: true
     timeout_seconds: 901
   context-collector-flash:
-    backend: cli
+    backend: api
     resume_mode: never
     command:
     - opencode
@@ -362,7 +362,7 @@ agents:
     model: gemini-2.5-flash
     timeout_seconds: 300
   context-json-flash:
-    backend: cli
+    backend: api
     resume_mode: never
     command:
     - opencode
@@ -400,7 +400,7 @@ agents:
     timeout_seconds: 120
   opencode:
     disabled: true  # W09: generic profile without specific role; disabled until covered by tests
-    backend: cli
+    backend: api
     command:
     - opencode
     - run
@@ -417,7 +417,7 @@ agents:
     model: gemini-2.5-flash
     timeout_seconds: 900
   verifier-cheap:
-    backend: cli
+    backend: api
     resume_mode: never
     multimodal: true  # TZ_FRONTEND_ACCEPTANCE P1 — can read screenshots
     command:
@@ -487,7 +487,7 @@ codex:
     kind: opencode
     metadata:
       complexity: simple
-      provider: cliproxy
+      provider: apiproxy
     model: opencode/gemini-3-flash-agent
     priority: 110
     reasoning: medium
@@ -579,7 +579,7 @@ verification:
     backend_quick: pytest tests/ -q --tb=short
     grace_smoke: python3 -m py_compile src/grace_control/**/*.py
   coder-shell:
-    backend: cli
+    backend: api
     command:
     - /bin/bash
     - -c

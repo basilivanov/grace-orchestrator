@@ -1,8 +1,0 @@
-{
-  "providers": {
-    "litellm": {
-      "baseUrl": "http://localhost:18317/v1",
-      "apiKey": "no-key-needed"
-    }
-  }
-}
