@@ -40,7 +40,7 @@ agents:
     inject_dir: true
     input:
       mode: file
-    model: deepseek/deepseek-v4-pro
+    model: gemini-2.5-pro
     timeout_seconds: 600
 
   architect-premium:
@@ -85,7 +85,7 @@ agents:
     inject_dir: true
     input:
       mode: file
-    model: deepseek/deepseek-v4-pro
+    model: gemini-2.5-pro
   reviewer-premium:
     backend: cli
     resume_mode: always
@@ -103,7 +103,7 @@ agents:
     inject_dir: true
     input:
       mode: file
-    model: deepseek/deepseek-v4-pro
+    model: gemini-2.5-pro
   coder-deepseek-flash:
     backend: cli
     resume_mode: never
@@ -208,7 +208,7 @@ agents:
     inject_dir: true
     input:
       mode: file
-    model: deepseek/deepseek-v4-flash
+    model: gemini-2.5-flash
     timeout_seconds: 900
   coder-sonnet:
     backend: cli
@@ -304,7 +304,7 @@ agents:
     minimal_repo: false
     skip_context_builder: true
     workspace_mode: full_git_worktree
-    model: deepseek/deepseek-v4-flash
+    model: gemini-2.5-flash
     output:
       artifacts:
       - .
@@ -359,7 +359,7 @@ agents:
     inject_dir: true
     input:
       mode: file
-    model: deepseek/deepseek-v4-flash
+    model: gemini-2.5-flash
     timeout_seconds: 300
   context-json-flash:
     backend: cli
@@ -396,7 +396,7 @@ agents:
     input:
       mode: stdin
       template: '{packet_markdown}'
-    model: deepseek/deepseek-v4-flash
+    model: gemini-2.5-flash
     timeout_seconds: 120
   opencode:
     disabled: true  # W09: generic profile without specific role; disabled until covered by tests
@@ -414,7 +414,7 @@ agents:
     inject_dir: true
     input:
       mode: file
-    model: deepseek/deepseek-v4-flash
+    model: gemini-2.5-flash
     timeout_seconds: 900
   verifier-cheap:
     backend: cli
@@ -443,7 +443,7 @@ agents:
     inject_dir: true
     input:
       mode: file
-    model: deepseek/deepseek-v4-flash
+    model: gemini-2.5-flash
     timeout_seconds: 300
 codex:
   binary: agy
@@ -454,7 +454,7 @@ codex:
     metadata:
       complexity: complex
       provider: deepseek
-    model: deepseek/deepseek-v4-pro
+    model: gemini-2.5-pro
     priority: 10
     reasoning: max
     roles:
@@ -466,7 +466,7 @@ codex:
     metadata:
       complexity: complex
       provider: deepseek
-    model: deepseek/deepseek-v4-pro
+    model: gemini-2.5-pro
     priority: 5
     reasoning: max
     roles:
@@ -477,7 +477,7 @@ codex:
     metadata:
       complexity: simple
       provider: deepseek
-    model: deepseek/deepseek-v4-flash
+    model: gemini-2.5-flash
     priority: 200
     reasoning: medium
     roles:
@@ -520,7 +520,7 @@ codex:
     metadata:
       complexity: simple
       provider: deepseek
-    model: deepseek/deepseek-v4-flash
+    model: gemini-2.5-flash
     priority: 5
     reasoning: medium
     roles:
@@ -531,7 +531,7 @@ codex:
     metadata:
       complexity: simple
       provider: deepseek
-    model: deepseek/deepseek-v4-flash
+    model: gemini-2.5-flash
     priority: 100
     roles:
     - context_collector
