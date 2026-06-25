@@ -276,8 +276,87 @@ $('#search').addEventListener('input',e=>{state.q=e.target.value.trim();renderBo
 // Auto-refresh
 setInterval(loadData,15000);
 
-// Init
-loadData();
+// WebSocket
+let ws = null;
+let wsReconnectAttempts = 0;
+let currentPacketId = null;
+let wsFallbackPolling = false;
+
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = proto + '//' + location.host + '/ws';
+  try {
+    ws = new WebSocket(wsUrl);
+    ws.onopen = () => { wsReconnectAttempts = 0; wsFallbackPolling = false; };
+    ws.onmessage = (ev) => {
+      try {
+        const msg = JSON.parse(ev.data);
+        const type = msg.type || '';
+        // stage events → refresh detail
+        if ((type === 'stage_started' || type === 'stage_finished' || type === 'stage_returned') && msg.packet_id) {
+          if (msg.packet_id === currentPacketId) {
+            delete detailCache[msg.packet_id];
+            loadAndRenderDetail(msg.packet_id);
+          }
+        }
+        if (type === 'worker_heartbeat' && msg.worker_id) {
+          // можно обновить карточку воркера
+        }
+      } catch(e) {}
+    };
+    ws.onclose = () => {
+      ws = null;
+      if (wsReconnectAttempts < 5) {
+        const delay = Math.min(1000 * Math.pow(2, wsReconnectAttempts), 30000);
+        wsReconnectAttempts++;
+        setTimeout(connectWS, delay);
+      } else {
+        wsFallbackPolling = true;
+      }
+    };
+    ws.onerror = () => { if (ws) ws.close(); };
+  } catch(e) {
+    wsFallbackPolling = true;
+  }
+}
+
+async function loadAndRenderDetail(id) {
+  const detail = await loadDetail(id);
+  if (!detail || state.sel !== id) return;
+  const pkts = getAllPackets(state.data);
+  const p = pkts.find(x => x.id === id);
+  if (!p) return;
+  if (detail.stages) p.stages = detail.stages;
+  if (detail.recovery_chain) p.recovery_chain = detail.recovery_chain;
+  if (detail.totals) p.totals = detail.totals;
+  if (detail.state_machine) p.state_machine = detail.state_machine;
+  if (detail.runs_summary) p.runs_summary = detail.runs_summary;
+  if (detail.sessions_summary) p.sessions = detail.sessions_summary.sessions || [];
+  Object.assign(p, detail.packet || {});
+  // Re-render the card's detail section only
+  const card = document.querySelector('.card[data-p="' + id + '"] .detail');
+  if (card) card.innerHTML = renderDetail(p);
+}
+
+// Override stab to set currentPacketId
+const origStab = stab;
+stab = function(id, t) {
+  currentPacketId = id;
+  origStab(id, t);
+};
+const origToggle2 = toggle;
+toggle = async function(id) {
+  currentPacketId = id || null;
+  origToggle2(id);
+  if (id && wsFallbackPolling) {
+    // Fallback: extra poll every 5s
+    clearInterval(window._pollTimer);
+    window._pollTimer = setInterval(() => { if (state.sel) loadAndRenderDetail(state.sel); }, 5000);
+  }
+};
+
+// Init WS
+connectWS();
 </script>
 </body></html>
 {% endraw %}

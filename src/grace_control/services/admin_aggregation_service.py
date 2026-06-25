@@ -327,6 +327,19 @@ class AdminAggregationService:
     def _derive_stages(self, db: Session, p: Packet) -> list[dict[str, Any]]:
         from grace_control.db.schema import StageRun
         stage_runs = db.query(StageRun).filter_by(packet_id=p.id).order_by(StageRun.started_at).all()
+
+        # Также ищем planning-стадии (context_builder, architect) по plan_{feature_id}
+        plan_packet_id = f"plan_{p.feature_id}"
+        if plan_packet_id != p.id:
+            plan_runs = db.query(StageRun).filter_by(packet_id=plan_packet_id).order_by(StageRun.started_at).all()
+            # Добавляем только если их ещё нет в основном списке
+            existing_keys = {(sr.stage_key, sr.loop_round) for sr in stage_runs}
+            for sr in plan_runs:
+                if (sr.stage_key, sr.loop_round) not in existing_keys:
+                    stage_runs.append(sr)
+
+        stage_runs.sort(key=lambda s: (s.started_at or datetime.max.replace(tzinfo=None), s.created_at))
+
         return [
             {
                 "id": s.id,
