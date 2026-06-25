@@ -16,17 +16,18 @@ _log = GraceLogger("packet_control")
 
 def retry_packet(packet_id: str, actor: str | None = None, reason: str = "manual_retry") -> dict:
     """BLOCKED_RECOVERABLE или REJECTED → READY, увеличивает attempt_count."""
-    from grace_control.core.state_machine import PacketStateMachine as _sm
+    from grace_control.core.state_machine import PacketStateMachine
     from grace_control.core.event_recorder import record_event
 
+    sm = PacketStateMachine()
     with get_db() as db:
         pkt = db.query(Packet).filter_by(id=packet_id).first()
         if not pkt:
             raise ValueError(f"Packet {packet_id} not found")
-        current = _sm.normalize_state(pkt.state)
+        current = PacketStateMachine.normalize_state(pkt.state)
         if current not in (PacketState.BLOCKED_RECOVERABLE, PacketState.REJECTED):
             raise ValueError(f"Cannot retry from state {pkt.state}")
-        _sm.transition(current, PacketState.READY)
+        sm.transition(current, PacketState.READY)
         pkt.state = PacketState.READY.value
         pkt.attempt_count = (pkt.attempt_count or 0) + 1
         db.flush()
@@ -40,17 +41,18 @@ def retry_packet(packet_id: str, actor: str | None = None, reason: str = "manual
 
 def cancel_packet(packet_id: str, actor: str | None = None, reason: str = "manual_cancel") -> dict:
     """RUNNING → CANCELLED, освобождает lease. Сначала сигнал воркеру."""
-    from grace_control.core.state_machine import PacketStateMachine as _sm
+    from grace_control.core.state_machine import PacketStateMachine
     from grace_control.core.event_recorder import record_event
     from grace_control.api.ws_broadcast import broadcast_packet_cancel
     import asyncio
 
+    sm = PacketStateMachine()
     worker_id = None
     with get_db() as db:
         pkt = db.query(Packet).filter_by(id=packet_id).first()
         if not pkt:
             raise ValueError(f"Packet {packet_id} not found")
-        current = _sm.normalize_state(pkt.state)
+        current = PacketStateMachine.normalize_state(pkt.state)
         if current != PacketState.RUNNING:
             raise ValueError(f"Cannot cancel from state {pkt.state}")
 
@@ -68,7 +70,7 @@ def cancel_packet(packet_id: str, actor: str | None = None, reason: str = "manua
         pkt = db.query(Packet).filter_by(id=packet_id).first()
         if not pkt:
             raise ValueError(f"Packet {packet_id} not found")
-        _sm.transition(PacketState.RUNNING, PacketState.CANCELLED)
+        sm.transition(PacketState.RUNNING, PacketState.CANCELLED)
         pkt.state = PacketState.CANCELLED.value
 
         lease = db.query(Lease).filter_by(packet_id=packet_id).first()
@@ -176,8 +178,8 @@ def stop_worker(worker_id: str, actor: str | None = None) -> dict:
         for lease in leases:
             pkt = db.query(Packet).filter_by(id=lease.packet_id).first()
             if pkt and pkt.state == "running":
-                from grace_control.core.state_machine import PacketStateMachine as _sm
-                _sm.transition(PacketState.RUNNING, PacketState.CANCELLED)
+                from grace_control.core.state_machine import PacketStateMachine
+                PacketStateMachine().transition(PacketState.RUNNING, PacketState.CANCELLED)
                 pkt.state = PacketState.CANCELLED.value
             db.delete(lease)
             stopped_packets.append(lease.packet_id)

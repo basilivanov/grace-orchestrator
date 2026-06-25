@@ -189,16 +189,12 @@ def _read_supervisor_logs(packet_id: str, tail: int) -> list[AggregatedLines]:
     for path in [Path("/tmp/supervisor.log")]:
         try:
             text = path.read_text(errors="replace")
-            for line in text.split("\n")[-tail:]:
-                if not line.strip():
+            for raw_line in text.split("\n")[-tail * 2:]:
+                line = raw_line.strip()
+                if not line:
                     continue
                 if packet_id in line:
-                    level = "info"
-                    if "error" in line.lower():
-                        level = "error"
-                    elif "warn" in line.lower():
-                        level = "warn"
-                    lines.append(AggregatedLines(ts="", source="supervisor", level=level, trace_id=None, msg=line.strip()))
+                    lines.append(_parse_structured_line(line, "supervisor"))
         except (OSError, IOError):
             pass
     return lines
