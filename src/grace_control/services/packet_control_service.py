@@ -39,12 +39,13 @@ def retry_packet(packet_id: str, actor: str | None = None, reason: str = "manual
 
 
 def cancel_packet(packet_id: str, actor: str | None = None, reason: str = "manual_cancel") -> dict:
-    """RUNNING → CANCELLED, освобождает lease."""
+    """RUNNING → CANCELLED, освобождает lease. Сначала сигнал воркеру."""
     from grace_control.core.state_machine import PacketStateMachine as _sm
     from grace_control.core.event_recorder import record_event
     from grace_control.api.ws_broadcast import broadcast_packet_cancel
     import asyncio
 
+    worker_id = None
     with get_db() as db:
         pkt = db.query(Packet).filter_by(id=packet_id).first()
         if not pkt:
@@ -52,24 +53,36 @@ def cancel_packet(packet_id: str, actor: str | None = None, reason: str = "manua
         current = _sm.normalize_state(pkt.state)
         if current != PacketState.RUNNING:
             raise ValueError(f"Cannot cancel from state {pkt.state}")
-        _sm.transition(current, PacketState.CANCELLED)
+
+        lease = db.query(Lease).filter_by(packet_id=packet_id).first()
+        if lease:
+            worker_id = lease.worker_id
+
+    # Сначала сигнал воркеру (если он есть), потом state change
+    if worker_id:
+        _try_signal_worker(worker_id, signal.SIGTERM)
+        import time
+        time.sleep(1)
+
+    with get_db() as db:
+        pkt = db.query(Packet).filter_by(id=packet_id).first()
+        if not pkt:
+            raise ValueError(f"Packet {packet_id} not found")
+        _sm.transition(PacketState.RUNNING, PacketState.CANCELLED)
         pkt.state = PacketState.CANCELLED.value
 
         lease = db.query(Lease).filter_by(packet_id=packet_id).first()
-        worker_id = None
         if lease:
             worker = db.query(Worker).filter_by(id=lease.worker_id).first()
-            worker_id = lease.worker_id
             if worker:
                 worker.current_packet_id = None
             db.delete(lease)
 
         record_event("packet_transition", "packet", packet_id, {
-            "from": current.value, "to": PacketState.CANCELLED.value, "reason": reason, "actor": actor,
+            "from": "running", "to": "cancelled", "reason": reason, "actor": actor,
         })
         db.commit()
 
-    # Безопасно запускаем broadcast через ensure_future
     try:
         loop = asyncio.get_event_loop()
         if loop.is_running():
@@ -78,10 +91,6 @@ def cancel_packet(packet_id: str, actor: str | None = None, reason: str = "manua
             loop.run_until_complete(broadcast_packet_cancel(packet_id, reason))
     except RuntimeError:
         pass
-
-    # Пытаемся убить процесс воркера через supervisor
-    if worker_id:
-        _try_signal_worker(worker_id)
 
     _log.info("packet_cancelled", packet_id=packet_id, actor=actor)
     return {"ok": True, "packet_id": packet_id, "state": PacketState.CANCELLED.value}

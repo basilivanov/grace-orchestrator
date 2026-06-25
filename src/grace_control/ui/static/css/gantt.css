@@ -55,10 +55,8 @@
 }
 .gantt-lane-track {
   flex: 1;
-  display: flex;
-  gap: 2px;
   overflow-x: auto;
-  min-height: 20px;
+  min-height: 22px;
   position: relative;
 }
 .gantt-bar {

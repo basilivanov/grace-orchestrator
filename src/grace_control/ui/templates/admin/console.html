@@ -104,7 +104,7 @@ function renderCard(p){
   if(pipe.length){
     pipeHtml='<div class="pipe">'+pipe.map((s,i)=>{
       const cls=s.status==='done'?'done':s.status==='running'?'running':s.status==='failed'?'failed':s.status==='skipped'?'skipped':'pending';
-      const lbl=(s.stage_key||s.key||'').split('_').slice(0,2).join(' ');
+      const lbl=esc(s.stage_key||s.key||'').split('_').slice(0,2).join(' ');
       const dur=s.duration_ms?fmtDur(s.duration_ms):'—';
       let h=`<div class="ps"><div class="ps-l ${cls}">${lbl}</div><div class="ps-d ${cls}"></div><div class="ps-t ${cls}">${dur}</div></div>`;
       if(i<pipe.length-1){
@@ -114,12 +114,12 @@ function renderCard(p){
       return h;
     }).join('')+'</div>';
   }
-  const att=p.attempt_count>1?`<span style="color:var(--orange)">attempt ${p.attempt_count}/${p.max_attempts}</span>`:'';
-  const sub=`<span>${p.feature?.title||''}</span><span>·</span><span>${p.wave?.title||''}</span>${cur?`<span>·</span><span style="color:var(--blue)">at ${cur.stage_key||cur.key}</span>`:''}${att?`<span>·</span>${att}`:''}`;
+  const att=p.attempt_count>1?`<span style="color:var(--orange)">attempt ${esc(p.attempt_count+'')}/${p.max_attempts}</span>`:'';
+  const sub=`<span>${esc(p.feature?.title||'')}</span><span>·</span><span>${esc(p.wave?.title||'')}</span>${cur?`<span>·</span><span style="color:var(--blue)">at ${esc(cur.stage_key||cur.key)}</span>`:''}${att?`<span>·</span>${att}`:''}`;
   const dur=p.duration_seconds?fmtDur(p.duration_seconds*1000):'—';
-  const mets=`<div class="met"><span class="met-l">Duration</span><span class="met-v">${dur}</span></div>${p.model?`<div class="met"><span class="met-l">Model</span><span class="met-v">${p.model}</span></div>`:''}`;
+  const mets=`<div class="met"><span class="met-l">Duration</span><span class="met-v">${dur}</span></div>${p.model?`<div class="met"><span class="met-l">Model</span><span class="met-v">${esc(p.model)}</span></div>`:''}`;
   const detHtml=sel?renderDetail(p):'';
-  return`<div class="card ${sel?'sel':''}" data-p="${p.id}"><div class="card-h" onclick="toggle('${p.id}')"><div class="strip s-${sc}"></div><div class="info"><div class="info-top"><span class="pkt-id">${p.id}</span><span class="pkt-name">${p.title}</span><span class="badge b-${sc}">${SL[p.state]||p.state}</span></div><div class="info-sub">${sub}</div></div>${pipeHtml}<div class="mets">${mets}</div></div><div class="detail ${sel?'open':''}">${detHtml}</div></div>`;
+  return`<div class="card ${sel?'sel':''}" data-p="${esc(p.id)}"><div class="card-h" onclick="toggle('${esc(p.id)}')"><div class="strip s-${sc}"></div><div class="info"><div class="info-top"><span class="pkt-id">${esc(p.id)}</span><span class="pkt-name">${esc(p.title)}</span><span class="badge b-${sc}">${esc(SL[p.state]||p.state)}</span></div><div class="info-sub">${sub}</div></div>${pipeHtml}<div class="mets">${mets}</div></div><div class="detail ${sel?'open':''}">${detHtml}</div></div>`;
 }
 
 function renderDetail(p){
@@ -151,11 +151,11 @@ function renderPipeTab(p){
     if(s.loop_round>1)rows+=`<div class="sc-r"><span class="sc-rk">Round</span><span class="sc-rv">${s.loop_round}</span></div>`;
     if(s.tokens_in)rows+=`<div class="sc-r"><span class="sc-rk">Tokens</span><span class="sc-rv">${s.tokens_in}→${s.tokens_out||0}</span></div>`;
     if(s.cost_usd)rows+=`<div class="sc-r"><span class="sc-rk">Cost</span><span class="sc-rv">$${Number(s.cost_usd).toFixed(4)}</span></div>`;
-    if(s.model)rows+=`<div class="sc-r"><span class="sc-rk">Model</span><span class="sc-rv">${s.model}</span></div>`;
-    if(s.worker_id)rows+=`<div class="sc-r"><span class="sc-rk">Worker</span><span class="sc-rv">${s.worker_id}</span></div>`;
-    if(s.recovery_reason)rows+=`<div class="sc-r"><span class="sc-rk">Reason</span><span class="sc-rv err">${s.recovery_reason}</span></div>`;
-    if(s.error)rows+=`<div class="sc-r"><span class="sc-rk">Error</span><span class="sc-rv err">${(s.error+'').slice(0,100)}</span></div>`;
-    return`<div class="sc ${cls}"><div class="sc-h"><span class="sc-n ${cls}">${s.stage_key||s.key}${s.loop_round>1?' r'+s.loop_round:''}</span><span class="sc-si">${icon}</span></div><div class="sc-rs">${rows}</div></div>`;
+    if(s.model)rows+=`<div class="sc-r"><span class="sc-rk">Model</span><span class="sc-rv">${esc(s.model)}</span></div>`;
+    if(s.worker_id)rows+=`<div class="sc-r"><span class="sc-rk">Worker</span><span class="sc-rv">${esc(s.worker_id)}</span></div>`;
+    if(s.recovery_reason)rows+=`<div class="sc-r"><span class="sc-rk">Reason</span><span class="sc-rv err">${esc(s.recovery_reason)}</span></div>`;
+    if(s.error)rows+=`<div class="sc-r"><span class="sc-rk">Error</span><span class="sc-rv err">${esc((s.error+'').slice(0,100))}</span></div>`;
+    return`<div class="sc ${cls}"><div class="sc-h"><span class="sc-n ${cls}">${esc(s.stage_key||s.key)}${s.loop_round>1?' r'+s.loop_round:''}</span><span class="sc-si">${icon}</span></div><div class="sc-rs">${rows}</div></div>`;
   }).join('')+'</div>';
   return html;
 }

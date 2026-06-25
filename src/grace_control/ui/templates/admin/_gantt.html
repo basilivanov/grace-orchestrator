@@ -37,9 +37,9 @@
       <div class="gantt-lane-track">
         {% for bar in lane.bars %}
         <div class="gantt-bar status-{{ bar.status }}"
-             style="background: {{ bar.color or '#CCC' }}; width: {{ bar.duration_ms // 1000 if bar.duration_ms else 10 }}px"
-             title="{{ bar.stage_key }} · {{ bar.started_at[:19] if bar.started_at }} → {{ bar.finished_at[:19] if bar.finished_at }} · {{ (bar.duration_ms // 1000)|string + 's' if bar.duration_ms else 'running' }}">
-          {{ bar.stage_key[:8] }}
+             style="position:absolute; left: {{ bar.left_pct }}%; width: {{ bar.width_pct }}%; background: {{ bar.color or '#CCC' }}; min-width: 4px; height: 18px;"
+             title="{{ bar.stage_key }} · {{ bar.started_at[:19] if bar.started_at }} → {{ bar.finished_at[:19] if bar.finished_at }} · {{ (bar.duration_ms // 1000)|string + 's' if bar.duration_ms else 'running' }}{% if bar.loop_round and bar.loop_round > 1 %} · round {{ bar.loop_round }}{% endif %}">
+          <span style="font-size:8px;color:#fff;padding:0 3px;white-space:nowrap;overflow:hidden">{{ bar.stage_key[:6] }}{% if bar.loop_round and bar.loop_round > 1 %} r{{ bar.loop_round }}{% endif %}</span>
         </div>
         {% endfor %}
       </div>
