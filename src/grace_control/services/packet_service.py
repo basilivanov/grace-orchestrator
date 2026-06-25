@@ -28,6 +28,7 @@ import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Optional
+from grace_control.core.stage_instrumentation import stage
 
 from grace_control.core.state_machine import PacketStateMachine, StateTransitionError
 from grace_control.core.structured_logger import GraceLogger
@@ -174,6 +175,7 @@ class PacketService:
         asyncio.create_task(self._broadcast(packet_id, to_state.value, reason))
         return packet
 
+    @stage("executor")
     async def claim(self, packet_id: str, worker_id: str) -> ClaimResult:
         """Claim a packet: DRAFT/REJECTED/BLOCKED_RECOVERABLE→READY→RUNNING, creates lease.
 

@@ -50,6 +50,10 @@ def new_run_uid() -> str:
     return f"run_{nanoid(10)}"
 
 
+def new_stage_run_uid() -> str:
+    return f"srun_{nanoid(10)}"
+
+
 def generate_unique_id(db, model, factory, *, max_attempts: int = 5, reserved: set[str] | None = None) -> str:
     for _ in range(max_attempts):
         value = factory()

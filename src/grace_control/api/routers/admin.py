@@ -421,61 +421,34 @@ def unarchive_feature(feature_id: str) -> dict:
 # START_BLOCK_PLANNED_CONTROL_STUBS
 
 
-# START_FUNCTION_CONTRACT
-# name: _planned
-# purpose: Return a 501 JSON response for planned-but-not-implemented endpoints.
-# inputs: doc (str) — reference doc URL/path.
-# returns: JSONResponse with status 501.
-# side_effects: None.
-# emitted_logs: None.
-# error_behavior: Never raises.
-# END_FUNCTION_CONTRACT
-def _planned(doc: str) -> JSONResponse:
-    return JSONResponse(
-        status_code=501,
-        content={"error": "not_implemented", "planned": "v2", "doc": doc},
-    )
+from grace_control.services.packet_control_service import retry_packet as _retry, cancel_packet as _cancel, delete_packet as _delete
 
 
-# START_FUNCTION_CONTRACT
-# name: packet_resume
-# purpose: Planned stub — resume a packet execution (TZ_SESSION_RESUME).
-# inputs: packet_id (str).
-# returns: JSONResponse 501.
-# side_effects: None.
-# emitted_logs: None.
-# error_behavior: Returns 501.
-# END_FUNCTION_CONTRACT
 @router.post("/api/admin/packet/{packet_id}/resume")
-def packet_resume(packet_id: str) -> JSONResponse:
-    return _planned("TZ_SESSION_RESUME.md")
+def packet_resume(packet_id: str) -> dict:
+    """Retry a BLOCKED_RECOVERABLE or REJECTED packet."""
+    try:
+        return _retry(packet_id, actor="admin_ui", reason="manual_retry")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
-# START_FUNCTION_CONTRACT
-# name: packet_delete
-# purpose: Planned stub — delete a packet and its runs.
-# inputs: packet_id (str).
-# returns: JSONResponse 501.
-# side_effects: None.
-# emitted_logs: None.
-# error_behavior: Returns 501.
-# END_FUNCTION_CONTRACT
 @router.post("/api/admin/packet/{packet_id}/delete")
-def packet_delete(packet_id: str) -> JSONResponse:
-    return _planned("TZ_ADMIN_PANEL.md#planned-control-stubs")
+def packet_delete(packet_id: str, body: dict = {}) -> dict:
+    """Delete a packet and its runs."""
+    confirm = body.get("confirm", "")
+    try:
+        return _delete(packet_id, confirm=confirm, actor="admin_ui")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
-# START_FUNCTION_CONTRACT
-# name: packet_stop
-# purpose: Planned stub — stop a running packet execution.
-# inputs: packet_id (str).
-# returns: JSONResponse 501.
-# side_effects: None.
-# emitted_logs: None.
-# error_behavior: Returns 501.
-# END_FUNCTION_CONTRACT
 @router.post("/api/admin/packet/{packet_id}/stop")
-def packet_stop(packet_id: str) -> JSONResponse:
-    return _planned("TZ_ADMIN_PANEL.md#planned-control-stubs")
+def packet_stop(packet_id: str) -> dict:
+    """Cancel a running packet."""
+    try:
+        return _cancel(packet_id, actor="admin_ui", reason="manual_cancel")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 # END_BLOCK_PLANNED_CONTROL_STUBS

@@ -1,0 +1,115 @@
+/* Stage Metrics */
+.metrics-page {
+  padding: 12px;
+}
+.metrics-header {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+.metrics-header h1 {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0;
+}
+.period-btn {
+  font-size: 10px;
+  padding: 3px 10px;
+  border: 1px solid #ccc;
+  border-radius: 3px;
+  text-decoration: none;
+  color: #666;
+  background: #fff;
+}
+.period-btn.active {
+  background: #0B5E87;
+  color: #fff;
+  border-color: #0B5E87;
+}
+.metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px;
+}
+.metric-card {
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+  padding: 8px;
+  background: #fff;
+}
+.metric-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid #eee;
+}
+.metric-stage-label {
+  font-weight: 600;
+  font-size: 11px;
+  color: #333;
+}
+.metric-stage-count {
+  font-size: 9px;
+  color: #888;
+}
+.metric-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.metric-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  padding: 1px 0;
+}
+.metric-label {
+  color: #888;
+}
+.metric-value {
+  color: #333;
+  font-family: 'DejaVu Sans Mono', monospace;
+}
+/* Heatmap */
+.heatmap-section {
+  margin-top: 24px;
+}
+.heatmap-section h2 {
+  font-size: 13px;
+  margin: 0 0 8px 0;
+}
+.heatmap-grid {
+  font-size: 9px;
+  font-family: 'DejaVu Sans Mono', monospace;
+}
+.heatmap-header, .heatmap-row {
+  display: flex;
+  gap: 2px;
+  padding: 2px 0;
+}
+.heatmap-corner, .heatmap-stage {
+  width: 60px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #888;
+}
+.heatmap-hour {
+  width: 20px;
+  text-align: center;
+  color: #888;
+}
+.heatmap-cell {
+  width: 20px;
+  height: 16px;
+  line-height: 16px;
+  text-align: center;
+  background: #B02A2A;
+  color: #fff;
+  font-size: 8px;
+  border-radius: 2px;
+}

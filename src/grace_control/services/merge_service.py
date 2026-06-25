@@ -25,6 +25,7 @@ import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from grace_control.core.stage_instrumentation import stage
 
 from grace_control.core.structured_logger import GraceLogger
 from grace_control.db.schema import PacketState
@@ -62,6 +63,7 @@ class MergeService:
         self._git = git or GitService()
         self._packets = packets  # lazy import to avoid cycle
 
+    @stage("merge")
     async def merge_packet(
         self,
         packet_id: str,

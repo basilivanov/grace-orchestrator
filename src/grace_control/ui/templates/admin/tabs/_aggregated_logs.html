@@ -1,0 +1,61 @@
+{# Aggregated Logs tab
+   Expects: packet_id, lines (list of log lines), sources_used, truncated, time_range #}
+<div class="aggregated-logs" id="tab-aggregated-logs"
+     hx-trigger="refresh from:body"
+     hx-get="/admin/_partial/tab_aggregated_logs?packet_id={{ packet_id }}"
+     hx-swap="outerHTML">
+  <div class="log-filters">
+    <fieldset class="source-filter">
+      <legend>Sources</legend>
+      <label><input type="checkbox" name="src" value="server" checked> Server</label>
+      <label><input type="checkbox" name="src" value="supervisor" checked> Supervisor</label>
+      <label><input type="checkbox" name="src" value="worker_stdout" checked> Worker out</label>
+      <label><input type="checkbox" name="src" value="worker_stderr" checked> Worker err</label>
+      <label><input type="checkbox" name="src" value="agent" checked> Agent</label>
+      <label><input type="checkbox" name="src" value="recovery" checked> Recovery</label>
+      <label><input type="checkbox" name="src" value="db_events" checked> DB</label>
+    </fieldset>
+    <div class="log-filter-inputs">
+      <select class="log-level">
+        <option value="all">All levels</option>
+        <option value="info">Info</option>
+        <option value="warn">Warn</option>
+        <option value="error">Error</option>
+      </select>
+      <input type="text" class="log-trace" placeholder="trace_id" title="Filter by trace_id">
+      <input type="text" class="log-regex" placeholder="regex filter">
+      <button class="btn-small" onclick="applyLogFilters('{{ packet_id }}')">Apply</button>
+      <button class="btn-small" onclick="toggleAutoScroll()" id="autoscroll-btn">Auto-scroll ✓</button>
+      <button class="btn-small" onclick="document.getElementById('aggregated-log-stream').innerHTML = ''">Clear</button>
+    </div>
+  </div>
+
+  <div class="log-stats">
+    Sources: {{ sources_used|join(', ') if sources_used else 'none' }}
+    {% if truncated %}<span class="warn">· truncated</span>{% endif %}
+    {% if time_range %}<span class="mono">· {{ time_range.min[:19] }} → {{ time_range.max[:19] }}</span>{% endif %}
+  </div>
+
+  <div class="log-stream" id="aggregated-log-stream">
+    {% if lines %}
+    {% for line in lines %}
+    <div class="log-line log-source-{{ line.source }}">
+      <span class="log-ts mono">{{ line.ts[:19] if line.ts else '—' }}</span>
+      <span class="log-source-badge source-{{ line.source }}">{{ line.source[:8] }}</span>
+      <span class="log-level-badge level-{{ line.level }}">{{ line.level[:4] }}</span>
+      {% if line.trace_id %}<span class="log-trace mono" title="Filter: {{ line.trace_id }}"
+            onclick="applyTraceFilter('{{ line.trace_id }}')">{{ line.trace_id[:12] }}</span>{% endif %}
+      <span class="log-msg">{{ line.msg[:500] }}</span>
+    </div>
+    {% endfor %}
+    {% else %}
+    <div class="log-empty">No log lines match the current filters.</div>
+    {% endif %}
+  </div>
+
+  {% if truncated %}
+  <div class="log-truncated warn">Log truncated — showing last entries. Use filters to narrow.</div>
+  {% endif %}
+</div>
+
+

@@ -1,0 +1,120 @@
+/* Aggregated Logs */
+.aggregated-logs {
+  font-size: 10px;
+  line-height: 1.4;
+}
+.log-filters {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+  padding: 8px;
+  background: #f5f5f5;
+  border-radius: 4px;
+}
+.source-filter {
+  border: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.source-filter legend {
+  font-size: 10px;
+  font-weight: 600;
+  color: #555;
+}
+.source-filter label {
+  font-size: 10px;
+  cursor: pointer;
+}
+.log-filter-inputs {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.log-level, .log-trace, .log-regex {
+  font-size: 10px;
+  padding: 2px 6px;
+  border: 1px solid #ccc;
+  border-radius: 3px;
+}
+.log-stats {
+  font-size: 9px;
+  color: #888;
+  margin-bottom: 6px;
+}
+.log-stream {
+  max-height: 600px;
+  overflow-y: auto;
+  font-family: 'DejaVu Sans Mono', monospace;
+  font-size: 9px;
+  background: #1a1a1a;
+  color: #e0e0e0;
+  padding: 4px;
+  border-radius: 4px;
+}
+.log-line {
+  display: flex;
+  gap: 6px;
+  padding: 2px 4px;
+  border-bottom: 1px solid #2a2a2a;
+  line-height: 1.5;
+}
+.log-line:hover {
+  background: #2a2a2a;
+}
+.log-ts {
+  color: #888;
+  white-space: nowrap;
+  min-width: 80px;
+}
+.log-source-badge {
+  font-size: 8px;
+  padding: 0 4px;
+  border-radius: 2px;
+  color: #fff;
+  min-width: 40px;
+  text-align: center;
+}
+.source-server { background: #888; }
+.source-supervisor { background: #6C3483; }
+.source-worker_out { background: #0B5E87; }
+.source-worker_err { background: #B02A2A; }
+.source-agent { background: #1E7E34; }
+.source-recovery { background: #CC5500; }
+.source-db_events { background: #17A2B8; }
+.log-level-badge {
+  font-size: 8px;
+  padding: 0 4px;
+  border-radius: 2px;
+  min-width: 24px;
+  text-align: center;
+}
+.level-info { color: #aaa; }
+.level-warn { color: #ffc107; }
+.level-error { color: #f44336; }
+.log-trace {
+  color: #888;
+  cursor: pointer;
+  min-width: 60px;
+}
+.log-trace:hover {
+  color: #0B5E87;
+  text-decoration: underline;
+}
+.log-msg {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.log-empty {
+  padding: 20px;
+  text-align: center;
+  color: #888;
+}
+.log-truncated {
+  font-size: 9px;
+  padding: 4px;
+  text-align: center;
+}

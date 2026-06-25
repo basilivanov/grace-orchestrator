@@ -1,54 +1,57 @@
-{# Pipeline view partial — compact horizontal flow layout.
-   Expects: pipeline, stages, p_state, p_acceptance_profile, p_packet_id, p_feature_id
-   Design: Small blocks arranged in a horizontal flow (wrapping to 2 rows max).
-   Each block shows: icon + label + status. Clicking opens the relevant tab. #}
-{% set pipeline_rows = stages | pipeline_visible_rows(p_state, p_acceptance_profile) %}
-<section class="pipeline-view">
-  <h2 class="pipeline-h">Pipeline</h2>
-  <div class="pipeline-flow">
-    {% for row in pipeline_rows %}
-      {% set row_sev = row.status | pipeline_severity %}
-      <div class="pipeline-block is-{{ row.status }} severity-{{ row_sev }}"
-           {% if row.target_tab %}
-           hx-get="/admin/_partial/tab?packet_id={{ p_packet_id }}&feature_id={{ p_feature_id }}&tab={{ row.target_tab }}"
-           hx-target="#packet-tab-content"
-           hx-swap="outerHTML"
-           hx-push-url="{{ shell_url(feature_id=p_feature_id, packet_id=p_packet_id, tab=row.target_tab) }}"
-           style="cursor: pointer;"
-           {% endif %}
-           title="{{ row.label }}{% if row.duration_label and row.duration_label != '—' %} · {{ row.duration_label }}{% endif %}{% if row.meta %} · {{ row.meta }}{% endif %}">
-        <span class="pipeline-block-icon severity-{{ row_sev }}">{{ row.icon }}</span>
-        <span class="pipeline-block-name">{{ row.label }}</span>
-        <span class="pipeline-block-status severity-{{ row_sev }}">{{ row.status_label }}</span>
-      </div>
-    {% endfor %}
+{# Stage Timeline + Stage cards
+   Expects: stages (list), recovery_chain, totals, p_packet_id or packet_id #}
+<section class="stage-timeline-section">
+  <div class="stage-timeline-header">
+    <h3>Pipeline</h3>
+    <span class="totals-info">
+      {{ totals.duration_ms // 1000 if totals and totals.duration_ms else 0 }}s
+      {% if totals and totals.cost_usd %} · ${{ '%.4f'|format(totals.cost_usd) }}{% endif %}
+      {% if totals and totals.loop_count %} · {{ totals.loop_count }} return(s){% endif %}
+    </span>
   </div>
-  {# Expanded detail row — shows timing/meta for running/failed/rejected stages #}
-  {% set ns = namespace(has_active=false) %}
-  {% for row in pipeline_rows %}
-    {% if row.status == 'running' or row.status == 'failed' or row.status == 'rejected' %}
-      {% set ns.has_active = true %}
-    {% endif %}
-  {% endfor %}
-  {% if ns.has_active %}
-  <div class="pipeline-details">
-    {% for row in pipeline_rows %}
-      {% if row.status == 'running' or row.status == 'failed' or row.status == 'rejected' %}
-      {% set row_sev = row.status | pipeline_severity %}
-      <div class="pipeline-detail-row severity-{{ row_sev }}">
-        <span class="pipeline-detail-name">{{ row.label }}</span>
-        {% if row.time_range and row.time_range != '—' %}
-        <span class="pipeline-detail-fact mono">{{ row.time_range }}</span>
-        {% endif %}
-        {% if row.duration_label and row.duration_label != '—' %}
-        <span class="pipeline-detail-fact mono">{{ row.duration_label }}</span>
-        {% endif %}
-        {% if row.meta %}
-        <span class="pipeline-detail-fact mono">{{ row.meta }}</span>
+
+  {# Stage cards #}
+  <div class="stage-cards">
+    {% for s in stages %}
+    <div class="stage-card status-{{ s.status }}" id="stage-{{ s.id }}">
+      <div class="stage-card-header">
+        <span class="stage-label">{{ s.stage_key }}{% if s.loop_round and s.loop_round > 1 %} (r{{ s.loop_round }}){% endif %}</span>
+        <span class="stage-badge status-badge-{{ s.status }}">{{ s.status }}</span>
+        <span class="stage-duration">{{ (s.duration_ms // 1000)|string + 's' if s.duration_ms else '—' }}</span>
+      </div>
+      <div class="stage-card-body">
+        <div class="stage-detail-row"><span class="detail-key">Started</span><span class="detail-val">{{ (s.started_at or '—')[:19] }}</span></div>
+        <div class="stage-detail-row"><span class="detail-key">Finished</span><span class="detail-val">{{ (s.finished_at or '—')[:19] }}</span></div>
+        {% if s.model %}<div class="stage-detail-row"><span class="detail-key">Model</span><span class="detail-val mono">{{ s.model }}</span></div>{% endif %}
+        {% if s.tokens_in is not none %}<div class="stage-detail-row"><span class="detail-key">Tokens</span><span class="detail-val mono">{{ s.tokens_in }} in / {{ s.tokens_out }} out</span></div>{% endif %}
+        {% if s.cost_usd %}<div class="stage-detail-row"><span class="detail-key">Cost</span><span class="detail-val mono">${{ '%.6f'|format(s.cost_usd) }}</span></div>{% endif %}
+        {% if s.recovery_reason %}<div class="stage-detail-row"><span class="detail-key">Reason</span><span class="detail-val warn">{{ s.recovery_reason[:80] }}</span></div>{% endif %}
+        {% if s.error %}<div class="stage-detail-row"><span class="detail-key">Error</span><span class="detail-val err">{{ s.error[:200] }}</span></div>{% endif %}
+      </div>
+      <div class="stage-card-actions">
+        <button class="btn-small" onclick="fetch('/api/admin/packet/{{ p_packet_id or packet_id }}/stages/{{ s.stage_key }}/logs?stream=all').then(r=>r.json()).then(d=>alert(d.lines.map(l=>l.msg).join('\\n').slice(0,2000)))" title="Logs">📋</button>
+        {% if s.stage_key in ('verifier', 'reviewer') %}
+        <button class="btn-small warn" onclick="if(confirm('Re-run {{ s.stage_key }} stage?')){fetch('/api/admin/packet/{{ p_packet_id or packet_id }}/stages/{{ s.stage_key }}/rerun',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}).then(r=>r.json()).then(d=>alert('Rerun ok: '+JSON.stringify(d)))}" title="Re-run stage">↻</button>
         {% endif %}
       </div>
-      {% endif %}
+    </div>
     {% endfor %}
   </div>
+
+  {# return arrows #}
+  {% if recovery_chain %}
+  <details class="recovery-chain-section" style="margin-top:12px">
+    <summary style="font-size:11px;color:#666;cursor:pointer">Recovery Chain ({{ recovery_chain|length }} returns)</summary>
+    {% for rc in recovery_chain %}
+    <div style="font-size:10px;padding:2px 8px;border-left:2px solid #B02A2A;margin:2px 0">
+      <strong>{{ rc.from }}</strong> ═▶ <strong>{{ rc.to }}</strong>
+      <span style="color:#B02A2A">{{ rc.reason[:50] }}</span>
+      <span class="mono">round {{ rc.loop_round }}</span>
+      <span class="mono" style="color:#888">{{ rc.at[:19] if rc.at }}</span>
+    </div>
+    {% endfor %}
+  </details>
+  {% else %}
+  <p class="no-recovery" style="font-size:10px;color:#888;margin:8px 0">No recovery loops for this packet.</p>
   {% endif %}
 </section>

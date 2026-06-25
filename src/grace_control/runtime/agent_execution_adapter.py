@@ -26,6 +26,9 @@ class AgentExecutionAdapterResult(BaseModel):
     model: str | None = None
     agent_name: str | None = None
     prompt_sha256: str | None = None
+    tokens_in: int | None = None
+    tokens_out: int | None = None
+    cost_usd: float | None = None
 
 
 class AgentExecutionAdapter(ABC):

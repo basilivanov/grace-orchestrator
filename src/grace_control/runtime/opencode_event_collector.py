@@ -45,3 +45,27 @@ class OpenCodeEventCollector:
     def reset(self) -> None:
         self._raw_events.clear()
         self._plain_lines.clear()
+
+    @property
+    def tokens_in(self) -> int:
+        tokens = 0
+        for ev in self._raw_events:
+            if not isinstance(ev, dict):
+                continue
+            for usage_key in ("usage", "llm_usage"):
+                usage_val = ev.get(usage_key)
+                if isinstance(usage_val, dict):
+                    tokens += usage_val.get("input_tokens") or usage_val.get("prompt_tokens") or 0
+        return tokens
+
+    @property
+    def tokens_out(self) -> int:
+        tokens = 0
+        for ev in self._raw_events:
+            if not isinstance(ev, dict):
+                continue
+            for usage_key in ("usage", "llm_usage"):
+                usage_val = ev.get(usage_key)
+                if isinstance(usage_val, dict):
+                    tokens += usage_val.get("output_tokens") or usage_val.get("completion_tokens") or 0
+        return tokens

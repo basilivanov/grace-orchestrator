@@ -21,6 +21,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from pydantic import BaseModel
+from grace_control.core.stage_instrumentation import stage
 
 from grace_control.agent.backend import ExecutionBackend
 from grace_control.core.evidence_verifier import EvidenceVerifierVerdict, run_evidence_verifier, skipped_evidence_report
@@ -322,6 +323,9 @@ class ExecutionResult(BaseModel):
     domain_status: str = ""; worktree_path: str = ""; branch_name: str = ""
     acceptance_report_path: str = ""; acceptance_verdict: str = ""; acceptance_summary: str = ""
     commit_sha: str = ""
+    tokens_in: int | None = None
+    tokens_out: int | None = None
+    cost_usd: float | None = None
 
 
 class PacketExecutionAdapter:
@@ -353,6 +357,7 @@ class PacketExecutionAdapter:
         )
         self._session_store = SessionStore()
 
+    @stage("coder", llm=True)
     async def execute(self, packet_id: str, worker_id: str,
                        claim_data: dict | None = None) -> ExecutionResult:
         start = time.time(); _log.info("adapter_execute_start", packet_id=packet_id, worker_id=worker_id)
@@ -715,7 +720,10 @@ class PacketExecutionAdapter:
                 model=getattr(result, "model", "") or executor.get("model",""),
                 command_preview=getattr(result, "command_preview", None),
                 prompt=getattr(result, "prompt", ""), dev_replay=dev_rep,
-                diagnostics=getattr(self, "_last_diagnostics", None))
+                diagnostics=getattr(self, "_last_diagnostics", None),
+                tokens_in=getattr(result, "tokens_in", None),
+                tokens_out=getattr(result, "tokens_out", None),
+                cost_usd=getattr(result, "cost_usd", None))
             _log.info("adapter_execute_done", packet_id=packet_id, accepted=True, duration_ms=er.duration_ms); return er
         def _rej(domain, reason, evr, rvr):
             dev_rep = self._build_dev_replay_metadata(
@@ -738,7 +746,10 @@ class PacketExecutionAdapter:
                 model=getattr(result, "model", "") or executor.get("model",""),
                 command_preview=getattr(result, "command_preview", None),
                 prompt=getattr(result, "prompt", ""), commit_sha=sha, dev_replay=dev_rep,
-                diagnostics=getattr(self, "_last_diagnostics", None))
+                diagnostics=getattr(self, "_last_diagnostics", None),
+                tokens_in=getattr(result, "tokens_in", None),
+                tokens_out=getattr(result, "tokens_out", None),
+                cost_usd=getattr(result, "cost_usd", None))
             # TZ_RETENTION_POLICY Phase 1: on REJECTED / BLOCKED, clean up
             # worktree + all attempt-branches for this packet. Run artifacts
             # in .grace/state/.../runs/R0X/ are NOT touched.
@@ -812,7 +823,10 @@ class PacketExecutionAdapter:
             acceptance_report=accept_report, evidence_verifier_report=evr, reviewer_report=rvr,
             evidence_path=er.evidence_path, duration_ms=er.duration_ms, executor_id=executor.get("executor_id",""),
             commit_sha=commit_sha, dev_replay=dev_rep,
-            diagnostics=getattr(self, "_last_diagnostics", None))
+            diagnostics=getattr(self, "_last_diagnostics", None),
+            tokens_in=getattr(result, "tokens_in", None),
+            tokens_out=getattr(result, "tokens_out", None),
+            cost_usd=getattr(result, "cost_usd", None))
         # TZ_RETENTION_POLICY Phase 1: on REJECTED (acceptance failure), clean
         # up worktree + all attempt-branches for this packet. Run artifacts
         # in .grace/state/ are NOT touched.

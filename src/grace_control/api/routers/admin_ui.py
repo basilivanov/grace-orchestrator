@@ -64,7 +64,7 @@ _templates.env.globals["dev_tools_enabled"] = _settings.dev_tools_enabled
 _templates.env.globals["dev_keep_failed_worktrees"] = _settings.dev_keep_failed_worktrees
 
 # Tabs that can be swapped via HTMX (each one is a single hx-get endpoint)
-_TABS = ("timeline", "spec", "runs", "sessions", "evidence", "logs", "artifacts", "diagnostics")
+_TABS = ("timeline", "spec", "runs", "sessions", "evidence", "logs", "artifacts", "diagnostics", "aggregated_logs")
 
 
 def _features_data() -> dict:
@@ -687,6 +687,51 @@ def partial_tab(
         "artifacts": artifacts,
         "diagnostic_data": diagnostic_data,
         "shell_url": _shell_url,
+    })
+
+
+@router.get("/admin/_partial/tab_aggregated_logs", response_class=HTMLResponse)
+def partial_aggregated_logs(
+    request: Request,
+    packet_id: str = Query(...),
+    sources: str = Query("all"),
+    level: str = Query("all"),
+    trace_id: str = Query(None),
+    regex: str = Query(None),
+):
+    from grace_control.services.aggregated_logs_service import get_aggregated_logs
+    data = get_aggregated_logs(
+        packet_id=packet_id,
+        sources=sources.split(",") if sources != "all" else None,
+        tail=500, level=level, trace_id=trace_id, regex=regex,
+    )
+    return _templates.TemplateResponse(request, "tabs/_aggregated_logs.html", {
+        "request": request,
+        "packet_id": packet_id,
+        "lines": data.get("lines", []),
+        "sources_used": data.get("sources_used", []),
+        "truncated": data.get("truncated", False),
+        "time_range": data.get("time_range"),
+    })
+
+
+@router.get("/admin/_partial/gantt", response_class=HTMLResponse)
+def partial_gantt(
+    request: Request,
+    feature_id: str = Query(...),
+    zoom: str = Query("24h"),
+):
+    try:
+        from grace_control.api.routers.admin_pipeline import feature_gantt
+        from fastapi.responses import JSONResponse
+        gantt_data = feature_gantt(feature_id=feature_id, zoom=zoom)
+    except Exception:
+        gantt_data = {"zoom": zoom, "lanes": []}
+    return _templates.TemplateResponse(request, "_gantt.html", {
+        "request": request,
+        "feature_id": feature_id,
+        "zoom": zoom,
+        "gantt": gantt_data,
     })
 
 

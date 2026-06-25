@@ -26,6 +26,7 @@
 from __future__ import annotations
 
 import json
+from grace_control.core.stage_instrumentation import stage
 import re
 from enum import Enum
 from pathlib import Path
@@ -118,6 +119,7 @@ def _build_report_from_json(data: dict) -> EvidenceVerifierReport:
     )
 
 
+@stage("verifier", llm=True)
 async def run_evidence_verifier(
     *,
     packet,
@@ -336,7 +338,6 @@ def _build_multimodal_context(
     if diff_reports:
         for dr in diff_reports[:2]:
             try:
-                import json
                 data = json.loads(dr.read_text())
                 parts.append(f"Visual diff: {data.get('diff_pct', '?')}% (threshold {data.get('max_diff_pct', '?')})")
             except Exception:

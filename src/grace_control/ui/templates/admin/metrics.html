@@ -1,0 +1,99 @@
+{# Stage Metrics screen
+   Expects: metrics_data (dict of stage_key → metric dict) #}
+{% extends "admin/base.html" %}
+{% block content %}
+<div class="metrics-page">
+  <div class="metrics-header">
+    <h1>Stage Metrics</h1>
+    <div class="period-switch">
+      <a href="/admin?tab=metrics&period=24h" class="period-btn {{ 'active' if period == '24h' }}">24h</a>
+      <a href="/admin?tab=metrics&period=7d" class="period-btn {{ 'active' if period == '7d' }}">7d</a>
+      <a href="/admin?tab=metrics&period=30d" class="period-btn {{ 'active' if period == '30d' }}">30d</a>
+    </div>
+    <button class="btn-small" hx-post="/api/admin/stages/metrics/recompute"
+            hx-vals='{"period": "{{ period }}"}'
+            hx-trigger="click"
+            hx-swap="none">Recalculate now</button>
+  </div>
+
+  <div class="metrics-grid">
+    {% for stage_key, m in metrics_data.items() %}
+    <div class="metric-card">
+      <div class="metric-card-header">
+        <span class="metric-stage-label">{{ stage_key }}</span>
+        <span class="metric-stage-count">n={{ m.count or 0 }}</span>
+      </div>
+      <div class="metric-card-body">
+        <div class="metric-row">
+          <span class="metric-label">P50</span>
+          <span class="metric-value">{{ (m.p50_ms // 1000)|string + 's' if m.p50_ms else '—' }}</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">P95</span>
+          <span class="metric-value">{{ (m.p95_ms // 1000)|string + 's' if m.p95_ms else '—' }}</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Avg</span>
+          <span class="metric-value">{{ (m.avg_ms // 1000)|string + 's' if m.avg_ms else '—' }}</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Max</span>
+          <span class="metric-value">{{ (m.max_ms // 1000)|string + 's' if m.max_ms else '—' }}</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Success</span>
+          <span class="metric-value">{{ '%.1f%%'|format(m.success_rate * 100) if m.success_rate else '—' }}</span>
+        </div>
+        {% if m.avg_tokens_in is not none %}
+        <div class="metric-row">
+          <span class="metric-label">Tokens in</span>
+          <span class="metric-value">{{ m.avg_tokens_in }}</span>
+        </div>
+        {% endif %}
+        {% if m.avg_cost_usd is not none %}
+        <div class="metric-row">
+          <span class="metric-label">Avg cost</span>
+          <span class="metric-value">${{ '%.6f'|format(m.avg_cost_usd) }}</span>
+        </div>
+        {% endif %}
+        {% if m.total_cost_usd %}
+        <div class="metric-row">
+          <span class="metric-label">Total cost</span>
+          <span class="metric-value">${{ '%.4f'|format(m.total_cost_usd) }}</span>
+        </div>
+        {% endif %}
+        {% if m.avg_idle_seconds is not none %}
+        <div class="metric-row">
+          <span class="metric-label">Idle avg</span>
+          <span class="metric-value">{{ m.avg_idle_seconds }}s</span>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+
+  {% if heatmap %}
+  <div class="heatmap-section">
+    <h2>Heatmap: stage × hour ({{ period }})</h2>
+    <div class="heatmap-grid">
+      <div class="heatmap-header">
+        <span class="heatmap-corner"></span>
+        {% for h in range(24) %}
+        <span class="heatmap-hour">{{ '%02d'|format(h) }}</span>
+        {% endfor %}
+      </div>
+      {% for row in heatmap.matrix %}
+      <div class="heatmap-row">
+        <span class="heatmap-stage">{{ row.stage_key[:12] }}</span>
+        {% for cell in row.hours %}
+        <span class="heatmap-cell" style="opacity: {{ (cell.avg_ms / 60000)|round(2) if cell.avg_ms > 0 else 0.05 }}"
+              title="{{ cell.count }} runs · avg {{ cell.avg_ms // 1000 }}s">{{ cell.count if cell.count > 0 else '·' }}</span>
+        {% endfor %}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

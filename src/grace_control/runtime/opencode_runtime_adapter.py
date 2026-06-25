@@ -11,6 +11,7 @@ from typing import Any, Callable
 
 from grace_control.agent.backend import ExecutionBackend, ExecutionRequest, ExecutionResult
 from grace_control.config.settings import settings
+from grace_control.config.model_pricing import compute_cost
 from grace_control.core.runtime_artifacts import RuntimeArtifactRef, RuntimeArtifactStore
 from grace_control.core.runtime_events import RuntimeEventLogger
 from grace_control.core.runtime_redaction import RuntimeRedactor
@@ -209,6 +210,9 @@ class OpenCodeRuntimeAdapter(AgentExecutionAdapter):
                     break
 
         prompt_sha = hashlib.sha256((prompt or "").encode("utf-8")).hexdigest()
+        t_in = collector.tokens_in
+        t_out = collector.tokens_out
+        cost = compute_cost(contract.model, t_in, t_out)
 
         return AgentExecutionAdapterResult(
             ok=(failure_code is None),
@@ -228,6 +232,9 @@ class OpenCodeRuntimeAdapter(AgentExecutionAdapter):
             model=contract.model,
             agent_name=contract.agent_name,
             prompt_sha256=prompt_sha,
+            tokens_in=t_in,
+            tokens_out=t_out,
+            cost_usd=cost,
         )
 
     async def run_with_artifacts(
@@ -744,4 +751,7 @@ def _map_adapter_result(ar: AgentExecutionAdapterResult, request: ExecutionReque
         model=ar.model or request.executor.get("model", "") if request.executor else "",
         command_preview=list(ar.command) if ar.command else [],
         prompt="",
+        tokens_in=ar.tokens_in,
+        tokens_out=ar.tokens_out,
+        cost_usd=ar.cost_usd,
     )

@@ -212,6 +212,37 @@ class RecoveryController:
             "next_executor_hint": decision.next_executor_hint,
         }, trace_id=trace_id)
 
+        # Create StageRun and emit stage_returned for recovery loops
+        from_stage = "verifier"
+        if signal.reviewer_verdict in ("REWORK_TO_CODER", "RETURN_TO_ARCHITECT", "rework_required") or (
+            decision.action == RecoveryAction.RETRY_REVIEWER
+        ):
+            from_stage = "reviewer"
+        elif decision.action == RecoveryAction.RETRY_MERGE:
+            from_stage = "merge"
+
+        to_stage = None
+        if decision.action in (RecoveryAction.RETRY_SAME_CODER, RecoveryAction.SWITCH_CODER):
+            to_stage = "coder"
+        elif decision.action == RecoveryAction.RETURN_TO_ARCHITECT:
+            to_stage = "architect"
+        elif decision.action == RecoveryAction.RETRY_VERIFIER:
+            to_stage = "verifier"
+        elif decision.action == RecoveryAction.RETRY_REVIEWER:
+            to_stage = "reviewer"
+        elif decision.action == RecoveryAction.RETRY_MERGE:
+            to_stage = "merge"
+
+        if to_stage:
+            from grace_control.core.stage_instrumentation import create_for_return
+            create_for_return(
+                packet_id=packet_id,
+                from_stage=from_stage,
+                to_stage=to_stage,
+                reason=decision.reason or "",
+                trace_id=trace_id,
+            )
+
     async def _apply_decision(self, packet_id: str, decision: RecoveryDecision):
         method_map = {
             RecoveryAction.RETRY_SAME_CODER: self._apply_retry_same_coder,

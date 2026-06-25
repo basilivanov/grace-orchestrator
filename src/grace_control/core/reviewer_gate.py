@@ -27,6 +27,7 @@
 from __future__ import annotations
 
 import json
+from grace_control.core.stage_instrumentation import stage
 import re
 from enum import Enum
 from pathlib import Path
@@ -280,6 +281,7 @@ def _render_reviewer_evidence_bundle(bundle: dict) -> str:
     return "\n".join(parts)
 
 
+@stage("reviewer", llm=True)
 async def run_reviewer_gate(
     *,
     packet,

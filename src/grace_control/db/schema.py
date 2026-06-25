@@ -31,7 +31,7 @@ from __future__ import annotations
 import enum
 from datetime import datetime
 
-from sqlalchemy import Boolean, Column, DateTime, Integer, JSON, String, Text
+from sqlalchemy import Boolean, Column, DateTime, Integer, JSON, String, Text, Numeric, UniqueConstraint
 from sqlalchemy.orm import declarative_base, relationship
 
 Base = declarative_base()
@@ -141,6 +141,9 @@ class PacketRun(Base):
     model = Column(String, nullable=True)
     command_preview = Column(JSON, nullable=True)
     prompt = Column(Text, nullable=True)
+    tokens_in = Column(Integer, nullable=True)
+    tokens_out = Column(Integer, nullable=True)
+    cost_usd = Column(Numeric(10, 6), nullable=True)
 
 
 class Worker(Base):
@@ -265,5 +268,93 @@ class AgentSession(Base):
     finished_at = Column(DateTime, nullable=True)
     # Forward-compat: if the table doesn't exist, callers should
     # detect via sqlite_master and skip silently.
+
+
+class StageRun(Base):
+    __tablename__ = "stage_runs"
+
+    id = Column(String, primary_key=True)        # srun_XXXX
+    packet_id = Column(String, nullable=False, index=True)
+    run_id = Column(String, nullable=True, index=True)  # PacketRun.id
+    feature_id = Column(String, nullable=False, index=True)
+    wave_id = Column(String, nullable=False, index=True)
+
+    # Stage identity
+    stage_key = Column(String, nullable=False, index=True)
+    attempt_number = Column(Integer, nullable=False, default=1)
+    loop_round = Column(Integer, nullable=False, default=1)
+    parent_stage_run_id = Column(String, nullable=True)  # для возвратов
+
+    # Timing
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+    duration_ms = Column(Integer, nullable=True)
+    last_heartbeat = Column(DateTime, nullable=True)
+
+    # Status
+    status = Column(String, nullable=False, default="pending")
+    error = Column(Text, nullable=True)
+
+    # Executor info
+    executor_id = Column(String, nullable=True)
+    worker_id = Column(String, nullable=True)
+    model = Column(String, nullable=True)
+    prompt_hash = Column(String, nullable=True)  # sha256 of prompt
+    command_preview = Column(JSON, nullable=True)
+
+    # LLM cost (для LLM-стадий)
+    tokens_in = Column(Integer, nullable=True)
+    tokens_out = Column(Integer, nullable=True)
+    cost_usd = Column(Numeric(10, 6), nullable=True)
+
+    # Artifacts
+    stdout_path = Column(String, nullable=True)
+    stderr_path = Column(String, nullable=True)
+    result_path = Column(String, nullable=True)  # evidence/decision json
+    artifacts_dir = Column(String, nullable=True)  # директория с артефактами
+
+    # Trace и recovery
+    trace_id = Column(String, nullable=True, index=True)
+    recovery_reason = Column(Text, nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class StageMetric(Base):
+    __tablename__ = "stage_metrics"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    stage_key = Column(String, nullable=False, index=True)
+    period_kind = Column(String, nullable=False)  # 24h|7d|30d
+    period_start = Column(DateTime, nullable=False, index=True)
+    period_end = Column(DateTime, nullable=False)
+
+    count = Column(Integer, nullable=False)
+    p50_ms = Column(Integer, nullable=True)
+    p95_ms = Column(Integer, nullable=True)
+    avg_ms = Column(Integer, nullable=True)
+    max_ms = Column(Integer, nullable=True)
+    min_ms = Column(Integer, nullable=True)
+
+    success_count = Column(Integer, nullable=False, default=0)
+    failure_count = Column(Integer, nullable=False, default=0)
+    success_rate = Column(Numeric(5, 4), nullable=True)
+
+    # LLM cost (для LLM-стадий)
+    avg_tokens_in = Column(Integer, nullable=True)
+    avg_tokens_out = Column(Integer, nullable=True)
+    avg_cost_usd = Column(Numeric(10, 6), nullable=True)
+    total_cost_usd = Column(Numeric(10, 6), nullable=True)
+
+    # Idle time: claim → start, для executor/coder стадий
+    avg_idle_seconds = Column(Integer, nullable=True)
+
+    computed_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("stage_key", "period_kind", "period_start",
+                         name="uq_stage_metrics_period"),
+    )
 
 # END_BLOCK_TABLES

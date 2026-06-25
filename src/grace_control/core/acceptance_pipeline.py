@@ -25,6 +25,7 @@ from typing import Any
 
 from grace_control.core.structured_logger import GraceLogger
 
+from grace_control.core.stage_instrumentation import stage
 _log = GraceLogger("acceptance")
 
 import os
@@ -477,6 +478,7 @@ class AcceptancePipeline:
             summary="all deterministic gates passed",
         )
 
+    @stage("t0_scope_lint")
     def _run_t0(
         self, packet: ExecutionPacketContract,
         changed_files: list[str] | None,
@@ -560,6 +562,7 @@ class AcceptancePipeline:
         cmd_str = " ".join(cmd) if isinstance(cmd, list) else str(cmd)
         return bool(_SHELL_OPS_PATTERN.search(cmd_str))
 
+    @stage("t1_unit_tests")
     def _run_t1(self, packet: ExecutionPacketContract, changed_files: list[str],
                 *, run_dir: Path | None = None, cwd: Path | None = None) -> StageResult:
         base_path = (cwd or self._root).resolve()
@@ -620,6 +623,7 @@ class AcceptancePipeline:
                           summary=f"T1 passed: {len(commands)} commands ok",
                           commands=commands, command_origins=all_origins)
 
+    @stage("t2_e2e_smoke")
     def _run_t2(self, packet: ExecutionPacketContract, changed_files: list[str],
                 *, run_dir: Path | None = None, cwd: Path | None = None) -> StageResult:
         base_path = (cwd or self._root).resolve()

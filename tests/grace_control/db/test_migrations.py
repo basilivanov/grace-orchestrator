@@ -73,3 +73,38 @@ def test_migration_is_idempotent(tmp_path):
     cols = {row[1] for row in conn.execute("PRAGMA table_info(feature_planning_runs)").fetchall()}
     conn.close()
     assert "last_heartbeat" in cols
+
+
+def test_stage_runs_and_metrics_tables_and_columns_created(tmp_path):
+    db_path = tmp_path / "test_migration_v2.db"
+    
+    # 1) Setup a legacy DB with old schema (missing packet_runs columns and new tables)
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("""
+        CREATE TABLE packet_runs (
+            id VARCHAR PRIMARY KEY,
+            packet_id VARCHAR NOT NULL,
+            run_number INTEGER NOT NULL,
+            status VARCHAR NOT NULL
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+    # 2) Run init_db which must apply the migrations
+    init_db(f"sqlite:///{db_path}")
+    Base.metadata.create_all(__import__("grace_control.db", fromlist=["engine"]).engine)
+
+    # 3) Check packet_runs columns
+    conn = sqlite3.connect(str(db_path))
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(packet_runs)").fetchall()}
+    assert "tokens_in" in cols
+    assert "tokens_out" in cols
+    assert "cost_usd" in cols
+
+    # 4) Check new tables exist
+    tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    assert "stage_runs" in tables
+    assert "stage_metrics" in tables
+    conn.close()
+

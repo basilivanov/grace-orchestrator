@@ -30,6 +30,7 @@ from grace_control.api.auth import AuthMiddleware
 from grace_control.api.lifespan import lifespan
 from grace_control.api.routers import (
     admin,
+    admin_pipeline,
     admin_ui,
     agents,
     architect,
@@ -98,6 +99,7 @@ def create_app(settings: GraceSettings | None = None) -> FastAPI:
     #   - JSON API at /api/admin/* (read-only, for other consumers)
     #   - HTMX UI at /admin and /admin/_partial/* (server-rendered HTML)
     app.include_router(admin.router, tags=["admin"])
+    app.include_router(admin_pipeline.router, tags=["admin-pipeline"])
     app.include_router(admin_ui.router, tags=["admin-ui"])
     app.include_router(health.router, tags=["health"])
     app.include_router(ws.router, tags=["ws"])

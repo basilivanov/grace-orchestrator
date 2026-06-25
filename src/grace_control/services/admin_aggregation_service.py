@@ -318,7 +318,77 @@ class AdminAggregationService:
             "state_machine": self._derive_state_machine(db, p, runs),
             "pipeline": self._derive_pipeline(db, p, runs),
             "dev_replay": dev_replay,
+            # TZ_Admin_Pipeline_Observability_v2: StageRun-based pipeline data
+            "stages": self._derive_stages(db, p),
+            "recovery_chain": self._derive_recovery_chain(db, p),
+            "totals": self._derive_totals(db, p),
         }
+
+    def _derive_stages(self, db: Session, p: Packet) -> list[dict[str, Any]]:
+        from grace_control.db.schema import StageRun
+        stage_runs = db.query(StageRun).filter_by(packet_id=p.id).order_by(StageRun.started_at).all()
+        return [
+            {
+                "id": s.id,
+                "stage_key": s.stage_key,
+                "status": s.status,
+                "started_at": _iso(s.started_at),
+                "finished_at": _iso(s.finished_at),
+                "duration_ms": s.duration_ms,
+                "loop_round": s.loop_round,
+                "attempt_number": s.attempt_number,
+                "parent_stage_run_id": s.parent_stage_run_id,
+                "error": s.error,
+                "executor_id": s.executor_id,
+                "worker_id": s.worker_id,
+                "model": s.model,
+                "tokens_in": s.tokens_in,
+                "tokens_out": s.tokens_out,
+                "cost_usd": float(s.cost_usd) if s.cost_usd else None,
+                "stdout_path": s.stdout_path,
+                "stderr_path": s.stderr_path,
+                "artifacts_dir": s.artifacts_dir,
+                "result_path": s.result_path,
+                "trace_id": s.trace_id,
+                "recovery_reason": s.recovery_reason,
+            }
+            for s in stage_runs
+        ]
+
+    def _derive_recovery_chain(self, db: Session, p: Packet) -> list[dict[str, Any]]:
+        from grace_control.db.schema import StageRun
+        chain = []
+        seen: set[str] = set()
+        stage_runs = db.query(StageRun).filter_by(packet_id=p.id).order_by(StageRun.started_at).all()
+        for s in stage_runs:
+            if s.parent_stage_run_id and s.parent_stage_run_id not in seen:
+                seen.add(s.parent_stage_run_id)
+                parent = db.query(StageRun).filter_by(id=s.parent_stage_run_id).first()
+                if parent:
+                    chain.append({
+                        "from": parent.stage_key,
+                        "to": s.stage_key,
+                        "reason": s.recovery_reason or "",
+                        "decision": f"recovery_return_to_{s.stage_key}",
+                        "at": _iso(s.created_at),
+                        "loop_round": s.loop_round,
+                    })
+        return chain
+
+    def _derive_totals(self, db: Session, p: Packet) -> dict[str, Any]:
+        from grace_control.db.schema import StageRun
+        stage_runs = db.query(StageRun).filter_by(packet_id=p.id).all()
+        return {
+            "duration_ms": sum(s.duration_ms or 0 for s in stage_runs),
+            "tokens_in": sum(s.tokens_in or 0 for s in stage_runs),
+            "tokens_out": sum(s.tokens_out or 0 for s in stage_runs),
+            "cost_usd": round(sum(float(s.cost_usd or 0) for s in stage_runs), 6),
+            "loop_count": self._derive_loop_count(stage_runs),
+        }
+
+    @staticmethod
+    def _derive_loop_count(stage_runs: list) -> int:
+        return sum(1 for s in stage_runs if s.parent_stage_run_id is not None)
 
     def _derive_pipeline(
         self,

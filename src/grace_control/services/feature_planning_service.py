@@ -20,6 +20,7 @@ from grace_control.core.uid import generate_unique_id, new_wave_uid, new_packet_
 from grace_control.db import get_db
 from grace_control.db.schema import Feature, FeaturePlanningRun, Wave, Packet, Event
 from grace_control.db.schema import PacketState
+from grace_control.core.stage_instrumentation import stage
 
 _CONTENT_PREVIEW_CHARS = 2500
 _MAX_RELEVANT_FILES = 15
@@ -187,6 +188,7 @@ class FeaturePlanningService:
             ],
         }
 
+    @stage("context_builder")
     async def run_context_builder(self, feature_id: str, target_repo_root: str | None = None) -> dict:
         cb_run = self.db.query(FeaturePlanningRun).filter_by(
             feature_id=feature_id, stage="context_builder"
@@ -428,6 +430,7 @@ class FeaturePlanningService:
         self.db.commit()
         return context
 
+    @stage("architect", llm=True)
     async def run_architect(self, feature_id: str, context: dict, target_repo_root: str | None = None) -> dict:
         arch_run = self.db.query(FeaturePlanningRun).filter_by(
             feature_id=feature_id, stage="architect"

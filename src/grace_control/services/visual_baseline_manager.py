@@ -26,6 +26,7 @@
 from __future__ import annotations
 
 import json
+from grace_control.core.stage_instrumentation import stage
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -65,6 +66,7 @@ class VisualBaselineManager:
         self._run_dir = Path(run_dir)
         self._baseline_dir = baseline_dir or (self._worktree / "tests" / "e2e")
 
+    @stage("t3_visual")
     def compare(
         self,
         viewport: str,

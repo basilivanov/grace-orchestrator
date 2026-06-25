@@ -98,13 +98,13 @@ function renderBoard(pkts){
 function renderCard(p){
   const sc=SC[p.state]||'queue';
   const sel=state.sel===p.id;
-  const pipe=p.pipeline?p.pipeline.stages:[];
+  const pipe=p.stages||(p.pipeline?p.pipeline.stages:[]);
   const cur=pipe.find(s=>s.status==='running')||pipe.find(s=>s.status==='failed');
   let pipeHtml='';
   if(pipe.length){
     pipeHtml='<div class="pipe">'+pipe.map((s,i)=>{
       const cls=s.status==='done'?'done':s.status==='running'?'running':s.status==='failed'?'failed':s.status==='skipped'?'skipped':'pending';
-      const lbl=s.label?s.label.split(' ').slice(0,2).join(' '):s.key;
+      const lbl=(s.stage_key||s.key||'').split('_').slice(0,2).join(' ');
       const dur=s.duration_ms?fmtDur(s.duration_ms):'—';
       let h=`<div class="ps"><div class="ps-l ${cls}">${lbl}</div><div class="ps-d ${cls}"></div><div class="ps-t ${cls}">${dur}</div></div>`;
       if(i<pipe.length-1){
@@ -115,7 +115,7 @@ function renderCard(p){
     }).join('')+'</div>';
   }
   const att=p.attempt_count>1?`<span style="color:var(--orange)">attempt ${p.attempt_count}/${p.max_attempts}</span>`:'';
-  const sub=`<span>${p.feature?.title||''}</span><span>·</span><span>${p.wave?.title||''}</span>${cur?`<span>·</span><span style="color:var(--blue)">at ${cur.key}</span>`:''}${att?`<span>·</span>${att}`:''}`;
+  const sub=`<span>${p.feature?.title||''}</span><span>·</span><span>${p.wave?.title||''}</span>${cur?`<span>·</span><span style="color:var(--blue)">at ${cur.stage_key||cur.key}</span>`:''}${att?`<span>·</span>${att}`:''}`;
   const dur=p.duration_seconds?fmtDur(p.duration_seconds*1000):'—';
   const mets=`<div class="met"><span class="met-l">Duration</span><span class="met-v">${dur}</span></div>${p.model?`<div class="met"><span class="met-l">Model</span><span class="met-v">${p.model}</span></div>`:''}`;
   const detHtml=sel?renderDetail(p):'';
@@ -124,28 +124,58 @@ function renderCard(p){
 
 function renderDetail(p){
   const t=state.tab[p.id]||'pipeline';
-  const tabs=['pipeline','logs','events','sessions'];
-  const tabsH=tabs.map(x=>`<div class="dtab ${t===x?'on':''}" onclick="stab('${p.id}','${x}')">${x[0].toUpperCase()+x.slice(1)}</div>`).join('');
+  const tabs=['pipeline','logs','events','sessions','recovery','aggregated_logs'];
+  const tabsH=tabs.map(x=>`<div class="dtab ${t===x?'on':''}" onclick="stab('${p.id}','${x}')">${x==='aggregated_logs'?'A-Logs':x[0].toUpperCase()+x.slice(1)}</div>`).join('');
   let cont='';
   if(t==='pipeline')cont=renderPipeTab(p);
   else if(t==='logs')cont=renderLogsTab(p);
   else if(t==='events')cont=renderEventsTab(p);
   else if(t==='sessions')cont=renderSessionsTab(p);
+  else if(t==='recovery')cont=renderRecoveryTab(p);
+  else if(t==='aggregated_logs'){cont='<div class="loading">Loading aggregated logs...</div>';loadAggregatedLogs(p.id);}
   return`<div class="dtabs">${tabsH}</div><div class="dcont">${cont}</div>`;
 }
 
 function renderPipeTab(p){
-  if(!p.pipeline)return'<div class="empty">No pipeline data</div>';
-  return'<div class="scards">'+p.pipeline.stages.map(s=>{
+  const src=p.stages||(p.pipeline?p.pipeline.stages:null);
+  if(!src||!src.length)return'<div class="empty">No pipeline data</div>';
+  const tot=p.totals||{cost_usd:0,loop_count:0,duration_ms:0};
+  let html='';
+  if(tot.cost_usd||tot.loop_count)html+=`<div style="font-size:10px;color:var(--t3);margin-bottom:6px;font-family:var(--mono)">Total: ${fmtDur(tot.duration_ms)} · $${Number(tot.cost_usd).toFixed(4)} · ${tot.loop_count} loops</div>`;
+  html+='<div class="scards">'+src.map(s=>{
     const cls=s.status;const icon=s.status==='done'?'✓':s.status==='running'?'⟳':s.status==='failed'?'✗':'—';
     let rows='';
     if(s.started_at)rows+=`<div class="sc-r"><span class="sc-rk">Start</span><span class="sc-rv">${fmtTime(s.started_at)}</span></div>`;
     if(s.finished_at)rows+=`<div class="sc-r"><span class="sc-rk">End</span><span class="sc-rv">${fmtTime(s.finished_at)}</span></div>`;
     if(s.duration_ms)rows+=`<div class="sc-r"><span class="sc-rk">Duration</span><span class="sc-rv ${cls}">${fmtDur(s.duration_ms)}</span></div>`;
-    if(s.meta)rows+=`<div class="sc-r"><span class="sc-rk">Info</span><span class="sc-rv">${s.meta}</span></div>`;
-    if(s.target_tab)rows+=`<div class="sc-r"><span class="sc-rk">Tab</span><span class="sc-rv">${s.target_tab}</span></div>`;
-    return`<div class="sc ${cls}"><div class="sc-h"><span class="sc-n ${cls}">${s.key}</span><span class="sc-si">${icon}</span></div><div class="sc-rs">${rows}</div></div>`;
+    if(s.loop_round>1)rows+=`<div class="sc-r"><span class="sc-rk">Round</span><span class="sc-rv">${s.loop_round}</span></div>`;
+    if(s.tokens_in)rows+=`<div class="sc-r"><span class="sc-rk">Tokens</span><span class="sc-rv">${s.tokens_in}→${s.tokens_out||0}</span></div>`;
+    if(s.cost_usd)rows+=`<div class="sc-r"><span class="sc-rk">Cost</span><span class="sc-rv">$${Number(s.cost_usd).toFixed(4)}</span></div>`;
+    if(s.model)rows+=`<div class="sc-r"><span class="sc-rk">Model</span><span class="sc-rv">${s.model}</span></div>`;
+    if(s.worker_id)rows+=`<div class="sc-r"><span class="sc-rk">Worker</span><span class="sc-rv">${s.worker_id}</span></div>`;
+    if(s.recovery_reason)rows+=`<div class="sc-r"><span class="sc-rk">Reason</span><span class="sc-rv err">${s.recovery_reason}</span></div>`;
+    if(s.error)rows+=`<div class="sc-r"><span class="sc-rk">Error</span><span class="sc-rv err">${(s.error+'').slice(0,100)}</span></div>`;
+    return`<div class="sc ${cls}"><div class="sc-h"><span class="sc-n ${cls}">${s.stage_key||s.key}${s.loop_round>1?' r'+s.loop_round:''}</span><span class="sc-si">${icon}</span></div><div class="sc-rs">${rows}</div></div>`;
   }).join('')+'</div>';
+  return html;
+}
+
+function renderRecoveryTab(p){
+  const rc=p.recovery_chain||[];
+  if(!rc.length)return'<div class="empty">No recovery loops for this packet.</div>';
+  return'<div style="display:flex;flex-direction:column;gap:6px">'+rc.map(r=>`<div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--bg1);border:1px solid var(--bd);border-radius:6px;font-size:11px"><span style="color:var(--red);font-weight:600">${r.from}</span><span style="color:var(--t3)">═▶</span><span style="color:var(--blue);font-weight:600">${r.to}</span><span style="color:var(--yellow);flex:1">${r.reason}</span><span style="color:var(--t3);font-family:var(--mono)">round ${r.loop_round}</span><span style="color:var(--t3);font-size:10px">${(r.at||'').slice(0,16)}</span></div>`).join('')+'</div>';
+}
+
+function loadAggregatedLogs(packetId){
+  fetch('/api/admin/packet/'+packetId+'/logs/aggregated?tail=200').then(r=>r.json()).then(d=>{
+    const cont=document.querySelector('.card[data-p="'+packetId+'"] .dcont');
+    if(!cont)return;
+    if(!d.lines||!d.lines.length){cont.innerHTML='<div class="empty">No logs</div>';return;}
+    cont.innerHTML='<div class="logs" style="max-height:500px">'+d.lines.map(l=>{
+      const lv=l.level||'info';
+      return'<div class="ll"><span class="lt">'+(l.ts||'').slice(0,16)+'</span><span class="lv '+lv.toUpperCase()+'">'+lv.slice(0,4)+'</span><span class="lm" style="color:'+({server:'#888',supervisor:'#a78bfa',worker_out:'#5b8def',worker_err:'#f87171',agent:'#4ade80',recovery:'#fb923c',db_events:'#17a2b8'}[l.source]||'var(--t2)')+'">['+l.source+'] '+l.msg.slice(0,300)+'</span></div>';
+    }).join('')+'</div>'+(d.truncated?'<div style="font-size:9px;color:var(--yellow);padding:4px">Logs truncated</div>':'');
+  }).catch(()=>{});
 }
 
 function renderLogsTab(p){
@@ -224,6 +254,9 @@ toggle=async function(id){
       const p=pkts.find(x=>x.id===id);
       if(p){
         if(detail.pipeline)p.pipeline=detail.pipeline;
+        if(detail.stages)p.stages=detail.stages;
+        if(detail.recovery_chain)p.recovery_chain=detail.recovery_chain;
+        if(detail.totals)p.totals=detail.totals;
         if(detail.state_machine)p.state_machine=detail.state_machine;
         if(detail.runs_summary)p.runs_summary=detail.runs_summary;
         if(detail.sessions_summary)p.sessions=detail.sessions_summary.sessions||[];

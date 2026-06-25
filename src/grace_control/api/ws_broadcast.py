@@ -105,3 +105,83 @@ async def broadcast_packet_merge(packet_id: str, commit_sha: str = ""):
         "state": "merged",
         "commit_sha": commit_sha
     })
+
+
+async def broadcast_stage_started(packet_id: str, stage_key: str, stage_run_id: str, attempt: int, loop_round: int, started_at: str, executor_id: str | None = None, model: str | None = None):
+    await broadcast_event("stage_started", {
+        "packet_id": packet_id,
+        "stage_key": stage_key,
+        "stage_run_id": stage_run_id,
+        "attempt": attempt,
+        "loop_round": loop_round,
+        "started_at": started_at,
+        "executor_id": executor_id,
+        "model": model,
+    })
+
+
+async def broadcast_stage_finished(packet_id: str, stage_key: str, stage_run_id: str, status: str, finished_at: str, duration_ms: int | None = None, error: str | None = None, tokens_in: int | None = None, tokens_out: int | None = None, cost_usd: float | None = None):
+    await broadcast_event("stage_finished", {
+        "packet_id": packet_id,
+        "stage_key": stage_key,
+        "stage_run_id": stage_run_id,
+        "status": status,
+        "finished_at": finished_at,
+        "duration_ms": duration_ms,
+        "error": error,
+        "tokens_in": tokens_in,
+        "tokens_out": tokens_out,
+        "cost_usd": cost_usd,
+    })
+
+
+async def broadcast_stage_log_line(packet_id: str, stage_key: str, source: str, line: str, level: str, ts: str, trace_id: str | None = None):
+    await broadcast_event("stage_log_line", {
+        "packet_id": packet_id,
+        "stage_key": stage_key,
+        "source": source,
+        "line": line,
+        "level": level,
+        "ts": ts,
+        "trace_id": trace_id,
+    })
+
+
+async def broadcast_stage_artifact_added(packet_id: str, stage_key: str, path: str, size: int, type: str):
+    await broadcast_event("stage_artifact_added", {
+        "packet_id": packet_id,
+        "stage_key": stage_key,
+        "path": path,
+        "size": size,
+        "type": type,
+    })
+
+
+async def broadcast_stage_returned(packet_id: str, from_stage: str, to_stage: str, reason: str, decision: str, loop_round: int, parent_stage_run_id: str | None = None):
+    await broadcast_event("stage_returned", {
+        "packet_id": packet_id,
+        "from_stage": from_stage,
+        "to_stage": to_stage,
+        "reason": reason,
+        "decision": decision,
+        "loop_round": loop_round,
+        "parent_stage_run_id": parent_stage_run_id,
+    })
+
+
+async def broadcast_worker_heartbeat(worker_id: str, current_packet_id: str | None, current_stage_key: str | None, last_heartbeat: str, lease_expires_at: str | None):
+    await broadcast_event("worker_heartbeat", {
+        "worker_id": worker_id,
+        "current_packet_id": current_packet_id,
+        "current_stage_key": current_stage_key,
+        "last_heartbeat": last_heartbeat,
+        "lease_expires_at": lease_expires_at,
+    })
+
+
+async def broadcast_metrics_updated(stage_keys: list[str], period: str, computed_at: str):
+    await broadcast_event("metrics_updated", {
+        "stage_keys": stage_keys,
+        "period": period,
+        "computed_at": computed_at,
+    })

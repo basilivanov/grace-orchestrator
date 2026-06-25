@@ -1,0 +1,108 @@
+/* Stage Timeline and cards */
+.stage-timeline-section {
+  margin-bottom: 12px;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+  padding: 8px;
+  background: #fafafa;
+}
+.stage-timeline-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.stage-timeline-header h3 {
+  font-size: 12px;
+  font-weight: 600;
+  color: #333;
+  margin: 0;
+}
+.totals-info {
+  font-size: 10px;
+  color: #666;
+  font-family: 'DejaVu Sans Mono', monospace;
+}
+/* Stage cards */
+.stage-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.stage-card {
+  border: 1px solid #e0e0e0;
+  border-radius: 3px;
+  padding: 6px 8px;
+  background: #fff;
+  font-size: 10px;
+}
+.stage-card.status-failed { border-left: 3px solid #B02A2A; }
+.stage-card.status-done { border-left: 3px solid #1E7E34; }
+.stage-card.status-running { border-left: 3px solid #0B5E87; }
+.stage-card.status-skipped { border-left: 3px solid #B8860B; }
+.stage-card.status-pending { border-left: 3px solid #CCC; }
+.stage-card.status-cancelled { border-left: 3px solid #6C3483; }
+.stage-card-header {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 4px;
+}
+.stage-label {
+  font-weight: 600;
+  color: #333;
+  font-size: 11px;
+}
+.stage-badge {
+  font-size: 9px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  color: #fff;
+  text-transform: uppercase;
+}
+.status-badge-pending { background: #CCC; }
+.status-badge-running { background: #0B5E87; }
+.status-badge-done { background: #1E7E34; }
+.status-badge-failed { background: #B02A2A; }
+.status-badge-skipped { background: #B8860B; }
+.status-badge-cancelled { background: #6C3483; }
+.stage-duration {
+  font-family: 'DejaVu Sans Mono', monospace;
+  font-size: 10px;
+  color: #666;
+  margin-left: auto;
+}
+.stage-card-body {
+  margin: 4px 0;
+}
+.stage-detail-row {
+  display: flex;
+  gap: 8px;
+  padding: 1px 0;
+}
+.detail-key {
+  color: #888;
+  width: 60px;
+  flex-shrink: 0;
+}
+.detail-val {
+  color: #333;
+  word-break: break-all;
+}
+.detail-val.warn { color: #B8860B; }
+.detail-val.err { color: #B02A2A; }
+.stage-card-actions {
+  display: flex;
+  gap: 4px;
+  margin-top: 4px;
+}
+.btn-small {
+  font-size: 9px;
+  padding: 2px 6px;
+  border: 1px solid #ccc;
+  background: #fff;
+  cursor: pointer;
+  border-radius: 3px;
+}
+.btn-small:hover { background: #f0f0f0; }
+.btn-small.warn { border-color: #B8860B; color: #B8860B; }

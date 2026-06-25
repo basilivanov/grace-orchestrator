@@ -109,6 +109,9 @@ class EvidenceService:
         prompt: str = "",
         dev_replay: dict | None = None,
         diagnostics: dict | None = None,
+        tokens_in: int | None = None,
+        tokens_out: int | None = None,
+        cost_usd: float | None = None,
     ) -> None:
         try:
             with self._db() as db:
@@ -152,6 +155,12 @@ class EvidenceService:
                         existing.command_preview = list(command_preview)
                     if prompt:
                         existing.prompt = prompt
+                    if tokens_in is not None:
+                        existing.tokens_in = tokens_in
+                    if tokens_out is not None:
+                        existing.tokens_out = tokens_out
+                    if cost_usd is not None:
+                        existing.cost_usd = cost_usd
                     self._log_rejection(status, accept_dict)
         except Exception:
             _log.warn("update_run_result_failed", run_id=run_id, status=status)

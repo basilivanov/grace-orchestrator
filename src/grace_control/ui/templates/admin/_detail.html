@@ -33,7 +33,9 @@
       {% set p_total_size_bytes = p.total_size_bytes or 0 %}
       {% set p_acceptance_profile = p.packet.acceptance_profile if p.packet else 'NORMAL' %}
       {% set pipeline = p.pipeline or {} %}
-      {% set stages = pipeline.stages or [] %}
+      {% set stages = p.stages or pipeline.stages or [] %}
+      {% set recovery_chain = p.recovery_chain or [] %}
+      {% set totals = p.totals or {} %}
 
       {# Header + metadata #}
       {% include "detail/_packet_header.html" %}

@@ -1,0 +1,61 @@
+{# Feature Pipeline Gantt partial
+   Expects: feature_id, zoom, gantt (from /api/admin/feature/{id}/gantt) #}
+<div id="feature-gantt" class="gantt-container"
+     hx-trigger="refresh from:body"
+     hx-get="/admin/_partial/gantt?feature_id={{ feature_id }}&zoom={{ zoom }}"
+     hx-swap="outerHTML">
+  <div class="gantt-toolbar">
+    <div class="zoom-switch">
+      {% for z in ["1h","6h","24h","7d"] %}
+      <button class="zoom-btn {{ 'active' if z == zoom else '' }}"
+              hx-get="/admin/_partial/gantt?feature_id={{ feature_id }}&zoom={{ z }}"
+              hx-target="#feature-gantt" hx-swap="outerHTML">{{ z }}</button>
+      {% endfor %}
+    </div>
+    <span class="gantt-count">{{ gantt.lanes|length }} packets</span>
+  </div>
+
+  <div class="gantt-body">
+    {% if gantt.lanes %}
+    <div class="gantt-ruler" style="--time-min: '{{ gantt.time_min or '' }}'; --time-max: '{{ gantt.time_max or '' }}'">
+      {% if gantt.time_min and gantt.time_max %}
+        {% set t_min = gantt.time_min[:16] %}
+        {% set t_max = gantt.time_max[:16] %}
+        <span class="ruler-start">{{ t_min }}</span>
+        <span class="ruler-end">{{ t_max }}</span>
+      {% endif %}
+    </div>
+    {% for lane in gantt.lanes %}
+    <div class="gantt-lane" data-packet="{{ lane.packet_id }}">
+      <div class="gantt-lane-label"
+           hx-get="/admin?packet_id={{ lane.packet_id }}&feature_id={{ feature_id }}"
+           hx-push-url="true"
+           style="cursor:pointer"
+           title="{{ lane.packet_id }} · {{ lane.wave }}">
+        {{ lane.label[:30] }}
+      </div>
+      <div class="gantt-lane-track">
+        {% for bar in lane.bars %}
+        <div class="gantt-bar status-{{ bar.status }}"
+             style="background: {{ bar.color or '#CCC' }}; width: {{ bar.duration_ms // 1000 if bar.duration_ms else 10 }}px"
+             title="{{ bar.stage_key }} · {{ bar.started_at[:19] if bar.started_at }} → {{ bar.finished_at[:19] if bar.finished_at }} · {{ (bar.duration_ms // 1000)|string + 's' if bar.duration_ms else 'running' }}">
+          {{ bar.stage_key[:8] }}
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endfor %}
+    {% else %}
+    <div class="gantt-empty">No pipeline data for this feature.</div>
+    {% endif %}
+  </div>
+
+  <div class="gantt-legend">
+    <span class="legend-item"><span class="swatch status-pending"></span>pending</span>
+    <span class="legend-item"><span class="swatch status-running"></span>running</span>
+    <span class="legend-item"><span class="swatch status-done"></span>done</span>
+    <span class="legend-item"><span class="swatch status-failed"></span>failed</span>
+    <span class="legend-item"><span class="swatch status-skipped"></span>skipped</span>
+    <span class="legend-item"><span class="swatch status-returned"></span>returned</span>
+  </div>
+</div>

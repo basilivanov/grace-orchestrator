@@ -24,6 +24,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import yaml
+from grace_control.core.stage_instrumentation import stage
 
 
 # Legacy branch format for agent worktrees. The canonical home moved to
@@ -86,6 +87,7 @@ class PacketMaterializer:
         ".env.example",
     ]
 
+    @stage("materialize")
     def materialize(
         self,
         packet_data: dict,
