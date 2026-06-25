@@ -204,6 +204,16 @@ def _read_worker_logs(packet_id: str, tail: int, include_stdout: bool, include_s
     lines: list[AggregatedLines] = []
     with get_db() as db:
         runs = db.query(PacketRun).filter_by(packet_id=packet_id).order_by(PacketRun.run_number.desc()).limit(3).all()
+        # Назначаем trace_id из StageRun
+        srun = db.query(StageRun).filter_by(
+            packet_id=packet_id, status="running"
+        ).order_by(StageRun.started_at.desc()).first()
+        if not srun:
+            srun = db.query(StageRun).filter_by(
+                packet_id=packet_id, status="done"
+            ).order_by(StageRun.started_at.desc()).first()
+        trace_id = srun.trace_id if srun else None
+
         for run in runs:
             if not run.evidence_path:
                 continue
@@ -212,7 +222,7 @@ def _read_worker_logs(packet_id: str, tail: int, include_stdout: bool, include_s
                 stdout_file = ev_path / "stdout.log"
                 if stdout_file.exists():
                     for line in _tail_file(stdout_file, tail):
-                        lines.append(AggregatedLines(ts="", source="worker_out", level="info", trace_id=None, msg=line.strip()))
+                        lines.append(AggregatedLines(ts="", source="worker_out", level="info", trace_id=trace_id, msg=line.strip()))
             if include_stderr:
                 stderr_file = ev_path / "stderr.log"
                 if stderr_file.exists():
@@ -220,7 +230,7 @@ def _read_worker_logs(packet_id: str, tail: int, include_stdout: bool, include_s
                         level = "info"
                         if "error" in line.lower():
                             level = "error"
-                        lines.append(AggregatedLines(ts="", source="worker_err", level=level, trace_id=None, msg=line.strip()))
+                        lines.append(AggregatedLines(ts="", source="worker_err", level=level, trace_id=trace_id, msg=line.strip()))
     return lines
 
 

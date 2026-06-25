@@ -9,10 +9,12 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException
 
+from grace_control.core.structured_logger import GraceLogger
 from grace_control.db import get_db
 from grace_control.db.schema import Worker
 
 router = APIRouter()
+_log = GraceLogger("workers_router")
 
 
 @router.get("/")
@@ -37,14 +39,23 @@ async def list_workers() -> dict:
 @router.post("/register")
 async def register_worker(request: dict) -> dict:
     worker_id = request["worker_id"]
+    pid = request.get("pid")
     with get_db() as db:
         existing = db.query(Worker).filter_by(id=worker_id).first()
         if existing:
             existing.status = "active"
             existing.last_heartbeat = datetime.now(UTC)
+            if pid:
+                existing.pid = pid
         else:
-            db.add(Worker(id=worker_id, status="active", last_heartbeat=datetime.now(UTC)))
-        return {"data": {"worker_id": worker_id, "status": "registered"}, "timestamp": datetime.now(UTC).isoformat() + "Z"}
+            w = Worker(id=worker_id, status="active", last_heartbeat=datetime.now(UTC))
+            if pid:
+                w.pid = pid
+            db.add(w)
+        db.commit()
+    _log.info("worker_registered", worker_id=worker_id, pid=pid)
+    return {"data": {"worker_id": worker_id, "status": "registered", "pid": pid},
+            "timestamp": datetime.now(UTC).isoformat() + "Z"}
 
 
 @router.post("/heartbeat")
