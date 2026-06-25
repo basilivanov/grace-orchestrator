@@ -142,11 +142,12 @@ async def recompute_metrics(period_kind: str = "24h") -> dict:
             idle_times = []
 
             for r in runs:
-                if r.started_at and r.stage_key == "coder":
-                    # idle = coder start - executor start (claim time)
+                if r.started_at and r.stage_key == "coder" and r.attempt_number:
+                    # idle = coder start - executor start для той же попытки
                     from grace_control.db.schema import StageRun as SR
                     executor_run = db.query(SR).filter_by(
-                        packet_id=r.packet_id, stage_key="executor", status="done"
+                        packet_id=r.packet_id, stage_key="executor",
+                        attempt_number=r.attempt_number, status="done"
                     ).order_by(SR.started_at).first()
                     if executor_run and executor_run.started_at and r.started_at > executor_run.started_at:
                         idle = (r.started_at - executor_run.started_at).total_seconds()

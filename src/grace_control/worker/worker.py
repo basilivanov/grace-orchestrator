@@ -238,7 +238,7 @@ class Worker:
         self.log.info("worker_starting", worker_id=self.worker_id)
         from grace_control.db import init_db as _init_db
         _init_db()
-        await self.api.register(self.worker_id)
+        await self.api.register(self.worker_id, pid=os.getpid())
         self.log.info("worker_registered", worker_id=self.worker_id)
         self.running = True
 

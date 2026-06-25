@@ -471,6 +471,18 @@ class PacketExecutionAdapter:
                     events=self._obs_events if not getattr(self, "_obs_disabled", True) else None,
                 )
 
+            # ── Rerun stage branch ─────────────────────────────────────
+            rerun_stage_key = _pkt_spec.get("rerun_stage")
+            if rerun_stage_key in ("verifier", "reviewer"):
+                _log.info("rerun_stage_branch", packet_id=packet_id, stage=rerun_stage_key)
+                result = await self._rerun_stage(rerun_stage_key, pkt_contract, packet_id,
+                                                  run_number, run_id, evidence_dir, start)
+                return self._persist_run("rejected" if not result.ok else "accepted",
+                    run_id, executor, {}, None, None, None,
+                    int((time.time()-start)*1000), "", packet_id, start,
+                    commit_sha="", wt_path=None, run_dir=None, changed_files=None)
+            # ── end rerun branch ───────────────────────────────────────
+
             result = await self._call_executor(packet_path, pkt_contract, run_number, base_ref, base_sha, executor, evidence_dir)
             _log.debug("executor_run_completed", packet_id=packet_id, ok=result.ok, errors=result.errors[:2])
 
@@ -1651,6 +1663,81 @@ class PacketExecutionAdapter:
         if _preflight_result is not None:
             result.evidence["target_repo_preflight"] = _preflight_result.to_dict()
         return result
+
+    async def _rerun_stage(self, stage_key: str, pkt_contract, packet_id: str,
+                            run_number: int, run_id: str, evidence_dir: Path,
+                            start: float) -> ExecutionResult:
+        """Run a single verifier/reviewer stage for rerun without full execution."""
+        _log.info("rerun_stage_exec", packet_id=packet_id, stage=stage_key)
+        from grace_control.core.acceptance_pipeline import AcceptanceReport
+        last_acceptance = AcceptanceReport(packet_id=packet_id)
+        try:
+            with get_db() as db:
+                last_run = db.query(PacketRun).filter_by(packet_id=packet_id).order_by(
+                    PacketRun.run_number.desc()).first()
+                if last_run and last_run.result_json:
+                    acc = last_run.result_json.get("acceptance_report") or {}
+                    last_acceptance = AcceptanceReport(
+                        packet_id=packet_id,
+                        final_verdict=acc.get("final_verdict", "rework_required"),
+                        profile=acc.get("profile", "NORMAL"),
+                        stages=acc.get("stages", []),
+                        summary=acc.get("summary", ""),
+                    )
+        except Exception:
+            pass
+
+        wt_path = evidence_dir.parent if evidence_dir else self.worktree_root
+        run_dir = evidence_dir if evidence_dir else self.state_root / "packets" / packet_id
+
+        try:
+            if stage_key == "verifier":
+                from grace_control.core.evidence_verifier import run_evidence_verifier
+                evr = await run_evidence_verifier(
+                    packet=pkt_contract,
+                    acceptance_report=last_acceptance,
+                    worktree_path=wt_path,
+                    run_dir=run_dir,
+                    changed_files=[],
+                    artifacts=[],
+                )
+                accepted = evr.verdict.value == "PASS"
+                return ExecutionResult(
+                    accepted=accepted,
+                    domain_status="accepted" if accepted else "rejected",
+                    reason=evr.summary,
+                    evidence={"verifier_verdict": evr.verdict.value, "summary": evr.summary},
+                    duration_ms=int((time.time() - start) * 1000),
+                )
+            elif stage_key == "reviewer":
+                from grace_control.core.reviewer_gate import run_reviewer_gate
+                rvr = await run_reviewer_gate(
+                    packet=pkt_contract,
+                    acceptance_report=last_acceptance,
+                    evidence_verifier_report=None,
+                    worktree_path=wt_path,
+                    run_dir=run_dir,
+                    changed_files=[],
+                    artifacts=[],
+                )
+                accepted = rvr.verdict.value == "PASS"
+                return ExecutionResult(
+                    accepted=accepted,
+                    domain_status="accepted" if accepted else "rejected",
+                    reason=rvr.summary,
+                    evidence={"reviewer_verdict": rvr.verdict.value, "summary": rvr.summary},
+                    duration_ms=int((time.time() - start) * 1000),
+                )
+        except Exception as e:
+            _log.error("rerun_stage_failed", packet_id=packet_id, stage=stage_key, error=str(e)[:200])
+            return ExecutionResult(
+                accepted=False, domain_status="failed", reason=str(e)[:500],
+                evidence={}, duration_ms=int((time.time() - start) * 1000),
+            )
+        return ExecutionResult(
+            accepted=False, domain_status="failed", reason="unknown stage",
+            evidence={}, duration_ms=int((time.time() - start) * 1000),
+        )
 
     def _build_dev_replay_metadata(
         self, packet_id: str, run_id: str, run_number: int,

@@ -38,8 +38,11 @@ class WorkerAPIClient:
     def __init__(self, base_url: str = "http://localhost:8042"):
         self.client = httpx.AsyncClient(base_url=base_url, timeout=30.0)
 
-    async def register(self, worker_id: str) -> dict:
-        r = await self.client.post("/api/workers/register", json={"worker_id": worker_id})
+    async def register(self, worker_id: str, pid: int | None = None) -> dict:
+        payload = {"worker_id": worker_id}
+        if pid:
+            payload["pid"] = pid
+        r = await self.client.post("/api/workers/register", json=payload)
         r.raise_for_status()
         return r.json()
 

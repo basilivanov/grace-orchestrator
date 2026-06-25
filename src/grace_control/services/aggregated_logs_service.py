@@ -204,19 +204,19 @@ def _read_worker_logs(packet_id: str, tail: int, include_stdout: bool, include_s
     lines: list[AggregatedLines] = []
     with get_db() as db:
         runs = db.query(PacketRun).filter_by(packet_id=packet_id).order_by(PacketRun.run_number.desc()).limit(3).all()
-        # Назначаем trace_id из StageRun
-        srun = db.query(StageRun).filter_by(
-            packet_id=packet_id, status="running"
-        ).order_by(StageRun.started_at.desc()).first()
-        if not srun:
-            srun = db.query(StageRun).filter_by(
-                packet_id=packet_id, status="done"
-            ).order_by(StageRun.started_at.desc()).first()
-        trace_id = srun.trace_id if srun else None
-
         for run in runs:
             if not run.evidence_path:
                 continue
+            # Trace_id по run_id, а не по packet целиком
+            srun = db.query(StageRun).filter_by(
+                run_id=run.id, status="running"
+            ).order_by(StageRun.started_at.desc()).first()
+            if not srun:
+                srun = db.query(StageRun).filter_by(
+                    run_id=run.id, status="done"
+                ).order_by(StageRun.started_at.desc()).first()
+            trace_id = srun.trace_id if srun else None
+
             ev_path = Path(run.evidence_path)
             if include_stdout:
                 stdout_file = ev_path / "stdout.log"
