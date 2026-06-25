@@ -17,14 +17,18 @@ PERIOD_KINDS = ("24h", "7d", "30d")
 
 
 def _period_range(period_kind: str) -> tuple[datetime, datetime]:
+    """Возвращает фиксированный период: начало часа для 24h, начало дня для 7d/30d."""
     now = datetime.now(timezone.utc)
     if period_kind == "24h":
-        return now - timedelta(hours=24), now
+        start = now.replace(minute=0, second=0, microsecond=0) - timedelta(hours=24)
+        return start, start + timedelta(hours=24)
     elif period_kind == "7d":
-        return now - timedelta(days=7), now
+        start = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=7)
+        return start, start + timedelta(days=7)
     elif period_kind == "30d":
-        return now - timedelta(days=30), now
-    return now - timedelta(days=7), now
+        start = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=30)
+        return start, start + timedelta(days=30)
+    return now - timedelta(hours=24), now
 
 
 def _percentile(sorted_values: list[int], pct: float) -> int | None:

@@ -37,9 +37,33 @@ from grace_control.core.stuck_scanner import stuck_scan_loop
 from grace_control.core.structured_logger import GraceLogger
 from grace_control.core.wave_gate import check_wave_gates
 from grace_control.db import init_db
+from grace_control.services.stage_metrics_service import recompute_metrics as _recompute_metrics
 
 _log = GraceLogger("lifespan")
 _lease_task: asyncio.Task | None = None
+
+
+async def _metrics_recalc_loop():
+    """Пересчёт метрик: 24h раз в 60с, 7d раз в 10 минут, 30d раз в час."""
+    import time
+    while True:
+        try:
+            await _recompute_metrics("24h")
+        except Exception as e:
+            _log.error("metrics_24h_recalc_error", error=str(e)[:200])
+        await asyncio.sleep(60)
+        # 7d каждые 10 минут
+        if int(time.time()) % 600 < 60:
+            try:
+                await _recompute_metrics("7d")
+            except Exception as e:
+                _log.error("metrics_7d_recalc_error", error=str(e)[:200])
+        # 30d каждый час
+        if int(time.time()) % 3600 < 60:
+            try:
+                await _recompute_metrics("30d")
+            except Exception as e:
+                _log.error("metrics_30d_recalc_error", error=str(e)[:200])
 
 
 # START_FUNCTION_CONTRACT
@@ -81,6 +105,7 @@ async def lifespan(app: FastAPI):
         "wave_gate", check_wave_gates, settings.wave_gate_interval_seconds))
     asyncio.create_task(_safe_loop(
         "feature_gate", check_feature_completion, settings.feature_gate_interval_seconds))
+    asyncio.create_task(_metrics_recalc_loop())
     yield
     if _lease_task:
         _lease_task.cancel()

@@ -1,7 +1,7 @@
 """Admin pipeline router — new read endpoints for pipeline observability v2."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Query
 
 from grace_control.core.structured_logger import GraceLogger
@@ -26,6 +26,37 @@ from grace_control.services.packet_control_service import (
 router = APIRouter()
 _log = GraceLogger("admin_pipeline")
 _svc = AdminAggregationService()
+
+
+def _add_bar_geometry(bars: list[dict], time_min: datetime | None, time_max: datetime | None) -> list[dict]:
+    """Добавляет left_pct/width_pct каждому bar относительно временной оси."""
+    if not bars or not time_min or not time_max:
+        return bars
+    total_ms = (time_max - time_min).total_seconds() * 1000
+    if total_ms <= 0:
+        total_ms = 3600000  # 1h fallback
+
+    for b in bars:
+        s = _parse_dt(b.get("started_at"))
+        e = _parse_dt(b.get("finished_at")) or s or time_max
+        if not s:
+            b["left_pct"] = 0
+            b["width_pct"] = 0
+            continue
+        left_ms = (s - time_min).total_seconds() * 1000
+        dur_ms = (e - s).total_seconds() * 1000 if e else total_ms - left_ms
+        b["left_pct"] = round(left_ms / total_ms * 100, 2)
+        b["width_pct"] = max(round(dur_ms / total_ms * 100, 2), 0.5)
+    return bars
+
+
+def _parse_dt(iso: str | None) -> datetime | None:
+    if not iso:
+        return None
+    try:
+        return datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
 
 
 @router.get("/api/admin/packet/{packet_id}/pipeline")
@@ -105,17 +136,17 @@ def packet_pipeline_gantt(packet_id: str, zoom: str = Query("24h")):
             return {"zoom": zoom, "time_min": None, "time_max": None, "lanes": []}
 
         times = [s.started_at for s in stages if s.started_at] + [s.finished_at for s in stages if s.finished_at]
-        time_min = min(times).isoformat() + "Z" if times else None
-        time_max = max(times).isoformat() + "Z" if times else None
+        time_min = min(times) if times else None
+        time_max = max(times) if times else None
 
+        color_map = {
+            "pending": "#CCC", "running": "#0B5E87", "done": "#1E7E34",
+            "failed": "#B02A2A", "skipped": "#B8860B", "cancelled": "#6C3483",
+        }
         bars = []
         for s in stages:
             if not s.started_at:
                 continue
-            color_map = {
-                "pending": "#CCC", "running": "#0B5E87", "done": "#1E7E34",
-                "failed": "#B02A2A", "skipped": "#B8860B", "cancelled": "#6C3483",
-            }
             bars.append({
                 "stage_key": s.stage_key,
                 "started_at": s.started_at.isoformat() + "Z",
@@ -126,10 +157,12 @@ def packet_pipeline_gantt(packet_id: str, zoom: str = Query("24h")):
                 "color": color_map.get(s.status, "#CCC"),
             })
 
+        bars = _add_bar_geometry(bars, time_min, time_max)
+
         return {
             "zoom": zoom,
-            "time_min": time_min,
-            "time_max": time_max,
+            "time_min": time_min.isoformat() + "Z" if time_min else None,
+            "time_max": time_max.isoformat() + "Z" if time_max else None,
             "lanes": [{"packet_id": packet_id, "label": packet_id, "bars": bars}],
         }
 
@@ -146,6 +179,10 @@ def feature_gantt(feature_id: str, zoom: str = Query("24h"), wave_id: str = Quer
 
         lanes = []
         all_times: list[datetime] = []
+        color_map = {
+            "pending": "#CCC", "running": "#0B5E87", "done": "#1E7E34",
+            "failed": "#B02A2A", "skipped": "#B8860B", "cancelled": "#6C3483",
+        }
         for wave in waves:
             packets = db.query(Packet).filter_by(feature_id=feature_id, wave_id=wave.id).all()
             for pkt in packets:
@@ -157,10 +194,6 @@ def feature_gantt(feature_id: str, zoom: str = Query("24h"), wave_id: str = Quer
                     all_times.append(s.started_at)
                     if s.finished_at:
                         all_times.append(s.finished_at)
-                    color_map = {
-                        "pending": "#CCC", "running": "#0B5E87", "done": "#1E7E34",
-                        "failed": "#B02A2A", "skipped": "#B8860B", "cancelled": "#6C3483",
-                    }
                     bars.append({
                         "stage_key": s.stage_key,
                         "started_at": s.started_at.isoformat() + "Z",
@@ -177,10 +210,18 @@ def feature_gantt(feature_id: str, zoom: str = Query("24h"), wave_id: str = Quer
                     "bars": bars,
                 })
 
-        time_min = min(all_times).isoformat() + "Z" if all_times else None
-        time_max = max(all_times).isoformat() + "Z" if all_times else None
+        time_min = min(all_times) if all_times else None
+        time_max = max(all_times) if all_times else None
 
-        return {"zoom": zoom, "time_min": time_min, "time_max": time_max, "lanes": lanes}
+        for lane in lanes:
+            lane["bars"] = _add_bar_geometry(lane["bars"], time_min, time_max)
+
+        return {
+            "zoom": zoom,
+            "time_min": time_min.isoformat() + "Z" if time_min else None,
+            "time_max": time_max.isoformat() + "Z" if time_max else None,
+            "lanes": lanes,
+        }
 
 
 @router.get("/api/admin/packet/{packet_id}/logs/aggregated")

@@ -95,10 +95,16 @@ def get_aggregated_logs(
         if db_lines:
             sources_used.append("db_events")
 
+    # Применяем since/until до сортировки/tail
+    if since:
+        all_lines = [l for l in all_lines if l.ts >= since]
+    if until:
+        all_lines = [l for l in all_lines if l.ts <= until]
+
     # Sort by timestamp
     all_lines.sort(key=lambda x: x.ts)
 
-    # Apply filters
+    # Apply level/trace_id/regex filters
     if level and level != "all":
         all_lines = [l for l in all_lines if l.level == level]
     if trace_id:
@@ -106,15 +112,16 @@ def get_aggregated_logs(
     if parser:
         all_lines = [l for l in all_lines if parser.search(l.msg)]
 
+    total_before = len(all_lines)
+    truncated = total_before > tail
+
     # Tail
-    if len(all_lines) > tail:
+    if truncated:
         all_lines = all_lines[-tail:]
 
     if all_lines:
         time_min = all_lines[0].ts
         time_max = all_lines[-1].ts
-
-    truncated = len(all_lines) > tail
 
     return {
         "lines": [
@@ -133,28 +140,48 @@ def _read_server_logs(packet_id: str, tail: int) -> list[AggregatedLines]:
     for log_path in Path("/tmp").glob("api*.log"):
         try:
             text = log_path.read_text(errors="replace")
-            for line in text.split("\n")[-tail:]:
-                if not line.strip():
+            for raw_line in text.split("\n")[-tail * 2:]:
+                line = raw_line.strip()
+                if not line:
                     continue
                 if packet_id in line:
-                    lines.append(_parse_server_line(line))
+                    lines.append(_parse_structured_line(line, "server"))
         except (OSError, IOError):
             pass
     return lines
 
 
-def _parse_server_line(line: str) -> AggregatedLines:
+def _parse_structured_line(line: str, default_source: str) -> AggregatedLines:
+    """Пытается распарсить JSON-логи (structured) и извлечь ts/level/trace_id."""
     ts = ""
     level = "info"
     trace_id = None
-    if line[:19].count("-") >= 2:
-        ts = line[:23] if "T" in line[:25] else line[:19]
-    level_str = line.lower()
-    if "error" in level_str:
-        level = "error"
-    elif "warn" in level_str:
-        level = "warn"
-    return AggregatedLines(ts=ts, source="server", level=level, trace_id=trace_id, msg=line.strip())
+    msg = line
+    try:
+        obj = json.loads(line)
+        if isinstance(obj, dict):
+            ts = str(obj.get("ts", obj.get("timestamp", obj.get("time", ""))))[:26]
+            lvl = str(obj.get("level", "info")).lower()
+            if lvl in ("error", "err"):
+                level = "error"
+            elif lvl in ("warn", "warning"):
+                level = "warn"
+            msg = obj.get("msg", obj.get("message", line))[:500]
+            # trace_id из ctx
+            ctx = obj.get("ctx", {})
+            if isinstance(ctx, dict):
+                trace_id = str(ctx.get("trace_id")) or None
+            if not trace_id:
+                trace_id = str(obj.get("trace_id")) or None
+    except (json.JSONDecodeError, TypeError):
+        if line[:19].count("-") >= 2:
+            ts = line[:23] if "T" in line[:25] else line[:19]
+        level_str = line.lower()
+        if "error" in level_str:
+            level = "error"
+        elif "warn" in level_str:
+            level = "warn"
+    return AggregatedLines(ts=ts, source=default_source, level=level, trace_id=trace_id, msg=msg)
 
 
 def _read_supervisor_logs(packet_id: str, tail: int) -> list[AggregatedLines]:
