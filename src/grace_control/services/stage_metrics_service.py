@@ -142,12 +142,14 @@ async def recompute_metrics(period_kind: str = "24h") -> dict:
             idle_times = []
 
             for r in runs:
-                if r.started_at and r.started_at:
-                    from grace_control.db.schema import Lease
-                    # claim time = Lease.acquired_at для этого packet_id
-                    lease = db.query(Lease).filter_by(packet_id=r.packet_id).order_by(Lease.acquired_at).first()
-                    if lease and lease.acquired_at and r.started_at > lease.acquired_at:
-                        idle = (r.started_at - lease.acquired_at).total_seconds()
+                if r.started_at and r.stage_key == "coder":
+                    # idle = coder start - executor start (claim time)
+                    from grace_control.db.schema import StageRun as SR
+                    executor_run = db.query(SR).filter_by(
+                        packet_id=r.packet_id, stage_key="executor", status="done"
+                    ).order_by(SR.started_at).first()
+                    if executor_run and executor_run.started_at and r.started_at > executor_run.started_at:
+                        idle = (r.started_at - executor_run.started_at).total_seconds()
                         idle_times.append(idle)
 
             metric = StageMetric(

@@ -156,6 +156,7 @@ class Worker(Base):
     current_packet_id = Column(String, index=True)
     last_heartbeat = Column(DateTime, default=datetime.utcnow)
     started_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    pid = Column(Integer, nullable=True)  # OS PID for signalling
 
 
 class Lease(Base):

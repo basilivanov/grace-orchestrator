@@ -336,12 +336,13 @@ def stage(stage_key: str, llm: bool = False):
                         tokens_in = updated_srun.tokens_in if updated_srun else None
                         tokens_out = updated_srun.tokens_out if updated_srun else None
                         cost_usd = updated_srun.cost_usd if updated_srun else None
+                        actual_status = updated_srun.status if updated_srun else "done"
 
                     finished_payload = {
                         "packet_id": srun.packet_id,
                         "stage_key": stage_key,
                         "stage_run_id": srun.id,
-                        "status": "done",
+                        "status": actual_status,
                         "finished_at": datetime.utcnow().isoformat() + "Z",
                         "duration_ms": duration_ms,
                         "tokens_in": tokens_in,
@@ -360,12 +361,13 @@ def stage(stage_key: str, llm: bool = False):
                         updated_srun = db.query(StageRun).filter_by(id=srun.id).first()
                         duration_ms = updated_srun.duration_ms if updated_srun else None
                         error_msg = updated_srun.error if updated_srun else str(e)
+                        actual_status = updated_srun.status if updated_srun else "failed"
 
                     failed_payload = {
                         "packet_id": srun.packet_id,
                         "stage_key": stage_key,
                         "stage_run_id": srun.id,
-                        "status": "failed",
+                        "status": actual_status,
                         "finished_at": datetime.utcnow().isoformat() + "Z",
                         "duration_ms": duration_ms,
                         "error": error_msg,

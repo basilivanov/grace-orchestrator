@@ -15,7 +15,7 @@ _log = GraceLogger("packet_control")
 
 
 def retry_packet(packet_id: str, actor: str | None = None, reason: str = "manual_retry") -> dict:
-    """BLOCKED_RECOVERABLE или REJECTED → READY, увеличивает attempt_count."""
+    """BLOCKED_RECOVERABLE or REJECTED -> READY, increments attempt_count."""
     from grace_control.core.state_machine import PacketStateMachine
     from grace_control.core.event_recorder import record_event
 
@@ -39,12 +39,34 @@ def retry_packet(packet_id: str, actor: str | None = None, reason: str = "manual
     return {"ok": True, "packet_id": packet_id, "state": PacketState.READY.value}
 
 
+def _try_signal_worker(worker_id: str, sig=signal.SIGTERM):
+    """Look up PID in Worker.pid then env-var. No pgrep for safety."""
+    pid = None
+    with get_db() as db:
+        from grace_control.db.schema import Worker as W
+        w = db.query(W).filter_by(id=worker_id).first()
+        if w and w.pid:
+            pid = w.pid
+    if not pid:
+        pid_str = os.environ.get(f"GRACE_WORKER_PID_{worker_id}")
+        if pid_str:
+            try:
+                pid = int(pid_str)
+            except (ValueError, TypeError):
+                pid = None
+    if pid:
+        try:
+            os.kill(pid, sig)
+            _log.info("worker_signalled", worker_id=worker_id, signal=sig, pid=pid)
+        except (ProcessLookupError, PermissionError, OSError) as e:
+            _log.warn("worker_signal_failed", worker_id=worker_id, pid=pid, error=str(e)[:100])
+
+
 def cancel_packet(packet_id: str, actor: str | None = None, reason: str = "manual_cancel") -> dict:
-    """RUNNING → CANCELLED, освобождает lease. Сначала сигнал воркеру."""
+    """RUNNING -> CANCELLED, releases lease. Signals worker first, re-checks state."""
     from grace_control.core.state_machine import PacketStateMachine
     from grace_control.core.event_recorder import record_event
     from grace_control.api.ws_broadcast import broadcast_packet_cancel
-    import asyncio
 
     sm = PacketStateMachine()
     worker_id = None
@@ -55,12 +77,10 @@ def cancel_packet(packet_id: str, actor: str | None = None, reason: str = "manua
         current = PacketStateMachine.normalize_state(pkt.state)
         if current != PacketState.RUNNING:
             raise ValueError(f"Cannot cancel from state {pkt.state}")
-
         lease = db.query(Lease).filter_by(packet_id=packet_id).first()
         if lease:
             worker_id = lease.worker_id
 
-    # Сначала сигнал воркеру (если он есть), потом state change
     if worker_id:
         _try_signal_worker(worker_id, signal.SIGTERM)
         import time
@@ -70,16 +90,21 @@ def cancel_packet(packet_id: str, actor: str | None = None, reason: str = "manua
         pkt = db.query(Packet).filter_by(id=packet_id).first()
         if not pkt:
             raise ValueError(f"Packet {packet_id} not found")
+        current = PacketStateMachine.normalize_state(pkt.state)
+        if current != PacketState.RUNNING:
+            _log.warn("cancel_skipped_state_changed",
+                       packet_id=packet_id, current_state=pkt.state)
+            return {"ok": False, "packet_id": packet_id,
+                    "state": pkt.state, "reason": "state changed during cancel"}
+
         sm.transition(PacketState.RUNNING, PacketState.CANCELLED)
         pkt.state = PacketState.CANCELLED.value
-
         lease = db.query(Lease).filter_by(packet_id=packet_id).first()
         if lease:
             worker = db.query(Worker).filter_by(id=lease.worker_id).first()
             if worker:
                 worker.current_packet_id = None
             db.delete(lease)
-
         record_event("packet_transition", "packet", packet_id, {
             "from": "running", "to": "cancelled", "reason": reason, "actor": actor,
         })
@@ -98,35 +123,8 @@ def cancel_packet(packet_id: str, actor: str | None = None, reason: str = "manua
     return {"ok": True, "packet_id": packet_id, "state": PacketState.CANCELLED.value}
 
 
-def _try_signal_worker(worker_id: str, sig=signal.SIGTERM):
-    """Пытается найти PID воркера и послать сигнал."""
-    pid = os.environ.get(f"GRACE_WORKER_PID_{worker_id}")
-    if pid:
-        try:
-            os.kill(int(pid), sig)
-            _log.info("worker_signalled", worker_id=worker_id, signal=sig)
-        except (ProcessLookupError, PermissionError, OSError) as e:
-            _log.warn("worker_signal_failed", worker_id=worker_id, error=str(e)[:100])
-    else:
-        # Ищем в процессах по worker_id
-        import subprocess
-        try:
-            result = subprocess.run(
-                ["pgrep", "-f", worker_id],
-                capture_output=True, text=True, timeout=5,
-            )
-            if result.stdout.strip():
-                for pid_str in result.stdout.strip().split("\n"):
-                    try:
-                        os.kill(int(pid_str), sig)
-                    except (ProcessLookupError, OSError):
-                        pass
-        except (subprocess.SubprocessError, FileNotFoundError):
-            pass
-
-
 def delete_packet(packet_id: str, confirm: str, actor: str | None = None) -> dict:
-    """Удаляет packet, все PacketRun, StageRun, Event записи. Требует подтверждения."""
+    """Deletes packet, all PacketRun, StageRun, Event records."""
     if confirm != packet_id:
         raise ValueError("confirm must match packet_id")
     from grace_control.core.event_recorder import record_event
@@ -149,8 +147,9 @@ def delete_packet(packet_id: str, confirm: str, actor: str | None = None) -> dic
 
 
 def rerun_stage(packet_id: str, stage_key: str, actor: str | None = None) -> dict:
-    """Re-run вердикта verifier/reviewer. Создаёт новый StageRun с loop_round+1."""
+    """Creates pending StageRun + sets packet to READY for actual dispatch."""
     from grace_control.core.stage_instrumentation import create_for_return
+    from grace_control.core.state_machine import PacketStateMachine
 
     create_for_return(
         packet_id=packet_id,
@@ -159,14 +158,30 @@ def rerun_stage(packet_id: str, stage_key: str, actor: str | None = None) -> dic
         reason=f"manual rerun by {actor or 'operator'}",
         trace_id=None,
     )
+
+    with get_db() as db:
+        pkt = db.query(Packet).filter_by(id=packet_id).first()
+        if pkt:
+            sm = PacketStateMachine()
+            current = PacketStateMachine.normalize_state(pkt.state)
+            if current in (PacketState.RUNNING, PacketState.READY,
+                           PacketState.BLOCKED_RECOVERABLE, PacketState.REJECTED,
+                           PacketState.ACCEPTED, PacketState.DRAFT):
+                try:
+                    sm.transition(current, PacketState.READY)
+                    pkt.state = PacketState.READY.value
+                    pkt.attempt_count = (pkt.attempt_count or 0) + 1
+                    db.commit()
+                except Exception:
+                    pass
+
     _log.info("stage_rerun", packet_id=packet_id, stage_key=stage_key, actor=actor)
     return {"ok": True, "packet_id": packet_id, "stage_key": stage_key}
 
 
 def stop_worker(worker_id: str, actor: str | None = None) -> dict:
-    """SIGTERM процессу воркера, освобождает lease. SIGKILL после таймаута."""
+    """SIGTERM to worker process, releases leases. SIGKILL after timeout."""
     from grace_control.core.event_recorder import record_event
-    import time
 
     stopped_packets = []
     with get_db() as db:
@@ -184,7 +199,8 @@ def stop_worker(worker_id: str, actor: str | None = None) -> dict:
             db.delete(lease)
             stopped_packets.append(lease.packet_id)
             record_event("packet_transition", "packet", lease.packet_id, {
-                "from": "running", "to": "cancelled", "reason": f"worker {worker_id} stopped by {actor or 'operator'}",
+                "from": "running", "to": "cancelled",
+                "reason": f"worker {worker_id} stopped by {actor or 'operator'}",
             })
 
         worker.status = "stopped"
@@ -194,11 +210,8 @@ def stop_worker(worker_id: str, actor: str | None = None) -> dict:
         })
         db.commit()
 
-    # SIGTERM сначала
     _try_signal_worker(worker_id, signal.SIGTERM)
-
-    # Ждём 5 секунд, потом SIGKILL
-    import threading
+    import threading, time
     def _force_kill():
         time.sleep(5)
         _try_signal_worker(worker_id, signal.SIGKILL)
@@ -209,7 +222,7 @@ def stop_worker(worker_id: str, actor: str | None = None) -> dict:
 
 
 async def dev_replay(packet_id: str, stage_key: str | None = None, actor: str | None = None) -> dict:
-    """Вызывает dev-replay для стадии по trace_id."""
+    """Invokes dev-replay for a stage by trace_id."""
     from grace_control.api.routers.dev_replay import replay_stage
     from grace_control.core.event_recorder import record_event
 

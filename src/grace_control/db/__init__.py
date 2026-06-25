@@ -90,6 +90,7 @@ _SQLITE_COLUMN_MIGRATIONS: list[tuple[str, str, str]] = [
     ("packet_runs", "tokens_in", "ALTER TABLE packet_runs ADD COLUMN tokens_in INTEGER"),
     ("packet_runs", "tokens_out", "ALTER TABLE packet_runs ADD COLUMN tokens_out INTEGER"),
     ("packet_runs", "cost_usd", "ALTER TABLE packet_runs ADD COLUMN cost_usd NUMERIC(10, 6)"),
+    ("workers", "pid", "ALTER TABLE workers ADD COLUMN pid INTEGER"),
 ]
 # Tables that may be missing on existing DBs (added after initial create_all).
 _SQLITE_TABLE_CREATIONS: list[str] = [

@@ -163,7 +163,7 @@ function renderPipeTab(p){
 function renderRecoveryTab(p){
   const rc=p.recovery_chain||[];
   if(!rc.length)return'<div class="empty">No recovery loops for this packet.</div>';
-  return'<div style="display:flex;flex-direction:column;gap:6px">'+rc.map(r=>`<div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--bg1);border:1px solid var(--bd);border-radius:6px;font-size:11px"><span style="color:var(--red);font-weight:600">${r.from}</span><span style="color:var(--t3)">═▶</span><span style="color:var(--blue);font-weight:600">${r.to}</span><span style="color:var(--yellow);flex:1">${r.reason}</span><span style="color:var(--t3);font-family:var(--mono)">round ${r.loop_round}</span><span style="color:var(--t3);font-size:10px">${(r.at||'').slice(0,16)}</span></div>`).join('')+'</div>';
+  return'<div style="display:flex;flex-direction:column;gap:6px">'+rc.map(r=>`<div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--bg1);border:1px solid var(--bd);border-radius:6px;font-size:11px"><span style="color:var(--red);font-weight:600">${esc(r.from)}</span><span style="color:var(--t3)">═▶</span><span style="color:var(--blue);font-weight:600">${esc(r.to)}</span><span style="color:var(--yellow);flex:1">${esc(r.reason)}</span><span style="color:var(--t3);font-family:var(--mono)">round ${r.loop_round}</span><span style="color:var(--t3);font-size:10px">${(r.at||'').slice(0,16)}</span></div>`).join('')+'</div>';
 }
 
 function esc(s){return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
@@ -192,7 +192,7 @@ function renderEventsTab(p){
 
 function renderSessionsTab(p){
   if(!p.sessions||!p.sessions.length)return'<div class="empty">No sessions</div>';
-  return'<div class="slist">'+p.sessions.map(s=>`<div class="sitem"><span class="sid">${s.id||s.session_id}</span><span class="sst sst-${s.status}">${s.status}</span><span class="smd">${s.model||''}</span><span class="stk">${s.tokens_in||s.tokensUsed||0}→${s.tokens_out||0}</span></div>`).join('')+'</div>';
+  return'<div class="slist">'+p.sessions.map(s=>`<div class="sitem"><span class="sid">${esc(s.id||s.session_id)}</span><span class="sst sst-${esc(s.status)}">${esc(s.status)}</span><span class="smd">${esc(s.model||'')}</span><span class="stk">${s.tokens_in||s.tokensUsed||0}→${s.tokens_out||0}</span></div>`).join('')+'</div>';
 }
 
 function toggle(id){state.sel=state.sel===id?null:id;render();}
