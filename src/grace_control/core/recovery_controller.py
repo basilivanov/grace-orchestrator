@@ -28,6 +28,31 @@ from grace_control.core.structured_logger import GraceLogger, get_trace_id
 _log = GraceLogger("recovery_controller")
 
 
+def _apply_create_stage_run(packet_id: str, decision, trace_id: str | None = None):
+    """Создаёт pending StageRun для recovery-возврата, если решение предполагает повтор."""
+    from grace_control.core.stage_instrumentation import create_for_return
+
+    action_map = {
+        "retry_same_coder": ("verifier", "coder"),
+        "switch_coder": ("verifier", "coder"),
+        "return_to_architect": ("reviewer", "architect"),
+        "retry_verifier": ("verifier", "verifier"),
+        "retry_reviewer": ("reviewer", "reviewer"),
+        "retry_merge": ("merge", "merge"),
+    }
+    action_name = decision.action.value if hasattr(decision.action, 'value') else str(decision.action)
+    pair = action_map.get(action_name)
+    if pair:
+        from_stage, to_stage = pair
+        create_for_return(
+            packet_id=packet_id,
+            from_stage=from_stage,
+            to_stage=to_stage,
+            reason=decision.reason or "",
+            trace_id=trace_id or getattr(decision, 'audit_payload', {}).get('trace_id'),
+        )
+
+
 class RecoveryController:
 
     def __init__(self, project_root: Path | None = None):
@@ -212,37 +237,6 @@ class RecoveryController:
             "next_executor_hint": decision.next_executor_hint,
         }, trace_id=trace_id)
 
-        # Create StageRun and emit stage_returned for recovery loops
-        from_stage = "verifier"
-        if signal.reviewer_verdict in ("REWORK_TO_CODER", "RETURN_TO_ARCHITECT", "rework_required") or (
-            decision.action == RecoveryAction.RETRY_REVIEWER
-        ):
-            from_stage = "reviewer"
-        elif decision.action == RecoveryAction.RETRY_MERGE:
-            from_stage = "merge"
-
-        to_stage = None
-        if decision.action in (RecoveryAction.RETRY_SAME_CODER, RecoveryAction.SWITCH_CODER):
-            to_stage = "coder"
-        elif decision.action == RecoveryAction.RETURN_TO_ARCHITECT:
-            to_stage = "architect"
-        elif decision.action == RecoveryAction.RETRY_VERIFIER:
-            to_stage = "verifier"
-        elif decision.action == RecoveryAction.RETRY_REVIEWER:
-            to_stage = "reviewer"
-        elif decision.action == RecoveryAction.RETRY_MERGE:
-            to_stage = "merge"
-
-        if to_stage:
-            from grace_control.core.stage_instrumentation import create_for_return
-            create_for_return(
-                packet_id=packet_id,
-                from_stage=from_stage,
-                to_stage=to_stage,
-                reason=decision.reason or "",
-                trace_id=trace_id,
-            )
-
     async def _apply_decision(self, packet_id: str, decision: RecoveryDecision):
         method_map = {
             RecoveryAction.RETRY_SAME_CODER: self._apply_retry_same_coder,
@@ -261,6 +255,9 @@ class RecoveryController:
             await method(packet_id, decision)
         else:
             method(packet_id, decision)
+
+        # Создаём pending StageRun для возврата в coder/architect/verifier/reviewer/merge
+        _apply_create_stage_run(packet_id, decision, trace_id=getattr(self, '_last_trace_id', None))
 
     def _apply_retry_same_coder(self, packet_id: str, decision: RecoveryDecision = None):
         _log.info("apply_retry_same_coder_start", packet_id=packet_id)

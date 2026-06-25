@@ -43,6 +43,7 @@ def cancel_packet(packet_id: str, actor: str | None = None, reason: str = "manua
     from grace_control.core.state_machine import PacketStateMachine as _sm
     from grace_control.core.event_recorder import record_event
     from grace_control.api.ws_broadcast import broadcast_packet_cancel
+    import asyncio
 
     with get_db() as db:
         pkt = db.query(Packet).filter_by(id=packet_id).first()
@@ -55,8 +56,10 @@ def cancel_packet(packet_id: str, actor: str | None = None, reason: str = "manua
         pkt.state = PacketState.CANCELLED.value
 
         lease = db.query(Lease).filter_by(packet_id=packet_id).first()
+        worker_id = None
         if lease:
             worker = db.query(Worker).filter_by(id=lease.worker_id).first()
+            worker_id = lease.worker_id
             if worker:
                 worker.current_packet_id = None
             db.delete(lease)
@@ -66,9 +69,49 @@ def cancel_packet(packet_id: str, actor: str | None = None, reason: str = "manua
         })
         db.commit()
 
-    broadcast_packet_cancel(packet_id, reason)
+    # Безопасно запускаем broadcast через ensure_future
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            asyncio.ensure_future(broadcast_packet_cancel(packet_id, reason))
+        else:
+            loop.run_until_complete(broadcast_packet_cancel(packet_id, reason))
+    except RuntimeError:
+        pass
+
+    # Пытаемся убить процесс воркера через supervisor
+    if worker_id:
+        _try_signal_worker(worker_id)
+
     _log.info("packet_cancelled", packet_id=packet_id, actor=actor)
     return {"ok": True, "packet_id": packet_id, "state": PacketState.CANCELLED.value}
+
+
+def _try_signal_worker(worker_id: str, sig=signal.SIGTERM):
+    """Пытается найти PID воркера и послать сигнал."""
+    pid = os.environ.get(f"GRACE_WORKER_PID_{worker_id}")
+    if pid:
+        try:
+            os.kill(int(pid), sig)
+            _log.info("worker_signalled", worker_id=worker_id, signal=sig)
+        except (ProcessLookupError, PermissionError, OSError) as e:
+            _log.warn("worker_signal_failed", worker_id=worker_id, error=str(e)[:100])
+    else:
+        # Ищем в процессах по worker_id
+        import subprocess
+        try:
+            result = subprocess.run(
+                ["pgrep", "-f", worker_id],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.stdout.strip():
+                for pid_str in result.stdout.strip().split("\n"):
+                    try:
+                        os.kill(int(pid_str), sig)
+                    except (ProcessLookupError, OSError):
+                        pass
+        except (subprocess.SubprocessError, FileNotFoundError):
+            pass
 
 
 def delete_packet(packet_id: str, confirm: str, actor: str | None = None) -> dict:
@@ -110,8 +153,9 @@ def rerun_stage(packet_id: str, stage_key: str, actor: str | None = None) -> dic
 
 
 def stop_worker(worker_id: str, actor: str | None = None) -> dict:
-    """SIGTERM процессу воркера, освобождает lease."""
+    """SIGTERM процессу воркера, освобождает lease. SIGKILL после таймаута."""
     from grace_control.core.event_recorder import record_event
+    import time
 
     stopped_packets = []
     with get_db() as db:
@@ -137,14 +181,17 @@ def stop_worker(worker_id: str, actor: str | None = None) -> dict:
         record_event("admin_action", "worker", worker_id, {
             "action": "stop_worker", "actor": actor,
         })
-
-        pid = os.environ.get(f"GRACE_WORKER_PID_{worker_id}")
-        if pid:
-            try:
-                os.kill(int(pid), signal.SIGTERM)
-            except (ProcessLookupError, PermissionError, OSError):
-                pass
         db.commit()
+
+    # SIGTERM сначала
+    _try_signal_worker(worker_id, signal.SIGTERM)
+
+    # Ждём 5 секунд, потом SIGKILL
+    import threading
+    def _force_kill():
+        time.sleep(5)
+        _try_signal_worker(worker_id, signal.SIGKILL)
+    threading.Thread(target=_force_kill, daemon=True).start()
 
     _log.info("worker_stopped", worker_id=worker_id, actor=actor, stopped_packets=stopped_packets)
     return {"ok": True, "worker_id": worker_id, "stopped_packets": stopped_packets}

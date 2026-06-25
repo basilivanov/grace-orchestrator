@@ -14,6 +14,53 @@ from grace_control.config.model_pricing import compute_cost
 from grace_control.api.ws_broadcast import broadcast_event
 
 
+def _infer_stage_status(result) -> str:
+    """Определяет реальный статус стадии из результата, а не только из исключения.
+    T0/T1/T2/verifier/reviewer возвращают FAILED-объекты без исключения."""
+    if result is None:
+        return "failed"
+    if hasattr(result, "accepted"):
+        return "done" if result.accepted else "failed"
+    if hasattr(result, "status"):
+        val = result.status
+        if hasattr(val, "value"):
+            val = val.value
+        if isinstance(val, str):
+            if val in ("PASSED", "done", "accepted", "ok", True):
+                return "done"
+            elif val in ("FAILED", "failed", "rejected", "blocked", False):
+                return "failed"
+            elif val in ("SKIPPED", "skipped"):
+                return "skipped"
+    if hasattr(result, "verdict"):
+        val = result.verdict
+        if hasattr(val, "value"):
+            val = val.value
+        if isinstance(val, str):
+            if val in ("PASS", "done", "accepted"):
+                return "done"
+            elif val in ("REWORK_TO_CODER", "RETURN_TO_ARCHITECT", "failed", "rejected"):
+                return "failed"
+    if hasattr(result, "domain_status"):
+        val = result.domain_status
+        if isinstance(val, str):
+            if val in ("accepted", "done"):
+                return "done"
+            elif val in ("failed", "rejected", "blocked"):
+                return "failed"
+    if isinstance(result, dict):
+        accepted = result.get("accepted")
+        if accepted is False:
+            return "failed"
+        status = result.get("status")
+        if isinstance(status, str):
+            if status in ("done", "accepted", "ok"):
+                return "done"
+            elif status in ("failed", "rejected", "blocked"):
+                return "failed"
+    return "done"
+
+
 def stage(stage_key: str, llm: bool = False):
     """Decorator to instrument a pipeline stage."""
     def decorator(fn):
@@ -65,8 +112,30 @@ def stage(stage_key: str, llm: bool = False):
                 wave_id = "unknown"
                 attempt_number = 1
 
-            loop_round = 1
             with get_db() as db:
+                # Ищем существующий pending StageRun для этого (packet_id, stage_key)
+                existing_pending = db.query(StageRun).filter_by(
+                    packet_id=packet_id, stage_key=stage_key, status="pending"
+                ).order_by(StageRun.created_at.desc()).first()
+
+                if existing_pending:
+                    # Recovery создал pending запись — обновляем до running
+                    existing_pending.status = "running"
+                    existing_pending.started_at = datetime.utcnow()
+                    existing_pending.executor_id = args_dict.get("executor_id") or kwargs.get("executor_id")
+                    existing_pending.worker_id = args_dict.get("worker_id") or kwargs.get("worker_id")
+                    existing_pending.model = args_dict.get("model") or kwargs.get("model")
+                    trace_id = args_dict.get("trace_id") or kwargs.get("trace_id")
+                    if trace_id:
+                        existing_pending.trace_id = trace_id
+                    prompt = args_dict.get("prompt") or kwargs.get("prompt")
+                    if prompt:
+                        existing_pending.prompt_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+                    db.commit()
+                    db.refresh(existing_pending)
+                    return existing_pending
+
+                loop_round = 1
                 prev_runs = db.query(StageRun).filter_by(
                     packet_id=packet_id, stage_key=stage_key
                 ).all()
@@ -105,7 +174,8 @@ def stage(stage_key: str, llm: bool = False):
             with get_db() as db:
                 srun = db.query(StageRun).filter_by(id=srun_id).first()
                 if srun:
-                    srun.status = "done"
+                    # Determine actual status from result, not just "done"
+                    srun.status = _infer_stage_status(result)
                     srun.finished_at = finished
                     if srun.started_at:
                         srun.duration_ms = int((finished - srun.started_at).total_seconds() * 1000)
