@@ -326,6 +326,7 @@ class ExecutionResult(BaseModel):
     tokens_in: int | None = None
     tokens_out: int | None = None
     cost_usd: float | None = None
+    evidence: dict = {}
 
 
 class PacketExecutionAdapter:
@@ -471,17 +472,16 @@ class PacketExecutionAdapter:
                     events=self._obs_events if not getattr(self, "_obs_disabled", True) else None,
                 )
 
-            # ── Rerun stage branch ─────────────────────────────────────
-            rerun_stage_key = _pkt_spec.get("rerun_stage")
-            if rerun_stage_key in ("verifier", "reviewer"):
-                _log.info("rerun_stage_branch", packet_id=packet_id, stage=rerun_stage_key)
-                result = await self._rerun_stage(rerun_stage_key, pkt_contract, packet_id,
-                                                  run_number, run_id, evidence_dir, start)
-                return self._persist_run("rejected" if not result.accepted else "accepted",
-                    run_id, executor, {}, None, None, None,
-                    int((time.time()-start)*1000), "", packet_id, start,
-                    commit_sha="", wt_path=None, run_dir=None, changed_files=None)
-            # ── end rerun branch ───────────────────────────────────────
+            # ── Rerun stage branch (one-shot, chain verifier→reviewer) ──
+            from grace_control.services.packet_control_service import consume_rerun_stage
+            rerun_marker = consume_rerun_stage(packet_id, _pkt_spec.get("rerun_stage", ""), run_number)
+            if rerun_marker:
+                _log.info("rerun_stage_branch", packet_id=packet_id, stage=rerun_marker, attempt=run_number)
+                er = await self._rerun_stage(rerun_marker, pkt_contract, packet_id,
+                                              run_number, run_id, evidence_dir, start, is_rerun=True)
+                self._persist_rerun_result(run_id, er, start, packet_id)
+                return er
+            # ── end rerun branch ─────────────────────────────────────────
 
             result = await self._call_executor(packet_path, pkt_contract, run_number, base_ref, base_sha, executor, evidence_dir)
             _log.debug("executor_run_completed", packet_id=packet_id, ok=result.ok, errors=result.errors[:2])
@@ -1666,82 +1666,81 @@ class PacketExecutionAdapter:
 
     async def _rerun_stage(self, stage_key: str, pkt_contract, packet_id: str,
                             run_number: int, run_id: str, evidence_dir: Path,
-                            start: float) -> ExecutionResult:
-        """Run a single verifier/reviewer stage for rerun without full execution."""
+                            start: float, is_rerun: bool = False) -> ExecutionResult:
+        """Run verifier/reviewer with previous terminal run context. Chain verifier→reviewer."""
         _log.info("rerun_stage_exec", packet_id=packet_id, stage=stage_key)
         from grace_control.core.acceptance_pipeline import AcceptanceReport
-        from grace_control.core.evidence_verifier import EvidenceVerifierReport, EvidenceVerifierVerdict
+        from grace_control.core.evidence_verifier import (
+            EvidenceVerifierReport, EvidenceVerifierVerdict, run_evidence_verifier,
+        )
+        from grace_control.core.reviewer_gate import run_reviewer_gate
 
-        last_acceptance = AcceptanceReport(packet_id=packet_id)
-        last_verifier_report: EvidenceVerifierReport | None = None
-        wt_path = self.worktree_root
-        run_dir = self.state_root / "packets" / packet_id
+        # D: load previous terminal run context
+        prev_run_data = self._load_prev_run_context(packet_id, run_id)
 
-        try:
-            with get_db() as db:
-                # Берём предыдущий завершённый run (не текущий пустой)
-                from grace_control.db.schema import PacketRun as PR, StageRun as SR
-                prev_run = db.query(PR).filter(
-                    PR.packet_id == packet_id,
-                    PR.status.in_(["accepted", "rejected", "failed"]),
-                    PR.id != run_id,
-                ).order_by(PR.run_number.desc()).first()
+        if not prev_run_data:
+            return ExecutionResult(
+                accepted=False, domain_status="failed",
+                reason="RERUN_CONTEXT_MISSING: no previous terminal run found",
+                duration_ms=int((time.time() - start) * 1000),
+                evidence={"rerun_error": "RERUN_CONTEXT_MISSING", "detail": "no previous terminal run"},
+            )
 
-                if prev_run and prev_run.result_json:
-                    rj = prev_run.result_json
-                    acc = rj.get("acceptance_report") or {}
-                    last_acceptance = AcceptanceReport(
-                        packet_id=packet_id,
-                        final_verdict=acc.get("final_verdict", "rework_required"),
-                        profile=acc.get("profile", "NORMAL"),
-                        stages=acc.get("stages", []),
-                        summary=acc.get("summary", ""),
-                    )
-                    evr_data = rj.get("evidence_verifier_report") or {}
-                    if evr_data and isinstance(evr_data, dict):
-                        v = evr_data.get("verdict", "REWORK_TO_CODER")
-                        try:
-                            v_enum = EvidenceVerifierVerdict(v)
-                        except ValueError:
-                            v_enum = EvidenceVerifierVerdict.REWORK_TO_CODER
-                        last_verifier_report = EvidenceVerifierReport(
-                            verdict=v_enum,
-                            summary=evr_data.get("summary", ""),
-                            missing_evidence=evr_data.get("missing_evidence", []),
-                            failed_checks=evr_data.get("failed_checks", []),
-                            skipped=evr_data.get("skipped", False),
-                        )
+        last_acceptance = prev_run_data["acceptance_report"]
+        last_verifier_report = prev_run_data["verifier_report"]
+        wt_path = prev_run_data["worktree_path"]
+        run_dir = prev_run_data["run_dir"]
 
-                    # worktree path из evidence_path предыдущего run
-                    if prev_run.evidence_path:
-                        prev_ev = Path(prev_run.evidence_path)
-                        # Ищем worktree: parent of evidence_dir = packets/{id}
-                        wt_candidate = prev_ev.parent.parent / "worktree" if prev_ev.parent.parent else self.worktree_root
-                        if wt_candidate.exists():
-                            wt_path = wt_candidate
-                        run_dir = prev_ev
-        except Exception as e:
-            _log.warn("rerun_load_prev_failed", packet_id=packet_id, error=str(e)[:200])
+        if not last_acceptance.packet_id:
+            return ExecutionResult(
+                accepted=False, domain_status="failed",
+                reason="RERUN_CONTEXT_MISSING: no acceptance report available",
+                duration_ms=int((time.time() - start) * 1000),
+                evidence={"rerun_error": "RERUN_CONTEXT_MISSING", "detail": "acceptance report"},
+            )
 
         try:
             if stage_key == "verifier":
+                # C: verifier rerun
                 evr = await run_evidence_verifier(
                     packet=pkt_contract, acceptance_report=last_acceptance,
                     worktree_path=wt_path, run_dir=run_dir,
                     changed_files=[], artifacts=[],
                 )
-                accepted = evr.verdict.value == "PASS"
+                if evr.verdict.value != "PASS":
+                    _log.info("rerun_verifier_failed", packet_id=packet_id, verdict=evr.verdict.value)
+                    return ExecutionResult(
+                        accepted=False, domain_status="rejected",
+                        reason=evr.summary or "verifier rerun rejected",
+                        duration_ms=int((time.time() - start) * 1000),
+                        evidence={"verifier_verdict": evr.verdict.value, "summary": evr.summary},
+                    )
+                # Verifier PASS → chain to reviewer
+                _log.info("rerun_verifier_pass_chain_reviewer", packet_id=packet_id)
+                rvr = await run_reviewer_gate(
+                    packet=pkt_contract, acceptance_report=last_acceptance,
+                    evidence_verifier_report=evr, worktree_path=wt_path,
+                    run_dir=run_dir, changed_files=[], artifacts=[],
+                )
+                accepted = rvr.verdict.value == "PASS"
                 return ExecutionResult(
                     accepted=accepted, domain_status="accepted" if accepted else "rejected",
-                    reason=evr.summary,
-                    evidence={"verifier_verdict": evr.verdict.value, "summary": evr.summary},
+                    reason=rvr.summary or ("reviewer rerun accepted" if accepted else "reviewer rerun rejected"),
                     duration_ms=int((time.time() - start) * 1000),
+                    evidence={
+                        "verifier_verdict": evr.verdict.value, "reviewer_verdict": rvr.verdict.value,
+                        "verifier_summary": evr.summary, "reviewer_summary": rvr.summary,
+                    },
                 )
+
             elif stage_key == "reviewer":
-                if last_verifier_report is None:
-                    last_verifier_report = EvidenceVerifierReport(
-                        verdict=EvidenceVerifierVerdict.REWORK_TO_CODER,
-                        summary="verifier report not found",
+                # Reviewer rerun: requires existing verifier PASS
+                if not last_verifier_report or last_verifier_report.verdict.value != "PASS":
+                    return ExecutionResult(
+                        accepted=False, domain_status="rejected",
+                        reason="RERUN_VERIFIER_CONTEXT_MISSING: previous verifier verdict not PASS",
+                        duration_ms=int((time.time() - start) * 1000),
+                        evidence={"rerun_error": "RERUN_VERIFIER_CONTEXT_MISSING"},
                     )
                 rvr = await run_reviewer_gate(
                     packet=pkt_contract, acceptance_report=last_acceptance,
@@ -1752,20 +1751,109 @@ class PacketExecutionAdapter:
                 accepted = rvr.verdict.value == "PASS"
                 return ExecutionResult(
                     accepted=accepted, domain_status="accepted" if accepted else "rejected",
-                    reason=rvr.summary,
-                    evidence={"reviewer_verdict": rvr.verdict.value, "summary": rvr.summary},
+                    reason=rvr.summary or ("reviewer rerun accepted" if accepted else "reviewer rerun rejected"),
                     duration_ms=int((time.time() - start) * 1000),
+                    evidence={"reviewer_verdict": rvr.verdict.value, "summary": rvr.summary},
                 )
         except Exception as e:
             _log.error("rerun_stage_failed", packet_id=packet_id, stage=stage_key, error=str(e)[:200])
             return ExecutionResult(
                 accepted=False, domain_status="failed", reason=str(e)[:500],
-                evidence={}, duration_ms=int((time.time() - start) * 1000),
+                duration_ms=int((time.time() - start) * 1000),
+                evidence={"error": str(e)[:500]},
             )
         return ExecutionResult(
-            accepted=False, domain_status="failed", reason="unknown stage",
-            evidence={}, duration_ms=int((time.time() - start) * 1000),
+            accepted=False, domain_status="failed", reason="unknown rerun stage",
+            duration_ms=int((time.time() - start) * 1000),
+            evidence={},
         )
+
+    def _load_prev_run_context(self, packet_id: str, current_run_id: str) -> dict | None:
+        """Load context from previous terminal PacketRun. Returns dict or None."""
+        from grace_control.db.schema import PacketRun as PR
+        from grace_control.core.acceptance_pipeline import AcceptanceReport
+        from grace_control.core.evidence_verifier import (
+            EvidenceVerifierReport, EvidenceVerifierVerdict,
+        )
+
+        with get_db() as db:
+            prev_run = db.query(PR).filter(
+                PR.packet_id == packet_id, PR.id != current_run_id,
+                PR.status.in_(["accepted", "rejected", "failed", "blocked"]),
+            ).order_by(PR.run_number.desc()).first()
+
+            if not prev_run:
+                return None
+
+            rj = prev_run.result_json or {}
+
+            # Load acceptance report
+            acc = rj.get("acceptance_report") or {}
+            last_acceptance = AcceptanceReport(
+                packet_id=packet_id,
+                final_verdict=acc.get("final_verdict", "rework_required"),
+                profile=acc.get("profile", "NORMAL"),
+                stages=acc.get("stages", []),
+                summary=acc.get("summary", ""),
+            )
+
+            # Load verifier report
+            last_verifier_report = None
+            evr_data = rj.get("evidence_verifier_report") or {}
+            if isinstance(evr_data, dict) and evr_data.get("verdict"):
+                try:
+                    v = EvidenceVerifierVerdict(evr_data["verdict"])
+                    last_verifier_report = EvidenceVerifierReport(
+                        verdict=v, summary=evr_data.get("summary", ""),
+                        missing_evidence=evr_data.get("missing_evidence", []),
+                        failed_checks=evr_data.get("failed_checks", []),
+                    )
+                except (ValueError, TypeError):
+                    pass
+
+            # Worktree from persisted result
+            legacy = rj.get("legacy_result") or {}
+            wt_path_str = ""
+            if isinstance(legacy, dict):
+                wt_path_str = legacy.get("worktree_path", "")
+            wt_path = Path(wt_path_str) if wt_path_str else self.worktree_root
+
+            # Run dir from evidence_path
+            run_dir = Path(prev_run.evidence_path) if prev_run.evidence_path else self.state_root / "packets" / packet_id
+
+            return {
+                "acceptance_report": last_acceptance,
+                "verifier_report": last_verifier_report,
+                "worktree_path": wt_path,
+                "run_dir": run_dir,
+            }
+
+    def _persist_rerun_result(self, run_id: str, er: ExecutionResult, start: float, packet_id: str) -> None:
+        """Persist rerun result to PacketRun without full _persist_run dependencies."""
+        from grace_control.core.event_recorder import record_event
+        import json as _json
+
+        with get_db() as db:
+            existing = db.query(PacketRun).filter_by(id=run_id).first()
+            if not existing:
+                _log.warn("rerun_persist_no_run", run_id=run_id)
+                return
+            status = "accepted" if er.accepted else ("blocked" if er.domain_status == "blocked" else "rejected")
+            existing.status = status
+            existing.finished_at = datetime.utcnow()
+            existing.duration_ms = int((time.time() - start) * 1000)
+            existing.result_json = {
+                "legacy_result": {"accepted": er.accepted, "domain_status": er.domain_status,
+                                  "reason": er.reason or "", "worktree_path": ""},
+                "acceptance_report": {"final_verdict": "accepted" if er.accepted else "rejected",
+                                      "summary": er.reason or ""},
+                "rerun_evidence": dict(er.evidence or {}),
+            }
+            db.commit()
+        record_event("rerun_completed", "packet", packet_id, {
+            "run_id": run_id, "status": status, "reason": er.reason or "",
+        })
+        _log.info("rerun_persisted", run_id=run_id, status=status)
 
     def _build_dev_replay_metadata(
         self, packet_id: str, run_id: str, run_number: int,

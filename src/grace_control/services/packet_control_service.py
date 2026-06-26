@@ -146,6 +146,30 @@ def delete_packet(packet_id: str, confirm: str, actor: str | None = None) -> dic
     return {"ok": True, "packet_id": packet_id}
 
 
+def consume_rerun_stage(packet_id: str, expected_stage: str, expected_attempt: int) -> str | None:
+    """Atomically consume rerun_stage marker. Returns stage_key or None."""
+    from grace_control.core.event_recorder import record_event
+
+    with get_db() as db:
+        pkt = db.query(Packet).filter_by(id=packet_id).first()
+        if not pkt:
+            return None
+        spec = dict(pkt.spec_json or {})
+        marker = spec.pop("rerun_stage", None)
+        if marker != expected_stage:
+            if marker:
+                spec["rerun_stage"] = marker  # restore
+            return None
+        if pkt.attempt_count != expected_attempt:
+            return None
+        pkt.spec_json = spec
+        record_event("rerun_marker_consumed", "packet", packet_id, {
+            "stage_key": expected_stage, "attempt": expected_attempt,
+        })
+        db.commit()
+        return marker
+
+
 def rerun_stage(packet_id: str, stage_key: str, actor: str | None = None) -> dict:
     """Re-run verifier/reviewer. Creates pending StageRun + stores dispatch marker."""
     from grace_control.core.stage_instrumentation import create_for_return
@@ -165,22 +189,27 @@ def rerun_stage(packet_id: str, stage_key: str, actor: str | None = None) -> dic
         if pkt:
             sm = PacketStateMachine()
             current = PacketStateMachine.normalize_state(pkt.state)
-            if current in (PacketState.RUNNING, PacketState.READY,
-                           PacketState.BLOCKED_RECOVERABLE, PacketState.REJECTED,
-                           PacketState.ACCEPTED, PacketState.DRAFT):
+            allowed = (PacketState.RUNNING, PacketState.READY,
+                       PacketState.BLOCKED_RECOVERABLE, PacketState.REJECTED,
+                       PacketState.ACCEPTED, PacketState.DRAFT)
+            if current in allowed and current != PacketState.READY:
                 try:
                     sm.transition(current, PacketState.READY)
                     pkt.state = PacketState.READY.value
-                    pkt.attempt_count = (pkt.attempt_count or 0) + 1
-                    spec = dict(pkt.spec_json or {})
-                    spec["rerun_stage"] = stage_key
-                    pkt.spec_json = spec
-                    record_event("rerun_dispatched", "packet", packet_id, {
-                        "stage_key": stage_key, "actor": actor,
-                    })
-                    db.commit()
                 except Exception:
                     pass
+            elif current == PacketState.READY:
+                pass  # already READY
+            else:
+                _log.warn("rerun_skip_state", packet_id=packet_id, state=pkt.state)
+            pkt.attempt_count = (pkt.attempt_count or 0) + 1
+            spec = dict(pkt.spec_json or {})
+            spec["rerun_stage"] = stage_key
+            pkt.spec_json = spec
+            record_event("rerun_dispatched", "packet", packet_id, {
+                "stage_key": stage_key, "actor": actor,
+            })
+            db.commit()
 
     _log.info("stage_rerun", packet_id=packet_id, stage_key=stage_key, actor=actor)
     return {"ok": True, "packet_id": packet_id, "stage_key": stage_key}

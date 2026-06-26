@@ -14,6 +14,16 @@ from grace_control.config.model_pricing import compute_cost
 from grace_control.api.ws_broadcast import broadcast_event
 
 
+_PLANNING_PREFIX = "plan_"
+
+
+def _compute_run_id(packet_id: str, attempt_number: int) -> str | None:
+    """Детерминированный run_id для packet stages, None для planning stages."""
+    if packet_id.startswith(_PLANNING_PREFIX) or packet_id == "unknown":
+        return None
+    return f"{packet_id}-R{attempt_number:02d}"
+
+
 def _infer_stage_status(result) -> str:
     """Определяет реальный статус стадии из результата, а не только из исключения.
     T0/T1/T2/verifier/reviewer возвращают FAILED-объекты без исключения."""
@@ -125,7 +135,7 @@ def stage(stage_key: str, llm: bool = False):
                     existing_pending.executor_id = args_dict.get("executor_id") or kwargs.get("executor_id")
                     existing_pending.worker_id = args_dict.get("worker_id") or kwargs.get("worker_id")
                     existing_pending.model = args_dict.get("model") or kwargs.get("model")
-                    existing_pending.run_id = args_dict.get("run_id") or kwargs.get("run_id")
+                    existing_pending.run_id = _compute_run_id(packet_id, attempt_number)
                     trace_id = args_dict.get("trace_id") or kwargs.get("trace_id")
                     if trace_id:
                         existing_pending.trace_id = trace_id
@@ -157,7 +167,7 @@ def stage(stage_key: str, llm: bool = False):
                 worker_id=args_dict.get("worker_id") or kwargs.get("worker_id"),
                 model=args_dict.get("model") or kwargs.get("model"),
                 trace_id=args_dict.get("trace_id") or kwargs.get("trace_id"),
-                run_id=args_dict.get("run_id") or kwargs.get("run_id"),
+                run_id=_compute_run_id(packet_id, attempt_number),
             )
             
             prompt = args_dict.get("prompt") or kwargs.get("prompt")
