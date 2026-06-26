@@ -373,7 +373,7 @@ class PacketExecutionAdapter:
         if self._obs_trace and self._obs_trace.trace_id:
             with get_db() as db:
                 active_srun = db.query(StageRun).filter_by(
-                    packet_id=packet_id, status="running"
+                    packet_id=packet_id, run_id=run_id, status="running"
                 ).order_by(StageRun.started_at.desc()).first()
                 if active_srun:
                     active_srun.trace_id = self._obs_trace.trace_id
@@ -488,7 +488,7 @@ class PacketExecutionAdapter:
                 _log.info("rerun_stage_branch", packet_id=packet_id, stage=rerun_marker, attempt=run_number)
                 er = await self._rerun_stage(rerun_marker, pkt_contract, packet_id,
                                               run_number, run_id, evidence_dir, start, is_rerun=True)
-                self._persist_rerun_result(run_id, er, start, packet_id)
+                self._persist_rerun_result(run_id, er, start, packet_id, evidence_dir)
                 return er
             # ── end rerun branch ─────────────────────────────────────────
 
@@ -1708,6 +1708,26 @@ class PacketExecutionAdapter:
                 evidence={"rerun_error": "RERUN_CONTEXT_MISSING", "detail": "acceptance report"},
             )
 
+        # Carry forward the acceptance report in evidence so _persist_rerun_result
+        # stores the full canonical report (stages, profile, etc.), not a synthetic one.
+        _original_acc_dict = None
+        try:
+            _rj = prev_run_data.get("_raw_result_json", {})
+            if isinstance(_rj, dict):
+                _original_acc_dict = _rj.get("acceptance_report") or {}
+            if not _original_acc_dict:
+                _original_acc_dict = {
+                    "final_verdict": last_acceptance.final_verdict.value
+                        if hasattr(last_acceptance.final_verdict, "value") else last_acceptance.final_verdict,
+                    "profile": last_acceptance.profile,
+                    "stages": [{"name": s.name.value if hasattr(s.name, "value") else s.name,
+                                 "status": s.status.value if hasattr(s.status, "value") else s.status}
+                                for s in (last_acceptance.stages or [])],
+                    "summary": last_acceptance.summary or "",
+                }
+        except Exception:
+            _original_acc_dict = None
+
         try:
             if stage_key == "verifier":
                 evr = await run_evidence_verifier(
@@ -1717,11 +1737,14 @@ class PacketExecutionAdapter:
                 )
                 if evr.verdict.value != "PASS":
                     _log.info("rerun_verifier_failed", packet_id=packet_id, verdict=evr.verdict.value)
+                    _ev = {"verifier_verdict": evr.verdict.value, "summary": evr.summary}
+                    if _original_acc_dict:
+                        _ev["acceptance_report"] = _original_acc_dict
                     return ExecutionResult(
                         accepted=False, domain_status="rejected",
                         reason=evr.summary or "verifier rerun rejected",
                         duration_ms=int((time.time() - start) * 1000),
-                        evidence={"verifier_verdict": evr.verdict.value, "summary": evr.summary},
+                        evidence=_ev,
                         worktree_path=str(prev_run_data["worktree_path"]),
                         branch_name=prev_run_data.get("branch_name", ""),
                     )
@@ -1733,14 +1756,17 @@ class PacketExecutionAdapter:
                     run_dir=run_dir, changed_files=[], artifacts=[],
                 )
                 accepted = rvr.verdict.value == "PASS"
+                _ev = {
+                    "verifier_verdict": evr.verdict.value, "reviewer_verdict": rvr.verdict.value,
+                    "verifier_summary": evr.summary, "reviewer_summary": rvr.summary,
+                }
+                if _original_acc_dict:
+                    _ev["acceptance_report"] = _original_acc_dict
                 return ExecutionResult(
                     accepted=accepted, domain_status="accepted" if accepted else "rejected",
                     reason=rvr.summary or ("reviewer rerun accepted" if accepted else "reviewer rerun rejected"),
                     duration_ms=int((time.time() - start) * 1000),
-                    evidence={
-                        "verifier_verdict": evr.verdict.value, "reviewer_verdict": rvr.verdict.value,
-                        "verifier_summary": evr.summary, "reviewer_summary": rvr.summary,
-                    },
+                    evidence=_ev,
                     worktree_path=str(prev_run_data["worktree_path"]),
                     branch_name=prev_run_data.get("branch_name", ""),
                 )
@@ -1748,11 +1774,14 @@ class PacketExecutionAdapter:
             elif stage_key == "reviewer":
                 # Reviewer rerun: requires existing verifier PASS
                 if not last_verifier_report or last_verifier_report.verdict.value != "PASS":
+                    _ev = {"rerun_error": "RERUN_VERIFIER_CONTEXT_MISSING"}
+                    if _original_acc_dict:
+                        _ev["acceptance_report"] = _original_acc_dict
                     return ExecutionResult(
                         accepted=False, domain_status="rejected",
                         reason="RERUN_VERIFIER_CONTEXT_MISSING: previous verifier verdict not PASS",
                         duration_ms=int((time.time() - start) * 1000),
-                        evidence={"rerun_error": "RERUN_VERIFIER_CONTEXT_MISSING"},
+                        evidence=_ev,
                     )
                 rvr = await run_reviewer_gate(
                     packet=pkt_contract, acceptance_report=last_acceptance,
@@ -1761,11 +1790,14 @@ class PacketExecutionAdapter:
                     changed_files=[], artifacts=[],
                 )
                 accepted = rvr.verdict.value == "PASS"
+                _ev = {"reviewer_verdict": rvr.verdict.value, "summary": rvr.summary}
+                if _original_acc_dict:
+                    _ev["acceptance_report"] = _original_acc_dict
                 return ExecutionResult(
                     accepted=accepted, domain_status="accepted" if accepted else "rejected",
                     reason=rvr.summary or ("reviewer rerun accepted" if accepted else "reviewer rerun rejected"),
                     duration_ms=int((time.time() - start) * 1000),
-                    evidence={"reviewer_verdict": rvr.verdict.value, "summary": rvr.summary},
+                    evidence=_ev,
                     worktree_path=str(prev_run_data["worktree_path"]),
                     branch_name=prev_run_data.get("branch_name", ""),
                 )
@@ -1852,9 +1884,11 @@ class PacketExecutionAdapter:
                 "run_dir": run_dir,
                 "branch_name": branch_name,
                 "commit_sha": legacy.get("commit_sha", "") if isinstance(legacy, dict) else "",
+                "_raw_result_json": rj,
             }
 
-    def _persist_rerun_result(self, run_id: str, er: ExecutionResult, start: float, packet_id: str) -> None:
+    def _persist_rerun_result(self, run_id: str, er: ExecutionResult, start: float,
+                               packet_id: str, evidence_dir: Path | None = None) -> None:
         """Persist rerun result to PacketRun with canonical report fields."""
         from grace_control.core.event_recorder import record_event
         import json as _json
@@ -1868,6 +1902,9 @@ class PacketExecutionAdapter:
             existing.status = status
             existing.finished_at = datetime.utcnow()
             existing.duration_ms = int((time.time() - start) * 1000)
+            # Set evidence_path for re-rerun context lookup
+            if evidence_dir:
+                existing.evidence_path = str(evidence_dir)
 
             ev = dict(er.evidence or {})
             result_json = {"legacy_result": {
@@ -1886,10 +1923,15 @@ class PacketExecutionAdapter:
                     "verdict": ev["reviewer_verdict"],
                     "summary": ev.get("reviewer_summary", ev.get("summary", "")),
                 }
-            result_json["acceptance_report"] = {
-                "final_verdict": "accepted" if er.accepted else "rejected",
-                "summary": er.reason or "",
-            }
+            # Full canonical acceptance report from previous run, if available
+            original_acc = ev.get("acceptance_report")
+            if isinstance(original_acc, dict) and original_acc.get("final_verdict"):
+                result_json["acceptance_report"] = original_acc
+            else:
+                result_json["acceptance_report"] = {
+                    "final_verdict": "accepted" if er.accepted else "rejected",
+                    "summary": er.reason or "",
+                }
             existing.result_json = result_json
             db.commit()
         record_event("rerun_completed", "packet", packet_id, {
