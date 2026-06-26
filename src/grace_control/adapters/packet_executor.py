@@ -488,6 +488,7 @@ class PacketExecutionAdapter:
                 _log.info("rerun_stage_branch", packet_id=packet_id, stage=rerun_marker, attempt=run_number)
                 er = await self._rerun_stage(rerun_marker, pkt_contract, packet_id,
                                               run_number, run_id, evidence_dir, start, is_rerun=True)
+                evidence_dir.mkdir(parents=True, exist_ok=True)
                 self._persist_rerun_result(run_id, er, start, packet_id, evidence_dir)
                 return er
             # ── end rerun branch ─────────────────────────────────────────
@@ -1904,6 +1905,7 @@ class PacketExecutionAdapter:
             existing.duration_ms = int((time.time() - start) * 1000)
             # Set evidence_path for re-rerun context lookup
             if evidence_dir:
+                evidence_dir.mkdir(parents=True, exist_ok=True)
                 existing.evidence_path = str(evidence_dir)
 
             ev = dict(er.evidence or {})

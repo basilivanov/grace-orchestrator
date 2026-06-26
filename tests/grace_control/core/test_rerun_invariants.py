@@ -357,17 +357,20 @@ class TestIntegration:
         assert er.worktree_path == "/tmp/wt"
         assert er.branch_name == "agent/test"
 
-    def test_re_rerun_chain(self):
+    def test_re_rerun_chain(self, tmp_path):
         """Первый rerun persist → следующий rerun load_prev_run_context находит контекст."""
         from grace_control.adapters.packet_executor import PacketExecutionAdapter, ExecutionResult
         from pathlib import Path
 
+        evidence_dir = tmp_path / "packets" / "pkt_chain1" / "runs" / "R02"
+        assert not evidence_dir.exists()
+
         _pkt("pkt_chain1", attempt=2)
         # Initial run with full context
         _run("pkt_chain1", run_number=1, status="rejected",
-             evidence_path="/tmp",
+             evidence_path=str(evidence_dir),
              result_json={
-                 "legacy_result": {"worktree_path": "/tmp", "branch_name": "agent/initial"},
+                 "legacy_result": {"worktree_path": str(tmp_path), "branch_name": "agent/initial"},
                  "acceptance_report": {
                      "final_verdict": "rework_required", "profile": "NORMAL",
                      "stages": [{"name": "coder", "status": "failed"}],
@@ -380,13 +383,13 @@ class TestIntegration:
         _run("pkt_chain1", run_number=2, status="running")
 
         adapter = PacketExecutionAdapter.__new__(PacketExecutionAdapter)
-        adapter.state_root = Path("/tmp")
-        adapter.worktree_root = Path("/tmp")
+        adapter.state_root = tmp_path
+        adapter.worktree_root = tmp_path
 
         er = ExecutionResult(
             accepted=True, domain_status="accepted",
             reason="rerun ok", duration_ms=3000,
-            worktree_path="/tmp", branch_name="agent/rerun-fix",
+            worktree_path=str(tmp_path), branch_name="agent/rerun-fix",
             evidence={
                 "verifier_verdict": "PASS", "verifier_summary": "all fixed",
                 "reviewer_verdict": "PASS", "reviewer_summary": "safe",
@@ -397,13 +400,14 @@ class TestIntegration:
                 },
             },
         )
-        adapter._persist_rerun_result(rid2, er, 1000.0, "pkt_chain1", evidence_dir=Path("/tmp"))
+        adapter._persist_rerun_result(rid2, er, 1000.0, "pkt_chain1", evidence_dir=evidence_dir)
 
         # Verify run2 is persisted with evidence_path and full acceptance report
         with get_db() as db:
             r2 = db.query(PacketRun).filter_by(id=rid2).first()
             assert r2 is not None
-            assert r2.evidence_path == "/tmp"
+            assert r2.evidence_path == str(evidence_dir)
+            assert evidence_dir.exists()  # created by persist
             assert r2.status == "accepted"
             rj2 = r2.result_json or {}
             assert rj2["acceptance_report"]["final_verdict"] == "rework_required"
@@ -415,5 +419,5 @@ class TestIntegration:
         ctx = adapter._load_prev_run_context("pkt_chain1", rid3)
         assert ctx is not None
         assert ctx["acceptance_report"].summary == "fix it"
-        assert ctx["worktree_path"] == Path("/tmp")
-        assert ctx["run_dir"] == Path("/tmp")
+        assert ctx["worktree_path"] == tmp_path
+        assert ctx["run_dir"] == evidence_dir
