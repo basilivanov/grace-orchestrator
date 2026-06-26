@@ -49,7 +49,7 @@ from grace_control.runtime.runtime_diff_inspector import RuntimeDiffInspector, R
 from grace_control.runtime.runtime_scope_enforcer import RuntimeScopeEnforcer
 from grace_control.core.structured_logger import GraceLogger
 from grace_control.db import get_db
-from grace_control.db.schema import Packet, PacketRun
+from grace_control.db.schema import Packet, PacketRun, StageRun
 from grace_control.services.agent_commit_service import AgentCommitService
 from grace_control.services.rework_packet_service import create_rework_packet
 from grace_control.services.worktree_cleanup_service import WorktreeCleanupService
@@ -369,6 +369,15 @@ class PacketExecutionAdapter:
             run_id, packet_data, run_number = self._load_packet(packet_id, worker_id)
         executor = self._resolve_executor(packet_data); agent_commit_sha = ""
         self._init_observability(packet_data, run_id)
+        # Propagate trace_id to StageRun after _init_observability sets the runtime trace
+        if self._obs_trace and self._obs_trace.trace_id:
+            with get_db() as db:
+                active_srun = db.query(StageRun).filter_by(
+                    packet_id=packet_id, status="running"
+                ).order_by(StageRun.started_at.desc()).first()
+                if active_srun:
+                    active_srun.trace_id = self._obs_trace.trace_id
+                    db.commit()
         # Store effective target_repo_root for cleanup (honors feature spec override)
         pkt_spec = packet_data.get("spec_json") or {}
         if isinstance(pkt_spec, str):
@@ -1701,7 +1710,6 @@ class PacketExecutionAdapter:
 
         try:
             if stage_key == "verifier":
-                # C: verifier rerun
                 evr = await run_evidence_verifier(
                     packet=pkt_contract, acceptance_report=last_acceptance,
                     worktree_path=wt_path, run_dir=run_dir,
@@ -1714,8 +1722,10 @@ class PacketExecutionAdapter:
                         reason=evr.summary or "verifier rerun rejected",
                         duration_ms=int((time.time() - start) * 1000),
                         evidence={"verifier_verdict": evr.verdict.value, "summary": evr.summary},
+                        worktree_path=str(prev_run_data["worktree_path"]),
+                        branch_name=prev_run_data.get("branch_name", ""),
                     )
-                # Verifier PASS → chain to reviewer
+                # Verifier PASS -> chain to reviewer
                 _log.info("rerun_verifier_pass_chain_reviewer", packet_id=packet_id)
                 rvr = await run_reviewer_gate(
                     packet=pkt_contract, acceptance_report=last_acceptance,
@@ -1731,6 +1741,8 @@ class PacketExecutionAdapter:
                         "verifier_verdict": evr.verdict.value, "reviewer_verdict": rvr.verdict.value,
                         "verifier_summary": evr.summary, "reviewer_summary": rvr.summary,
                     },
+                    worktree_path=str(prev_run_data["worktree_path"]),
+                    branch_name=prev_run_data.get("branch_name", ""),
                 )
 
             elif stage_key == "reviewer":
@@ -1754,6 +1766,8 @@ class PacketExecutionAdapter:
                     reason=rvr.summary or ("reviewer rerun accepted" if accepted else "reviewer rerun rejected"),
                     duration_ms=int((time.time() - start) * 1000),
                     evidence={"reviewer_verdict": rvr.verdict.value, "summary": rvr.summary},
+                    worktree_path=str(prev_run_data["worktree_path"]),
+                    branch_name=prev_run_data.get("branch_name", ""),
                 )
         except Exception as e:
             _log.error("rerun_stage_failed", packet_id=packet_id, stage=stage_key, error=str(e)[:200])
@@ -1775,6 +1789,7 @@ class PacketExecutionAdapter:
         from grace_control.core.evidence_verifier import (
             EvidenceVerifierReport, EvidenceVerifierVerdict,
         )
+        import json as _json
 
         with get_db() as db:
             prev_run = db.query(PR).filter(
@@ -1789,6 +1804,8 @@ class PacketExecutionAdapter:
 
             # Load acceptance report
             acc = rj.get("acceptance_report") or {}
+            if not acc or not isinstance(acc, dict) or not acc.get("final_verdict"):
+                return None
             last_acceptance = AcceptanceReport(
                 packet_id=packet_id,
                 final_verdict=acc.get("final_verdict", "rework_required"),
@@ -1811,25 +1828,34 @@ class PacketExecutionAdapter:
                 except (ValueError, TypeError):
                     pass
 
-            # Worktree from persisted result
+            # Worktree from persisted result — must be real
             legacy = rj.get("legacy_result") or {}
             wt_path_str = ""
+            branch_name = ""
             if isinstance(legacy, dict):
                 wt_path_str = legacy.get("worktree_path", "")
-            wt_path = Path(wt_path_str) if wt_path_str else self.worktree_root
+                branch_name = legacy.get("branch_name", "")
+            wt_path = Path(wt_path_str) if wt_path_str else None
 
-            # Run dir from evidence_path
-            run_dir = Path(prev_run.evidence_path) if prev_run.evidence_path else self.state_root / "packets" / packet_id
+            # Если нет persisted worktree_path — контекст невалиден
+            if not wt_path or not wt_path.exists():
+                return None
+
+            run_dir = Path(prev_run.evidence_path) if prev_run.evidence_path else None
+            if not run_dir or not run_dir.exists():
+                return None
 
             return {
                 "acceptance_report": last_acceptance,
                 "verifier_report": last_verifier_report,
                 "worktree_path": wt_path,
                 "run_dir": run_dir,
+                "branch_name": branch_name,
+                "commit_sha": legacy.get("commit_sha", "") if isinstance(legacy, dict) else "",
             }
 
     def _persist_rerun_result(self, run_id: str, er: ExecutionResult, start: float, packet_id: str) -> None:
-        """Persist rerun result to PacketRun without full _persist_run dependencies."""
+        """Persist rerun result to PacketRun with canonical report fields."""
         from grace_control.core.event_recorder import record_event
         import json as _json
 
@@ -1842,13 +1868,29 @@ class PacketExecutionAdapter:
             existing.status = status
             existing.finished_at = datetime.utcnow()
             existing.duration_ms = int((time.time() - start) * 1000)
-            existing.result_json = {
-                "legacy_result": {"accepted": er.accepted, "domain_status": er.domain_status,
-                                  "reason": er.reason or "", "worktree_path": ""},
-                "acceptance_report": {"final_verdict": "accepted" if er.accepted else "rejected",
-                                      "summary": er.reason or ""},
-                "rerun_evidence": dict(er.evidence or {}),
+
+            ev = dict(er.evidence or {})
+            result_json = {"legacy_result": {
+                "accepted": er.accepted, "domain_status": er.domain_status,
+                "reason": er.reason or "", "worktree_path": er.worktree_path or "",
+                "branch_name": getattr(er, "branch_name", "") or "",
+            }}
+            # Canonical report fields — сохраняем для повторного rerun
+            if ev.get("verifier_verdict"):
+                result_json["evidence_verifier_report"] = {
+                    "verdict": ev["verifier_verdict"],
+                    "summary": ev.get("verifier_summary", ev.get("summary", "")),
+                }
+            if ev.get("reviewer_verdict"):
+                result_json["reviewer_report"] = {
+                    "verdict": ev["reviewer_verdict"],
+                    "summary": ev.get("reviewer_summary", ev.get("summary", "")),
+                }
+            result_json["acceptance_report"] = {
+                "final_verdict": "accepted" if er.accepted else "rejected",
+                "summary": er.reason or "",
             }
+            existing.result_json = result_json
             db.commit()
         record_event("rerun_completed", "packet", packet_id, {
             "run_id": run_id, "status": status, "reason": er.reason or "",

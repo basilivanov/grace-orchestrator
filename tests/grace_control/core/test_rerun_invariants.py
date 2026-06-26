@@ -32,11 +32,12 @@ def _pkt(packet_id="pkt_x", state=PacketState.READY, attempt=1, spec=None):
         return p
 
 
-def _run(packet_id="pkt_x", run_number=1, status="rejected", result_json=None):
+def _run(packet_id="pkt_x", run_number=1, status="rejected", result_json=None, evidence_path=None):
     with get_db() as db:
         rid = f"{packet_id}-R{run_number:02d}"
         r = PacketRun(id=rid, packet_id=packet_id, run_number=run_number,
-                      worker_id="wkr_t", status=status, result_json=result_json or {})
+                      worker_id="wkr_t", status=status, result_json=result_json or {},
+                      evidence_path=evidence_path)
         db.add(r)
         db.commit()
         return r
@@ -179,13 +180,19 @@ class TestPrevRunContext:
         """Проверяет, что выбирается предыдущий terminal run, а не текущий."""
         from pathlib import Path
         _pkt("pkt_pr1", attempt=3)
-        rid1 = f"pkt_pr1-R01"
-        rid2 = f"pkt_pr1-R02"
         rid3 = f"pkt_pr1-R03"
         _run("pkt_pr1", run_number=1, status="rejected",
-             result_json={"acceptance_report": {"final_verdict": "rework_required", "stages": [], "summary": ""}})
+             evidence_path="/tmp",
+             result_json={
+                 "legacy_result": {"worktree_path": "/tmp", "branch_name": "test"},
+                 "acceptance_report": {"final_verdict": "rework_required", "stages": [], "summary": "bad"},
+             })
         _run("pkt_pr1", run_number=2, status="accepted",
-             result_json={"acceptance_report": {"final_verdict": "accepted", "stages": [], "summary": "ok"}})
+             evidence_path="/tmp",
+             result_json={
+                 "legacy_result": {"worktree_path": "/tmp", "branch_name": "test"},
+                 "acceptance_report": {"final_verdict": "accepted", "stages": [], "summary": "ok"},
+             })
         # Current empty run (run_number=3) should be ignored
         from grace_control.adapters.packet_executor import PacketExecutionAdapter
         adapter = PacketExecutionAdapter.__new__(PacketExecutionAdapter)
@@ -269,3 +276,83 @@ class TestTraceCorrelation:
         assert s1.trace_id == "trc_run1"
         assert s2.trace_id == "trc_run2"
         assert s1.trace_id != s2.trace_id
+
+
+# ── 8. Integration: real adapter persistence + worktree merge path ───────────
+
+class TestIntegration:
+    def test_persist_canonical_format(self):
+        """_persist_rerun_result сохраняет canonical reports для re-rerun."""
+        from grace_control.adapters.packet_executor import PacketExecutionAdapter, ExecutionResult
+        from pathlib import Path
+
+        _pkt("pkt_int1", attempt=2)
+        rid = "pkt_int1-R02"
+        _run("pkt_int1", run_number=2, status="running")
+
+        adapter = PacketExecutionAdapter.__new__(PacketExecutionAdapter)
+        er = ExecutionResult(
+            accepted=True, domain_status="accepted",
+            reason="rerun ok", duration_ms=3000,
+            worktree_path="/tmp/test_wt",
+            branch_name="agent/test-branch",
+            evidence={
+                "verifier_verdict": "PASS", "verifier_summary": "all good",
+                "reviewer_verdict": "PASS", "reviewer_summary": "safe",
+            },
+        )
+        adapter._persist_rerun_result(rid, er, 1000.0, "pkt_int1")
+
+        with get_db() as db:
+            r = db.query(PacketRun).filter_by(id=rid).first()
+            assert r is not None
+            assert r.status == "accepted"
+            rj = r.result_json or {}
+            assert "evidence_verifier_report" in rj
+            assert rj["evidence_verifier_report"]["verdict"] == "PASS"
+            assert "reviewer_report" in rj
+            assert rj["reviewer_report"]["verdict"] == "PASS"
+            lr = rj.get("legacy_result", {})
+            assert lr.get("worktree_path") == "/tmp/test_wt"
+            assert lr.get("branch_name") == "agent/test-branch"
+
+    def test_rerun_context_requires_worktree(self):
+        from grace_control.adapters.packet_executor import PacketExecutionAdapter
+        from pathlib import Path
+
+        _pkt("pkt_int2", attempt=2)
+        _run("pkt_int2", run_number=1, status="rejected",
+             result_json={
+                 "legacy_result": {"worktree_path": "", "branch_name": ""},
+                 "acceptance_report": {"final_verdict": "rework_required", "stages": [], "summary": ""},
+             })
+        adapter = PacketExecutionAdapter.__new__(PacketExecutionAdapter)
+        adapter.state_root = Path("/tmp")
+        adapter.worktree_root = Path("/nonexistent")
+        ctx = adapter._load_prev_run_context("pkt_int2", "pkt_int2-R02")
+        assert ctx is None
+
+    def test_rerun_context_missing_acceptance(self):
+        from grace_control.adapters.packet_executor import PacketExecutionAdapter
+        from pathlib import Path
+
+        _pkt("pkt_int3", attempt=2)
+        _run("pkt_int3", run_number=1, status="rejected",
+             result_json={
+                 "legacy_result": {"worktree_path": "/tmp", "branch_name": "test"},
+             })
+        adapter = PacketExecutionAdapter.__new__(PacketExecutionAdapter)
+        adapter.state_root = Path("/tmp")
+        adapter.worktree_root = Path("/nonexistent")
+        ctx = adapter._load_prev_run_context("pkt_int3", "pkt_int3-R02")
+        assert ctx is None
+
+    def test_execution_result_has_worktree_branch(self):
+        from grace_control.adapters.packet_executor import ExecutionResult
+        er = ExecutionResult(
+            accepted=True, domain_status="accepted",
+            reason="test", duration_ms=100,
+            worktree_path="/tmp/wt", branch_name="agent/test",
+        )
+        assert er.worktree_path == "/tmp/wt"
+        assert er.branch_name == "agent/test"
