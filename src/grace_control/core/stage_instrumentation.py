@@ -125,6 +125,7 @@ def stage(stage_key: str, llm: bool = False):
                     existing_pending.executor_id = args_dict.get("executor_id") or kwargs.get("executor_id")
                     existing_pending.worker_id = args_dict.get("worker_id") or kwargs.get("worker_id")
                     existing_pending.model = args_dict.get("model") or kwargs.get("model")
+                    existing_pending.run_id = args_dict.get("run_id") or kwargs.get("run_id")
                     trace_id = args_dict.get("trace_id") or kwargs.get("trace_id")
                     if trace_id:
                         existing_pending.trace_id = trace_id
@@ -156,6 +157,7 @@ def stage(stage_key: str, llm: bool = False):
                 worker_id=args_dict.get("worker_id") or kwargs.get("worker_id"),
                 model=args_dict.get("model") or kwargs.get("model"),
                 trace_id=args_dict.get("trace_id") or kwargs.get("trace_id"),
+                run_id=args_dict.get("run_id") or kwargs.get("run_id"),
             )
             
             prompt = args_dict.get("prompt") or kwargs.get("prompt")
