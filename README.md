@@ -52,11 +52,25 @@ mkdir -p "$GRACE_RUNTIME"
 git -C "$GRACE_PROJECT" status
 ```
 
-### 3. Настроить модели
+### 3. Настроить профили и доступ к провайдерам
 
 Supervisor читает секреты из `$GRACE_RUNTIME/.env`. Файл не нужно добавлять в Git.
 
-Текущая конфигурация использует CLI Proxy на `127.0.0.1:18317` для основного coder и reviewer, а DeepSeek API — как прямой резервный coder:
+Порядок агентов задаётся профилями в `src/grace_control/config/agent_profiles.yaml`. Для каждого профиля там настраиваются роль, backend, модель, reasoning effort, `priority`, окружение и флаг `disabled`. Внутри роли активные профили сортируются по `priority` от большего к меньшему; следующие recovery-попытки переходят к следующим профилям.
+
+Текущие основные профили:
+
+| Приоритет | Профиль | Роль и модель |
+|---:|---|---|
+| 400 | `architect-mini-swe` | architect, `openai/gpt-5.5`, `xhigh` |
+| 400 | `reviewer-mini-swe` | reviewer, `openai/gpt-5.6-sol`, `xhigh` |
+| 300 | `coder-mini-swe` | coder, `openai/gemini-3.6-flash-high` через CLI Proxy |
+| 200 | `coder-mini-swe-deepseek` | coder, `openai/deepseek-v4-flash` через DeepSeek API |
+| 100 | `coder-mini-swe-gpt55` | coder, `openai/gpt-5.5`, `high` |
+
+Для смены модели или порядка меняйте соответствующий профиль и его `priority`. Переменная `GRACE_CODER_EXECUTOR_LADDER` поддерживается только как явный временный override порядка профилей для конкретного запуска.
+
+Для текущих провайдеров достаточно передать доступ к CLI Proxy и DeepSeek API:
 
 ```dotenv
 # $GRACE_RUNTIME/.env
@@ -64,14 +78,6 @@ GRACE_MINI_SWE_OPENAI_BASE_URL=http://127.0.0.1:18317/v1
 GRACE_MINI_SWE_OPENAI_API_KEY=dummy
 DEEPSEEK_API_KEY=replace_with_your_key
 ```
-
-Модели по умолчанию:
-
-- coder: `openai/gemini-3.6-flash-high` через CLI Proxy;
-- резервный coder: `openai/deepseek-v4-flash` через DeepSeek API;
-- reviewer: `openai/gpt-5.6-sol`, reasoning effort `xhigh`.
-
-Имена моделей можно переопределить переменными `GRACE_MINI_SWE_CODER_MODEL`, `GRACE_MINI_SWE_DEEPSEEK_CODER_MODEL` и `GRACE_MINI_SWE_REVIEWER_MODEL`.
 
 ### 4. Запустить API и worker
 

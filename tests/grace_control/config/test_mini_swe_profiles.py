@@ -23,14 +23,16 @@
 #   - function: test_primary_coder_uses_flash_36_through_local_cli_proxy
 #   - function: test_deepseek_coder_uses_direct_provider_environment
 #   - function: test_role_selection_prefers_mini_swe_profiles
-#   - function: test_coder_selection_ladder_prefers_flash_then_deepseek_then_gpt55
+#   - function: test_coder_selection_uses_profile_priority_without_override
 #   - function: test_configured_coder_ladder_cycles_only_allowed_profiles
+#   - function: test_supervisor_does_not_define_default_coder_ladder
 #   - function: test_resolve_model_returns_mini_swe_executor_ids
 # END_MODULE_MAP
 
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
 from grace_control.config.agent_profiles import get_agent_profile, reset_cache
 from grace_control.core.executor_selector import resolve_model, select_executor
@@ -232,16 +234,17 @@ def test_role_selection_prefers_mini_swe_profiles():
 
 
 # START_FUNCTION_CONTRACT
-# name: test_coder_selection_ladder_prefers_flash_then_deepseek_then_gpt55
-# purpose: Verify the default coder ladder order for consecutive attempts.
-# inputs: None.
+# name: test_coder_selection_uses_profile_priority_without_override
+# purpose: Verify coder attempts follow descending profile priority by default.
+# inputs: monkeypatch — pytest environment fixture.
 # returns: None; asserts selected executor IDs.
-# side_effects: Resets the profile cache.
+# side_effects: Removes a test-local ladder override and resets the profile cache.
 # emitted_logs: None.
 # error_behavior: Fails when coder fallback order changes.
 # END_FUNCTION_CONTRACT
-def test_coder_selection_ladder_prefers_flash_then_deepseek_then_gpt55():
+def test_coder_selection_uses_profile_priority_without_override(monkeypatch):
     reset_cache()
+    monkeypatch.delenv("GRACE_CODER_EXECUTOR_LADDER", raising=False)
 
     assert select_executor("coder", attempt=1)["executor_id"] == "coder-mini-swe"
     assert select_executor("coder", attempt=2)["executor_id"] == "coder-mini-swe-deepseek"
@@ -268,6 +271,22 @@ def test_configured_coder_ladder_cycles_only_allowed_profiles(monkeypatch):
     assert select_executor("coder", attempt=2)["executor_id"] == "coder-mini-swe-deepseek"
     assert select_executor("coder", attempt=3)["executor_id"] == "coder-mini-swe"
     assert select_executor("coder", attempt=4)["executor_id"] == "coder-mini-swe-deepseek"
+
+
+# START_FUNCTION_CONTRACT
+# name: test_supervisor_does_not_define_default_coder_ladder
+# purpose: Verify supervisor startup does not bypass YAML profile priorities.
+# inputs: None.
+# returns: None; asserts the launch script has no implicit ladder default.
+# side_effects: Reads scripts/live_supervisor.sh.
+# emitted_logs: None.
+# error_behavior: Fails when supervisor reintroduces a coder ladder default.
+# END_FUNCTION_CONTRACT
+def test_supervisor_does_not_define_default_coder_ladder():
+    repository_root = Path(__file__).resolve().parents[3]
+    source = (repository_root / "scripts" / "live_supervisor.sh").read_text()
+
+    assert "GRACE_CODER_EXECUTOR_LADDER:-" not in source
 
 
 # START_FUNCTION_CONTRACT

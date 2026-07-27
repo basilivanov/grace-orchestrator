@@ -102,7 +102,10 @@ export GRACE_LOG_DEBUG="${GRACE_LOG_DEBUG:-0}"
 # make progress within this window.  The hard cap is an independent safety net.
 export GRACE_AGENT_TIMEOUT="${GRACE_AGENT_TIMEOUT:-600}"
 export GRACE_AGENT_MAX_TIMEOUT="${GRACE_AGENT_MAX_TIMEOUT:-3600}"
-export GRACE_CODER_EXECUTOR_LADDER="${GRACE_CODER_EXECUTOR_LADDER:-coder-mini-swe,coder-mini-swe-deepseek}"
+# Coder routing is defined by enabled profiles and their priorities in
+# agent_profiles.yaml.  An explicitly exported GRACE_CODER_EXECUTOR_LADDER
+# remains available as an emergency per-launch override; the supervisor must
+# not create one implicitly because that would bypass profile priorities.
 export GRACE_TARGET_DIR="$TARGET_DIR"
 export GRACE_SOURCE_DIR="$SOURCE_DIR"
 # Prefer the W-engine installed with this orchestrator source tree.  The
