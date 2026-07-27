@@ -68,6 +68,62 @@ def test_p0_1_merge_transitions_packet_to_merged(db):
         assert packet.state == PacketState.MERGED.value
 
 
+def test_merge_rework_cancels_failed_parent_as_superseded(db):
+    from grace_control.services.git_service import GitResult
+
+    with get_db() as session:
+        session.add(Packet(
+            id="p-parent-failed",
+            feature_id="F1",
+            wave_id="W01",
+            slug="p-parent-failed",
+            title="Original",
+            spec_json={},
+            state=PacketState.FAILED.value,
+            attempt_count=3,
+            max_attempts=3,
+            acceptance_profile=AcceptanceProfile.STRICT.value,
+        ))
+        session.add(Packet(
+            id="p-rework-accepted",
+            feature_id="F1",
+            wave_id="W01",
+            slug="p-rework-accepted",
+            title="Rework: Original",
+            spec_json={
+                "origin": "review_rework",
+                "parent_packet_id": "p-parent-failed",
+            },
+            state=PacketState.ACCEPTED.value,
+            attempt_count=1,
+            max_attempts=3,
+            acceptance_profile=AcceptanceProfile.STRICT.value,
+        ))
+        session.commit()
+
+    git = MagicMock()
+    git.validate_repo.return_value = MagicMock(is_git=True, is_clean=True, current_branch="main")
+    git.checkout.return_value = GitResult(True, "", "", 0)
+    git.fetch.return_value = GitResult(True, "", "", 0)
+    git.merge.return_value = GitResult(True, "", "", 0)
+    git.push.return_value = GitResult(True, "", "", 0)
+    git.current_sha.return_value = "1234567890abcdef"
+
+    result = asyncio.run(MergeService(git=git).merge_packet(
+        packet_id="p-rework-accepted",
+        target_repo_root="/tmp/repo",
+        branch_name="agent/p-rework-accepted-attempt-0001",
+        target_branch="main",
+    ))
+
+    assert result.success is True
+    with get_db() as session:
+        parent = session.query(Packet).filter_by(id="p-parent-failed").first()
+        child = session.query(Packet).filter_by(id="p-rework-accepted").first()
+        assert parent.state == PacketState.CANCELLED.value
+        assert child.state == PacketState.MERGED.value
+
+
 # ── P0#2: SQLite migration adds features.degraded_reason ──────────────────
 
 
@@ -374,7 +430,7 @@ def test_p1_6_t0_uses_worktree_only_files(tmp_path):
     from grace_control.core.acceptance_pipeline import AcceptancePipeline
     pipe = AcceptancePipeline(repo_root=project_root)
 
-    commands = pipe._build_t0_commands(
+    commands, _origins = pipe._build_t0_commands(
         packet=ExecutionPacketContract(
             packet_id="p1", title="t", allowed_write_scope=["src/"],
             frozen_scope=[], acceptance_profile=AcceptanceProfile.NORMAL,

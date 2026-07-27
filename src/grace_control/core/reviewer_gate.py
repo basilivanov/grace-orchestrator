@@ -105,6 +105,8 @@ MAX_ACCEPTANCE_STAGE_SUMMARY_CHARS = 500
 MAX_ACCEPTANCE_STAGES = 20
 MAX_SCOPE_VIOLATIONS = 10
 MAX_EVIDENCE_PATHS = 20
+MAX_CONTRACT_ITEMS = 30
+MAX_CONTRACT_ITEM_CHARS = 1200
 
 _SECRET_PATTERNS = [
     re.compile(r'\b(?:API_KEY|TOKEN|SECRET|PASSWORD|JWT_SECRET|SESSION_SECRET)\s*=\s*[^\s"\']+', re.IGNORECASE),
@@ -118,6 +120,22 @@ def _redact_secrets(text: str) -> str:
     for pat in _SECRET_PATTERNS:
         text = pat.sub("***REDACTED***", text)
     return text
+
+
+def _bounded_contract_items(value: Any) -> list[str]:
+    """Normalize reviewer contract fields without allowing prompt blow-up."""
+    if isinstance(value, str):
+        values = [value]
+    elif isinstance(value, (list, tuple)):
+        values = list(value)
+    else:
+        return []
+    result: list[str] = []
+    for item in values[:MAX_CONTRACT_ITEMS]:
+        text = _redact_secrets(str(item))[:MAX_CONTRACT_ITEM_CHARS]
+        if text:
+            result.append(text)
+    return result
 
 
 def _serialize_acceptance_report(report) -> dict | None:
@@ -313,6 +331,25 @@ async def run_reviewer_gate(
 
     prompt_parts: list[str] = []
     prompt_parts.append(f"Packet: {packet.packet_id} — {getattr(packet, 'title', '')}")
+    packet_metadata = getattr(packet, "metadata", {}) or {}
+    contract_context = {
+        "acceptance_criteria": _bounded_contract_items(
+            packet_metadata.get("acceptance_criteria", [])
+        ),
+        "coder_instructions": _bounded_contract_items(
+            packet_metadata.get("coder_instructions", [])
+        ),
+        "blocking_issues": _bounded_contract_items(
+            packet_metadata.get("blocking_issues", [])
+        ),
+        "rework_summary": _redact_secrets(
+            str(packet_metadata.get("rework_summary", ""))
+        )[:MAX_CONTRACT_ITEM_CHARS],
+    }
+    prompt_parts.append(
+        "Authoritative packet contract: "
+        + json.dumps(contract_context, ensure_ascii=False)
+    )
     prompt_parts.append(f"Evidence verifier verdict: {evidence_verifier_report.verdict.value}")
     prompt_parts.append(f"Evidence verifier summary: {evidence_verifier_report.summary}")
     prompt_parts.append(evidence_block)
@@ -329,7 +366,7 @@ async def run_reviewer_gate(
         from grace_control.core.executor_selector import resolve_model
         executor = resolve_model("reviewer")
         raw = await run_llm(full_prompt, role="reviewer", model=executor["model"],
-                            cli="reviewer-premium")
+                            cli=executor["executor_id"], cwd=worktree_path)
         return parse_reviewer_json(raw)
     except Exception as e:
         return skipped_reviewer_report(f"reviewer gate error: {e}")

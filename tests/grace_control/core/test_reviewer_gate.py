@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+from unittest.mock import Mock
 from pathlib import Path
 
 import pytest
@@ -176,9 +177,10 @@ class TestReviewerEvidenceBundle:
 
 
 class FakePacket:
-    def __init__(self, pid="pkt_test123", title="Test packet"):
+    def __init__(self, pid="pkt_test123", title="Test packet", metadata=None):
         self.packet_id = pid
         self.title = title
+        self.metadata = metadata or {}
 
 
 class FakeVerdict:
@@ -194,18 +196,27 @@ class FakeEvidenceVerifierReport:
 
 
 @pytest.mark.asyncio
-async def test_full_prompt_includes_packet_id_and_evidence_verifier(mocker):
+async def test_full_prompt_includes_packet_id_and_evidence_verifier(monkeypatch, db):
     """The final reviewer prompt must include packet id and evidence verifier summary."""
     from grace_control.core.reviewer_gate import run_reviewer_gate
 
     # Mock run_llm so we can capture the prompt
-    mock_run_llm = mocker.patch("grace_control.core.llm_runner.run_llm", return_value='{"verdict":"PASS"}')
-    mock_resolve = mocker.patch(
+    mock_run_llm = Mock(return_value='{"verdict":"PASS"}')
+    monkeypatch.setattr("grace_control.core.llm_runner.run_llm", mock_run_llm)
+    monkeypatch.setattr(
         "grace_control.core.executor_selector.resolve_model",
-        return_value={"model": "deepseek/deepseek-v4-flash"},
+        Mock(return_value={
+            "model": "deepseek/deepseek-v4-flash",
+            "executor_id": "reviewer-mini-swe",
+        }),
     )
 
-    packet = FakePacket()
+    packet = FakePacket(metadata={
+        "acceptance_criteria": ["Every required document is reconciled."],
+        "coder_instructions": ["Mark open decisions truthfully."],
+        "blocking_issues": ["Remove an invented production claim."],
+        "rework_summary": "Semantic documentation repair is incomplete.",
+    })
     acc = FakeAcceptanceReport()
     evr = FakeEvidenceVerifierReport()
 
@@ -233,3 +244,8 @@ async def test_full_prompt_includes_packet_id_and_evidence_verifier(mocker):
     assert "Test packet" in prompt, "prompt must include packet title"
     assert "all evidence found" in prompt or "PASS" in prompt, "prompt must include evidence verifier summary"
     assert "Worktree path:" in prompt or "Run directory:" in prompt, "prompt must include evidence paths"
+    assert "Authoritative packet contract" in prompt
+    assert "Every required document is reconciled." in prompt
+    assert "Mark open decisions truthfully." in prompt
+    assert "Remove an invented production claim." in prompt
+    assert "Semantic documentation repair is incomplete." in prompt

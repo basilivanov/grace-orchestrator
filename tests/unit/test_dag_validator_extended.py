@@ -43,3 +43,28 @@ def test_scope_conflict_three_way():
         "P1": ["shared.py"], "P2": ["shared.py"], "P3": ["shared.py"],
     })
     assert len(conflicts) == 3
+
+
+def test_validate_dag_allows_directly_ordered_scope_overlap():
+    packets = [
+        {"id": "P1", "depends_on": [], "scope": ["shared.py"]},
+        {"id": "P2", "depends_on": ["P1"], "scope": ["shared.py"]},
+    ]
+
+    result = validate_dag(packets)
+
+    assert result.valid
+    assert result.conflicts == []
+
+
+def test_validate_dag_allows_transitively_ordered_scope_overlap():
+    packets = [
+        {"id": "P1", "depends_on": [], "scope": ["shared.py"]},
+        {"id": "P2", "depends_on": ["P1"], "scope": ["middle.py"]},
+        {"id": "P3", "depends_on": ["P2"], "scope": ["shared.py"]},
+    ]
+
+    result = validate_dag(packets)
+
+    assert result.valid
+    assert result.conflicts == []

@@ -59,6 +59,12 @@ _RULES: list[tuple[re.Pattern, str | callable]] = [
     (re.compile(r"^app\.(\w+(?:\.\w+)+)$"), _import_to_fs),
 ]
 
+_FILE_EXTENSIONS = (
+    ".py", ".yaml", ".yml", ".json", ".toml", ".txt", ".md",
+    ".cfg", ".ini", ".sh", ".bash", ".sql", ".html", ".css",
+    ".js", ".ts", ".tsx", ".jsx", ".rs", ".go", ".xml", ".mako",
+)
+
 
 class ScopeCanonicalizationResult(BaseModel):
     changed: bool = False
@@ -79,6 +85,7 @@ class ScopePathCanonicalizer:
         import copy
         patched = copy.deepcopy(plan)
         result = ScopeCanonicalizationResult(plan=patched)
+        preserve_root_app = self._uses_root_app_layout(target_repo_root)
 
         waves = patched.get("waves", [])
         for wi, wave in enumerate(waves):
@@ -114,7 +121,24 @@ class ScopePathCanonicalizer:
                         })
                         new_scope.append(path)
                         continue
-                    if "." in path and "/" not in path and not path.startswith("."):
+                    if (
+                        "." in path
+                        and "/" not in path
+                        and not path.startswith(".")
+                        and not path.endswith(_FILE_EXTENSIONS)
+                    ):
+                        import_canonical = self._canonicalize(path)
+                        if import_canonical != path:
+                            result.changed = True
+                            result.fixes.append({
+                                "code": "CANONICALIZE_SCOPE_PATH",
+                                "from": path,
+                                "to": import_canonical,
+                                "packet_title": pkt.get("title", f"wave-{wi}-pkt-{pi}"),
+                                "scope_index": si,
+                            })
+                            new_scope.append(import_canonical)
+                            continue
                         result.errors.append({
                             "code": "E_SCOPE_PYTHON_IMPORT_PATH",
                             "message": f"scope path '{path}' looks like a Python import path — use filesystem path",
@@ -124,7 +148,10 @@ class ScopePathCanonicalizer:
                         new_scope.append(path)
                         continue
 
-                    canonical = self._canonicalize(path)
+                    canonical = self._canonicalize(
+                        path,
+                        preserve_root_app=preserve_root_app,
+                    )
                     if canonical != path:
                         result.changed = True
                         result.fixes.append({
@@ -146,9 +173,16 @@ class ScopePathCanonicalizer:
 
         return result
 
-    def _canonicalize(self, path: str) -> str:
+    def _canonicalize(
+        self,
+        path: str,
+        *,
+        preserve_root_app: bool = False,
+    ) -> str:
         """Apply rules in order; first match wins."""
         stripped = path.strip()
+        if preserve_root_app and stripped.startswith("app/"):
+            return stripped
         for pattern, replacement in _RULES:
             if callable(replacement):
                 m = pattern.match(stripped)
@@ -167,3 +201,17 @@ class ScopePathCanonicalizer:
             return stripped
 
         return stripped
+
+    def _uses_root_app_layout(self, target_repo_root: Path | None) -> bool:
+        """Prefer an architect's repo-root ``app/`` layout unless the target
+        is an existing ``apps/api/app`` monorepo.
+
+        An empty new repository has no topology to override the TZ, so
+        ``app/...`` remains an exact, canonical repo-relative filesystem path.
+        """
+        if target_repo_root is None:
+            return False
+        root = Path(target_repo_root)
+        if (root / "apps" / "api" / "app").exists():
+            return False
+        return True

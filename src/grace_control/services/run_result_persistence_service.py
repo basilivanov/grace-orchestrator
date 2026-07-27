@@ -85,7 +85,7 @@ def persist_rerun_result(
             "reason": result.reason or "",
             "worktree_path": result.worktree_path or "",
             "branch_name": result.branch_name or "",
-            "commit_sha": result.evidence.get("commit_sha", ""),
+            "commit_sha": result.commit_sha or "",
         }
         result_json: dict = {"legacy_result": legacy}
 

@@ -22,6 +22,7 @@ from __future__ import annotations
 from grace_control.core.structured_logger import GraceLogger
 from grace_control.db import get_db
 from grace_control.db.schema import Feature, Packet, PacketState, Wave
+from grace_control.services.rework_packet_service import effective_rework_packets
 
 _log = GraceLogger("wave_gate")
 
@@ -44,8 +45,9 @@ def check_wave_gates() -> int:
                 current_packets = db.query(Packet).filter_by(
                     feature_id=fid, wave_id=current_wave.id
                 ).all()
+                effective_packets = effective_rework_packets(current_packets)
 
-                if not current_packets:
+                if not effective_packets:
                     continue
 
                 # Next wave opens only when all packets are MERGED or intentionally
@@ -62,10 +64,10 @@ def check_wave_gates() -> int:
                     PacketState.BLOCKED_FINAL,
                 }
                 all_done = all(
-                    PacketState(p.state) in done_states for p in current_packets
+                    PacketState(p.state) in done_states for p in effective_packets
                 )
                 has_degraded = any(
-                    PacketState(p.state) in degraded_states for p in current_packets
+                    PacketState(p.state) in degraded_states for p in effective_packets
                 )
 
                 if has_degraded and not all_done:
@@ -73,7 +75,7 @@ def check_wave_gates() -> int:
                     if feature is not None:
                         reason = (
                             f"wave {current_wave.id} has degraded packets "
-                            f"({sum(1 for p in current_packets if PacketState(p.state) in degraded_states)} failed/blocked/rejected)"
+                            f"({sum(1 for p in effective_packets if PacketState(p.state) in degraded_states)} failed/blocked/rejected)"
                         )
                         feature.degraded_reason = reason
                         _log.warn("wave_gate_degraded", feature_id=fid,

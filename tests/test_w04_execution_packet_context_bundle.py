@@ -83,6 +83,78 @@ def test_execution_packet_contains_file_tree_and_previews():
     assert "## 17. Full Spec JSON" in content
 
 
+def test_execution_packet_contains_source_feature_specification_once(db):
+    """Packet coders receive the original feature/TZ even when the target
+    repository is empty, without duplicating it in the YAML diagnostics."""
+    materializer = PacketMaterializer()
+    with tempfile.TemporaryDirectory() as tmp:
+        packet_data = {
+            "id": "pkt_source_tz",
+            "title": "Create canon",
+            "description": "Create the documentation wave",
+            "spec_json": {
+                "scope": ["docs/requirements.xml"],
+                "feature_context": {
+                    "feature_id": "feat_source_tz",
+                    "title": "Exact architecture specification",
+                    "description": "EXACT_TZ_SENTINEL with required_field_name",
+                },
+            },
+        }
+        path = materializer.materialize(packet_data, Path(tmp))
+        content = path.read_text()
+
+    assert "### Source Feature\nExact architecture specification" in content
+    assert "### Source TZ / Specification" in content
+    assert content.count("EXACT_TZ_SENTINEL with required_field_name") == 1
+    assert "description: (rendered verbatim in section 2)" in content
+
+
+# START_FUNCTION_CONTRACT
+# name: test_execution_packet_surfaces_bounded_retry_context
+# purpose: Verify retry coders see the prior failed command and recovery decision prominently rather than only in diagnostic YAML.
+# inputs: None.
+# returns: None.
+# side_effects: Creates and removes a temporary packet state directory.
+# emitted_logs: None.
+# error_behavior: AssertionError on missing or duplicated retry context.
+# END_FUNCTION_CONTRACT
+def test_execution_packet_surfaces_bounded_retry_context():
+    materializer = PacketMaterializer()
+    with tempfile.TemporaryDirectory() as tmp:
+        packet_data = {
+            "id": "pkt_retry_context",
+            "title": "Retry the failed gate",
+            "spec_json": {
+                "scope": ["src/app.py"],
+                "coder_instructions": ["Fix only the reported failure"],
+                "recovery": {
+                    "previous_attempt": 2,
+                    "action": "switch_coder",
+                    "failure_class": "retryable_coder",
+                    "reason": "T1 failed",
+                    "acceptance_summary": "T1 failed: 1/1 commands failed",
+                    "requested_executor_id": "coder-deepseek",
+                    "failed_checks": [{
+                        "stage": "T1_TARGETED_TESTS",
+                        "command": "python -m missing_linter",
+                        "exit_code": 1,
+                    }],
+                },
+            },
+        }
+        path = materializer.materialize(packet_data, Path(tmp))
+        content = path.read_text()
+
+    instructions = content.split("## 11. Coder Instructions", 1)[1].split(
+        "## 12. Acceptance Criteria", 1
+    )[0]
+    assert "### Retry Context" in instructions
+    assert "Previous attempt: 2" in instructions
+    assert "python -m missing_linter" in instructions
+    assert "### Required Actions" in instructions
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Section 14 test: full structured evidence fields
 # ═══════════════════════════════════════════════════════════════════════════

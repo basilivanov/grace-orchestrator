@@ -131,6 +131,13 @@ _EXPECTATION_VALUES = frozenset({
     "diff_contains", "test_output", "import_absent", "import_updated",
 })
 
+SUPPORTED_EVIDENCE_KINDS = frozenset({
+    "command", "file", "diff", "log", "test", "runtime_log",
+    "observability", "contract", "screenshot", "dom_snapshot",
+    "console_log", "network_log", "visual_diff", "a11y_report",
+    "artifact_manifest",
+})
+
 
 @dataclass(frozen=True)
 class EvidenceRequirement:
@@ -331,7 +338,20 @@ class ScopeContractError(ValueError):
 
 def _has_python_import_path(path: str) -> bool:
     """W02: Check for Python import-style paths (dot-separated, no slashes)."""
-    return "." in path and "/" not in path and not path.startswith(".")
+    if any(marker in path for marker in ("*", "?", "[", "]")):
+        return False
+    file_extensions = (
+        ".py", ".yaml", ".yml", ".json", ".toml", ".txt", ".md",
+        ".cfg", ".ini", ".sh", ".bash", ".sql", ".html", ".css",
+        ".js", ".ts", ".tsx", ".jsx", ".rs", ".go", ".xml", ".mako",
+        ".log", ".png", ".jpg", ".jpeg", ".har",
+    )
+    return (
+        "." in path
+        and "/" not in path
+        and not path.startswith(".")
+        and not path.endswith(file_extensions)
+    )
 
 
 def validate_scope_paths(scope_list: list[str], frozen_list: list[str] | None = None) -> list[str]:
@@ -488,10 +508,23 @@ def build_packet_contract(packet_data: dict) -> ExecutionPacketContract:
     if evidence_errors:
         raise ScopeContractError(evidence_errors)
 
+    # Coder-owned evidence is part of the packet's effective write contract.
+    # Architect plans commonly require command/test artifacts under paths such
+    # as ``verification-output/W00*.log`` without duplicating those patterns in
+    # ``scope``.  Rejecting such an artifact as out-of-scope makes the evidence
+    # contract impossible to satisfy.
+    effective_scope = list(scope_list)
+    for requirement in expected_evidence:
+        if requirement.owner != "coder":
+            continue
+        for pattern in requirement.artifact_patterns:
+            if pattern and not pattern.startswith("/") and pattern not in effective_scope:
+                effective_scope.append(pattern)
+
     return ExecutionPacketContract(
         packet_id=packet_data.get("id", packet_data.get("packet_id", "")),
         title=packet_data.get("title", ""),
-        allowed_write_scope=scope_list,
+        allowed_write_scope=effective_scope,
         frozen_scope=frozen,
         acceptance_profile=acceptance_profile,
         verification={
@@ -507,6 +540,14 @@ def build_packet_contract(packet_data: dict) -> ExecutionPacketContract:
             "frontend": spec.get("frontend"),  # TZ_FRONTEND_ACCEPTANCE P0
             "target_repo_root": spec.get("target_repo_root", ""),
             "workspace_mode": spec.get("workspace_mode", ""),
+            "rework_base_sha": spec.get("rework_base_sha", ""),
+            # Semantic gates must survive contract compilation so evidence and
+            # final reviewers can check the exact packet contract instead of
+            # inferring it from command output and a truncated patch.
+            "acceptance_criteria": spec.get("acceptance_criteria", []),
+            "coder_instructions": spec.get("coder_instructions", []),
+            "blocking_issues": spec.get("blocking_issues", []),
+            "rework_summary": spec.get("rework_summary", ""),
             # W05: evidence canonicalization warnings persisted in contract metadata
             "_evidence_schema_warnings": _evidence_warnings,
         },

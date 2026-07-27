@@ -25,7 +25,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -96,8 +95,7 @@ async def _safe_loop(name: str, fn, interval: int) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _lease_task
-    db_url = os.environ.get("GRACE_DB_URL") or settings.database_url
-    init_db(db_url)
+    init_db(settings.database_url)
     _lease_task = asyncio.create_task(lease_expiration_loop())
     # W08: Stuck scanner background loop
     asyncio.create_task(stuck_scan_loop())

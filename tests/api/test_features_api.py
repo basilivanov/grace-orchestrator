@@ -205,6 +205,64 @@ async def test_planning_runs_persisted(api):
         assert "context_builder" in stages
 
 
+# START_FUNCTION_CONTRACT
+# name: test_regenerate_preserves_feature_target_repo
+# purpose: Prove background regeneration sends the feature target repository
+#          to both context collection and architect planning.
+# inputs: api -- isolated FastAPI test client and database fixture.
+# returns: None; asserts exact target_repo_root propagation.
+# side_effects: Creates one temporary feature row and background planning task.
+# emitted_logs: None.
+# error_behavior: AssertionError on target-repository fallback regressions.
+# END_FUNCTION_CONTRACT
+@pytest.mark.asyncio
+async def test_regenerate_preserves_feature_target_repo(api):
+    import asyncio
+    from unittest.mock import AsyncMock, patch
+
+    from grace_control.db import get_db
+    from grace_control.db.schema import Feature
+    from grace_control.services.feature_intake_service import FeatureIntakeService
+    from grace_control.services.feature_planning_service import FeaturePlanningService
+
+    target_repo = "/opt/independent-control-project"
+    with get_db() as db:
+        created = FeatureIntakeService(db).create_feature(
+            title="Independent regeneration",
+            description="Keep the external target",
+            target_repo_root=target_repo,
+            mode="draft_plan",
+            approval_mode="manual",
+        )
+        feature_id = created["feature_id"]
+        feature = db.query(Feature).filter_by(id=feature_id).first()
+        feature.status = "PLAN_FAILED"
+        db.commit()
+
+    context = {"summary": "empty external repository", "files": []}
+    with (
+        patch.object(
+            FeaturePlanningService,
+            "run_context_builder",
+            new=AsyncMock(return_value=context),
+        ) as run_context,
+        patch.object(
+            FeaturePlanningService,
+            "run_architect",
+            new=AsyncMock(return_value={"status": "PLAN_READY"}),
+        ) as run_architect,
+    ):
+        response = await api.post(f"/api/features/{feature_id}/regenerate-plan")
+        assert response.status_code == 200
+        for _ in range(20):
+            await asyncio.sleep(0.01)
+            if run_architect.await_count:
+                break
+
+        run_context.assert_awaited_once_with(feature_id, target_repo)
+        run_architect.assert_awaited_once_with(feature_id, context, target_repo)
+
+
 # ── approval_mode tests ──────────────────────────────────────────────────
 
 

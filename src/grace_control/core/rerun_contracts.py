@@ -65,6 +65,7 @@ class RerunResult(BaseModel):
     source_run_id: str = ""
     worktree_path: str = ""
     branch_name: str = ""
+    commit_sha: str = ""
 
     evidence: dict = {}
     acceptance_report: dict = {}

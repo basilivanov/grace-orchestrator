@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -456,7 +457,9 @@ class PacketExecutionAdapter:
             from grace_control.core.contracts import build_packet_contract
             pkt_contract = build_packet_contract(packet_data)
             base_ref = _settings.base_branch
-            base_sha = self._inspector.base_sha(self.project_root, base_ref)
+            base_sha = self._inspector.base_sha(
+                _mat_target or self.project_root, base_ref
+            )
             evidence_dir = self.state_root / "packets" / packet_id / "runs" / f"R{run_number:02d}"
 
             # ── W04: Block blind NORMAL/STRICT coder packets without context ─
@@ -492,7 +495,7 @@ class PacketExecutionAdapter:
             rerun_marker = consume_rerun_stage(packet_id, _pkt_spec.get("rerun_stage", ""), run_number)
             if rerun_marker:
                 _log.info("rerun_stage_branch", packet_id=packet_id, stage=rerun_marker, attempt=run_number)
-                from grace_control.core.rerun_contracts import RerunStage
+                from grace_control.core.rerun_contracts import RerunStage, RerunResult
                 from grace_control.services.rerun_context_service import load_previous_terminal_context
                 from grace_control.services.rerun_pipeline_service import execute_rerun as _exec_rerun
                 from grace_control.services.run_result_persistence_service import persist_rerun_result as _persist_rerun
@@ -502,6 +505,18 @@ class PacketExecutionAdapter:
                     packet_id=packet_id, current_run_id=run_id,
                 )
                 if not rerun_ctx:
+                    missing_rr = RerunResult(
+                        accepted=False, domain_status="failed",
+                        reason="RERUN_CONTEXT_MISSING: no previous terminal run found",
+                        duration_ms=int((time.time() - start) * 1000),
+                        evidence={"rerun_error": "RERUN_CONTEXT_MISSING",
+                                   "detail": "no previous terminal run"},
+                    )
+                    _persist_rerun(
+                        run_id=run_id, packet_id=packet_id,
+                        result=missing_rr, evidence_dir=evidence_dir,
+                        started_at=start,
+                    )
                     return ExecutionResult(
                         accepted=False, domain_status="failed",
                         reason="RERUN_CONTEXT_MISSING: no previous terminal run found",
@@ -523,7 +538,7 @@ class PacketExecutionAdapter:
                     accepted=rr.accepted, domain_status=rr.domain_status,
                     reason=rr.reason, duration_ms=rr.duration_ms,
                     evidence=rr.evidence, worktree_path=rr.worktree_path,
-                    branch_name=rr.branch_name,
+                    branch_name=rr.branch_name, commit_sha=rr.commit_sha,
                 )
             # ── end rerun branch ─────────────────────────────────────────
 
@@ -532,6 +547,22 @@ class PacketExecutionAdapter:
 
             if not hasattr(result, "evidence") or result.evidence is None:
                 result.evidence = {}
+
+            # The workspace builder is authoritative for the commit from which
+            # the executor worktree was created.  This can differ from both the
+            # orchestrator repository and the target repository's current HEAD
+            # (for example for scoped copies and rework seeds).
+            workspace_evidence = result.evidence.get("workspace", {})
+            if isinstance(workspace_evidence, dict):
+                workspace_base_sha = workspace_evidence.get("base_sha")
+                if isinstance(workspace_base_sha, str) and workspace_base_sha:
+                    if workspace_base_sha != base_sha:
+                        _log.info(
+                            "workspace_base_sha_selected",
+                            packet_id=packet_id,
+                            base_sha=workspace_base_sha[:12],
+                        )
+                    base_sha = workspace_base_sha
 
             # ── W2: capture prompt + agent output artifacts, emit with refs ─
             self._obs_event("packet.worktree_created", status="completed")
@@ -563,7 +594,13 @@ class PacketExecutionAdapter:
                     "skipped": False
                 }
 
-            wt_status, agent_commit_sha = self._inspected_worktree(result, pkt_contract, packet_id, packet_data["attempt_count"])
+            wt_status, agent_commit_sha = self._inspected_worktree(
+                result,
+                pkt_contract,
+                packet_id,
+                packet_data["attempt_count"],
+                base_sha=base_sha,
+            )
             if wt_status == "worktree_missing":
                 return self._fast_reject("Worktree missing after agent run", executor.get("executor_id",""), run_id, start)
             elif wt_status == "no_changes":
@@ -664,6 +701,8 @@ class PacketExecutionAdapter:
             if ex: ex.status = "running"; ex.started_at = datetime.now(UTC)
             else: db.add(PacketRun(id=rid, packet_id=packet_id, run_number=rn, worker_id=worker_id, status="running", started_at=datetime.now(UTC)))
             pd = {k: getattr(p, k) for k in ("id","feature_id","wave_id","slug","title","description","spec_json","state","acceptance_profile","attempt_count","max_attempts")}
+            from grace_control.services.rework_packet_service import resolve_rework_spec
+            pd["spec_json"] = resolve_rework_spec(db, p)
         return rid, pd, rn
 
     def _resolve_executor(self, pd: dict) -> dict:
@@ -672,11 +711,17 @@ class PacketExecutionAdapter:
         from grace_control.core.executor_selector import select_executor
         tier = route_packet(pd.get("acceptance_profile","NORMAL"), pd.get("spec_json"))
         spec = pd.get("spec_json") or {}
+        local_attempt = max(pd.get("attempt_count", 0), 1)
+        try:
+            ladder_base_attempt = max(int(spec.get("coder_ladder_base_attempt", 1)), 1)
+        except (TypeError, ValueError):
+            ladder_base_attempt = 1
+        effective_attempt = ladder_base_attempt + local_attempt - 1
         rid = (spec.get("recovery") or {}).get("requested_executor_id") if isinstance(spec, dict) else None
         if rid:
             match = get_agent_profile(rid)
-            ex = match.to_dict() if match else select_executor("coder", attempt=max(pd.get("attempt_count", 0), 1))
-        else: ex = select_executor("coder", attempt=max(pd.get("attempt_count", 0), 1))
+            ex = match.to_dict() if match else select_executor("coder", attempt=effective_attempt)
+        else: ex = select_executor("coder", attempt=effective_attempt)
         pd["_executor"] = ex; pd["_tier"] = tier.value; return ex
 
     def _resolve_materializer_target(self, packet_data: dict) -> Path | None:
@@ -695,17 +740,39 @@ class PacketExecutionAdapter:
             return self.project_root
         return None
 
-    def _inspected_worktree(self, result, pkt_contract, packet_id, attempt_count):
+    def _inspected_worktree(
+        self,
+        result,
+        pkt_contract,
+        packet_id,
+        attempt_count,
+        *,
+        base_sha="",
+    ):
         """Return (status, sha). status: 'committed'|'no_changes'|'worktree_missing'|'not_git'."""
         if not result.worktree_path or not Path(result.worktree_path).exists():
             return "worktree_missing", ""
         wt = Path(result.worktree_path)
         if not self._inspector.is_git_worktree(wt):
             return "not_git", ""
-        if not self._inspector.has_changes(wt, pkt_contract.allowed_write_scope):
-            return "no_changes", ""
-        sha = self._committer.commit(wt, packet_id, attempt_count)
-        return "committed", sha
+        if self._inspector.has_changes(wt, pkt_contract.allowed_write_scope):
+            sha = self._committer.commit(wt, packet_id, attempt_count)
+            if sha:
+                return "committed", sha
+
+        # mini-swe coders may commit their own work. In that case the worktree
+        # is clean and a wrapper commit reports "nothing to commit", but HEAD
+        # is still the exact agent result needed for evidence and rework seeds.
+        head_sha = self._inspector.base_sha(wt, "HEAD")
+        if base_sha and head_sha and head_sha != base_sha:
+            _log.info(
+                "agent_existing_commit_detected",
+                packet_id=packet_id,
+                sha=head_sha[:12],
+                base_sha=base_sha[:12],
+            )
+            return "committed", head_sha
+        return "no_changes", ""
 
     def _self_evolution_guard(self, pd, accept_report, safe_data, run_id, executor, start):
         spec = pd.get("spec_json") or {}
@@ -831,6 +898,7 @@ class PacketExecutionAdapter:
                     summary=evr.summary,
                     blocking_issues=evr.failed_checks,
                     coder_instructions=evr.coder_instructions,
+                    rework_base_sha=sha,
                 )
             return _rej("rejected" if evr.verdict==EvidenceVerifierVerdict.REWORK_TO_CODER else "blocked", evr.summary, evr, skipped_reviewer_report("ev reject"))
         rvr = await run_reviewer_gate(packet=pkt_contract, acceptance_report=accept_report,
@@ -844,6 +912,7 @@ class PacketExecutionAdapter:
                     summary=rvr.summary,
                     blocking_issues=rvr.required_changes,
                     coder_instructions=rvr.risks,
+                    rework_base_sha=sha,
                 )
             return _rej("rejected" if rvr.verdict==ReviewerVerdict.REWORK_TO_CODER else "blocked", rvr.summary, evr, rvr)
         _log.error("unexpected_reviewer_verdict", packet_id=packet_id, verdict=rvr.verdict.value)
@@ -880,9 +949,9 @@ class PacketExecutionAdapter:
             evidence_path=er.evidence_path, duration_ms=er.duration_ms, executor_id=executor.get("executor_id",""),
             commit_sha=commit_sha, dev_replay=dev_rep,
             diagnostics=getattr(self, "_last_diagnostics", None),
-            tokens_in=getattr(result, "tokens_in", None),
-            tokens_out=getattr(result, "tokens_out", None),
-            cost_usd=getattr(result, "cost_usd", None))
+            tokens_in=(safe_data or {}).get("tokens_in"),
+            tokens_out=(safe_data or {}).get("tokens_out"),
+            cost_usd=(safe_data or {}).get("cost_usd"))
         # TZ_RETENTION_POLICY Phase 1: on REJECTED (acceptance failure), clean
         # up worktree + all attempt-branches for this packet. Run artifacts
         # in .grace/state/ are NOT touched.
@@ -1004,7 +1073,9 @@ class PacketExecutionAdapter:
 
         inspector = RuntimeDiffInspector()
         diff_req = RuntimeDiffInspectionRequest(
-            repo_root=str(self.project_root),
+            repo_root=str(
+                Path(getattr(self, "_packet_target_repo", "") or self.project_root)
+            ),
             worktree_root=str(wt_path),
             base_ref=base_sha or base_ref,
         )
@@ -1353,30 +1424,11 @@ class PacketExecutionAdapter:
                 _log.info("workspace_mode_defaulted_to_target_repo_worktree",
                            packet_id=pid, target_repo_root=str(_effective_target_repo))
 
-        # ── Fail-fast: scope paths must exist under the effective root ──
+        # Scope paths may name files that the packet is expected to create.
+        # Repository isolation is enforced below by resolving the workspace
+        # from target_root; a same-named file in project_root is not evidence
+        # that an explicit external target is wrong.
         target_root = Path(_effective_target_repo) if _effective_target_repo else Path(_s.target_repo_root or self.project_root)
-        if _effective_target_repo and eff:
-            for scope_path in eff:
-                p = target_root / scope_path
-                orchestrator_p = self.project_root / scope_path
-                if not p.exists() and orchestrator_p.exists():
-                    from grace_control.agent.backend import ExecutionResult as _ER
-                    err = (f"WRONG_WORKTREE_ROOT: scope path '{scope_path}' does not exist under "
-                           f"target_repo_root={target_root} but exists under "
-                           f"project_root={self.project_root}. Refusing to run agent "
-                           f"in orchestrator repo for a target feature packet.")
-                    _log.error("wrong_worktree_root", packet_id=pid, error=err)
-                    return _ER(
-                        accepted=False,
-                        domain_status="failed",
-                        worktree_path="",
-                        branch_name="",
-                        commit_sha="",
-                        stdout="",
-                        stderr=err,
-                        duration_ms=0,
-                        errors=[err],
-                    )
 
         # TZ §6.3: auto-upgrade scoped_copy to full_git_worktree if verification
         # contains commands that need broader repo context (pytest, tsc, etc.).
@@ -1417,13 +1469,13 @@ class PacketExecutionAdapter:
             wt_root = target_root / wt_root
         wt_path = wt_root / slug
 
-        # Fail if worktree path is inside GRACE repo for real-project mode.
-        # In target_repo_worktree mode, project_root is the target repo itself
-        # and the worktree belongs inside it — skip this check.
-        if workspace_mode == "target_repo_worktree" and str(self.project_root.resolve()) != str(target_root.resolve()):
+        # Fail if worktree path is inside the orchestrator source repository.
+        # A dedicated runtime/control directory is intentionally separate from
+        # GRACE_SOURCE_DIR and is a valid place for target worktrees.
+        source_root = Path(os.environ.get("GRACE_SOURCE_DIR", str(self.project_root))).resolve()
+        if workspace_mode == "target_repo_worktree" and str(source_root) != str(target_root.resolve()):
             try:
-                wt_path.resolve().relative_to(self.project_root.resolve())
-                import os
+                wt_path.resolve().relative_to(source_root)
                 if os.environ.get("GRACE_ALLOW_WORKTREE_INSIDE_GRACE") != "1":
                     error_msg = f"worktree_root is inside GRACE project root: {wt_path}. Set GRACE_ALLOW_WORKTREE_INSIDE_GRACE=1 to override."
                     _log.warn("worktree_inside_grace_repo_failed", error=error_msg)
@@ -1443,6 +1495,33 @@ class PacketExecutionAdapter:
                 pass
 
         git = GitService()
+        workspace_base_ref = base_ref
+        rework_seed_sha = ""
+        rework_base_sha = str(pkt_metadata.get("rework_base_sha", ""))
+        if pkt_metadata.get("origin") == "review_rework" and rework_base_sha:
+            valid_sha = len(rework_base_sha) == 40 and all(
+                char in "0123456789abcdefABCDEF" for char in rework_base_sha
+            )
+            commit_check = git._run(["cat-file", "-e", f"{rework_base_sha}^{{commit}}"], target_root)
+            if valid_sha and commit_check.success:
+                # Rework must remain based on the current target branch.  Using
+                # the old rejected commit as the branch base makes later main
+                # commits appear as out-of-scope deletions and can merge a
+                # stale history.  Replay the rejected agent commit after the
+                # fresh worktree is created instead.
+                rework_seed_sha = rework_base_sha
+                _log.info(
+                    "rework_workspace_seed_selected",
+                    packet_id=pid,
+                    seed_sha=rework_base_sha[:12],
+                    workspace_base_ref=workspace_base_ref,
+                )
+            else:
+                _log.warn(
+                    "rework_workspace_seed_rejected",
+                    packet_id=pid,
+                    reason="invalid_or_missing_commit",
+                )
 
         if workspace_mode == "scoped_copy":
             from grace_control.services.agent_workspace_builder import AgentWorkspaceBuilder
@@ -1504,7 +1583,7 @@ class PacketExecutionAdapter:
                 workspace_root=wt_root,
                 slug=slug,
                 branch=branch,
-                base_ref=base_ref,
+                base_ref=workspace_base_ref,
             )
             wt_path = ws.workspace_path
             base_sha = ws.base_sha
@@ -1521,7 +1600,9 @@ class PacketExecutionAdapter:
             if branch_check.stdout.strip():
                 git._run(["branch", "-D", branch], _effective_repo)
                 _log.info("stale_branch_deleted", branch=branch, packet_id=pid)
-            add_result = git.worktree_add(_effective_repo, wt_path, branch, base_ref=base_ref)
+            add_result = git.worktree_add(
+                _effective_repo, wt_path, branch, base_ref=workspace_base_ref,
+            )
 
         # 2.1: FAIL FAST — if worktree_add failed for any reason other than
         # "already exists" (which means we reuse an existing one), stop here.
@@ -1568,6 +1649,67 @@ class PacketExecutionAdapter:
                 errors=[f"worktree path does not exist after git worktree add: {wt_path}"],
             )
 
+        if rework_seed_sha and workspace_mode != "scoped_copy":
+            # A rework commit can itself be based on an earlier rejected seed
+            # commit.  Replay the complete descendant range from the common
+            # ancestor, otherwise cherry-picking only the tip applies a
+            # two-file delta to an unrelated baseline and may conflict.
+            merge_base = git._run(
+                ["merge-base", workspace_base_ref, rework_seed_sha], target_root
+            )
+            seed_commits: list[str] = []
+            if merge_base.success and merge_base.stdout.strip():
+                commit_range = git._run(
+                    [
+                        "rev-list",
+                        "--reverse",
+                        f"{merge_base.stdout.strip()}..{rework_seed_sha}",
+                    ],
+                    target_root,
+                )
+                if commit_range.success:
+                    seed_commits = [
+                        line.strip()
+                        for line in commit_range.stdout.splitlines()
+                        if line.strip()
+                    ]
+            if not seed_commits:
+                seed_commits = [rework_seed_sha]
+
+            seed_result = git._run(["cherry-pick", *seed_commits], wt_path)
+            if not seed_result.success:
+                git._run(["cherry-pick", "--abort"], wt_path)
+                error_msg = (
+                    "rework seed could not be replayed onto current target base: "
+                    f"{seed_result.stderr[:300]}"
+                )
+                _log.warn(
+                    "rework_workspace_seed_apply_failed",
+                    packet_id=pid,
+                    seed_sha=rework_seed_sha[:12],
+                    seed_commit_count=len(seed_commits),
+                    error=seed_result.stderr[:300],
+                )
+                from grace_control.agent.backend import ExecutionResult as _ER
+                return _ER(
+                    accepted=False,
+                    domain_status="failed",
+                    worktree_path=wt_path,
+                    branch_name=branch,
+                    commit_sha="",
+                    stdout="",
+                    stderr=error_msg,
+                    duration_ms=0,
+                    errors=[error_msg],
+                )
+            _log.info(
+                "rework_workspace_seed_applied",
+                packet_id=pid,
+                seed_sha=rework_seed_sha[:12],
+                seed_commit_count=len(seed_commits),
+                workspace_base_ref=workspace_base_ref,
+            )
+
         from grace_control.config.settings import settings
 
         # TZ_SESSION_RESUME.md Phase 3: resolve resume session before run
@@ -1605,10 +1747,15 @@ class PacketExecutionAdapter:
                           packet_id=pid, attempt=attempt, role=role,
                           resume_session_id=resume_session_id, fork=fork)
 
+        try:
+            inactivity_timeout = int(os.environ.get(
+                "GRACE_AGENT_TIMEOUT", str(settings.agent_timeout_seconds)))
+        except ValueError:
+            inactivity_timeout = settings.agent_timeout_seconds
         req = ExecutionRequest(packet_id=pid,
             spec={"attempt_count":attempt,"base_ref":base_ref,"allowed_write_scope":eff or [],"frozen_scope":packet_contract.frozen_scope or []},
             worktree_path=wt_path, branch_name=branch,
-            scope_paths=list(eff or []), executor=executor, timeout_s=settings.agent_timeout_seconds,
+            scope_paths=list(eff or []), executor=executor, timeout_s=inactivity_timeout,
             session_dir=self.state_root, evidence_dir=evidence_dir,
             resume_session_id=resume_session_id, fork_session=fork)
         result = await self._backend.run(req)
@@ -1757,6 +1904,7 @@ class PacketExecutionAdapter:
         summary: str,
         blocking_issues: list[str] | None = None,
         coder_instructions: list[str] | None = None,
+        rework_base_sha: str = "",
     ) -> None:
         from grace_control.config.settings import settings as _s
         if not getattr(_s, "agent_runtime_rework_packets_enabled", True):
@@ -1774,7 +1922,7 @@ class PacketExecutionAdapter:
                     Packet.spec_json["origin"].as_string() == "review_rework",
                     Packet.spec_json["parent_packet_id"].as_string() == original_packet_id,
                     Packet.spec_json["rework_source"].as_string() == verdict_source,
-                    Packet.state.in_(["ready", "running", "rejected"]),
+                    Packet.state.in_(["ready", "running", "rejected", "accepted", "merged"]),
                 ).first()
                 if existing_rework is not None:
                     _log.info("rework_packet_already_exists",
@@ -1797,6 +1945,8 @@ class PacketExecutionAdapter:
                     summary=summary,
                     blocking_issues=blocking_issues or [],
                     coder_instructions=coder_instructions,
+                    rework_base_sha=rework_base_sha,
+                    parent_attempt_count=orig.attempt_count or 1,
                 )
                 db.commit()
                 _log.info("rework_packet_committed",

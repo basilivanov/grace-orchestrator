@@ -161,7 +161,7 @@ def lint_text(
         if not _is_allowed(v.code, path, al):
             violations.append(v)
     else:
-        for s, e in zip(starts, sorted(ends), strict=False):
+        for s, e in zip(starts, ends, strict=False):
             if s != e:
                 v = Violation("GRC004", f"mismatched BLOCK: START_{s} vs END_{e}", path, 1)
                 if not _is_allowed(v.code, path, al):

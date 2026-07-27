@@ -158,6 +158,9 @@ Each packet should include a `complexity` field to enable model routing:
    - NEVER use `kind=diff` with pattern=`agent.patch`.
    - For creating new files: `kind=file` with pattern matching the filename.
    - For modifying existing files: `kind=diff` WITHOUT a pattern.
+   - Command/test stdout is captured by the controller. Reference it with the
+     run-relative path `tN/cmd_NNN_stdout.log`; NEVER redirect verification
+     output into repository files such as `.grace-t1-npm-test.stdout`.
 
    CRITICAL — frozen_scope rules:
    - NEVER put any file from the packet's own scope into frozen_scope.

@@ -6,13 +6,18 @@
 
 from __future__ import annotations
 
+import importlib.util
+import os
 import re
+import shlex
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel
 
+from grace_control.core.contracts import SUPPORTED_EVIDENCE_KINDS
 from grace_control.core.execution_environment import ExecutionEnvironment
 from grace_control.core.structured_logger import GraceLogger
 
@@ -84,8 +89,170 @@ _BASH_ONLY_PATTERNS = [
 ]
 
 
+def _contains_unquoted_shell_word(command: str, word: str) -> bool:
+    """Return whether *word* occurs outside single/double quoted data.
+
+    Plan verification often greps for forbidden source text.  A quoted grep
+    pattern containing ``source`` is data, not the bash ``source`` builtin,
+    and must not be rejected under ``/bin/sh``.
+    """
+    quote: str | None = None
+    escaped = False
+    unquoted: list[str] = []
+    for char in command:
+        if escaped:
+            escaped = False
+            unquoted.append(" ")
+            continue
+        if quote is not None:
+            if char == quote:
+                quote = None
+            elif char == "\\" and quote == '"':
+                escaped = True
+            unquoted.append(" ")
+            continue
+        if char in {"'", '"'}:
+            quote = char
+            unquoted.append(" ")
+            continue
+        if char == "\\":
+            escaped = True
+            unquoted.append(" ")
+            continue
+        unquoted.append(char)
+    return re.search(rf"\b{re.escape(word)}\b", "".join(unquoted)) is not None
+
+
 # ── Shell operators in argv list (require shell=True) ──────────────────
 _SHELL_OPS_IN_CMDS = re.compile(r'&&|\|\||[;|><]|\$\(|2>&1')
+
+_COMMAND_SEPARATORS = frozenset({"&&", "||", ";", "|"})
+_SCRIPT_SUFFIXES = (".py", ".sh")
+_SYSTEM_ABSOLUTE_PATHS = frozenset({"/bin/sh", "/bin/bash", "/usr/bin/env", "/dev/null"})
+_SEARCH_PROGRAMS = frozenset({"grep", "egrep", "rg"})
+
+
+def _command_segments(command: str) -> list[list[str]]:
+    """Split a command into simple invocations without interpreting shell syntax."""
+    try:
+        tokens = shlex.split(command, posix=True)
+    except ValueError:
+        return []
+    segments: list[list[str]] = []
+    current: list[str] = []
+    for token in tokens:
+        if token in _COMMAND_SEPARATORS:
+            if current:
+                segments.append(current)
+                current = []
+            continue
+        current.append(token)
+    if current:
+        segments.append(current)
+    return segments
+
+
+def _first_program_index(tokens: list[str]) -> int | None:
+    """Return the executable index after shell negation and NAME=value prefixes."""
+    index = 0
+    while index < len(tokens) and tokens[index] == "!":
+        index += 1
+    while index < len(tokens) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", tokens[index]):
+        index += 1
+    return index if index < len(tokens) else None
+
+
+def _negative_search_test_targets(command: str) -> list[str]:
+    """Return test paths scanned by a shell-negated text search.
+
+    An absence assertion that scans tests commonly matches the regression test's
+    own forbidden literal, so it cannot distinguish product code from proof of
+    the requirement.  Keep the check conservative and only flag explicit
+    repository test paths after the search pattern.
+    """
+    try:
+        tokens = shlex.split(command, posix=True)
+    except ValueError:
+        return []
+    if len(tokens) < 4 or tokens[0] != "!" or Path(tokens[1]).name not in _SEARCH_PROGRAMS:
+        return []
+
+    pattern_seen = False
+    targets: list[str] = []
+    for token in tokens[2:]:
+        if token.startswith("-"):
+            continue
+        if not pattern_seen:
+            pattern_seen = True
+            continue
+        normalized = token.removeprefix("./").rstrip("/")
+        if normalized in {"test", "tests"} or normalized.startswith(("test/", "tests/")):
+            targets.append(token)
+    return targets
+
+
+def _relative_command_path(value: str, target_repo_root: Path | None) -> str | None:
+    """Normalize a command path to target-repository-relative form when possible."""
+    path = Path(value)
+    if path.is_absolute():
+        if target_repo_root is None:
+            return None
+        try:
+            return path.relative_to(target_repo_root.resolve()).as_posix()
+        except ValueError:
+            return None
+    if ".." in path.parts:
+        return None
+    normalized = path.as_posix()
+    return normalized[2:] if normalized.startswith("./") else normalized
+
+
+def _known_script_paths(env: ExecutionEnvironment) -> set[str]:
+    """Extract script paths from discovered files and optional verification overrides."""
+    known = set(env.executable_scripts)
+    for entrypoint in env.verification_entrypoints:
+        if entrypoint.endswith(_SCRIPT_SUFFIXES):
+            known.add(entrypoint)
+            continue
+        try:
+            tokens = shlex.split(entrypoint, posix=True)
+        except ValueError:
+            continue
+        known.update(token for token in tokens if token.endswith(_SCRIPT_SUFFIXES))
+    return known
+
+
+def _python_module_exists(
+    module: str,
+    python_program: str,
+    target_repo_root: Path | None,
+) -> bool:
+    """Check repository and venv module paths without executing target code."""
+    if not re.fullmatch(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*", module):
+        return False
+    root = (target_repo_root or Path.cwd()).resolve()
+    module_path = Path(*module.split("."))
+    if module.split(".", 1)[0] in sys.stdlib_module_names:
+        return True
+    for base in (root, root / "src"):
+        if (base / module_path).with_suffix(".py").is_file():
+            return True
+        if (base / module_path / "__init__.py").is_file():
+            return True
+    for site_packages in root.glob(".venv/lib/python*/site-packages"):
+        if (site_packages / module_path).with_suffix(".py").is_file():
+            return True
+        if (site_packages / module_path / "__init__.py").is_file():
+            return True
+
+    # Bare interpreter names occur only in explicitly constructed legacy
+    # environments. Runtime discovery never invents them for a target repo.
+    if "/" not in python_program:
+        try:
+            return importlib.util.find_spec(module) is not None
+        except (ImportError, AttributeError, ValueError):
+            return False
+    return False
 
 
 def _add_error(
@@ -260,13 +427,62 @@ class PlanCompiler:
     ) -> CompileResult:
         if env is None:
             from grace_control.core.execution_environment import probe_execution_environment
-            env = probe_execution_environment()
+            env = probe_execution_environment(target_repo_root=target_repo_root)
 
         result = CompileResult(ok=True)
 
         waves = plan.get("waves", [])
         if not waves:
             return result  # Empty plan is valid (nothing to do)
+
+        # Enforce a feature-declared per-packet Python-file limit. This keeps
+        # the compiler generic while making an explicit business constraint
+        # executable instead of trusting a contradictory plan assertion.
+        limit_text = feature_description + "\n" + str(plan.get("constraints", {}))
+        python_file_limit: int | None = None
+        limit_match = re.search(
+            r"(?:at\s+most|no\s+more\s+than|maximum(?:\s+of)?|<=|≤)\s*"
+            r"(\d+)\s+(?:tracked\s+)?(?:python[- ]?)?files?",
+            limit_text,
+            re.IGNORECASE,
+        )
+        if limit_match:
+            python_file_limit = int(limit_match.group(1))
+
+        # A first-wave bootstrap packet may create a project-level venv that
+        # does not exist yet at planning time.  Permit later packets to refer
+        # to that environment when the plan explicitly scopes it OR declares
+        # it as a generated bootstrap side effect. Generated/ignored venvs do
+        # not always belong in a packet's tracked repository write scope.
+        plan_bootstraps_venv = False
+        for wave in waves:
+            if not isinstance(wave, dict):
+                continue
+            for packet in wave.get("packets", []) or []:
+                if not isinstance(packet, dict):
+                    continue
+                scope_entries = packet.get("scope", [])
+                if not isinstance(scope_entries, list):
+                    continue
+                has_venv_scope = any(
+                    isinstance(scope_entry, str) and ".venv" in scope_entry
+                    for scope_entry in scope_entries
+                )
+                packet_text = " ".join(
+                    str(packet.get(key, ""))
+                    for key in ("title", "description", "coder_instructions")
+                )
+                declares_venv_bootstrap = (
+                    ".venv" in packet_text
+                    and re.search(r"\b(bootstrap|create)\b", packet_text, re.IGNORECASE)
+                )
+                if (has_venv_scope or declares_venv_bootstrap) and re.search(
+                    r"\b(bootstrap|create)\b", packet_text, re.IGNORECASE
+                ):
+                    plan_bootstraps_venv = True
+                    break
+            if plan_bootstraps_venv:
+                break
 
         # ── 0. Source-split preflight (before per-packet checks) ─────
         self._validate_source_split(result, plan, env, feature_description, target_repo_root)
@@ -355,19 +571,51 @@ class PlanCompiler:
                             f"convert to filesystem path: replace dots with '/' and add '.py' or '/'",
                         )
 
-                    # Existing: non-canonical scope paths (app/, app.)
-                    if isinstance(sp, str) and (
-                        sp.startswith("app/")
-                        or sp.startswith("app.")
-                        or (".services" in sp and "/" not in sp)
-                    ):
+                    # A repo-root app/ directory is a valid project topology.
+                    # Import-style paths such as app.services.foo are rejected
+                    # by E_SCOPE_PYTHON_IMPORT_PATH above; filesystem paths must
+                    # not be rewritten to one particular monorepo layout.
+
+                if role == "coder" and python_file_limit and target_repo_root:
+                    scoped_python_files: set[str] = set()
+                    for scope_entry in scope:
+                        if not isinstance(scope_entry, str):
+                            continue
+                        normalized_entry = scope_entry.rstrip("/")
+                        if normalized_entry.endswith(".py"):
+                            scoped_python_files.add(normalized_entry)
+                            continue
+                        scope_path = target_repo_root / normalized_entry
+                        try:
+                            if scope_path.is_dir():
+                                scoped_python_files.update(
+                                    str(path.relative_to(target_repo_root))
+                                    for path in scope_path.rglob("*.py")
+                                    if path.is_file()
+                                )
+                            elif any(char in normalized_entry for char in "*?["):
+                                scoped_python_files.update(
+                                    str(path.relative_to(target_repo_root))
+                                    for path in target_repo_root.glob(normalized_entry)
+                                    if path.is_file() and path.suffix == ".py"
+                                )
+                        except OSError:
+                            continue
+                    if len(scoped_python_files) > python_file_limit:
                         _add_error(
-                            result, "E_SCOPE_PATH_NOT_CANONICAL",
-                            f"waves[{wi}].packets[{pi}].scope[{si}]",
-                            f"scope path '{sp}' is not canonical (e.g. use "
-                            f"apps/api/app/services/... not app/... or app.services...)",
+                            result,
+                            "E_SCOPE_PYTHON_FILE_LIMIT",
+                            f"waves[{wi}].packets[{pi}].scope",
+                            f"scope expands to {len(scoped_python_files)} Python files, "
+                            f"exceeding the feature-declared limit of {python_file_limit}",
                             title,
-                            f"replace '{sp}' with the full filesystem path",
+                            "split the coder work into bounded dependent packets or "
+                            "make the broad final sweep verification-only",
+                            details={
+                                "python_file_count": len(scoped_python_files),
+                                "python_file_limit": python_file_limit,
+                                "sample_paths": sorted(scoped_python_files)[:20],
+                            },
                         )
 
                 # W02: Reject scope/frozen_scope overlap (not silently strip)
@@ -410,9 +658,37 @@ class PlanCompiler:
                 acceptance = packet.get("acceptance_criteria", [])
                 coder_instructions = packet.get("coder_instructions", [])
 
-                t0 = verification.get("t0", [])
-                t1 = verification.get("t1", [])
-                t2 = verification.get("t2", [])
+                if isinstance(verification, dict):
+                    t0 = verification.get("t0", [])
+                    t1 = verification.get("t1", [])
+                    t2 = verification.get("t2", [])
+                elif isinstance(verification, list):
+                    # Compatibility for old predefined-plan API callers.  The
+                    # canonical architect schema remains an object with t0/t1/t2;
+                    # a legacy flat list is validated as targeted T1 commands.
+                    t0 = []
+                    t1 = verification
+                    t2 = []
+                    _add_warning(
+                        result,
+                        "W_VERIFICATION_LEGACY_LIST",
+                        f"waves[{wi}].packets[{pi}].verification",
+                        "verification is a legacy command list; canonical packets use an object with t0/t1/t2 arrays",
+                        title,
+                        "use verification: {t0: [], t1: [...], t2: []}",
+                    )
+                else:
+                    t0 = []
+                    t1 = []
+                    t2 = []
+                    _add_error(
+                        result,
+                        "E_VERIFICATION_INVALID_TYPE",
+                        f"waves[{wi}].packets[{pi}].verification",
+                        f"verification must be an object or legacy list, got {type(verification).__name__}",
+                        title,
+                        "use verification: {t0: [], t1: [], t2: []}",
+                    )
 
                 # ── 1. Command syntax validation ──────────────────
                 all_cmds = [(t0, "t0"), (t1, "t1"), (t2, "t2")]
@@ -420,17 +696,21 @@ class PlanCompiler:
                     for ci, cmd in enumerate(cmds):
                         if isinstance(cmd, str):
                             self._validate_cmd(
-                                result, cmd, env, title, f"verification.{stage_name}[{ci}]"
+                                result, cmd, env, title,
+                                f"verification.{stage_name}[{ci}]",
+                                allow_planned_venv=plan_bootstraps_venv,
+                                target_repo_root=target_repo_root,
                             )
 
                 # ── 2. Scope vs acceptance ────────────────────────
                 self._validate_scope_acceptance(
-                    result, title, scope, t1, acceptance, coder_instructions, role
+                    result, title, scope, t1, acceptance, coder_instructions, role,
+                    target_repo_root,
                 )
 
                 # ── 3. Evidence contract ──────────────────────────
                 self._validate_evidence(
-                    result, title, evidence, role, description, scope
+                    result, title, evidence, role, description, scope, verification
                 )
 
                 # ── 3b. Evidence–instruction contradiction ──────
@@ -542,9 +822,15 @@ class PlanCompiler:
         env: ExecutionEnvironment,
         title: str,
         field_path: str,
+        allow_planned_venv: bool = False,
+        target_repo_root: Path | None = None,
     ) -> None:
+        shell_is_bash = Path(env.shell).name == "bash"
+        python_candidates = set(env.python_candidates)
+        known_scripts = _known_script_paths(env)
+
         # Shell incompatibility: source under dash
-        if not env.shell_is_bash and " source " in cmd:
+        if not shell_is_bash and _contains_unquoted_shell_word(cmd, "source"):
             _add_error(
                 result, "E_SHELL_SOURCE_UNDER_DASH",
                 field_path, f"command uses 'source' but shell is {env.shell} (not bash)",
@@ -560,26 +846,204 @@ class PlanCompiler:
             )
 
         # Missing venv reference
-        if ".venv/bin/activate" in cmd or ".venv/bin/python" in cmd:
-            if not env.has_api_venv:
+        references_venv_activation = ".venv/bin/activate" in cmd
+        references_venv_python = ".venv/bin/python" in cmd
+        if references_venv_activation or references_venv_python:
+            has_discovered_venv = any(
+                candidate.endswith(".venv/bin/python")
+                for candidate in python_candidates
+            )
+            if not has_discovered_venv and not allow_planned_venv:
                 _add_error(
                     result, "E_VENV_MISSING",
                     field_path,
                     "command references venv but target repo has no .venv",
                     title,
-                    f"system python3 at {env.api_python_path} is available; "
-                    "use it directly or install venv in target repo",
+                    "use a Python path reported by runtime discovery or create the venv explicitly",
                 )
-            else:
+            elif allow_planned_venv and not has_discovered_venv:
+                _add_warning(
+                    result, "W_VENV_PLANNED_BOOTSTRAP",
+                    field_path,
+                    "command references a project venv created by an earlier bootstrap packet",
+                    title,
+                    "keep the bootstrap packet before all packets that use this venv",
+                )
+            elif references_venv_activation:
                 _add_warning(
                     result, "W_VENV_ACTIVATE_IN_WORKTREE",
                     field_path,
                     "venv exists in target repo but may not exist in worktree; "
                     "activation will fail at runtime in worktree",
                     title,
-                    "use the absolute python path instead of activation: "
-                    f"{env.api_python_path} -m pytest ...",
+                    "run the discovered repository-relative Python directly instead of activation: "
+                    f"{next(iter(env.python_candidates), '.venv/bin/python')} -m pytest ...",
                 )
+
+        # Deterministic executable, script, module, and absolute-path checks.
+        for segment in _command_segments(cmd):
+            program_index = _first_program_index(segment)
+            if program_index is None:
+                continue
+            program = segment[program_index]
+            program_name = Path(program).name
+
+            for token in segment:
+                if not token.startswith("/") or token in _SYSTEM_ABSOLUTE_PATHS:
+                    continue
+                relative = _relative_command_path(token, target_repo_root)
+                if relative is not None:
+                    allowed_paths = python_candidates | known_scripts | set(env.config_sources)
+                    if relative not in allowed_paths:
+                        _add_error(
+                            result,
+                            "E_TARGET_ABSOLUTE_PATH_UNDISCOVERED",
+                            field_path,
+                            f"absolute target path '{token}' was not reported by runtime discovery",
+                            title,
+                            "use a repository-relative path reported in deterministic environment facts",
+                        )
+                elif token.startswith(("/opt/", "/home/", "/workspace/")):
+                    _add_error(
+                        result,
+                        "E_TARGET_ABSOLUTE_PATH_UNDISCOVERED",
+                        field_path,
+                        f"absolute target-specific path '{token}' does not belong to the probed repository",
+                        title,
+                        "use repository-relative paths from deterministic environment facts",
+                    )
+
+            is_python = bool(re.fullmatch(r"python\d*(?:\.\d+)?", program_name))
+            if is_python:
+                normalized_program = _relative_command_path(program, target_repo_root)
+                program_is_known = (
+                    program in python_candidates
+                    or normalized_program in python_candidates
+                )
+                if not program_is_known and not allow_planned_venv:
+                    _add_error(
+                        result,
+                        "E_EXECUTABLE_NOT_DISCOVERED",
+                        field_path,
+                        f"Python executable '{program}' was not reported by runtime discovery",
+                        title,
+                        "use one of ExecutionEnvironment.python_candidates",
+                    )
+                    continue
+                if program_is_known and "/" in program and not allow_planned_venv:
+                    executable_relative = _relative_command_path(program, target_repo_root)
+                    executable_path = (
+                        target_repo_root / executable_relative
+                        if target_repo_root is not None and executable_relative is not None
+                        else None
+                    )
+                    if (
+                        executable_path is None
+                        or not executable_path.is_file()
+                        or not os.access(executable_path, os.X_OK)
+                    ):
+                        _add_error(
+                            result,
+                            "E_EXECUTABLE_PATH_MISSING",
+                            field_path,
+                            f"Python executable path '{program}' does not exist or is not executable",
+                            title,
+                            "fix the grace/project.yaml override or use a discovered executable",
+                        )
+                        continue
+
+                arguments = segment[program_index + 1:]
+                if "-m" in arguments:
+                    module_index = arguments.index("-m") + 1
+                    if module_index < len(arguments):
+                        module = arguments[module_index]
+                        if not allow_planned_venv and not _python_module_exists(
+                            module,
+                            program,
+                            target_repo_root,
+                        ):
+                            _add_error(
+                                result,
+                                "E_PYTHON_MODULE_MISSING",
+                                field_path,
+                                f"Python module '{module}' does not exist in the probed environment",
+                                title,
+                                "use an existing module or a discovered verification script path",
+                            )
+                    continue
+
+                script = next(
+                    (
+                        argument for argument in arguments
+                        if not argument.startswith("-") and argument.endswith(_SCRIPT_SUFFIXES)
+                    ),
+                    None,
+                )
+                if script is not None:
+                    self._validate_script_path(
+                        result,
+                        script,
+                        known_scripts,
+                        title,
+                        field_path,
+                        target_repo_root,
+                    )
+                continue
+
+            script: str | None = None
+            if program.endswith(_SCRIPT_SUFFIXES):
+                script = program
+            elif program_name in {"sh", "bash"}:
+                script = next(
+                    (
+                        argument for argument in segment[program_index + 1:]
+                        if not argument.startswith("-") and argument.endswith(_SCRIPT_SUFFIXES)
+                    ),
+                    None,
+                )
+            if script is not None:
+                self._validate_script_path(
+                    result,
+                    script,
+                    known_scripts,
+                    title,
+                    field_path,
+                    target_repo_root,
+                    require_executable=script == program,
+                    executable_scripts=set(env.executable_scripts),
+                )
+            elif "/" in program:
+                relative_program = _relative_command_path(program, target_repo_root)
+                executable_path = (
+                    target_repo_root / relative_program
+                    if target_repo_root is not None and relative_program is not None
+                    else None
+                )
+                if (
+                    executable_path is None
+                    or not executable_path.is_file()
+                    or not os.access(executable_path, os.X_OK)
+                ):
+                    _add_error(
+                        result,
+                        "E_EXECUTABLE_PATH_MISSING",
+                        field_path,
+                        f"executable path '{program}' does not exist or is not executable",
+                        title,
+                        "use a discovered executable script or a command available on PATH",
+                    )
+
+        test_targets = _negative_search_test_targets(cmd)
+        if test_targets:
+            _add_error(
+                result,
+                "E_NEGATIVE_SEARCH_SCANS_TESTS",
+                field_path,
+                "shell-negated absence search scans test paths and can match its own regression assertion: "
+                + ", ".join(test_targets),
+                title,
+                "scan implementation/configuration paths only; prove the same absence separately in tests",
+            )
 
         # Unsafe grep splitting
         if cmd.startswith("grep ") or cmd.startswith("egrep "):
@@ -637,9 +1101,14 @@ class PlanCompiler:
                 )
 
         # Bash-only syntax under sh
-        if not env.shell_is_bash:
+        if not shell_is_bash:
             for pattern, feature, fix in _BASH_ONLY_PATTERNS:
-                if pattern.search(cmd):
+                matched = (
+                    _contains_unquoted_shell_word(cmd, "source")
+                    if feature == "source"
+                    else pattern.search(cmd) is not None
+                )
+                if matched:
                     # Skip 'source' when it's for venv activation (caught by E_VENV_MISSING)
                     if feature == "source" and ("venv" in cmd.lower() or "activate" in cmd.lower()):
                         continue
@@ -653,6 +1122,42 @@ class PlanCompiler:
         if _SHELL_OPS_IN_CMDS.search(cmd):
             pass  # shell=True is now default for non-python3, so this is fine
 
+    def _validate_script_path(
+        self,
+        result: CompileResult,
+        script: str,
+        known_scripts: set[str],
+        title: str,
+        field_path: str,
+        target_repo_root: Path | None,
+        *,
+        require_executable: bool = False,
+        executable_scripts: set[str] | None = None,
+    ) -> None:
+        relative = _relative_command_path(script, target_repo_root)
+        script_path = (
+            target_repo_root / relative
+            if target_repo_root is not None and relative is not None
+            else None
+        )
+        is_known = relative in known_scripts if relative is not None else False
+        exists = script_path.is_file() if script_path is not None else is_known
+        executable = (
+            relative in (executable_scripts or set())
+            if require_executable
+            else True
+        )
+        if is_known and exists and executable:
+            return
+        _add_error(
+            result,
+            "E_SCRIPT_PATH_UNKNOWN",
+            field_path,
+            f"script path '{script}' is missing, unknown, or not executable",
+            title,
+            "use a script listed in ExecutionEnvironment.verification_entrypoints",
+        )
+
     def _validate_scope_acceptance(
         self,
         result: CompileResult,
@@ -662,7 +1167,69 @@ class PlanCompiler:
         acceptance: list[str],
         coder_instructions: list[str],
         role: str,
+        target_repo_root: Path | None,
     ) -> None:
+        # A recursive GRACE lint target must itself be writable scope.  A packet
+        # that owns selected files under ``app/bidder`` cannot repair failures
+        # in every other Python file reached by linting the whole directory.
+        # Reject that contract before materialization instead of exhausting the
+        # coder recovery ladder on deterministic, out-of-scope baseline errors.
+        if role == "coder":
+            normalized_scope = {str(item).rstrip("/") for item in scope}
+            for command_index, raw_command in enumerate(t1 if isinstance(t1, list) else []):
+                command = str(raw_command) if isinstance(raw_command, str) else " ".join(raw_command)
+                if "grace_lint.py" not in command:
+                    continue
+                try:
+                    import shlex
+
+                    tokens = shlex.split(command)
+                except ValueError:
+                    tokens = command.split()
+                try:
+                    lint_index = next(
+                        index for index, token in enumerate(tokens)
+                        if token.endswith("grace_lint.py")
+                    )
+                except StopIteration:
+                    continue
+                for target in tokens[lint_index + 1:]:
+                    target_path = target.rstrip("/")
+                    if (
+                        not target_path
+                        or target_path.startswith("-")
+                        or target_path.endswith(".py")
+                        or target_path in normalized_scope
+                    ):
+                        continue
+                    covered_files = sorted(
+                        item for item in normalized_scope
+                        if item.startswith(f"{target_path}/")
+                    )
+                    lint_root = target_repo_root / target_path if target_repo_root else None
+                    linted_python_files: set[str] = set()
+                    if lint_root and lint_root.is_dir():
+                        try:
+                            linted_python_files = {
+                                str(path.relative_to(target_repo_root))
+                                for path in lint_root.rglob("*.py")
+                                if path.is_file()
+                            }
+                        except OSError:
+                            linted_python_files = set()
+                    outside_scope = sorted(linted_python_files - normalized_scope)
+                    if covered_files and (outside_scope or not linted_python_files):
+                        _add_error(
+                            result,
+                            "E_SCOPE_ACCEPTANCE_IMPOSSIBLE",
+                            f"verification.t1[{command_index}]",
+                            f"GRACE lint target '{target_path}' is broader than packet "
+                            f"write scope; out-of-scope Python files: {outside_scope}",
+                            title,
+                            "list the exact scoped Python files in the lint command, "
+                            "or include the directory itself in packet scope",
+                        )
+
         # Check if T1 runs tests on files outside scope
         test_files_in_t1: set[str] = set()
         for cmd in (t1 if isinstance(t1, list) else []):
@@ -723,6 +1290,7 @@ class PlanCompiler:
         role: str,
         description: str,
         scope: list[str],
+        verification: dict | list,
     ) -> None:
         for ei, ev in enumerate(evidence):
             if not isinstance(ev, dict):
@@ -730,6 +1298,60 @@ class PlanCompiler:
             kind = ev.get("kind", "")
             patterns = ev.get("artifact_patterns", [])
             required = ev.get("required", True)
+
+            if kind not in SUPPORTED_EVIDENCE_KINDS:
+                _add_error(
+                    result, "E_EVIDENCE_KIND_UNKNOWN",
+                    f"expected_evidence[{ei}].kind",
+                    f"unknown evidence kind '{kind}' — "
+                    f"valid values: {sorted(SUPPORTED_EVIDENCE_KINDS)}",
+                    title,
+                    f"use one of: {', '.join(sorted(SUPPORTED_EVIDENCE_KINDS))}",
+                )
+
+            for pattern in patterns if isinstance(patterns, list) else [patterns]:
+                if isinstance(pattern, str) and pattern.startswith("/"):
+                    _add_error(
+                        result, "E_EVIDENCE_ABSOLUTE_PATTERN",
+                        f"expected_evidence[{ei}].artifact_patterns",
+                        f"artifact pattern '{pattern}' is absolute; evidence artifacts "
+                        "must be repository-relative",
+                        title,
+                        "use a repository-relative artifact path or leave artifact_patterns empty",
+                        details={"pattern": pattern},
+                    )
+                if isinstance(pattern, str) and self._is_descriptive_artifact_pattern(pattern):
+                    _add_error(
+                        result, "E_EVIDENCE_DESCRIPTIVE_PATTERN",
+                        f"expected_evidence[{ei}].artifact_patterns",
+                        f"artifact pattern '{pattern}' is a description, not a relative artifact glob",
+                        title,
+                        "use a run-relative artifact path such as t1/cmd_002_stdout.log",
+                        details={
+                            "pattern": pattern,
+                            "evidence_id": ev.get("id", ""),
+                            "producer": ev.get("producer", ""),
+                            "verification": verification,
+                        },
+                    )
+                if (
+                    isinstance(pattern, str)
+                    and re.fullmatch(
+                        r"\.grace-t\d[^/]*\.(?:stdout|stderr|log)",
+                        pattern.strip(),
+                        flags=re.IGNORECASE,
+                    )
+                ):
+                    _add_error(
+                        result, "E_EVIDENCE_EPHEMERAL_ROOT_ARTIFACT",
+                        f"expected_evidence[{ei}].artifact_patterns",
+                        f"artifact pattern '{pattern}' would persist controller command "
+                        "output in the target repository",
+                        title,
+                        "use the controller's run-relative artifact path, for example "
+                        "t1/cmd_001_stdout.log",
+                        details={"pattern": pattern},
+                    )
 
             # Validate expectation enum
             expectation = ev.get("expectation", "") or "exists"
@@ -745,6 +1367,14 @@ class PlanCompiler:
 
             # kind=diff with pattern=agent.patch → wrong
             if kind == "diff" and required:
+                if patterns:
+                    _add_error(
+                        result, "E_EVIDENCE_DIFF_HAS_PATTERN",
+                        f"expected_evidence[{ei}].artifact_patterns",
+                        "kind=diff is produced by the controller's captured patch and must not "
+                        "depend on a worktree file or command-stdout pattern",
+                        title, "leave artifact_patterns empty for kind=diff",
+                    )
                 if "agent.patch" in str(patterns):
                     _add_warning(
                         result, "W_EVIDENCE_DIFF_AGENT_PATCH",
@@ -774,6 +1404,33 @@ class PlanCompiler:
                     title, "add target files to scope or remove diff evidence",
                 )
 
+    @staticmethod
+    def _is_descriptive_artifact_pattern(pattern: str) -> bool:
+        """Return whether an artifact pattern is prose instead of a path glob."""
+        value = pattern.strip().lower()
+        command_prefixes = (
+            "git ", "npm ", "node ", "python ", "python3 ", "pytest ",
+            "grep ", "egrep ", "rg ", "test ", "make ", "just ", "sh ",
+            "bash ", "curl ", "get ", "post ", "patch ", "delete ",
+        )
+        looks_like_single_path = (
+            "/" in value
+            and bool(re.search(r"\.[a-z0-9*?]+$", value))
+            and not any(token in value for token in (" --", " &&", " ||", "|", ">", ";"))
+        )
+        return (
+            " stdout" in value
+            or value.endswith(" output")
+            or value.startswith("run: ")
+            or value.startswith(command_prefixes)
+            or value.startswith("coder note ")
+            or " requirement-by-requirement " in value
+            or " version and " in value
+            or " description or " in value
+            or " screenshot reference " in value
+            or (len(value.split()) >= 4 and not looks_like_single_path)
+        )
+
     # ── Remove/delete keywords for contradiction detection ─────────────
     _REMOVE_INTENT_KEYWORDS = [
         "remove", "delete", "consolidate", "drop", "eliminate",
@@ -799,8 +1456,13 @@ class PlanCompiler:
         self, texts: list[str], evidence_paths: list[str],
     ) -> list[str]:
         """Extract file paths from instructions that match evidence paths
-        and are likely being removed. Looks for patterns like:
+        and are explicitly being removed. Looks for patterns like:
         'delete models.py', 'remove src/foo.py', 'consolidate bar.py into'
+
+        A remove verb elsewhere in the same sentence is insufficient.  For
+        example, "update development-plan.xml and remove stale log links"
+        removes links, not the XML file.  The target path must immediately
+        follow the removal phrase (apart from a few harmless qualifiers).
         """
         targets: list[str] = []
         for text in texts:
@@ -808,9 +1470,17 @@ class PlanCompiler:
             for ep in evidence_paths:
                 ep_lower = ep.lower()
                 ep_name = Path(ep).name.lower()
-                # Check if evidence path or filename appears near remove keyword
                 for kw in self._REMOVE_INTENT_KEYWORDS:
-                    if kw in t and (ep_lower in t or ep_name in t):
+                    keyword = re.escape(kw)
+                    qualifiers = r"(?:(?:the|this|old|obsolete|target)\s+){0,3}"
+                    file_word = r"(?:file\s+)?"
+                    target = rf"(?:{re.escape(ep_lower)}|{re.escape(ep_name)})"
+                    explicit_removal = re.search(
+                        rf"(?:^|[\s:;,(]){keyword}\s+{qualifiers}{file_word}"
+                        rf"[`'\"]?{target}(?=$|[\s`'\".,;:)])",
+                        t,
+                    )
+                    if explicit_removal:
                         targets.append(ep)
                         break
         return list(set(targets))
@@ -845,13 +1515,40 @@ class PlanCompiler:
         # Check all text sources for remove intent
         all_texts = coder_instructions + [description, validation_hint]
         remove_kws = self._has_remove_intent(all_texts)
+        removal_targets = self._extract_target_paths_for_removal(
+            all_texts, ev_paths
+        ) if remove_kws else []
+
+        # expectation=deleted is an operation claim, not merely an end state.
+        # Require the packet text to name the exact file as a deletion target.
+        for ev in evidence:
+            if not isinstance(ev, dict) or ev.get("expectation") != "deleted":
+                continue
+            patterns = ev.get("artifact_patterns", ev.get("pattern", []))
+            if isinstance(patterns, str):
+                patterns = [patterns]
+            for pattern in patterns:
+                if pattern in removal_targets:
+                    continue
+                _add_error(
+                    result,
+                    "E_EVIDENCE_DELETION_NOT_EXPLICIT",
+                    "expected_evidence",
+                    f"Evidence '{ev.get('id', '?')}' expects '{pattern}' to be deleted, "
+                    "but the packet does not explicitly define that file deletion operation.",
+                    title,
+                    f"explicitly instruct the coder to delete {pattern}, or use expectation='absent'",
+                    details={
+                        "evidence_id": ev.get("id", "?"),
+                        "file": pattern,
+                        "remove_target_explicit": False,
+                    },
+                )
+
         if not remove_kws:
             return
 
         # Find which evidence paths are targeted for removal
-        removal_targets = self._extract_target_paths_for_removal(
-            all_texts, ev_paths
-        )
         if not removal_targets:
             return
 
@@ -880,6 +1577,7 @@ class PlanCompiler:
                             "file": p,
                             "current_expectation": expectation,
                             "remove_keywords": remove_kws,
+                            "remove_target_explicit": True,
                             "suggested_fix": "deleted",
                         },
                     )

@@ -71,6 +71,20 @@ def test_worker_timeout_no_attempts_remaining_is_failed():
         f"Timeout with no attempts remaining should be 'failed' (terminal), got: {status}"
 
 
+def test_worker_timeout_exhausted_enters_recovery_when_enabled(monkeypatch):
+    monkeypatch.setenv("GRACE_RECOVERY_CONTROLLER_ENABLED", "true")
+    exec_state = ExecutionState(
+        packet_id="pkt-timeout-recovery",
+        worker_id="worker-1",
+        attempt=3,
+        max_attempts=3,
+    )
+    exec_state.failure_type = WorkerFailureType.AGENT_TIMEOUT
+    exec_state.error_message = "Agent timed out after 600s"
+
+    assert exec_state.determine_release_status() == "blocked_recoverable"
+
+
 # ─── Test 2: Worker generic agent failure rejected not failed when retryable ─
 
 def test_worker_generic_agent_failure_rejected_not_failed_when_retryable():
@@ -98,8 +112,8 @@ def test_worker_generic_agent_failure_rejected_not_failed_when_retryable():
     assert result_data.get("failure_type") == "agent_nonzero"
 
 
-def test_worker_scope_violation_is_blocked_not_rejected():
-    """W07: Scope violation must be 'blocked', not blindly retried."""
+def test_worker_scope_violation_is_recovery_controlled_not_rejected():
+    """W07: Scope violation must await recovery, not be blindly retried."""
     exec_state = ExecutionState(
         packet_id="pkt-scope",
         worker_id="worker-1",
@@ -110,8 +124,8 @@ def test_worker_scope_violation_is_blocked_not_rejected():
     exec_state.error_message = "Agent wrote outside allowed scope"
 
     status = exec_state.determine_release_status()
-    assert status == "blocked", \
-        f"Scope violation should be 'blocked', got: {status}"
+    assert status == "blocked_recoverable", \
+        f"Scope violation should be 'blocked_recoverable', got: {status}"
 
     # Scope violation is NOT retryable
     assert not is_failure_retryable(WorkerFailureType.SCOPE_VIOLATION), \
@@ -267,6 +281,37 @@ def test_merge_failure_records_action_required_event():
             f"Expected merge error in payload, got: {payload}"
 
 
+def test_merge_uses_packet_target_repo_override():
+    """An external packet must merge into its claim target, not worker default."""
+    from grace_control.adapters.packet_executor import ExecutionResult
+
+    worker = Worker.__new__(Worker)
+    worker.log = MagicMock()
+    worker.api = AsyncMock()
+    worker._git_context = MagicMock()
+    worker._git_context.target_repo_root = "/opt/deep-calm"
+
+    exec_state = ExecutionState(
+        packet_id="pkt-external-target",
+        worker_id="worker-1",
+        release_status="accepted",
+        target_repo_root="/opt/trend-radar-ru",
+    )
+    result = ExecutionResult(
+        accepted=True,
+        domain_status="accepted",
+        worktree_path="/worktree",
+        branch_name="agent/pkt-external-target",
+        commit_sha="abc123def456",
+        duration_ms=1000,
+    )
+
+    asyncio.run(worker._phase_merge(exec_state, result))
+
+    assert worker.api.merge_packet.await_args.kwargs["target_repo_root"] == \
+        "/opt/trend-radar-ru"
+
+
 # ─── Additional: ExecutionState tests ───────────────────────────────────────
 
 def test_execution_state_has_attempts_remaining():
@@ -303,7 +348,7 @@ def test_execution_state_phases():
 
 
 def test_release_status_from_result_scope_violation():
-    """W07: release_status_from_result must return 'blocked' for scope violations."""
+    """W07: Scope violations must enter recovery-controlled blocked state."""
     from grace_control.adapters.packet_executor import ExecutionResult
 
     # Normal rejection
@@ -312,11 +357,11 @@ def test_release_status_from_result_scope_violation():
 
     # Scope violation in domain_status
     result2 = ExecutionResult(accepted=False, domain_status="rejected", reason="scope violation detected")
-    assert release_status_from_result(result2) == "blocked"
+    assert release_status_from_result(result2) == "blocked_recoverable"
 
     # Frozen scope in reason
     result3 = ExecutionResult(accepted=False, domain_status="rejected", reason="frozen scope touched")
-    assert release_status_from_result(result3) == "blocked"
+    assert release_status_from_result(result3) == "blocked_recoverable"
 
     # Blocked domain_status
     result4 = ExecutionResult(accepted=False, domain_status="blocked")

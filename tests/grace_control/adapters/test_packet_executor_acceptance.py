@@ -15,6 +15,14 @@ from grace_control.core.contracts import (
     StageResult,
     StageStatus,
 )
+from grace_control.db import init_db
+
+
+@pytest.fixture(autouse=True)
+def initialize_stage_instrumentation_db():
+    """Initialize the DB used by the stage-instrumentation decorator."""
+    init_db("sqlite:///:memory:")
+    yield
 
 
 class _FakeLegacyResult:
@@ -382,8 +390,9 @@ class TestEvidenceVerifierReviewerRouting:
     @patch("grace_control.adapters.packet_executor.get_db")
     @patch("grace_control.core.acceptance_pipeline.run_acceptance_pipeline")
     @patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._call_executor")
-    async def test_normal_verifier_pass_skips_reviewer(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
-        """NORMAL with verifier PASS → reviewer not called, accepted."""
+    async def test_normal_verifier_pass_runs_reviewer(self, mock_legacy, mock_pipeline, mock_get_db, mock_verifier, mock_reviewer):
+        """NORMAL with verifier PASS → reviewer runs before acceptance."""
+        mock_reviewer.return_value = _make_reviewer_pass()
         result = await _run_adapter_test(
             mock_legacy, mock_get_db, mock_pipeline,
             pipeline_report=_make_accepted_report(),
@@ -392,7 +401,7 @@ class TestEvidenceVerifierReviewerRouting:
             profile="NORMAL",
         )
         mock_verifier.assert_called_once()
-        mock_reviewer.assert_not_called()
+        mock_reviewer.assert_called_once()
 
     @patch("grace_control.adapters.packet_executor.run_reviewer_gate")
     @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
@@ -586,6 +595,99 @@ class TestEvidenceVerifierReviewerRouting:
 
 
 class TestCallExecutorTargetRepoWorktree:
+    # START_FUNCTION_CONTRACT
+    # name: test_new_external_scope_path_may_match_project_file
+    # purpose: Prove a packet may create a new target file even when a file
+    #          with the same name exists in the orchestrator project root.
+    # inputs: tmp_path -- isolated project, target, and worktree directories.
+    # returns: None; asserts the backend receives the external worktree.
+    # side_effects: Creates temporary directories and files.
+    # emitted_logs: None.
+    # error_behavior: AssertionError on a false wrong-root rejection.
+    # END_FUNCTION_CONTRACT
+    @pytest.mark.asyncio
+    @patch("grace_control.services.git_service.GitService.run_preflight")
+    @patch("grace_control.services.agent_workspace_builder.AgentWorkspaceBuilder.build_target_repo_worktree")
+    @patch("grace_control.services.worktree_cleanup_service.WorktreeCleanupService.cleanup_attempt")
+    @patch("grace_control.agent.backend.ExecutionBackend.run")
+    async def test_new_external_scope_path_may_match_project_file(
+        self, mock_backend_run, mock_cleanup, mock_build, mock_preflight, tmp_path,
+    ):
+        from grace_control.adapters.packet_executor import PacketExecutionAdapter
+        from grace_control.agent.backend import ExecutionResult as BackendExecutionResult
+        from grace_control.core.contracts import build_packet_contract
+        from grace_control.services.agent_workspace_builder import WorkspaceResult
+        from grace_control.services.git_service import PreflightResult
+
+        project_dir = tmp_path / "project"
+        target_dir = tmp_path / "target"
+        worktree_dir = tmp_path / "worktree"
+        project_dir.mkdir()
+        target_dir.mkdir()
+        worktree_dir.mkdir()
+        (project_dir / ".gitignore").write_text("project-only\n")
+
+        mock_preflight.return_value = PreflightResult(
+            success=True,
+            is_git_repo=True,
+            working_tree_clean=True,
+            current_branch="main",
+            local_head="123456",
+        )
+        mock_build.return_value = WorkspaceResult(
+            workspace_path=worktree_dir,
+            workspace_mode="target_repo_worktree",
+            target_repo_root=target_dir,
+            base_sha="123456",
+            commit_semantics="target_repo_commit",
+        )
+        mock_backend_run.return_value = BackendExecutionResult(
+            accepted=True,
+            domain_status="completed",
+            worktree_path=worktree_dir,
+            branch_name="agent/test",
+            commit_sha="abcdef",
+            stdout="run ok",
+            stderr="",
+            duration_ms=100,
+        )
+
+        adapter = PacketExecutionAdapter(
+            project_root=project_dir,
+            state_root=tmp_path / "state",
+            worktree_root=tmp_path / "worktrees",
+            backend=MagicMock(),
+        )
+        adapter._backend.run = mock_backend_run
+        packet_path = tmp_path / "pkt-new-file" / "EXECUTION_PACKET.md"
+        packet_path.parent.mkdir()
+        packet_path.write_text("packet content")
+        contract = build_packet_contract({
+            "id": "pkt-new-file",
+            "spec_json": {
+                "scope": [".gitignore"],
+                "target_repo_root": str(target_dir),
+                "workspace_mode": "target_repo_worktree",
+            },
+        })
+
+        result = await adapter._call_executor(
+            packet_path=packet_path,
+            packet_contract=contract,
+            attempt=1,
+            base_ref="main",
+            base_sha="123456",
+            executor={
+                "executor_id": "coder-opencode",
+                "workspace_mode": "target_repo_worktree",
+            },
+            evidence_dir=tmp_path / "evidence",
+        )
+
+        assert result.accepted is True
+        assert "WRONG_WORKTREE_ROOT" not in result.stderr
+        mock_backend_run.assert_awaited_once()
+
     @pytest.mark.asyncio
     @patch("grace_control.services.git_service.GitService.run_preflight")
     @patch("grace_control.services.agent_workspace_builder.AgentWorkspaceBuilder.build_target_repo_worktree")
@@ -687,6 +789,107 @@ class TestCallExecutorTargetRepoWorktree:
         mock_cleanup.assert_called_once()
         mock_build.assert_called_once()
         mock_preflight.assert_called_once()
+
+    # START_FUNCTION_CONTRACT
+    # name: test_rework_seed_is_replayed_on_current_target_head
+    # purpose: Prove review rework keeps current main as its ancestry and
+    #          replays the rejected agent commit without treating newer main
+    #          files as packet changes.
+    # inputs: tmp_path -- isolated Git repository and worktree root.
+    # returns: None; asserts Git ancestry and changed-file boundaries.
+    # side_effects: Creates temporary Git commits and a temporary worktree.
+    # emitted_logs: None.
+    # error_behavior: AssertionError on stale-base or replay regressions.
+    # END_FUNCTION_CONTRACT
+    @pytest.mark.asyncio
+    async def test_rework_seed_is_replayed_on_current_target_head(self, tmp_path):
+        from grace_control.agent.backend import ExecutionResult as BackendExecutionResult
+        from grace_control.core.contracts import build_packet_contract
+        from grace_control.services.git_service import GitService
+
+        target = tmp_path / "target"
+        target.mkdir()
+        git = GitService()
+        assert git._run(["init", "-q", "-b", "main"], target).success
+        assert git._run(["config", "user.email", "test@grace"], target).success
+        assert git._run(["config", "user.name", "Test Agent"], target).success
+        (target / "scope.txt").write_text("before\n")
+        assert git._run(["add", "."], target).success
+        assert git._run(["commit", "-q", "-m", "base"], target).success
+
+        assert git._run(["checkout", "-q", "-b", "rejected"], target).success
+        (target / "scope.txt").write_text("rejected implementation\n")
+        assert git._run(["commit", "-q", "-am", "rejected agent"], target).success
+        (target / "scope.txt").write_text("rejected implementation plus fix\n")
+        assert git._run(["commit", "-q", "-am", "rejected follow-up"], target).success
+        seed_sha = git._run(["rev-parse", "HEAD"], target).stdout.strip()
+
+        assert git._run(["checkout", "-q", "main"], target).success
+        (target / "newer-main.txt").write_text("newer main\n")
+        assert git._run(["add", "."], target).success
+        assert git._run(["commit", "-q", "-m", "advance main"], target).success
+        current_main = git._run(["rev-parse", "HEAD"], target).stdout.strip()
+
+        class InspectBackend:
+            worktree_path: Path | None = None
+
+            async def run(self, request):
+                self.worktree_path = Path(request.worktree_path)
+                return BackendExecutionResult(
+                    accepted=True,
+                    domain_status="completed",
+                    worktree_path=self.worktree_path,
+                    branch_name=request.branch_name,
+                    commit_sha="seeded",
+                    stdout="ok",
+                    stderr="",
+                    duration_ms=1,
+                )
+
+        backend = InspectBackend()
+        adapter = PacketExecutionAdapter(
+            project_root=target,
+            state_root=tmp_path / "state",
+            worktree_root=tmp_path / "worktrees",
+            backend=backend,
+        )
+        packet_path = tmp_path / "pkt-rework" / "EXECUTION_PACKET.md"
+        packet_path.parent.mkdir(parents=True)
+        packet_path.write_text("rework")
+        contract = build_packet_contract({
+            "id": "pkt-rework",
+            "spec_json": {
+                "scope": ["scope.txt"],
+                "origin": "review_rework",
+                "rework_base_sha": seed_sha,
+                "target_repo_root": str(target),
+                "workspace_mode": "full_git_worktree",
+            },
+        })
+
+        result = await adapter._call_executor(
+            packet_path=packet_path,
+            packet_contract=contract,
+            attempt=1,
+            base_ref="main",
+            base_sha=current_main,
+            executor={
+                "executor_id": "coder-mini-swe",
+                "workspace_mode": "full_git_worktree",
+                "resume_mode": "never",
+                "role": "coder",
+            },
+            evidence_dir=tmp_path / "evidence",
+        )
+
+        assert result.accepted is True
+        assert backend.worktree_path is not None
+        worktree = backend.worktree_path
+        assert git._run(["merge-base", "--is-ancestor", current_main, "HEAD"], worktree).success
+        assert (worktree / "newer-main.txt").read_text() == "newer main\n"
+        assert (worktree / "scope.txt").read_text() == "rejected implementation plus fix\n"
+        changed = git._run(["diff", "--name-only", current_main, "HEAD"], worktree)
+        assert changed.stdout.splitlines() == ["scope.txt"]
 
     @patch("grace_control.adapters.packet_executor.run_reviewer_gate")
     @patch("grace_control.adapters.packet_executor.run_evidence_verifier")

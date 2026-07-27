@@ -41,7 +41,7 @@ class PacketStateMachine:
       REJECTED → READY (retry) | FAILED (attempts exhausted) | BLOCKED_RECOVERABLE
                  | BLOCKED_FINAL | CANCELLED
       BLOCKED_RECOVERABLE → READY (recovery) | BLOCKED_FINAL | CANCELLED
-      BLOCKED_FINAL → (terminal)
+      BLOCKED_FINAL → CANCELLED (only when an explicit replacement supersedes it)
       BLOCKED → READY (back-compat alias, deprecated)
       ACCEPTED → MERGED
       MERGED → (terminal)
@@ -87,7 +87,7 @@ class PacketStateMachine:
             PacketState.BLOCKED_FINAL,
             PacketState.CANCELLED,
         ],
-        PacketState.BLOCKED_FINAL: [],
+        PacketState.BLOCKED_FINAL: [PacketState.CANCELLED],
         PacketState.ACCEPTED: [PacketState.MERGED],
         PacketState.MERGED: [],
         PacketState.FAILED: [PacketState.CANCELLED],

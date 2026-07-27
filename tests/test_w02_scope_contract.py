@@ -150,7 +150,7 @@ def test_build_packet_contract_with_explicit_scope():
 
 # ─── Test 3: Materializer refuses packet without scope ────────────────────
 
-def test_materializer_refuses_packet_without_scope():
+def test_materializer_refuses_packet_without_scope(db):
     """W02: PacketMaterializer must raise ValueError when scope is empty."""
     materializer = PacketMaterializer()
     with tempfile.TemporaryDirectory() as tmp:
@@ -163,7 +163,7 @@ def test_materializer_refuses_packet_without_scope():
             materializer.materialize(packet_data, Path(tmp))
 
 
-def test_materializer_materializes_with_scope():
+def test_materializer_materializes_with_scope(db):
     """PacketMaterializer works when scope is explicitly provided."""
     materializer = PacketMaterializer()
     with tempfile.TemporaryDirectory() as tmp:
@@ -276,6 +276,22 @@ def test_python_import_path_is_error():
     assert not result.ok
     error_codes = [e.code for e in result.errors]
     assert "E_SCOPE_PYTHON_IMPORT_PATH" in error_codes
+
+
+def test_root_files_with_extensions_are_filesystem_scope_paths():
+    """Root config/docs are valid paths, not dotted Python imports."""
+    errors = validate_scope_paths([
+        "AGENTS.md",
+        "pyproject.toml",
+        "alembic.ini",
+        "docker-compose.yml",
+    ])
+    assert errors == []
+
+
+def test_actual_python_import_path_is_still_rejected_by_contract():
+    errors = validate_scope_paths(["app.services.bidder"])
+    assert any("Python import path" in error for error in errors)
 
 
 # ─── Test 5: Scope/frozen overlap is error ────────────────────────────────

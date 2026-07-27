@@ -131,10 +131,48 @@ def _fake_executor(extras=None, command=None, **extra):
 
 class TestAgentRunServiceExtras:
     @pytest.mark.asyncio
+    async def test_localizes_project_root_env_to_worktree(self, tmp_path: Path):
+        captured: dict = {}
+
+        async def fake_run(
+            self, command, cwd, env=None, timeout_seconds=600,
+            stdin_text=None, **kwargs,
+        ):
+            captured["env"] = dict(env) if env else {}
+            return ProcessResult(stdout="ok", stderr="", exit_code=0, duration_ms=10)
+
+        parent_root = tmp_path / "merge-destination"
+        worktree = tmp_path / "isolated-worktree"
+        worktree.mkdir()
+        with patch.dict(os.environ, {
+            "GRACE_PROJECT_ROOT": str(parent_root),
+            "GRACE_TARGET_REPO_ROOT": str(parent_root),
+        }):
+            with patch.object(
+                __import__("grace_control.services.process_supervisor", fromlist=["ProcessSupervisor"]).ProcessSupervisor,
+                "run", fake_run,
+            ):
+                service = AgentRunService()
+                await service.run(
+                    _fake_executor(),
+                    packet_id="pkt-test",
+                    worktree_path=worktree,
+                    state_root=tmp_path,
+                    packet_markdown="# hello",
+                )
+
+        assert captured["env"]["GRACE_PROJECT_ROOT"] == str(worktree.resolve())
+        assert captured["env"]["GRACE_TARGET_REPO_ROOT"] == str(worktree.resolve())
+        assert captured["env"]["GRACE_AGENT_WORKTREE"] == str(worktree.resolve())
+
+    @pytest.mark.asyncio
     async def test_appends_extras_when_env_var_set(self, tmp_path: Path):
         captured: dict = {}
 
-        async def fake_run(self, command, cwd, env=None, timeout_seconds=600, stdin_text=None):
+        async def fake_run(
+            self, command, cwd, env=None, timeout_seconds=600,
+            stdin_text=None, **kwargs,
+        ):
             captured["command"] = list(command)
             captured["env"] = dict(env) if env else {}
             return ProcessResult(stdout="ok", stderr="", exit_code=0, duration_ms=10)
@@ -161,7 +199,10 @@ class TestAgentRunServiceExtras:
     async def test_drops_unresolved_env_var_tokens(self, tmp_path: Path):
         captured: dict = {}
 
-        async def fake_run(self, command, cwd, env=None, timeout_seconds=600, stdin_text=None):
+        async def fake_run(
+            self, command, cwd, env=None, timeout_seconds=600,
+            stdin_text=None, **kwargs,
+        ):
             captured["command"] = list(command)
             return ProcessResult(stdout="ok", stderr="", exit_code=0, duration_ms=10)
 
@@ -191,7 +232,10 @@ class TestAgentRunServiceExtras:
     async def test_drops_empty_tokens(self, tmp_path: Path):
         captured: dict = {}
 
-        async def fake_run(self, command, cwd, env=None, timeout_seconds=600, stdin_text=None):
+        async def fake_run(
+            self, command, cwd, env=None, timeout_seconds=600,
+            stdin_text=None, **kwargs,
+        ):
             captured["command"] = list(command)
             return ProcessResult(stdout="ok", stderr="", exit_code=0, duration_ms=10)
 
@@ -217,7 +261,10 @@ class TestAgentRunServiceExtras:
     async def test_no_extras_means_no_appended_flags(self, tmp_path: Path):
         captured: dict = {}
 
-        async def fake_run(self, command, cwd, env=None, timeout_seconds=600, stdin_text=None):
+        async def fake_run(
+            self, command, cwd, env=None, timeout_seconds=600,
+            stdin_text=None, **kwargs,
+        ):
             captured["command"] = list(command)
             return ProcessResult(stdout="ok", stderr="", exit_code=0, duration_ms=10)
 
@@ -242,7 +289,10 @@ class TestAgentRunServiceExtras:
     async def test_partial_extras_when_one_var_set(self, tmp_path: Path):
         captured: dict = {}
 
-        async def fake_run(self, command, cwd, env=None, timeout_seconds=600, stdin_text=None):
+        async def fake_run(
+            self, command, cwd, env=None, timeout_seconds=600,
+            stdin_text=None, **kwargs,
+        ):
             captured["command"] = list(command)
             return ProcessResult(stdout="ok", stderr="", exit_code=0, duration_ms=10)
 
@@ -270,7 +320,10 @@ class TestAgentRunServiceExtras:
     async def test_standalone_flag_emitted_when_no_value_follows(self, tmp_path: Path):
         captured: dict = {}
 
-        async def fake_run(self, command, cwd, env=None, timeout_seconds=600, stdin_text=None):
+        async def fake_run(
+            self, command, cwd, env=None, timeout_seconds=600,
+            stdin_text=None, **kwargs,
+        ):
             captured["command"] = list(command)
             return ProcessResult(stdout="ok", stderr="", exit_code=0, duration_ms=10)
 
@@ -420,7 +473,10 @@ class TestAgentRunServiceExtras:
         # the orchestrator wraps it as a single token rather than crashing.
         captured: dict = {}
 
-        async def fake_run(self, command, cwd, env=None, timeout_seconds=600, stdin_text=None):
+        async def fake_run(
+            self, command, cwd, env=None, timeout_seconds=600,
+            stdin_text=None, **kwargs,
+        ):
             captured["command"] = list(command)
             return ProcessResult(stdout="ok", stderr="", exit_code=0, duration_ms=10)
 

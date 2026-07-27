@@ -1,4 +1,271 @@
 agents:
+  architect-mini-swe:
+    backend: cli
+    resume_mode: never
+    command:
+    - "{python_executable}"
+    - -m
+    - grace_control.runtime.mini_swe_runner
+    - --role
+    - architect
+    - --model
+    - "{model}"
+    - --task-file
+    - "{packet_path}"
+    - --worktree
+    - "{worktree_path}"
+    - --timeout-seconds
+    - "3600"
+    - --reasoning-effort
+    - "{effort}"
+    cwd: "{worktree_path}"
+    effort: xhigh
+    priority: 400
+    inject_dir: false
+    input:
+      mode: file
+    model: "${GRACE_MINI_SWE_ARCHITECT_MODEL:-openai/gpt-5.5}"
+    timeout_seconds: 600
+
+  coder-mini-swe:
+    backend: cli
+    resume_mode: never
+    resume_safe: false
+    command:
+    - "{python_executable}"
+    - -m
+    - grace_control.runtime.mini_swe_runner
+    - --role
+    - coder
+    - --model
+    - "{model}"
+    - --task-file
+    - "{packet_path}"
+    - --worktree
+    - "{worktree_path}"
+    - --timeout-seconds
+    - "3600"
+    - --reasoning-effort
+    - "{effort}"
+    cwd: "{worktree_path}"
+    effort: medium
+    priority: 300
+    inject_dir: false
+    input:
+      mode: file
+    env:
+      GRACE_MINI_SWE_OPENAI_BASE_URL: "http://127.0.0.1:18317/v1"
+      GRACE_MINI_SWE_OPENAI_API_KEY: "dummy"
+    minimal_repo: false
+    skip_context_builder: false
+    workspace_mode: full_git_worktree
+    model: "${GRACE_MINI_SWE_CODER_MODEL:-openai/gemini-3.6-flash-high}"
+    timeout_seconds: 600
+
+  reviewer-mini-swe:
+    backend: cli
+    resume_mode: never
+    command:
+    - "{python_executable}"
+    - -m
+    - grace_control.runtime.mini_swe_runner
+    - --role
+    - reviewer
+    - --model
+    - "{model}"
+    - --task-file
+    - "{packet_path}"
+    - --worktree
+    - "{worktree_path}"
+    - --timeout-seconds
+    - "3600"
+    - --reasoning-effort
+    - "{effort}"
+    cwd: "{worktree_path}"
+    effort: xhigh
+    priority: 400
+    inject_dir: false
+    input:
+      mode: file
+    model: "${GRACE_MINI_SWE_REVIEWER_MODEL:-openai/gpt-5.6-sol}"
+    timeout_seconds: 600
+
+  verifier-mini-swe:
+    backend: cli
+    resume_mode: never
+    command:
+    - "{python_executable}"
+    - -m
+    - grace_control.runtime.mini_swe_runner
+    - --role
+    - verifier
+    - --model
+    - "{model}"
+    - --task-file
+    - "{packet_path}"
+    - --worktree
+    - "{worktree_path}"
+    - --timeout-seconds
+    - "3600"
+    - --reasoning-effort
+    - "{effort}"
+    cwd: "{worktree_path}"
+    effort: medium
+    priority: 300
+    inject_dir: false
+    input:
+      mode: file
+    model: "${GRACE_MINI_SWE_VERIFIER_MODEL:-openai/gpt-5.5}"
+    timeout_seconds: 600
+
+  architect-mini-swe-deepseek:
+    backend: cli
+    resume_mode: never
+    command:
+    - "{python_executable}"
+    - -m
+    - grace_control.runtime.mini_swe_runner
+    - --role
+    - architect
+    - --model
+    - "{model}"
+    - --task-file
+    - "{packet_path}"
+    - --worktree
+    - "{worktree_path}"
+    - --timeout-seconds
+    - "3600"
+    - --reasoning-effort
+    - "{effort}"
+    cwd: "{worktree_path}"
+    effort: medium
+    priority: 100
+    inject_dir: false
+    input:
+      mode: file
+    model: "${GRACE_MINI_SWE_DEEPSEEK_ARCHITECT_MODEL:-openai/deepseek-v4-pro}"
+    timeout_seconds: 600
+
+  coder-mini-swe-deepseek:
+    backend: cli
+    resume_mode: never
+    resume_safe: false
+    command:
+    - "{python_executable}"
+    - -m
+    - grace_control.runtime.mini_swe_runner
+    - --role
+    - coder
+    - --model
+    - "{model}"
+    - --task-file
+    - "{packet_path}"
+    - --worktree
+    - "{worktree_path}"
+    - --timeout-seconds
+    - "3600"
+    - --reasoning-effort
+    - "{effort}"
+    cwd: "{worktree_path}"
+    effort: medium
+    priority: 200
+    inject_dir: false
+    input:
+      mode: file
+    minimal_repo: false
+    skip_context_builder: false
+    workspace_mode: full_git_worktree
+    model: "${GRACE_MINI_SWE_DEEPSEEK_CODER_MODEL:-openai/deepseek-v4-flash}"
+    timeout_seconds: 600
+
+  coder-mini-swe-gpt55:
+    backend: cli
+    resume_mode: never
+    resume_safe: false
+    command:
+    - "{python_executable}"
+    - -m
+    - grace_control.runtime.mini_swe_runner
+    - --role
+    - coder
+    - --model
+    - "{model}"
+    - --task-file
+    - "{packet_path}"
+    - --worktree
+    - "{worktree_path}"
+    - --timeout-seconds
+    - "3600"
+    - --reasoning-effort
+    - "{effort}"
+    cwd: "{worktree_path}"
+    effort: high
+    priority: 100
+    inject_dir: false
+    input:
+      mode: file
+    minimal_repo: false
+    skip_context_builder: false
+    workspace_mode: full_git_worktree
+    model: "${GRACE_MINI_SWE_GPT55_CODER_MODEL:-openai/gpt-5.5}"
+    timeout_seconds: 600
+
+  reviewer-mini-swe-deepseek:
+    backend: cli
+    resume_mode: never
+    command:
+    - "{python_executable}"
+    - -m
+    - grace_control.runtime.mini_swe_runner
+    - --role
+    - reviewer
+    - --model
+    - "{model}"
+    - --task-file
+    - "{packet_path}"
+    - --worktree
+    - "{worktree_path}"
+    - --timeout-seconds
+    - "3600"
+    - --reasoning-effort
+    - "{effort}"
+    cwd: "{worktree_path}"
+    effort: medium
+    priority: 100
+    inject_dir: false
+    input:
+      mode: file
+    model: "${GRACE_MINI_SWE_DEEPSEEK_REVIEWER_MODEL:-openai/deepseek-v4-pro}"
+    timeout_seconds: 600
+
+  verifier-mini-swe-deepseek:
+    backend: cli
+    resume_mode: never
+    command:
+    - "{python_executable}"
+    - -m
+    - grace_control.runtime.mini_swe_runner
+    - --role
+    - verifier
+    - --model
+    - "{model}"
+    - --task-file
+    - "{packet_path}"
+    - --worktree
+    - "{worktree_path}"
+    - --timeout-seconds
+    - "3600"
+    - --reasoning-effort
+    - "{effort}"
+    cwd: "{worktree_path}"
+    effort: medium
+    priority: 100
+    inject_dir: false
+    input:
+      mode: file
+    model: "${GRACE_MINI_SWE_DEEPSEEK_VERIFIER_MODEL:-openai/deepseek-v4-flash}"
+    timeout_seconds: 600
+
   deepseek-v4-pro:
     backend: cli
     resume_mode: never
@@ -365,39 +632,28 @@ agents:
     backend: cli
     resume_mode: never
     command:
-    - opencode
-    - run
+    - "{python_executable}"
+    - -m
+    - grace_control.runtime.mini_swe_runner
+    - --role
+    - context_collector
     - --model
-    - '{model}'
-    - --variant
-    - '{effort}'
-    - |-
-      You are a READ-ONLY JSON context assistant for GRACE.
-
-      HARD ROLE BOUNDARY — READ-ONLY:
-      - You MUST NOT create, edit, delete, move, format, or commit files.
-      - You MUST NOT run write commands or modify the repository in any way.
-      - You MUST NOT implement, fix, refactor, or update anything.
-      - You MUST NOT produce patches, diffs, or code changes.
-      - If you see a problem or bug: report it as a finding in your JSON output. NEVER fix it.
-      - Your ONLY allowed action: read files and produce JSON output.
-
-      INPUT:
-      You receive a prompt describing a task and a list of files with metadata.
-      You MUST respond ONLY with valid JSON as specified in the prompt.
-      No markdown, no prose, no code fences, no explanations outside JSON.
-
-      OUTPUT CONTRACT:
-      - Respond ONLY with the exact JSON structure requested in the prompt.
-      - No extra text before or after the JSON.
-      - No file modifications whatsoever.
+    - "{model}"
+    - --task-file
+    - "{packet_path}"
+    - --worktree
+    - "{worktree_path}"
+    - --timeout-seconds
+    - "3600"
+    - --reasoning-effort
+    - "{effort}"
+    cwd: "{worktree_path}"
     effort: low
     inject_dir: false
     input:
-      mode: stdin
-      template: '{packet_markdown}'
-    model: deepseek/deepseek-v4-flash
-    timeout_seconds: 120
+      mode: file
+    model: "${GRACE_MINI_SWE_CONTEXT_MODEL:-openai/gemini-3-flash-agent}"
+    timeout_seconds: 600
   opencode:
     disabled: true  # W09: generic profile without specific role; disabled until covered by tests
     backend: cli

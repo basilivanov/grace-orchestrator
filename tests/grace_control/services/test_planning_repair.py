@@ -16,6 +16,9 @@ class TestRepairableErrorClassifier:
     def test_repairable_source_split_error(self):
         assert is_repairable_error("E_SOURCE_SPLIT_ORIGIN_MISSING")
 
+    def test_repairable_python_scope_limit_error(self):
+        assert is_repairable_error("E_SCOPE_PYTHON_FILE_LIMIT")
+
     def test_terminal_shell_error(self):
         assert not is_repairable_error("E_SHELL_SOURCE_UNDER_DASH")
 
@@ -108,6 +111,24 @@ class TestRepairPrompt:
         prompt = build_repair_prompt("test", "test", {"waves": []}, errors)
         assert "corrected json only" in prompt.lower() or "only valid json" in prompt.lower()
         assert "markdown" in prompt.lower() and "not" in prompt.lower()
+
+    def test_repair_prompt_keeps_large_plan_tail_needed_for_bounded_rework(self):
+        plan = {
+            "waves": [
+                {
+                    "title": "W1",
+                    "packets": [
+                        {"title": "P1", "description": "x" * 5000},
+                        {"title": "W06-P01 Final broad sweep marker"},
+                    ],
+                }
+            ]
+        }
+        errors = [{"code": "E_SCOPE_PYTHON_FILE_LIMIT", "message": "too broad"}]
+
+        prompt = build_repair_prompt("test", "test", plan, errors)
+
+        assert "W06-P01 Final broad sweep marker" in prompt
 
 
 class TestSessionHandleConversion:

@@ -36,6 +36,10 @@ _DEFAULT_TIMEOUT = int(os.environ.get("GRACE_CONTEXT_TIMEOUT", "60"))
 _CONTENT_PREVIEW_LINES = 100
 _CONTENT_PREVIEW_CHARS = 2500
 _MAX_RELEVANT_FILES = 15
+_DEFAULT_SCOPE_CANDIDATES = (
+    "app/", "src/", "apps/", "packages/", "tests/", "scripts/", "docs/",
+    "AGENTS.md", "README.md", "pyproject.toml",
+)
 
 #START_BLOCK_DATACLASSES
 
@@ -96,10 +100,22 @@ class ContextCollector:
         project_root: Path | None = None,
     ) -> CodebaseContext:
         root = project_root or self._root
-        scope = target_scope or ["src/grace_control/"]  # W02: read-only context default, not write scope
+        scope = target_scope or _default_context_scopes(root)
 
         files = _scan_files(root, scope)
         _log.debug("context_scan_done", file_count=len(files))
+
+        # Keep explicit offline/test mode deterministic.  The API test and
+        # local recovery harnesses set this flag when no LLM subprocess should
+        # be started; the static fallback still supplies complete file scope.
+        runner = getattr(self._run_llm, "__func__", self._run_llm)
+        offline_requested = os.environ.get("GRACE_CONTEXT_DISABLED", "").lower() in {
+            "1", "true", "yes", "on"
+        }
+        if offline_requested and getattr(runner, "__module__", __name__) == __name__:
+            context = self._fallback_analysis(task_description, files, scope)
+            _log.info("context_collection_disabled", file_count=len(files))
+            return context
 
         relevant_paths = []
         try:
@@ -182,7 +198,9 @@ Complexity: 0-50 (config), 51-150 (single module), 151-250 (multi-module), 251-3
 
     async def _run_llm(self, prompt: str) -> str:
         from grace_control.core.llm_runner import run_llm
+        session_dir = Path(self._stdout_log_path).parent if self._stdout_log_path else None
         return await run_llm(prompt, role="context_collector", model=self._model, cli=self._executor_id, cwd=self._root,
+                             session_dir=session_dir,
                              stdout_log_path=self._stdout_log_path, stderr_log_path=self._stderr_log_path)
 
     def _fallback_analysis(self, task: str, files: list[FileContext], scope: list[str]) -> CodebaseContext:
@@ -208,6 +226,26 @@ Complexity: 0-50 (config), 51-150 (single module), 151-250 (multi-module), 251-3
 _CODE_EXTS = {".py", ".html", ".js", ".css", ".json", ".yaml", ".yml", ".md"}
 _MAX_CONTENT_LINES = 120
 _MAX_CONTENT_CHARS = 3000
+
+
+#START_FUNCTION_CONTRACT
+# name: _default_context_scopes
+# purpose: Select existing common project roots for read-only context discovery.
+# inputs: root — target repository root.
+# returns: Existing repository-relative directory/file scopes.
+# side_effects: Checks filesystem paths.
+# emitted_logs: None.
+# error_behavior: Returns an empty list when no common project roots exist.
+#END_FUNCTION_CONTRACT
+def _default_context_scopes(root: Path) -> list[str]:
+    scopes: list[str] = []
+    for candidate in _DEFAULT_SCOPE_CANDIDATES:
+        try:
+            if (root / candidate).exists():
+                scopes.append(candidate)
+        except OSError:
+            continue
+    return scopes
 
 
 def _scan_files(root: Path, scopes: list[str]) -> list[FileContext]:

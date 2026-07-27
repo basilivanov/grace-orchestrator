@@ -357,8 +357,7 @@ async def merge_packet(packet_id: str, request: dict) -> dict:
         _log.warn("merge_failed", packet_id=packet_id, error=result.error[:200])
         try:
             with get_db() as db:
-                from grace_control.api.ws_events import record_event as _rec
-                _rec("packet_merge_failed", "packet", packet_id, {
+                record_event("packet_merge_failed", "packet", packet_id, {
                     "branch": branch_name, "error": result.error,
                 }, db=db)
         except Exception as _evt_err:
@@ -369,8 +368,7 @@ async def merge_packet(packet_id: str, request: dict) -> dict:
 
     try:
         with get_db() as db:
-            from grace_control.api.ws_events import record_event as _rec
-            _rec("packet_merged", "packet", packet_id, {
+            record_event("packet_merged", "packet", packet_id, {
                 "commit_sha": result.commit_sha, "target_repo": result.target_repo,
                 "branch": branch_name,
             }, db=db)

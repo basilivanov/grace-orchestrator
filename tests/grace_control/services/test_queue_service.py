@@ -31,10 +31,11 @@ def _add_wave(s, wid: str, fid: str, order: int = 1):
 
 
 def _add_packet(s, pid: str, fid: str, wid: str,
-                state: str = PacketState.READY.value, created_at=None):
+                state: str = PacketState.READY.value, created_at=None,
+                depends_on: list[str] | None = None):
     s.add(Packet(id=pid, feature_id=fid, wave_id=wid,
                  slug=pid, title=pid, description="",
-                 spec_json={}, state=state,
+                 spec_json={"depends_on": depends_on or []}, state=state,
                  created_at=created_at or datetime.now(UTC)))
     s.commit()
 
@@ -115,6 +116,62 @@ def test_packet_order_by_id_tiebreaker(_db):
     assert pid == "pkt_A"
 
 
+def test_packet_dependency_blocks_earlier_dependent_packet(_db):
+    ts = datetime(2026, 1, 1)
+    with get_db() as s:
+        _add_feature(s, "feat_DEP", status="active")
+        _add_wave(s, "wave_DEP", "feat_DEP")
+        _add_packet(
+            s,
+            "pkt_DEPENDENT",
+            "feat_DEP",
+            "wave_DEP",
+            created_at=ts,
+            depends_on=["pkt_BASE"],
+        )
+        _add_packet(
+            s,
+            "pkt_BASE",
+            "feat_DEP",
+            "wave_DEP",
+            created_at=ts + timedelta(seconds=1),
+        )
+
+    from grace_control.services.queue_service import claim_next
+
+    packet_id, reason = claim_next("worker")
+
+    assert packet_id == "pkt_BASE"
+    assert reason == "ok"
+
+
+def test_packet_dependency_becomes_claimable_after_merge(_db):
+    with get_db() as s:
+        _add_feature(s, "feat_DEP_DONE", status="active")
+        _add_wave(s, "wave_DEP_DONE", "feat_DEP_DONE")
+        _add_packet(
+            s,
+            "pkt_BASE_DONE",
+            "feat_DEP_DONE",
+            "wave_DEP_DONE",
+            state=PacketState.MERGED.value,
+        )
+        _add_packet(
+            s,
+            "pkt_DEP_DONE",
+            "feat_DEP_DONE",
+            "wave_DEP_DONE",
+            depends_on=["pkt_BASE_DONE"],
+        )
+
+    from grace_control.services.queue_service import claim_next
+
+    packet_id, reason = claim_next("worker")
+
+    assert packet_id == "pkt_DEP_DONE"
+    assert reason == "ok"
+
+
 # ── Degraded feature stops queue ───────────────────────────────────────
 
 
@@ -134,6 +191,161 @@ def test_degraded_packet_blocks_feature(_db):
     with get_db() as s:
         feat = s.query(Feature).filter_by(id="feat_D").first()
         assert feat.status == "degraded"
+
+
+def test_ready_rework_supersedes_failed_parent_and_reactivates_feature(_db):
+    with get_db() as s:
+        _add_feature(s, "feat_REWORK", status="degraded")
+        _add_wave(s, "wave_REWORK", "feat_REWORK")
+        _add_packet_with_attempts(
+            s, "pkt_PARENT", "feat_REWORK", "wave_REWORK",
+            state=PacketState.FAILED.value, attempt=3, max_attempts=3,
+        )
+        child = Packet(
+            id="pkt_REWORK",
+            feature_id="feat_REWORK",
+            wave_id="wave_REWORK",
+            slug="pkt-rework",
+            title="Rework: pkt_PARENT",
+            description="",
+            spec_json={
+                "origin": "review_rework",
+                "parent_packet_id": "pkt_PARENT",
+                "depends_on": [],
+            },
+            state=PacketState.READY.value,
+            attempt_count=0,
+            max_attempts=3,
+        )
+        s.add(child)
+        s.commit()
+
+    from grace_control.services.queue_service import claim_next
+
+    packet_id, reason = claim_next("worker")
+
+    assert packet_id == "pkt_REWORK"
+    assert reason == "ok"
+    with get_db() as s:
+        feature = s.query(Feature).filter_by(id="feat_REWORK").first()
+        assert feature.status == "active"
+
+
+def test_rework_lineage_end_to_end_unblocks_dependent_wave(_db):
+    import asyncio
+
+    from unittest.mock import MagicMock
+
+    from grace_control.services.git_service import GitResult
+    from grace_control.services.merge_service import MergeService
+    from grace_control.services.packet_service import PacketService
+
+    with get_db() as s:
+        _add_feature(s, "feat_REWORK_E2E", status="degraded")
+        _add_wave(s, "wave_REWORK_E2E_0", "feat_REWORK_E2E", order=0)
+        _add_wave(s, "wave_REWORK_E2E_1", "feat_REWORK_E2E", order=1)
+        s.add(Packet(
+            id="pkt_REWORK_E2E_PARENT",
+            feature_id="feat_REWORK_E2E",
+            wave_id="wave_REWORK_E2E_0",
+            slug="rework-e2e-parent",
+            title="Original Contract",
+            description="",
+            spec_json={
+                "scope": ["src/original.py"],
+                "verification": {"t1": ["pytest -q"]},
+                "expected_evidence": [{
+                    "id": "EV-E2E",
+                    "kind": "test",
+                    "artifact_patterns": ["verification-output/e2e.log"],
+                }],
+                "acceptance_criteria": ["original contract"],
+                "depends_on": [],
+            },
+            state=PacketState.FAILED.value,
+            attempt_count=3,
+            max_attempts=3,
+            acceptance_profile="STRICT",
+        ))
+        s.add(Packet(
+            id="pkt_REWORK_E2E_CHILD",
+            feature_id="feat_REWORK_E2E",
+            wave_id="wave_REWORK_E2E_0",
+            slug="rework-e2e-child",
+            title="Rework: Original Contract",
+            description="",
+            spec_json={
+                "origin": "review_rework",
+                "parent_packet_id": "pkt_REWORK_E2E_PARENT",
+                "scope": ["src/original.py"],
+                "verification": {"t1": ["pytest -q"]},
+                "blocking_issues": ["restore evidence"],
+            },
+            state=PacketState.READY.value,
+            attempt_count=0,
+            max_attempts=3,
+            acceptance_profile="STRICT",
+        ))
+        s.add(Packet(
+            id="pkt_REWORK_E2E_NEXT",
+            feature_id="feat_REWORK_E2E",
+            wave_id="wave_REWORK_E2E_1",
+            slug="rework-e2e-next",
+            title="Dependent Packet",
+            description="",
+            spec_json={"depends_on": ["Original Contract"]},
+            state=PacketState.DRAFT.value,
+            attempt_count=0,
+            max_attempts=3,
+            acceptance_profile="STRICT",
+        ))
+        s.commit()
+
+    from grace_control.services.queue_service import claim_next
+
+    packet_id, reason = claim_next("worker")
+    assert (packet_id, reason) == ("pkt_REWORK_E2E_CHILD", "ok")
+
+    packets = PacketService()
+    claim = asyncio.run(packets.claim(packet_id, "worker"))
+    assert claim.spec["expected_evidence"][0]["id"] == "EV-E2E"
+    assert claim.spec["acceptance_criteria"] == ["original contract"]
+    asyncio.run(packets.release(
+        packet_id,
+        "accepted",
+        {"accepted": True},
+        worker_id="worker",
+        lease_id=claim.lease_id,
+        claimed_attempt=claim.claimed_attempt,
+    ))
+
+    git = MagicMock()
+    git.validate_repo.return_value = MagicMock(is_git=True, is_clean=True, current_branch="main")
+    git.checkout.return_value = GitResult(True, "", "", 0)
+    git.fetch.return_value = GitResult(True, "", "", 0)
+    git.merge.return_value = GitResult(True, "", "", 0)
+    git.push.return_value = GitResult(True, "", "", 0)
+    git.current_sha.return_value = "fedcba9876543210"
+    merge = asyncio.run(MergeService(git=git).merge_packet(
+        packet_id=packet_id,
+        target_repo_root="/tmp/repo",
+        branch_name="agent/rework-e2e",
+        target_branch="main",
+    ))
+    assert merge.success is True
+
+    from grace_control.core.wave_gate import check_wave_gates
+
+    assert check_wave_gates() == 1
+    next_packet_id, next_reason = claim_next("worker")
+    assert (next_packet_id, next_reason) == ("pkt_REWORK_E2E_NEXT", "ok")
+    with get_db() as s:
+        parent = s.query(Packet).filter_by(id="pkt_REWORK_E2E_PARENT").first()
+        child = s.query(Packet).filter_by(id="pkt_REWORK_E2E_CHILD").first()
+        next_packet = s.query(Packet).filter_by(id="pkt_REWORK_E2E_NEXT").first()
+        assert parent.state == PacketState.CANCELLED.value
+        assert child.state == PacketState.MERGED.value
+        assert next_packet.state == PacketState.READY.value
 
 
 def test_degraded_feature_does_not_block_activation_of_another(_db):

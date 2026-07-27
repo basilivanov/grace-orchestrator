@@ -104,12 +104,33 @@ def _check_evidence_kind(
                     return True
         return False
 
+    if req.kind in {"test", "runtime_log", "observability"}:
+        return any(
+            cmd.exit_code == 0
+            for stage in stage_results
+            for cmd in stage.commands
+        )
+
+    if req.kind == "contract":
+        roots = [Path(worktree_path)] if worktree_path and worktree_path.exists() else []
+        if run_dir and Path(run_dir).exists():
+            roots.append(Path(run_dir))
+        if not roots:
+            return False
+        patterns = req.artifact_patterns or ([req.pattern] if req.pattern else [])
+        if not patterns:
+            return False
+        return all(any(any(root.rglob(pattern)) for root in roots) for pattern in patterns)
+
     if req.kind == "file":
-        if not worktree_path or not worktree_path.exists():
+        roots = [Path(worktree_path)] if worktree_path and worktree_path.exists() else []
+        if run_dir and Path(run_dir).exists():
+            roots.append(Path(run_dir))
+        if not roots:
             return False
         patterns = req.artifact_patterns or ([req.pattern] if req.pattern else [])
         if patterns:
-            return any(list(worktree_path.rglob(p)) for p in patterns)
+            return any(list(root.rglob(p)) for root in roots for p in patterns)
         return True
 
     if req.kind == "diff":

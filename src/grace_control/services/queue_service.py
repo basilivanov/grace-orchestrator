@@ -20,7 +20,8 @@
 # emitted_logs: queue_candidate, queue_activated, queue_degraded, queue_done,
 #                queue_noop, queue_retryable_failure_wait,
 #                queue_terminal_failure_degraded, queue_blocked_recoverable_wait,
-#                queue_waiting_for_retry, queue_ready_claimable.
+#                queue_waiting_for_retry, queue_ready_claimable,
+#                queue_dependency_wait.
 # error_behavior: Never raises — returns (packet_id, reason) tuple.
 # END_MODULE_CONTRACT
 
@@ -34,6 +35,10 @@ from typing import Any
 from grace_control.core.structured_logger import GraceLogger
 from grace_control.db import get_db
 from grace_control.db.schema import Feature, Packet, PacketState, Wave
+from grace_control.services.rework_packet_service import (
+    effective_rework_packets,
+    is_rework_spec,
+)
 
 _log = GraceLogger("queue_service")
 
@@ -82,6 +87,40 @@ def _oldest_queued_feature(db) -> Feature | None:
 def _active_feature(db) -> Feature | None:
     """Find the currently active feature."""
     return db.query(Feature).filter(Feature.status == "active").first()
+
+
+def _recoverable_degraded_feature(db) -> Feature | None:
+    """Reactivate the oldest degraded feature with an actionable rework leaf."""
+    degraded = (
+        db.query(Feature)
+        .filter(Feature.status == "degraded")
+        .order_by(Feature.created_at.asc(), Feature.id.asc())
+        .all()
+    )
+    for feature in degraded:
+        packets = db.query(Packet).filter(Packet.feature_id == feature.id).all()
+        effective = effective_rework_packets(packets)
+        ready_reworks = [
+            packet for packet in effective
+            if packet.state == PacketState.READY.value
+            and is_rework_spec(packet.spec_json)
+        ]
+        if not ready_reworks:
+            continue
+        feature.status = "active"
+        feature.degraded_reason = None
+        for packet in ready_reworks:
+            wave = db.query(Wave).filter_by(id=packet.wave_id).first()
+            if wave is not None:
+                wave.status = "IN_PROGRESS"
+        db.commit()
+        _log.info(
+            "queue_rework_reactivated",
+            feature_id=feature.id,
+            packet_ids=[packet.id for packet in ready_reworks],
+        )
+        return feature
+    return None
 
 
 def _run_wave_gate():
@@ -137,6 +176,18 @@ def _attempts_remaining(p: Packet) -> int:
     return max(0, (p.max_attempts or 0) - (p.attempt_count or 0))
 
 
+def _packet_dependencies_satisfied(packet: Packet, packets_by_title: dict[str, Packet]) -> bool:
+    spec = packet.spec_json if isinstance(packet.spec_json, dict) else {}
+    depends_on = spec.get("depends_on", [])
+    if isinstance(depends_on, str):
+        depends_on = [depends_on]
+    for dependency_title in depends_on:
+        dependency = packets_by_title.get(dependency_title)
+        if dependency is None or dependency.state not in TERMINAL_SUCCESS:
+            return False
+    return True
+
+
 def claim_next(worker_id: str) -> tuple[str | None, str]:
     """Determine the next claimable packet per FIFO queue discipline.
 
@@ -155,6 +206,8 @@ def claim_next(worker_id: str) -> tuple[str | None, str]:
 
         # 2. Find active feature, or promote oldest queued to active
         feat = _active_feature(db)
+        if feat is None:
+            feat = _recoverable_degraded_feature(db)
         if feat is None:
             feat = _oldest_queued_feature(db)
             if feat is None:
@@ -178,6 +231,25 @@ def claim_next(worker_id: str) -> tuple[str | None, str]:
             .order_by(Wave.order.asc(), Wave.created_at.asc(), Wave.id.asc())
             .all()
         )
+        feature_packets = db.query(Packet).filter(Packet.feature_id == feat.id).all()
+        effective_feature_packets = effective_rework_packets(feature_packets)
+        effective_by_id = {packet.id: packet for packet in effective_feature_packets}
+        packets_by_title: dict[str, Packet] = {}
+        for packet in feature_packets:
+            target = packet
+            seen: set[str] = set()
+            while target.id not in effective_by_id and target.id not in seen:
+                seen.add(target.id)
+                children = [
+                    candidate for candidate in feature_packets
+                    if is_rework_spec(candidate.spec_json)
+                    and candidate.spec_json.get("parent_packet_id") == target.id
+                    and candidate.state != PacketState.CANCELLED.value
+                ]
+                if len(children) != 1:
+                    break
+                target = children[0]
+            packets_by_title[packet.title] = target
 
         claimable_packet = None
         wave_complete = True  # tracks whether all preceding waves are done
@@ -188,15 +260,18 @@ def claim_next(worker_id: str) -> tuple[str | None, str]:
                 .filter(Packet.wave_id == wave.id)
                 .all()
             )
+            effective_wave_packets = effective_rework_packets(wave_packets)
 
-            if not wave_packets:
+            if not effective_wave_packets:
                 continue
 
             # Classify packets
-            ready = [p for p in wave_packets if p.state == PacketState.READY.value]
-            retryable = [p for p in wave_packets if is_retryable_failure(p)]
-            degrading = [p for p in wave_packets if is_feature_degrading_packet(p)]
-            all_done = all(p.state in TERMINAL_SUCCESS for p in wave_packets)
+            raw_ready = [p for p in effective_wave_packets if p.state == PacketState.READY.value]
+            ready = [p for p in raw_ready if _packet_dependencies_satisfied(p, packets_by_title)]
+            waiting_on_dependencies = [p for p in raw_ready if p not in ready]
+            retryable = [p for p in effective_wave_packets if is_retryable_failure(p)]
+            degrading = [p for p in effective_wave_packets if is_feature_degrading_packet(p)]
+            all_done = all(p.state in TERMINAL_SUCCESS for p in effective_wave_packets)
 
             # 5a. Degrading packets: feature must become degraded.
             if degrading:
@@ -226,6 +301,15 @@ def claim_next(worker_id: str) -> tuple[str | None, str]:
                 )
                 return None, "waiting_for_retry"
 
+            if waiting_on_dependencies and not ready:
+                _log.info(
+                    "queue_dependency_wait",
+                    feature_id=feat.id,
+                    wave_id=wave.id,
+                    packet_ids=[p.id for p in waiting_on_dependencies],
+                )
+                return None, "waiting_for_dependencies"
+
             # 5c. Non-wave-complete: do not skip ahead.
             if not wave_complete and ready:
                 return None, "waiting_for_wave_completion"
@@ -253,7 +337,7 @@ def claim_next(worker_id: str) -> tuple[str | None, str]:
                         PacketState.BLOCKED.value,
                         PacketState.BLOCKED_RECOVERABLE.value,
                     )
-                    for p in wave_packets
+                    for p in effective_wave_packets
                 ):
                     _log.info(
                         "queue_blocked_recoverable_wait",
@@ -274,22 +358,23 @@ def claim_next(worker_id: str) -> tuple[str | None, str]:
         all_feature_packets = (
             db.query(Packet).filter(Packet.feature_id == feat.id).all()
         )
-        remaining = len(all_feature_packets)
+        effective_feature_packets = effective_rework_packets(all_feature_packets)
+        remaining = len(effective_feature_packets)
         if remaining == 0:
             return None, "no_packets"
 
         # Retryable / blocked still pending: keep feature active.
-        if any(is_retryable_failure(p) for p in all_feature_packets):
+        if any(is_retryable_failure(p) for p in effective_feature_packets):
             return None, "waiting_for_retry"
         if any(
             p.state in (PacketState.BLOCKED.value, PacketState.BLOCKED_RECOVERABLE.value)
-            for p in all_feature_packets
+            for p in effective_feature_packets
         ):
             return None, "waiting_for_recovery"
 
-        done_count = sum(1 for p in all_feature_packets if p.state in TERMINAL_SUCCESS)
+        done_count = sum(1 for p in effective_feature_packets if p.state in TERMINAL_SUCCESS)
         non_terminal = sum(
-            1 for p in all_feature_packets
+            1 for p in effective_feature_packets
             if p.state in (PacketState.DRAFT.value, PacketState.READY.value, PacketState.RUNNING.value)
         )
 

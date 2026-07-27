@@ -151,3 +151,87 @@ for i in range(5):
     assert result.exit_code == 0
     final = stdout_log.read_text()
     assert final.count("MID-RUN") == 5
+
+
+@pytest.mark.asyncio
+async def test_progress_artifact_extends_inactivity_timeout(tmp_path: Path) -> None:
+    """Artifact growth keeps a long-running command alive past idle timeout."""
+    sup = ProcessSupervisor()
+    progress = tmp_path / "progress.marker"
+    script = """
+from pathlib import Path
+import time
+p = Path('progress.marker')
+for i in range(4):
+    p.write_text(str(i))
+    time.sleep(0.35)
+"""
+    result = await sup.run(
+        [sys.executable, "-c", script],
+        cwd=tmp_path,
+        timeout_seconds=1,
+        hard_timeout_seconds=5,
+        progress_paths=[progress],
+    )
+
+    assert result.exit_code == 0
+    assert not result.timed_out
+
+
+@pytest.mark.asyncio
+async def test_stdout_growth_extends_inactivity_timeout(tmp_path: Path) -> None:
+    """Regular stdout proves liveness beyond the inactivity window."""
+    sup = ProcessSupervisor()
+    script = """
+import time
+for i in range(4):
+    print(i, flush=True)
+    time.sleep(0.35)
+"""
+    result = await sup.run(
+        [sys.executable, "-c", script],
+        cwd=tmp_path,
+        timeout_seconds=1,
+        hard_timeout_seconds=5,
+    )
+
+    assert result.exit_code == 0
+    assert not result.timed_out
+    assert result.stdout.strip().splitlines() == ["0", "1", "2", "3"]
+
+
+@pytest.mark.asyncio
+async def test_hard_timeout_wins_despite_continuous_stdout(tmp_path: Path) -> None:
+    """Continuous progress cannot bypass the absolute runtime cap."""
+    sup = ProcessSupervisor()
+    script = """
+import time
+while True:
+    print("alive", flush=True)
+    time.sleep(0.2)
+"""
+    result = await sup.run(
+        [sys.executable, "-c", script],
+        cwd=tmp_path,
+        timeout_seconds=1,
+        hard_timeout_seconds=2,
+    )
+
+    assert result.timed_out
+    assert "hard timeout" in result.timeout_reason
+    assert "alive" in result.stdout
+
+
+@pytest.mark.asyncio
+async def test_inactivity_timeout_reports_reason(tmp_path: Path) -> None:
+    """A silent command is stopped after the inactivity window."""
+    sup = ProcessSupervisor()
+    result = await sup.run(
+        [sys.executable, "-c", "import time; time.sleep(5)"],
+        cwd=tmp_path,
+        timeout_seconds=1,
+        hard_timeout_seconds=5,
+    )
+
+    assert result.timed_out
+    assert "inactivity timeout" in result.timeout_reason

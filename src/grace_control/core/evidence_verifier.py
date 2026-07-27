@@ -134,6 +134,7 @@ async def run_evidence_verifier(
         check_artifact_patterns,
         route_missing_evidence,
         AcceptanceProfile,
+        SUPPORTED_EVIDENCE_KINDS,
         validate_evidence_for_profile,
     )
 
@@ -155,10 +156,87 @@ async def run_evidence_verifier(
             suggested_next_owner="coder",
         )
 
-    # 2. Check artifact patterns deterministically
+    # 2. Check artifact patterns deterministically.  Callers historically
+    # supplied only controller run-directory artifacts here, while packet
+    # evidence commonly lives in the target worktree (for example ``src/*.py``
+    # or ``verification-output/*.log``).  Build one repo-relative inventory so
+    # this verifier uses the same evidence sources as the acceptance pipeline.
+    available_artifacts = list(artifacts or [])
+    available_artifacts.extend(changed_files or [])
+    # Packets compiled before E_EVIDENCE_DIFF_HAS_PATTERN may refer to a
+    # synthetic T0 stdout label for diff evidence.  The worktree is committed
+    # before acceptance, so ``git diff`` stdout is normally empty; the
+    # controller-captured changed-files inventory is the authoritative proof.
+    if changed_files:
+        for requirement in getattr(packet, "expected_evidence", []):
+            if requirement.kind != "diff":
+                continue
+            for pattern in requirement.artifact_patterns:
+                if pattern == "t0_stdout" or re.fullmatch(
+                    r"t0/cmd_\d{3}_stdout\.log", pattern
+                ):
+                    available_artifacts.append(pattern)
+    evidence_roots = (Path(worktree_path), Path(run_dir))
+    verification_commands = {
+        command.strip()
+        for commands in (getattr(packet, "verification", {}) or {}).values()
+        for command in commands
+        if isinstance(command, str)
+    }
+    descriptive_patterns = {
+        pattern
+        for requirement in getattr(packet, "expected_evidence", [])
+        for pattern in requirement.artifact_patterns
+        if isinstance(pattern, str)
+        and (
+            pattern.endswith(" output")
+            or pattern.startswith("run: ")
+            or pattern.strip() in verification_commands
+        )
+    }
+    # Backward compatibility for packets compiled before descriptive output
+    # labels were rejected by the plan compiler.  A label such as
+    # ``npm test output`` is accepted only when that exact command passed and
+    # its controller-owned stdout artifact exists.
+    for stage_result in getattr(acceptance_report, "stages", []) or []:
+        for command_result in getattr(stage_result, "commands", []) or []:
+            stdout_path = Path(getattr(command_result, "stdout_path", "") or "")
+            if not getattr(command_result, "passed", False) or not stdout_path.is_file():
+                continue
+            try:
+                available_artifacts.append(stdout_path.relative_to(run_dir).as_posix())
+            except ValueError:
+                pass
+            command_alias = f"{command_result.command.strip()} output"
+            if command_alias in descriptive_patterns:
+                available_artifacts.append(command_alias)
+            run_alias = f"run: {command_result.command.strip()}"
+            if run_alias in descriptive_patterns:
+                available_artifacts.append(run_alias)
+            exact_alias = command_result.command.strip()
+            if exact_alias in descriptive_patterns:
+                available_artifacts.append(exact_alias)
+    for requirement in getattr(packet, "expected_evidence", []):
+        for pattern in requirement.artifact_patterns:
+            pattern_path = Path(pattern)
+            if pattern_path.is_absolute() or ".." in pattern_path.parts:
+                continue
+            for root in evidence_roots:
+                if not root.exists():
+                    continue
+                try:
+                    available_artifacts.extend(
+                        candidate.relative_to(root).as_posix()
+                        for candidate in root.glob(pattern)
+                        if candidate.is_file()
+                    )
+                except (OSError, ValueError):
+                    continue
+    available_artifacts = list(dict.fromkeys(available_artifacts))
+
     artifact_warnings = check_artifact_patterns(
         getattr(packet, "expected_evidence", []),
-        artifacts or [],
+        available_artifacts,
     )
     # Collect IDs of evidence whose patterns are unmatched
     missing_from_patterns: list[str] = []
@@ -167,6 +245,24 @@ async def run_evidence_verifier(
         m = re.search(r"Evidence '([^']+)'", w)
         if m:
             missing_from_patterns.append(m.group(1))
+
+    unsupported_requirements = [
+        req for req in getattr(packet, "expected_evidence", [])
+        if req.id in missing_from_patterns and req.kind not in SUPPORTED_EVIDENCE_KINDS
+    ]
+    if unsupported_requirements:
+        invalid = [f"{req.id}:{req.kind}" for req in unsupported_requirements]
+        return EvidenceVerifierReport(
+            verdict=EvidenceVerifierVerdict.RETURN_TO_ARCHITECT,
+            summary="Packet contract contains unsupported evidence kinds",
+            missing_evidence=[req.id for req in unsupported_requirements],
+            failed_checks=[f"unsupported evidence kind: {item}" for item in invalid],
+            spec_conflicts=["replace unsupported evidence kinds before coder retry"],
+            architect_questions=[
+                "Replace each unsupported evidence kind with a canonical kind and a run-relative artifact glob.",
+            ],
+            suggested_next_owner="architect",
+        )
 
     # 3. If deterministic checks found missing required evidence, route
     if missing_from_patterns:
@@ -232,8 +328,8 @@ async def run_evidence_verifier(
     prompt_parts.append(f"Scope violations: {acceptance_report.scope_violations}")
     if changed_files:
         prompt_parts.append(f"Changed files ({len(changed_files)}): {changed_files[:20]}")
-    if artifacts:
-        prompt_parts.append(f"Artifacts: {artifacts[:20]}")
+    if available_artifacts:
+        prompt_parts.append(f"Artifacts: {available_artifacts[:20]}")
 
     # W05 rework: Include deterministic artifact pattern warnings
     if artifact_warnings:
@@ -248,21 +344,20 @@ async def run_evidence_verifier(
     full_prompt = f"{prompt_template}\n\n## Context\n\n" + "\n".join(prompt_parts)
 
     try:
-        from grace_control.config.agent_profiles import get_agent_profile, load_agent_profiles
-        # Find the verifier profile — prefer verifier-cheap, fallback to any verifier
-        agent_profile = get_agent_profile("verifier-cheap")
-        if not agent_profile:
-            profs = load_agent_profiles()
-            agent_profile = next((p for k, p in profs.items() if "verif" in k.lower()), None)
+        from grace_control.config.agent_profiles import get_agent_profile
+        from grace_control.core.executor_selector import resolve_model
+
+        executor = resolve_model("verifier")
+        agent_profile = get_agent_profile(executor["executor_id"])
         is_multimodal = agent_profile.multimodal if agent_profile else False
-        model = agent_profile.model if agent_profile else "deepseek/deepseek-v4-flash"
+        model = executor["model"] or (agent_profile.model if agent_profile else "deepseek/deepseek-v4-flash")
         # Collect multimodal evidence if available
         multimodal_ctx = ""
         if is_multimodal:
             multimodal_ctx = _build_multimodal_context(packet, acceptance_report, worktree_path, run_dir)
         full_prompt = prompt_template + "\n\n## Context\n\n" + "\n".join(prompt_parts) + multimodal_ctx
         raw = await run_llm(full_prompt, role="verifier", model=model,
-                            cli="verifier-cheap")
+                            cli=executor["executor_id"], cwd=worktree_path)
         llm_report = parse_evidence_verifier_json(raw)
 
         # W05 rework: Merge deterministic findings into LLM report

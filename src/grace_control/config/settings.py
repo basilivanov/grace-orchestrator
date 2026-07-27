@@ -144,6 +144,7 @@ class GraceSettings(BaseSettings):
     opencode_server_host: str = "127.0.0.1"
     opencode_server_port: int = 4096
     opencode_server_url: str = ""
+    opencode_server_password: str = ""
     opencode_server_start_timeout_seconds: int = 20
     opencode_server_health_timeout_seconds: int = 5
     opencode_server_restart_on_unhealthy: bool = True

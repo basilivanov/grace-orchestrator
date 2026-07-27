@@ -49,6 +49,43 @@ async def test_plan_scope_conflict_422(api):
 
 
 @pytest.mark.asyncio
+async def test_plan_scope_conflict_422_does_not_create_orphan_feature(api):
+    title = "AtomicConflictValidation"
+
+    r = await api.post("/api/architect/plan", json={
+        "feature_spec": {"title": title, "waves": [{"title": "W1", "packets": [
+            {"title": "A", "scope": ["shared.py"]},
+            {"title": "B", "scope": ["shared.py"]},
+        ]}]},
+    })
+
+    assert r.status_code == 422
+    features = (await api.get("/api/features/")).json()["data"]
+    assert all(feature["title"] != title for feature in features)
+
+
+@pytest.mark.asyncio
+async def test_plan_allows_ordered_packets_to_revisit_scope_by_title(api):
+    r = await api.post("/api/architect/plan", json={
+        "feature_spec": {"title": "OrderedScopeReuse", "waves": [
+            {"title": "W1", "packets": [
+                {"title": "Create shared contract", "scope": ["shared.py"]},
+            ]},
+            {"title": "W2", "packets": [
+                {
+                    "title": "Finalize shared contract",
+                    "scope": ["shared.py"],
+                    "depends_on": ["Create shared contract"],
+                },
+            ]},
+        ]},
+    })
+
+    assert r.status_code == 200
+    assert r.json()["data"]["packets_count"] == 2
+
+
+@pytest.mark.asyncio
 async def test_plan_dag_cycle_422(api):
     r = await api.post("/api/architect/plan", json={
         "feature_spec": {"title": "CY", "waves": [{"title": "W1", "packets": [
@@ -145,6 +182,5 @@ async def test_plan_packet_level_verification_overrides_root(api):
     r2 = await api.get(f"/api/packets/{pid}")
     spec = r2.json()["data"]["spec_json"]
     assert spec["verification"] == ["packet command"]
-
 
 

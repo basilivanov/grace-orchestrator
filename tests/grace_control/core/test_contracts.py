@@ -12,6 +12,7 @@ from grace_control.core.contracts import (
     StageName,
     StageResult,
     StageStatus,
+    build_packet_contract,
     validate_acceptance_report,
     validate_packet_contract,
     validate_stage_result,
@@ -55,6 +56,56 @@ class TestAcceptanceReport:
 
 
 class TestPacketContract:
+    def test_semantic_review_contract_survives_compilation(self):
+        packet = build_packet_contract({
+            "id": "p1",
+            "title": "Semantic review",
+            "acceptance_profile": "NORMAL",
+            "spec_json": {
+                "scope": ["docs/requirements.md"],
+                "verification": {"t0": [], "t1": ["true"], "t2": []},
+                "acceptance_criteria": ["Every requirement is mapped."],
+                "coder_instructions": ["Keep open decisions open."],
+                "blocking_issues": ["Remove invented evidence."],
+                "rework_summary": "Documentation remains incomplete.",
+            },
+        })
+
+        assert packet.metadata["acceptance_criteria"] == [
+            "Every requirement is mapped."
+        ]
+        assert packet.metadata["coder_instructions"] == [
+            "Keep open decisions open."
+        ]
+        assert packet.metadata["blocking_issues"] == [
+            "Remove invented evidence."
+        ]
+        assert packet.metadata["rework_summary"] == "Documentation remains incomplete."
+
+    def test_coder_evidence_patterns_extend_effective_write_scope(self):
+        packet = build_packet_contract({
+            "id": "p1",
+            "title": "Evidence scope",
+            "acceptance_profile": "NORMAL",
+            "spec_json": {
+                "scope": ["docs/requirements.md"],
+                "verification": {"t0": [], "t1": ["true"], "t2": []},
+                "expected_evidence": [{
+                    "id": "EV-VERIFY",
+                    "kind": "test",
+                    "stage": "t1",
+                    "owner": "coder",
+                    "producer": "cli",
+                    "artifact_patterns": ["verification-output/W00*.log"],
+                }],
+            },
+        })
+
+        assert packet.allowed_write_scope == [
+            "docs/requirements.md",
+            "verification-output/W00*.log",
+        ]
+
     def test_valid_normal(self):
         p = ExecutionPacketContract(packet_id="p1", title="t",
             allowed_write_scope=["src/"], frozen_scope=["legacy/"],
@@ -93,19 +144,19 @@ class TestPacketContract:
             acceptance_profile=AcceptanceProfile.FAST)
         assert "path invalid" in " ".join(validate_packet_contract(p))
 
-    def test_normal_requires_verification(self):
+    def test_normal_allows_gate_resolver_verification_defaults(self):
         p = ExecutionPacketContract(packet_id="p1", title="t",
             allowed_write_scope=["src/"], frozen_scope=[],
             acceptance_profile=AcceptanceProfile.NORMAL,
             verification={})
-        assert "requires verification.t1" in " ".join(validate_packet_contract(p))
+        assert validate_packet_contract(p) == []
 
-    def test_strict_requires_verification(self):
+    def test_strict_allows_gate_resolver_verification_defaults(self):
         p = ExecutionPacketContract(packet_id="p1", title="t",
             allowed_write_scope=["src/"], frozen_scope=[],
             acceptance_profile=AcceptanceProfile.STRICT,
             verification={})
-        assert "requires verification.t1" in " ".join(validate_packet_contract(p))
+        assert validate_packet_contract(p) == []
 
 
 class TestStageResult:

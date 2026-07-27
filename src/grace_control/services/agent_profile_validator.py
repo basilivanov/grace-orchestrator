@@ -14,7 +14,9 @@
 
 from __future__ import annotations
 import os
+import re
 import shutil
+import sys
 from pathlib import Path
 from typing import Any
 from grace_control.services.agent_env_builder import AgentEnvBuilder
@@ -46,11 +48,6 @@ class AgentProfileValidator:
         if profile.input_mode not in valid_modes:
             errors.append(f"input_mode must be one of {valid_modes}, got '{profile.input_mode}'")
 
-        if check_executable and profile.command:
-            exe = shutil.which(profile.command[0])
-            if not exe:
-                warnings.append(f"executable '{profile.command[0]}' not found on PATH")
-
         ctx = {
             "packet_id": "test",
             "model": profile.model or "test-model",
@@ -61,6 +58,7 @@ class AgentProfileValidator:
             "attempt": "1",
             "packet_markdown": "test prompt",
             "packet_path": "/tmp/grace-worktree/EXECUTION_PACKET.md",
+            "python_executable": sys.executable,
         }
 
         rendered_command = []
@@ -70,8 +68,13 @@ class AgentProfileValidator:
             errors.append(str(e))
 
         for part in rendered_command:
-            if "{" in part and "}" in part:
+            if re.search(r"(?<!\$)\{[a-z_]+\}", part):
                 errors.append(f"unresolved placeholder in command: '{part[:40]}...'")
+
+        if check_executable and rendered_command:
+            exe = shutil.which(rendered_command[0])
+            if not exe:
+                warnings.append(f"executable '{rendered_command[0]}' not found on PATH")
 
         try:
             cwd_raw = self._renderer.render([profile.cwd_template], ctx)[0]

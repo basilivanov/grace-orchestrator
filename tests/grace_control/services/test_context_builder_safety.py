@@ -14,14 +14,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from grace_control.config.agent_profiles import load_agent_profiles
-from grace_control.core.context_collector import ContextCollector
+from grace_control.core.context_collector import ContextCollector, _default_context_scopes
 from grace_control.core.executor_selector import resolve_model, _profile_matches_role
 from grace_control.core.contracts import build_packet_contract
 from grace_control.services.feature_planning_service import (
     FeaturePlanningService,
     CONTEXT_BUILDER_MUTATED_TARGET_REPO,
     _git_snapshot,
-    _git_reset_hard,
+    _planning_workspace_mutation,
+    _prepare_planning_workspace,
+    _remove_planning_workspace,
 )
 
 
@@ -82,66 +84,49 @@ class TestContextJsonProfileIsReadOnly:
         assert profile is not None, "context-json-flash profile must exist in agent_profiles.yaml"
 
     def test_profile_prompt_contains_read_only(self):
-        profiles = load_agent_profiles()
-        profile = profiles["context-json-flash"]
-        # The command list contains the prompt as the last string element
-        command_parts = profile.command
-        prompt_text = ""
-        for part in command_parts:
-            if len(part) > 100:
-                prompt_text = part
-                break
-        if not prompt_text:
-            # Try input_template
-            prompt_text = profile.input_template or ""
-        assert "READ-ONLY" in prompt_text, (
+        from grace_control.runtime.mini_swe_runner import ROLE_CONTRACTS
+        prompt_text = ROLE_CONTRACTS["context_collector"]
+        assert "read-only" in prompt_text, (
             "context-json-flash prompt must contain READ-ONLY"
         )
 
     def test_profile_prompt_forbids_create_edit_delete(self):
-        profiles = load_agent_profiles()
-        profile = profiles["context-json-flash"]
-        command_parts = profile.command
-        prompt_text = ""
-        for part in command_parts:
-            if len(part) > 100:
-                prompt_text = part
-                break
-        if not prompt_text:
-            prompt_text = profile.input_template or ""
-        assert "MUST NOT create" in prompt_text or "MUST NOT" in prompt_text, (
+        from grace_control.runtime.mini_swe_runner import ROLE_CONTRACTS
+        prompt_text = ROLE_CONTRACTS["context_collector"]
+        assert "Do not create, edit, delete" in prompt_text, (
             "context-json-flash prompt must explicitly forbid create/edit/delete"
         )
 
     def test_profile_prompt_forbids_implementation(self):
-        profiles = load_agent_profiles()
-        profile = profiles["context-json-flash"]
-        command_parts = profile.command
-        prompt_text = ""
-        for part in command_parts:
-            if len(part) > 100:
-                prompt_text = part
-                break
-        if not prompt_text:
-            prompt_text = profile.input_template or ""
-        assert "MUST NOT implement" in prompt_text, (
+        from grace_control.runtime.mini_swe_runner import ROLE_CONTRACTS
+        prompt_text = ROLE_CONTRACTS["context_collector"]
+        assert "Do not implement" in prompt_text, (
             "context-json-flash prompt must explicitly forbid implementation"
         )
 
     def test_profile_prompt_is_json_only(self):
-        profiles = load_agent_profiles()
-        profile = profiles["context-json-flash"]
-        command_parts = profile.command
-        prompt_text = ""
-        for part in command_parts:
-            if len(part) > 100:
-                prompt_text = part
-                break
-        if not prompt_text:
-            prompt_text = profile.input_template or ""
+        from grace_control.runtime.mini_swe_runner import ROLE_CONTRACTS
+        prompt_text = ROLE_CONTRACTS["context_collector"]
         assert "JSON" in prompt_text, (
             "context-json-flash prompt must specify JSON-only output"
         )
+
+    def test_profile_uses_primary_mini_swe_wrapper(self):
+        profile = load_agent_profiles()["context-json-flash"]
+        assert profile.command[:3] == [
+            "{python_executable}", "-m", "grace_control.runtime.mini_swe_runner"
+        ]
+        assert "context_collector" in profile.command
+
+
+def test_default_context_scopes_follow_target_topology(tmp_path):
+    (tmp_path / "app").mkdir()
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "pyproject.toml").write_text("[project]\n")
+
+    scopes = _default_context_scopes(tmp_path)
+
+    assert scopes == ["app/", "tests/", "pyproject.toml"]
 
     def test_profile_never_resumes(self):
         profiles = load_agent_profiles()
@@ -204,9 +189,7 @@ class TestContextCollectorFlashPromptIsReadOnly:
 
 @pytest.mark.usefixtures("db")
 class TestRunContextBuilderMutationGuard:
-    """If context-builder mutates the target repo, the pipeline must fail
-    with CONTEXT_BUILDER_MUTATED_TARGET_REPO and reset the repo clean.
-    """
+    """Planning mutations must fail inside an isolated disposable clone."""
 
     def test_git_snapshot_detects_clean_repo(self, tmp_path):
         """A clean git repo returns is_clean=True."""
@@ -223,6 +206,70 @@ class TestRunContextBuilderMutationGuard:
         snap = _git_snapshot(repo)
         assert snap is not None
         assert snap["is_clean"] is True
+        assert snap["branch"] in {"master", "main"}
+
+    def test_branch_only_change_is_a_planning_mutation(self):
+        before = {
+            "head": "abc",
+            "branch": "main",
+            "is_clean": True,
+            "status_short": "",
+        }
+        after = {
+            "head": "abc",
+            "branch": "agent/test",
+            "is_clean": True,
+            "status_short": "",
+        }
+
+        mutation = _planning_workspace_mutation(before, after)
+
+        assert mutation is not None
+        assert mutation["pre_branch"] == "main"
+        assert mutation["post_branch"] == "agent/test"
+
+    def test_standalone_planning_clone_cannot_remove_live_coder_worktree(self, tmp_path):
+        repo = tmp_path / "target_repo"
+        repo.mkdir()
+        subprocess.run(
+            ["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True
+        )
+        subprocess.run(
+            ["git", "config", "user.email", "test@test.com"], cwd=repo, check=True
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test"], cwd=repo, check=True
+        )
+        (repo / "file.txt").write_text("base")
+        subprocess.run(["git", "add", "."], cwd=repo, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "init"], cwd=repo, check=True, capture_output=True
+        )
+        live_worktree = tmp_path / "live-coder"
+        subprocess.run(
+            ["git", "worktree", "add", "-b", "agent/live", str(live_worktree), "main"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+        )
+        log_dir = tmp_path / "planning"
+        log_dir.mkdir()
+        planning_repo = _prepare_planning_workspace(repo, log_dir, "context-builder")
+        try:
+            removal = subprocess.run(
+                ["git", "worktree", "remove", "--force", str(live_worktree)],
+                cwd=planning_repo,
+                capture_output=True,
+                text=True,
+            )
+
+            assert removal.returncode != 0
+            assert live_worktree.exists()
+            target_snapshot = _git_snapshot(repo)
+            assert target_snapshot is not None
+            assert target_snapshot["branch"] == "main"
+        finally:
+            _remove_planning_workspace(planning_repo)
 
     def test_git_snapshot_detects_dirty_repo(self, tmp_path):
         """A dirty git repo returns is_clean=False."""
@@ -241,36 +288,6 @@ class TestRunContextBuilderMutationGuard:
         snap = _git_snapshot(repo)
         assert snap is not None
         assert snap["is_clean"] is False
-
-    def test_git_reset_hard_restores_clean_state(self, tmp_path):
-        """git reset --hard restores repo to clean state."""
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        subprocess.run(["git", "init"], cwd=str(repo), capture_output=True, timeout=10)
-        subprocess.run(["git", "config", "user.email", "test@test.com"],
-                        cwd=str(repo), capture_output=True, timeout=5)
-        subprocess.run(["git", "config", "user.name", "Test"],
-                        cwd=str(repo), capture_output=True, timeout=5)
-        (repo / "file.txt").write_text("hello")
-        subprocess.run(["git", "add", "."], cwd=str(repo), capture_output=True, timeout=5)
-        commit_result = subprocess.run(
-            ["git", "commit", "-m", "init"], cwd=str(repo),
-            capture_output=True, text=True, timeout=10,
-        )
-        head = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=str(repo),
-            capture_output=True, text=True, timeout=10,
-        ).stdout.strip()
-        # Modify file
-        (repo / "file.txt").write_text("modified")
-        # Add untracked file
-        (repo / "new_file.txt").write_text("new")
-        # Reset
-        _git_reset_hard(repo, head)
-        # Verify clean
-        snap = _git_snapshot(repo)
-        assert snap is not None
-        assert snap["is_clean"] is True
 
     @pytest.mark.asyncio
     async def test_mutation_guard_raises_on_dirty_repo(self, tmp_path):
@@ -380,6 +397,11 @@ class TestTargetRepoRootPropagatedToPackets:
                 assert pkt_spec.get("target_repo_root") == "/opt/solarsage-astro", (
                     f"Packet {pkt.id} spec_json must include target_repo_root from feature"
                 )
+                assert pkt_spec.get("feature_context") == {
+                    "feature_id": fid,
+                    "title": "Propagation Test",
+                    "description": "",
+                }
 
 
 class TestPacketExecutorTargetRepoWorktreeByDefault:
@@ -444,56 +466,38 @@ class TestContextCollectorFilterRelevantStillReturnsJson:
 
 
 class TestContextJsonFlashTemplateRender:
-    """Blocker 1: context-json-flash input template must render correctly
-    via AgentRunService's CommandTemplateRenderer.
+    """The mini-swe context profile must receive the generated packet file."""
 
-    The template uses {packet_markdown} (not {prompt}) because
-    CommandTemplateRenderer.KNOWN_KEYS only includes packet_markdown,
-    and AgentRunService passes the prompt as packet_markdown in the context.
-    """
-
-    def test_context_json_flash_template_uses_packet_markdown(self):
-        """Template {packet_markdown} must render; {prompt} would be literal."""
+    def test_context_json_flash_uses_packet_file_input(self):
         from grace_control.config.agent_profiles import load_agent_profiles
-        from grace_control.services.command_template_renderer import CommandTemplateRenderer
 
         profiles = load_agent_profiles()
         profile = profiles.get("context-json-flash")
         assert profile is not None, "context-json-flash profile must exist"
+        assert profile.input_mode == "file"
+        assert "{packet_path}" in profile.command
 
-        template = profile.input_template
-        assert "{packet_markdown}" in template, (
-            f"context-json-flash input_template must use {{packet_markdown}}, "
-            f"got: {template!r}"
-        )
-
-    def test_context_json_flash_render_produces_real_content(self):
-        """Render the template with real context to confirm it produces
-        the prompt, not a literal placeholder."""
+    def test_context_json_flash_command_renders_packet_path(self):
         from grace_control.config.agent_profiles import load_agent_profiles
         from grace_control.services.command_template_renderer import CommandTemplateRenderer
 
         profiles = load_agent_profiles()
         profile = profiles.get("context-json-flash")
-        template = profile.input_template
         renderer = CommandTemplateRenderer()
-
-        test_prompt = "Task: filter relevant files for feature X"
         ctx = {
             "packet_id": "pkt_test",
-            "model": "deepseek/deepseek-v4-flash",
+            "model": "openai/gemini-3-flash-agent",
             "effort": "low",
             "role": "context_collector",
             "worktree_path": "/tmp/test",
             "state_root": "/tmp",
             "attempt": "1",
-            "packet_markdown": test_prompt,
+            "packet_path": "/tmp/test/EXECUTION_PACKET.md",
+            "python_executable": "/usr/bin/python3",
         }
-        rendered = renderer.render([template], ctx)
-        assert rendered[0] == test_prompt, (
-            f"Rendered template must equal the prompt text, "
-            f"got: {rendered[0]!r}"
-        )
+        rendered = renderer.render(profile.command, ctx)
+        assert "/tmp/test/EXECUTION_PACKET.md" in rendered
+        assert "grace_control.runtime.mini_swe_runner" in rendered
 
     def test_prompt_placeholder_would_render_as_literal(self):
         """Confirm that {prompt} would NOT be substituted by

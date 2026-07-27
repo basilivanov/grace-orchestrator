@@ -67,16 +67,23 @@ class AgentSessionAdapter:
 
 
 class OpenCodeSessionAdapter(AgentSessionAdapter):
-    """Adapter for OpenCode-backed architect sessions with resume support."""
+    """Profile-backed architect adapter with legacy OpenCode-compatible defaults."""
 
-    def __init__(self, default_model: str = "deepseek/deepseek-v4-pro"):
+    def __init__(
+        self,
+        default_model: str = "deepseek/deepseek-v4-pro",
+        default_executor_id: str = "deepseek-v4-pro",
+        runner_name: str = "opencode",
+    ):
         self.default_model = default_model
+        self.default_executor_id = default_executor_id
+        self.runner_name = runner_name
 
     async def run_new(self, request: AgentRunRequest) -> AgentRunResult:
         from grace_control.core.llm_runner import run_llm
 
         model = request.model or self.default_model
-        executor_id = request.executor_id or "deepseek-v4-pro"
+        executor_id = request.executor_id or self.default_executor_id
 
         try:
             raw = await run_llm(
@@ -84,12 +91,14 @@ class OpenCodeSessionAdapter(AgentSessionAdapter):
                 role=request.role,
                 model=model,
                 cli=executor_id,
+                cwd=request.cwd,
             )
             handle = AgentSessionHandle(
-                runner="opencode",
+                runner=self.runner_name,
                 role=request.role,
                 model=model,
                 session_id=None,
+                cwd=str(request.cwd) if request.cwd else None,
                 metadata={"executor_id": executor_id},
             )
             return AgentRunResult(
@@ -129,6 +138,8 @@ class OpenCodeSessionAdapter(AgentSessionAdapter):
             prompt=message,
             role=handle.role,
             model=handle.model or self.default_model,
+            executor_id=str(handle.metadata.get("executor_id") or self.default_executor_id),
+            cwd=Path(handle.cwd) if handle.cwd else None,
         )
         result = await self.run_new(request)
         result.session_mode = "fallback_new_session"

@@ -18,6 +18,58 @@ def _pkt(title="T", scope=None, role="coder", frozen_scope=None):
     }
 
 
+def test_evidence_deletion_autofix_skips_without_explicit_target_proof():
+    packet = _pkt("Docs", scope=["docs/development-plan.xml"])
+    packet["expected_evidence"] = [{
+        "id": "EV-XML",
+        "kind": "contract",
+        "artifact_patterns": ["docs/development-plan.xml"],
+        "expectation": "exists",
+    }]
+    report = SafePlanAutofixer().apply(
+        _make_plan([packet]),
+        [{
+            "code": "E_EVIDENCE_CONTRADICTS_INSTRUCTIONS",
+            "packet_title": "Docs",
+            "details": {
+                "evidence_id": "EV-XML",
+                "file": "docs/development-plan.xml",
+                "suggested_fix": "deleted",
+            },
+        }],
+    )
+
+    assert not report.applied
+    assert report.skipped[0]["code"] == "SKIPPED_AMBIGUOUS_EVIDENCE_DELETION"
+
+
+def test_evidence_deletion_autofix_applies_with_explicit_target_proof():
+    packet = _pkt("Delete old module", scope=["src/old.py"])
+    packet["expected_evidence"] = [{
+        "id": "EV-OLD",
+        "kind": "contract",
+        "artifact_patterns": ["src/old.py"],
+        "expectation": "exists",
+    }]
+    report = SafePlanAutofixer().apply(
+        _make_plan([packet]),
+        [{
+            "code": "E_EVIDENCE_CONTRADICTS_INSTRUCTIONS",
+            "packet_title": "Delete old module",
+            "details": {
+                "evidence_id": "EV-OLD",
+                "file": "src/old.py",
+                "remove_target_explicit": True,
+                "suggested_fix": "deleted",
+            },
+        }],
+    )
+
+    assert report.applied
+    evidence = report.patched_plan["waves"][0]["packets"][0]["expected_evidence"][0]
+    assert evidence["expectation"] == "deleted"
+
+
 class TestSourceSplitAutofix:
 
     def test_autofix_adds_missing_source_file_to_nearest_packet(self):
@@ -161,6 +213,229 @@ class TestUnsupportedErrors:
         report = SafePlanAutofixer().apply(plan, errors)
         assert not report.applied
         assert len(report.skipped) == 1
+
+
+class TestPythonScopeLimitAutofix:
+
+    def test_keeps_final_broad_sweep_for_architect_split(self):
+        broad_title = "W06-P01 Final repository-wide Python canon cleanup"
+        plan = {
+            "waves": [
+                {
+                    "title": "W01",
+                    "packets": [_pkt("W01", scope=["app/core/a.py"])],
+                },
+                {
+                    "title": "W06",
+                    "packets": [
+                        _pkt(broad_title, scope=["app", "scripts", "tests"]),
+                        _pkt(
+                            "W06-P02 Final evidence",
+                            scope=["docs/verification-matrix.md"],
+                        ),
+                    ],
+                },
+            ]
+        }
+        plan["waves"][1]["packets"][0]["depends_on"] = ["W05 docs"]
+        plan["waves"][1]["packets"][1]["depends_on"] = [broad_title]
+
+        report = SafePlanAutofixer().apply(
+            plan,
+            [{
+                "code": "E_SCOPE_PYTHON_FILE_LIMIT",
+                "packet_title": broad_title,
+                "message": "scope expands to 110 Python files",
+            }],
+        )
+
+        assert not report.applied
+        assert report.fixes == []
+        assert report.skipped == [{
+            "code": "SKIPPED_BROAD_SWEEP_REQUIRES_ARCHITECT_SPLIT",
+            "reason": "plan metadata cannot prove repository-wide scope is redundant",
+            "error_code": "E_SCOPE_PYTHON_FILE_LIMIT",
+            "packet_title": broad_title,
+        }]
+        packets = [p for w in plan["waves"] for p in w["packets"]]
+        assert broad_title in {p["title"] for p in packets}
+        evidence = next(p for p in packets if p["title"] == "W06-P02 Final evidence")
+        assert evidence["depends_on"] == [broad_title]
+
+    def test_keeps_broad_scope_when_not_an_unambiguous_final_sweep(self):
+        title = "Implement feature"
+        report = SafePlanAutofixer().apply(
+            _make_plan([_pkt(title, scope=["app", "scripts", "tests"])]),
+            [{"code": "E_SCOPE_PYTHON_FILE_LIMIT", "packet_title": title}],
+        )
+
+        assert not report.applied
+
+
+def test_autofix_drops_absolute_external_evidence_pattern():
+    packet = _pkt("P", scope=["scripts/a.py"])
+    packet["expected_evidence"] = [{
+        "id": "EV-VENV",
+        "kind": "contract",
+        "artifact_patterns": ["/opt/project/.venv/bin/python version"],
+    }]
+    report = SafePlanAutofixer().apply(
+        _make_plan([packet]),
+        [{
+            "code": "E_EVIDENCE_ABSOLUTE_PATTERN",
+            "packet_title": "P",
+            "message": "artifact pattern '/opt/project/.venv/bin/python version' is absolute",
+        }],
+    )
+
+    assert report.applied
+    assert report.patched_plan["waves"][0]["packets"][0]["expected_evidence"][0]["artifact_patterns"] == []
+
+
+def test_autofix_uses_controller_diff_instead_of_stdout_pattern():
+    packet = _pkt("P", scope=["src/router.js"])
+    packet["expected_evidence"] = [{
+        "id": "EV-DIFF",
+        "kind": "diff",
+        "artifact_patterns": ["t0_stdout"],
+    }]
+    report = SafePlanAutofixer().apply(
+        _make_plan([packet]),
+        [{"code": "E_EVIDENCE_DIFF_HAS_PATTERN", "packet_title": "P"}],
+    )
+
+    assert report.applied
+    evidence = report.patched_plan["waves"][0]["packets"][0]["expected_evidence"][0]
+    assert evidence["artifact_patterns"] == []
+
+
+def test_autofix_maps_pytest_description_to_command_artifact():
+    packet = _pkt("P", scope=["tests/unit/test_example.py"])
+    packet["verification"]["t1"] = [
+        "python scripts/grace_lint.py tests/unit/test_example.py",
+        "python -m pytest tests/unit/test_example.py -q",
+    ]
+    packet["expected_evidence"] = [{
+        "id": "EV-TEST",
+        "kind": "test",
+        "producer": "pytest",
+        "artifact_patterns": ["pytest stdout for tests/unit/test_example.py"],
+    }]
+    report = SafePlanAutofixer().apply(
+        _make_plan([packet]),
+        [{
+            "code": "E_EVIDENCE_DESCRIPTIVE_PATTERN",
+            "packet_title": "P",
+            "details": {
+                "pattern": "pytest stdout for tests/unit/test_example.py",
+                "evidence_id": "EV-TEST",
+            },
+        }],
+    )
+
+    assert report.applied
+    evidence = report.patched_plan["waves"][0]["packets"][0]["expected_evidence"][0]
+    assert evidence["artifact_patterns"] == ["t1/cmd_002_stdout.log"]
+
+
+def test_autofix_maps_exact_command_output_to_stdout_artifact():
+    packet = _pkt("P", scope=["package.json"])
+    packet["verification"]["t1"] = ["npm test", "npm run check"]
+    packet["expected_evidence"] = [{
+        "id": "EV-TEST",
+        "kind": "test",
+        "producer": "cli",
+        "artifact_patterns": ["npm test output", "npm run check output"],
+    }]
+    errors = [
+        {
+            "code": "E_EVIDENCE_DESCRIPTIVE_PATTERN",
+            "packet_title": "P",
+            "details": {"pattern": pattern, "evidence_id": "EV-TEST"},
+        }
+        for pattern in ("npm test output", "npm run check output")
+    ]
+
+    report = SafePlanAutofixer().apply(_make_plan([packet]), errors)
+
+    assert report.applied
+    evidence = report.patched_plan["waves"][0]["packets"][0]["expected_evidence"][0]
+    assert evidence["artifact_patterns"] == [
+        "t1/cmd_001_stdout.log",
+        "t1/cmd_002_stdout.log",
+    ]
+
+
+def test_autofix_maps_run_command_label_to_stdout_artifact():
+    packet = _pkt("P", scope=["package.json"])
+    packet["verification"]["t1"] = ["npm test"]
+    packet["expected_evidence"] = [{
+        "id": "EV-TEST",
+        "kind": "test",
+        "producer": "cli",
+        "artifact_patterns": ["run: npm test"],
+    }]
+
+    report = SafePlanAutofixer().apply(
+        _make_plan([packet]),
+        [{
+            "code": "E_EVIDENCE_DESCRIPTIVE_PATTERN",
+            "packet_title": "P",
+            "details": {"pattern": "run: npm test", "evidence_id": "EV-TEST"},
+        }],
+    )
+
+    assert report.applied
+    evidence = report.patched_plan["waves"][0]["packets"][0]["expected_evidence"][0]
+    assert evidence["artifact_patterns"] == ["t1/cmd_001_stdout.log"]
+
+
+def test_autofix_maps_bare_verification_command_to_stdout_artifact():
+    packet = _pkt("P", scope=["package.json"])
+    packet["verification"]["t1"] = ["npm run check"]
+    packet["expected_evidence"] = [{
+        "id": "EV-TEST",
+        "kind": "test",
+        "producer": "cli",
+        "artifact_patterns": ["npm run check"],
+    }]
+
+    report = SafePlanAutofixer().apply(
+        _make_plan([packet]),
+        [{
+            "code": "E_EVIDENCE_DESCRIPTIVE_PATTERN",
+            "packet_title": "P",
+            "details": {"pattern": "npm run check", "evidence_id": "EV-TEST"},
+        }],
+    )
+
+    assert report.applied
+    evidence = report.patched_plan["waves"][0]["packets"][0]["expected_evidence"][0]
+    assert evidence["artifact_patterns"] == ["t1/cmd_001_stdout.log"]
+
+
+def test_autofix_maps_matrix_description_to_relative_file():
+    packet = _pkt("Docs", scope=["docs/verification-matrix.md"])
+    packet["expected_evidence"] = [{
+        "id": "EV-MATRIX",
+        "kind": "contract",
+        "artifact_patterns": ["docs/verification-matrix.md requirement-by-requirement matrix"],
+    }]
+    report = SafePlanAutofixer().apply(
+        _make_plan([packet]),
+        [{
+            "code": "E_EVIDENCE_DESCRIPTIVE_PATTERN",
+            "packet_title": "Docs",
+            "details": {
+                "pattern": "docs/verification-matrix.md requirement-by-requirement matrix",
+                "evidence_id": "EV-MATRIX",
+            },
+        }],
+    )
+
+    assert report.applied
+    evidence = report.patched_plan["waves"][0]["packets"][0]["expected_evidence"][0]
+    assert evidence["artifact_patterns"] == ["docs/verification-matrix.md"]
 
 
 class TestSessionMode:

@@ -69,7 +69,7 @@ def validate_dag(packets: list[dict]) -> ValidationResult:
         for cycle in cycles:
             errors.append(f"Cycle detected: {' → '.join(cycle)}")
 
-    conflicts = detect_scope_conflicts(scope_map)
+    conflicts = detect_scope_conflicts(scope_map, dependency_graph=graph)
 
     for c in conflicts:
         errors.append(f"Scope conflict: {c.packet_a} and {c.packet_b} overlap on {c.overlapping_files}")
@@ -137,17 +137,49 @@ def topological_sort(graph: dict[str, list[str]]) -> list[str]:
 #END_BLOCK_SORT
 
 #START_BLOCK_CONFLICTS
-def detect_scope_conflicts(scope_map: dict[str, list[str]]) -> list[Conflict]:
+def _depends_transitively(graph: dict[str, list[str]], packet_id: str, dependency_id: str) -> bool:
+    """Return whether packet_id directly or transitively depends on dependency_id."""
+    pending = list(graph.get(packet_id, []))
+    visited: set[str] = set()
+    while pending:
+        current = pending.pop()
+        if current == dependency_id:
+            return True
+        if current in visited:
+            continue
+        visited.add(current)
+        pending.extend(graph.get(current, []))
+    return False
+
+
+def detect_scope_conflicts(
+    scope_map: dict[str, list[str]],
+    dependency_graph: dict[str, list[str]] | None = None,
+) -> list[Conflict]:
+    """Find overlapping scopes among packets that may execute unordered.
+
+    An overlap is safe when one packet depends directly or transitively on the
+    other: the later packet intentionally revisits an artifact after the first
+    packet has completed.  With no dependency graph, preserve the standalone
+    helper's conservative all-pairs behavior.
+    """
     conflicts: list[Conflict] = []
     pids = list(scope_map.keys())
     for i in range(len(pids)):
         for j in range(i + 1, len(pids)):
-            files_a = set(scope_map.get(pids[i], []))
-            files_b = set(scope_map.get(pids[j], []))
+            packet_a = pids[i]
+            packet_b = pids[j]
+            if dependency_graph and (
+                _depends_transitively(dependency_graph, packet_a, packet_b)
+                or _depends_transitively(dependency_graph, packet_b, packet_a)
+            ):
+                continue
+            files_a = set(scope_map.get(packet_a, []))
+            files_b = set(scope_map.get(packet_b, []))
             overlap = files_a & files_b
             significant_overlap = {f for f in overlap if not f.endswith("__init__.py")}
             if significant_overlap:
-                conflicts.append(Conflict(pids[i], pids[j], sorted(significant_overlap)))
+                conflicts.append(Conflict(packet_a, packet_b, sorted(significant_overlap)))
     return conflicts
 
 #END_BLOCK_CONFLICTS

@@ -63,6 +63,26 @@ async def test_apply_decision_real_db(db):
         make_feature(d, fid="F1")
         make_wave(d, wid="W01", fid="F1", order=1)
         make_packet(d, pid="P1", fid="F1", wid="W01", state=PacketState.REJECTED.value)
+        d.add(PacketRun(
+            id="R-switch-context",
+            packet_id="P1",
+            run_number=2,
+            status="rejected",
+            result_json={
+                "acceptance_report": {
+                    "final_verdict": "rework_required",
+                    "summary": "T1 failed: 1/1 commands failed",
+                    "stages": [{
+                        "name": "T1_TARGETED_TESTS",
+                        "commands": [{
+                            "command": "python -m missing_linter",
+                            "exit_code": 1,
+                            "stderr": "must not be copied into retry context",
+                        }],
+                    }],
+                },
+            },
+        ))
         d.flush()
 
     ctrl = RecoveryController()
@@ -76,6 +96,8 @@ async def test_apply_decision_real_db(db):
     with get_db() as d:
         p = d.query(Packet).filter_by(id="P1").first()
         assert p.state == PacketState.READY.value
+        assert p.spec_json["recovery"]["previous_attempt"] == 2
+        assert p.spec_json["recovery"]["acceptance_summary"] == "T1 failed: 1/1 commands failed"
 
 
 def test_evaluate_stale_workers(db):
@@ -246,6 +268,26 @@ async def test_full_coder_switch_real_db(db):
         make_feature(d, fid="F1")
         make_wave(d, wid="W01", fid="F1", order=1)
         make_packet(d, pid="P1", fid="F1", wid="W01", state=PacketState.REJECTED.value)
+        d.add(PacketRun(
+            id="R-switch-context",
+            packet_id="P1",
+            run_number=2,
+            status="rejected",
+            result_json={
+                "acceptance_report": {
+                    "final_verdict": "rework_required",
+                    "summary": "T1 failed: 1/1 commands failed",
+                    "stages": [{
+                        "name": "T1_TARGETED_TESTS",
+                        "commands": [{
+                            "command": "python -m missing_linter",
+                            "exit_code": 1,
+                            "stderr": "must not be copied into retry context",
+                        }],
+                    }],
+                },
+            },
+        ))
         d.flush()
 
     ctrl = RecoveryController()
@@ -255,6 +297,14 @@ async def test_full_coder_switch_real_db(db):
         p = d.query(Packet).filter_by(id="P1").first()
         assert p.state == PacketState.READY.value
         assert p.spec_json["recovery"]["requested_executor_id"] == decision.next_executor_hint
+        assert p.spec_json["recovery"]["previous_attempt"] == 2
+        assert p.spec_json["recovery"]["acceptance_summary"] == "T1 failed: 1/1 commands failed"
+        assert p.spec_json["recovery"]["failed_checks"] == [{
+            "stage": "T1_TARGETED_TESTS",
+            "command": "python -m missing_linter",
+            "exit_code": 1,
+        }]
+        assert "stderr" not in p.spec_json["recovery"]["failed_checks"][0]
 
 
 def test_full_stale_db_history(db):

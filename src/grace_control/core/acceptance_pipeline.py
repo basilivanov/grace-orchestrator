@@ -29,7 +29,6 @@ from grace_control.core.stage_instrumentation import stage
 _log = GraceLogger("acceptance")
 
 import os
-import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -52,8 +51,8 @@ from grace_control.core.evidence import EvidenceCollector, check_expected_eviden
 from grace_control.core.gate_resolver import resolve_default_gates, resolve_default_t0, resolve_touched_areas
 from grace_control.core.scope_guard import ScopeGuard, get_changed_files
 
-# W06: Pattern to detect shell operators in command strings
-_SHELL_OPS_PATTERN = _re.compile(r'(&&|\|\||[|<>;])')
+# W06: Pattern to detect shell operators and command substitution in strings.
+_SHELL_OPS_PATTERN = _re.compile(r'(&&|\|\||\$\(|[|<>;])')
 
 
 @dataclass(frozen=True)
@@ -521,7 +520,7 @@ class AcceptancePipeline:
         # Use explicit T0 commands if provided; otherwise fall back to auto defaults.
         explicit_t0 = packet.verification.get("t0", [])
         if explicit_t0:
-            t0_cmds = [shlex.split(c) if isinstance(c, str) else c for c in explicit_t0]
+            t0_cmds = [self._verification_command(c) for c in explicit_t0]
             t0_origins = ["architect:verification"] * len(explicit_t0)
         else:
             t0_cmds, t0_origins = self._build_t0_commands(packet, cf, cwd=cwd or self._root)
@@ -531,8 +530,9 @@ class AcceptancePipeline:
             r = self._runner.run(cmd, output_dir=output_dir, cwd=cwd, shell=self._needs_shell(cmd))
             commands.append(r)
             if not r.passed:
+                command_text = self._command_text(cmd)
                 _log.info("t0_command_failed",
-                    command=" ".join(cmd)[:200],
+                    command=command_text[:200],
                     exit_code=r.exit_code,
                     stderr=r.stderr[:500],
                     stdout=r.stdout[:500],
@@ -540,7 +540,7 @@ class AcceptancePipeline:
                 return _T0Result(
                     stage=StageResult(name=StageName.T0_SCOPE_AND_LINT,
                         status=StageStatus.FAILED, summary="T0 cheap check failed",
-                        blocking_issues=[f"{' '.join(cmd)} failed: {r.stderr[:200]}"],
+                        blocking_issues=[f"{command_text} failed: {r.stderr[:200]}"],
                         commands=commands, command_origins=t0_origins),
                     scope_violations=violations)
 
@@ -558,9 +558,54 @@ class AcceptancePipeline:
 
     @staticmethod
     def _needs_shell(cmd) -> bool:
-        """W06: Detect if a command needs shell=True."""
-        cmd_str = " ".join(cmd) if isinstance(cmd, list) else str(cmd)
-        return bool(_SHELL_OPS_PATTERN.search(cmd_str))
+        """W06: Detect if a command needs shell=True.
+
+        Besides classic shell operators (``&&``, ``||``, ``|``, ``<``, ``>``,
+        ``;``), a leading POSIX environment-variable assignment such as
+        ``HYPOTHESIS_PROFILE=ci pytest ...`` also requires a shell.  Without it
+        ``shlex.split`` would treat ``HYPOTHESIS_PROFILE=ci`` as the program
+        name and fail with ``command not found``.  Argv lists never carry shell
+        syntax and are always executed without a shell.
+        """
+        if isinstance(cmd, list):
+            return False
+        cmd_str = str(cmd)
+        if _SHELL_OPS_PATTERN.search(cmd_str):
+            return True
+        if cmd_str.lstrip().startswith("! "):
+            return True
+        return AcceptancePipeline._has_env_assignment_prefix(cmd_str)
+
+    @staticmethod
+    def _has_env_assignment_prefix(cmd_str: str) -> bool:
+        """Return True when the command starts with a ``NAME=value`` env prefix."""
+        tokens = cmd_str.strip().split()
+        if not tokens:
+            return False
+        first = tokens[0]
+        eq = first.find("=")
+        if eq <= 0:
+            return False
+        name = first[:eq]
+        if not (name[0].isalpha() or name[0] == "_"):
+            return False
+        return all(ch.isalnum() or ch == "_" for ch in name)
+
+    @staticmethod
+    def _verification_command(raw_command):
+        """Keep packet shell strings intact while copying explicit argv lists.
+
+        The packet's string is already the canonical shell representation.
+        Running ``shlex.split`` and then joining it again destroys quotes and
+        escapes, which can turn grep data into shell syntax.  List commands do
+        not carry shell quoting and remain explicit argv lists.
+        """
+        return raw_command if isinstance(raw_command, str) else list(raw_command)
+
+    @staticmethod
+    def _command_text(command) -> str:
+        """Render a shell string or argv list for logs and diagnostics."""
+        return " ".join(command) if isinstance(command, list) else str(command)
 
     @stage("t1_unit_tests")
     def _run_t1(self, packet: ExecutionPacketContract, changed_files: list[str],
@@ -572,7 +617,7 @@ class AcceptancePipeline:
         if isinstance(explicit_raw, list) and "t1" in packet.verification:
             # Architect explicitly provided T1 (even if empty list).
             # Empty list means explicit skip — NORMAL/STRICT still fail.
-            all_cmds = [shlex.split(c) if isinstance(c, str) else c for c in explicit_raw]
+            all_cmds = [self._verification_command(c) for c in explicit_raw]
             all_origins = ["architect:verification"] * len(explicit_raw) if explicit_raw else []
         else:
             # No explicit T1 — use auto defaults from gate resolver
@@ -633,7 +678,7 @@ class AcceptancePipeline:
 
         if explicit:
             # When architect provides explicit T2, use ONLY those commands.
-            all_cmds = [shlex.split(c) if isinstance(c, str) else c for c in explicit]
+            all_cmds = [self._verification_command(c) for c in explicit]
             all_origins = ["architect:verification"] * len(explicit)
         else:
             # No explicit T2 — use auto defaults from gate resolver

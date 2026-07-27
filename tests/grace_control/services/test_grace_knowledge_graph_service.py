@@ -43,6 +43,37 @@ class TestKnowledgeGraphLoad:
         assert len(kg.modules) == 2
         assert kg.modules[0].id == "M-BACKEND-SERVICES"
 
+    def test_loads_docs_knowledge_graph_xml_when_grace_path_is_absent(self, tmp_path):
+        docs_path = tmp_path / "docs"
+        docs_path.mkdir()
+        (docs_path / "knowledge-graph.xml").write_text(SAMPLE_KG)
+
+        kg = GraceKnowledgeGraphService().load(tmp_path)
+
+        assert kg is not None
+        assert kg.project == "solarsage-astro"
+        assert [module.id for module in kg.modules] == [
+            "M-BACKEND-SERVICES",
+            "M-BACKEND-API",
+        ]
+
+    def test_grace_knowledge_graph_path_precedes_docs_fallback(self, tmp_path):
+        grace_path = tmp_path / "grace"
+        docs_path = tmp_path / "docs"
+        grace_path.mkdir()
+        docs_path.mkdir()
+        (grace_path / "knowledge-graph.xml").write_text(
+            SAMPLE_KG.replace('project="solarsage-astro"', 'project="grace-layout"')
+        )
+        (docs_path / "knowledge-graph.xml").write_text(
+            SAMPLE_KG.replace('project="solarsage-astro"', 'project="docs-layout"')
+        )
+
+        kg = GraceKnowledgeGraphService().load(tmp_path)
+
+        assert kg is not None
+        assert kg.project == "grace-layout"
+
     def test_extracts_backend_services_module_from_kg(self, tmp_path):
         kg_path = tmp_path / "grace"
         kg_path.mkdir()

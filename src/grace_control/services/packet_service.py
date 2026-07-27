@@ -33,7 +33,7 @@ from grace_control.core.stage_instrumentation import stage
 from grace_control.core.state_machine import PacketStateMachine, StateTransitionError
 from grace_control.core.structured_logger import GraceLogger
 from grace_control.db import get_db
-from grace_control.db.schema import Event, Lease, Packet, PacketState, Worker
+from grace_control.db.schema import Event, Lease, Packet, PacketRun, PacketState, Worker
 
 _log = GraceLogger("packet_service")
 
@@ -173,7 +173,54 @@ class PacketService:
         _log.info("packet_transition", packet_id=packet_id,
             from_state=from_state.value, to_state=to_state.value, reason=reason)
         asyncio.create_task(self._broadcast(packet_id, to_state.value, reason))
+        if to_state == PacketState.MERGED:
+            self._supersede_rework_ancestors(db, packet)
         return packet
+
+    def _supersede_rework_ancestors(self, db, merged_packet: Packet) -> None:
+        """Cancel failed/rejected ancestors replaced by a merged rework leaf."""
+        from grace_control.services.rework_packet_service import is_rework_spec
+
+        spec = merged_packet.spec_json if isinstance(merged_packet.spec_json, dict) else {}
+        parent_id = spec.get("parent_packet_id", "") if is_rework_spec(spec) else ""
+        seen: set[str] = set()
+        while isinstance(parent_id, str) and parent_id and parent_id not in seen:
+            seen.add(parent_id)
+            parent = db.query(Packet).filter_by(id=parent_id).first()
+            if parent is None:
+                _log.warn(
+                    "rework_parent_not_found",
+                    packet_id=merged_packet.id,
+                    parent_packet_id=parent_id,
+                )
+                return
+            parent_spec = parent.spec_json if isinstance(parent.spec_json, dict) else {}
+            next_parent_id = parent_spec.get("parent_packet_id", "")
+            current = PacketStateMachine.normalize_state(parent.state)
+            if self._sm.can_transition(current, PacketState.CANCELLED):
+                parent.state = PacketState.CANCELLED.value
+                supersede_reason = f"superseded_by_rework:{merged_packet.id}"
+                _record_event(db, "packet_transition", parent.id, {
+                    "from": current.value,
+                    "to": PacketState.CANCELLED.value,
+                    "reason": supersede_reason,
+                })
+                _log.info(
+                    "rework_parent_superseded",
+                    packet_id=parent.id,
+                    merged_rework_packet_id=merged_packet.id,
+                )
+                asyncio.create_task(
+                    self._broadcast(parent.id, PacketState.CANCELLED.value, supersede_reason)
+                )
+            elif current not in (PacketState.CANCELLED, PacketState.MERGED):
+                _log.warn(
+                    "rework_parent_not_superseded",
+                    packet_id=parent.id,
+                    state=current.value,
+                    merged_rework_packet_id=merged_packet.id,
+                )
+            parent_id = next_parent_id
 
     @stage("executor")
     async def claim(self, packet_id: str, worker_id: str) -> ClaimResult:
@@ -234,6 +281,12 @@ class PacketService:
             if worker:
                 worker.current_packet_id = packet_id
 
+            from grace_control.services.rework_packet_service import resolve_rework_spec
+            resolved_spec = resolve_rework_spec(db, packet)
+            if resolved_spec != (packet.spec_json or {}):
+                packet.spec_json = resolved_spec
+                _log.info("rework_spec_hydrated", packet_id=packet_id)
+
             # Snapshot all values needed by callers before commit; after commit
             # SQLAlchemy expires attributes and any access to the ORM `lease`
             # outside this session will raise DetachedInstanceError.
@@ -242,7 +295,7 @@ class PacketService:
                 lease_id=lease.id,  # may be None for non-pk backends — see flush below
                 worker_id=worker_id,
                 expires_at=expires_at,
-                spec=dict(packet.spec_json or {}),
+                spec=dict(resolved_spec),
                 attempt=packet.attempt_count,
                 claimed_attempt=claimed_attempt,
                 feature_id=packet.feature_id or "",
@@ -388,6 +441,26 @@ class PacketService:
                 raise StaleLeaseError(
                     f"Packet {packet_id} is not RUNNING (state={packet.state})"
                 )
+
+            latest_run = (
+                db.query(PacketRun)
+                .filter_by(packet_id=packet_id)
+                .order_by(PacketRun.run_number.desc())
+                .first()
+            )
+            if latest_run and latest_run.status == "running":
+                latest_run.status = status
+                latest_run.finished_at = datetime.now(UTC)
+                if latest_run.started_at:
+                    started_at = latest_run.started_at
+                    if started_at.tzinfo is None:
+                        started_at = started_at.replace(tzinfo=UTC)
+                    latest_run.duration_ms = int(
+                        (latest_run.finished_at - started_at).total_seconds() * 1000
+                    )
+                persisted_result = dict(latest_run.result_json or {})
+                persisted_result.update(result)
+                latest_run.result_json = persisted_result
 
             await self._transition_in_session(db, packet_id, target, reason=f"release:{status}")
             if lease:

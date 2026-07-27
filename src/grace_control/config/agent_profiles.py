@@ -31,6 +31,7 @@ class AgentProfile:
         self.extras = raw.get("extras", [])
         self.model = raw.get("model", "")
         self.effort = raw.get("effort", "medium")
+        self.priority = int(raw.get("priority", 0))
         self.cwd_template = str(raw.get("cwd", "{worktree_path}"))
         self.timeout_seconds = int(raw.get("timeout_seconds", 600))
         self.minimal_repo = bool(raw.get("minimal_repo", False))
@@ -121,6 +122,7 @@ class AgentProfile:
             "extras": list(self.extras),
             "model": self.model,
             "effort": self.effort,
+            "priority": self.priority,
             "cwd": self.cwd_template,
             "timeout_seconds": self.timeout_seconds,
             "env": dict(self.env),

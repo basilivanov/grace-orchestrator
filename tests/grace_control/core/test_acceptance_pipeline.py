@@ -14,6 +14,8 @@ from grace_control.core.contracts import (
 from grace_control.core.evidence import EvidenceCollector
 from grace_control.core.scope_guard import ScopeGuard
 
+pytestmark = pytest.mark.usefixtures("db")
+
 
 def _make_packet(profile=AcceptanceProfile.NORMAL, t1=None, t2=None, **kw):
     t1_cmds = t1 if t1 is not None else [["python", "-c", "pass"]]
@@ -45,7 +47,7 @@ class FakeRunner:
         self.calls: list[str] = []
         self.call_cwds: list[Path | None] = []
 
-    def run(self, command, *, cwd=None, timeout_s=None, output_dir=None):
+    def run(self, command, *, cwd=None, timeout_s=None, output_dir=None, shell=False):
         cmd_str = " ".join(command) if isinstance(command, list) else command
         self.calls.append(cmd_str)
         self.call_cwds.append(cwd)
@@ -158,10 +160,10 @@ class TestFAST:
 
 
 class TestNORMAL:
-    def test_normal_without_commands_uses_auto_defaults(self):
-        """NORMAL without explicit T1 passes when gate_resolver provides defaults."""
+    def test_normal_with_explicit_empty_t1_requires_targeted_command(self):
+        """NORMAL must not treat an explicit empty T1 list as acceptance."""
         r = _pipeline(packet=_make_packet(profile=AcceptanceProfile.NORMAL, t1=[])).run(packet=_make_packet(profile=AcceptanceProfile.NORMAL, t1=[]))
-        assert r.final_verdict == FinalVerdict.ACCEPTED
+        assert r.final_verdict == FinalVerdict.REWORK_REQUIRED
 
     def test_normal_t1_failed_rework(self):
         p = _make_packet(profile=AcceptanceProfile.NORMAL, t1=[["false"]])
@@ -189,10 +191,10 @@ class TestNORMAL:
 
 
 class TestSTRICT:
-    def test_strict_without_commands_uses_auto_defaults(self):
-        """STRICT without explicit T1 passes when gate_resolver provides defaults."""
+    def test_strict_with_explicit_empty_t1_requires_targeted_command(self):
+        """STRICT must not treat an explicit empty T1 list as acceptance."""
         r = _pipeline(packet=_make_packet(profile=AcceptanceProfile.STRICT, t1=[])).run(packet=_make_packet(profile=AcceptanceProfile.STRICT, t1=[]))
-        assert r.final_verdict == FinalVerdict.ACCEPTED
+        assert r.final_verdict == FinalVerdict.REWORK_REQUIRED
 
     def test_strict_without_t2_uses_guardrails_if_available(self):
         """STRICT without explicit T2 uses guardrails.sh if target repo provides it."""
@@ -303,6 +305,143 @@ class TestReport:
         assert r.final_verdict == FinalVerdict.ACCEPTED
         t1_called = any("fast-t1" in c for c in runner.calls)
         assert t1_called
+
+    def test_explicit_shell_t1_preserves_quotes_and_escapes(self):
+        """Regression: packet strings must reach CommandRunner byte-for-byte."""
+        command = (
+            'grep -R "PostgreSQL" AGENTS.md docs && '
+            'grep -R "Never SQLite\\|no SQLite" AGENTS.md docs'
+        )
+        runner = FakeRunner()
+        packet = _make_packet(profile=AcceptanceProfile.NORMAL, t1=[command])
+
+        report = _pipeline(packet=packet, runner=runner).run(
+            packet=packet,
+            changed_files=["src/main.py"],
+        )
+
+        assert report.final_verdict == FinalVerdict.ACCEPTED
+        assert command in runner.calls
+
+    def test_env_assignment_prefix_runs_via_shell(self):
+        """Regression: leading env-var assignment must be executed through a shell.
+
+        A packet T2 command like ``HYPOTHESIS_PROFILE=ci pytest ...`` must not
+        be shlex-split into an argv list — that turns ``HYPOTHESIS_PROFILE=ci``
+        into the program name and fails with ``command not found``.
+        """
+        pipeline_cls = AcceptancePipeline
+        assert pipeline_cls._needs_shell("HYPOTHESIS_PROFILE=ci python -m pytest -q")
+        assert pipeline_cls._needs_shell("FOO=bar BAZ=qux python -m pytest")
+        # Flags with '=' and argv lists must NOT trigger shell mode.
+        assert not pipeline_cls._needs_shell("python -m pytest --maxfail=1")
+        assert not pipeline_cls._needs_shell(["python", "-m", "pytest", "--maxfail=1"])
+        # Classic shell operators still trigger shell mode.
+        assert pipeline_cls._needs_shell("pytest && echo ok")
+        assert pipeline_cls._needs_shell("! grep -R forbidden docs/")
+        assert pipeline_cls._needs_shell(
+            "test -z \"$(git ls-files '.grace-t*.stdout')\""
+        )
+
+    def test_env_prefixed_t2_command_executes(self, tmp_path):
+        """The real runner executes an env-prefixed T2 command successfully."""
+        (tmp_path / "AGENTS.md").write_text("x\n", encoding="utf-8")
+        command = "MARKER_VALUE=ok python3 -c \"import os,sys; sys.exit(0 if os.environ.get('MARKER_VALUE')=='ok' else 1)\""
+        packet = ExecutionPacketContract(
+            packet_id="p-env-prefix",
+            title="Env-prefixed verification",
+            allowed_write_scope=["AGENTS.md"],
+            frozen_scope=[],
+            acceptance_profile=AcceptanceProfile.NORMAL,
+            verification={"t0": ["test -f AGENTS.md"], "t1": [["echo", "ok"]], "t2": [command]},
+        )
+        pipeline = AcceptancePipeline(
+            repo_root=tmp_path,
+            command_runner=CommandRunner(tmp_path),
+            scope_guard=ScopeGuard(tmp_path),
+            evidence_collector=EvidenceCollector(),
+        )
+        report = pipeline.run(
+            packet=packet,
+            changed_files=["AGENTS.md"],
+            worktree_path=str(tmp_path),
+            run_dir=str(tmp_path / "run"),
+        )
+        assert report.final_verdict == FinalVerdict.ACCEPTED
+        t2_stage = next(stage for stage in report.stages if stage.name.value == "T2_FULL_TESTS")
+        assert t2_stage.commands[0].exit_code == 0
+
+    def test_explicit_shell_t0_preserves_quoted_parentheses(self):
+        """Quoted signatures containing shell syntax stay quoted at T0."""
+        command = (
+            'grep -R "decide_next_bid(bid_state: BidState) -> Decision" '
+            'docs AGENTS.md'
+        )
+        runner = FakeRunner()
+        packet = ExecutionPacketContract(
+            packet_id="p1",
+            title="Test",
+            allowed_write_scope=["src/"],
+            frozen_scope=[],
+            acceptance_profile=AcceptanceProfile.FAST,
+            verification={"t0": [command], "t1": []},
+        )
+
+        report = _pipeline(packet=packet, runner=runner).run(
+            packet=packet,
+            changed_files=["src/main.py"],
+        )
+
+        assert report.final_verdict == FinalVerdict.ACCEPTED
+        assert command in runner.calls
+
+    def test_explicit_shell_grep_executes_with_original_quoting(self, tmp_path):
+        """The real runner executes quoted grep alternation and chaining."""
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        (tmp_path / "AGENTS.md").write_text(
+            "PostgreSQL only. Never SQLite.\n",
+            encoding="utf-8",
+        )
+        (docs / "rules.md").write_text(
+            "PostgreSQL only. No SQLite.\n",
+            encoding="utf-8",
+        )
+        command = (
+            'grep -R "PostgreSQL" AGENTS.md docs >/dev/null && '
+            'grep -R "Never SQLite\\|no SQLite\\|No SQLite" '
+            'AGENTS.md docs >/dev/null'
+        )
+        packet = ExecutionPacketContract(
+            packet_id="p-shell-quotes",
+            title="Quoted shell verification",
+            allowed_write_scope=["AGENTS.md", "docs/"],
+            frozen_scope=[],
+            acceptance_profile=AcceptanceProfile.NORMAL,
+            verification={
+                "t0": ["test -f AGENTS.md && test -f docs/rules.md"],
+                "t1": [command],
+                "t2": [],
+            },
+        )
+        pipeline = AcceptancePipeline(
+            repo_root=tmp_path,
+            command_runner=CommandRunner(tmp_path),
+            scope_guard=ScopeGuard(tmp_path),
+            evidence_collector=EvidenceCollector(),
+        )
+
+        report = pipeline.run(
+            packet=packet,
+            changed_files=["AGENTS.md", "docs/rules.md"],
+            worktree_path=str(tmp_path),
+            run_dir=str(tmp_path / "run"),
+        )
+
+        assert report.final_verdict == FinalVerdict.ACCEPTED
+        t1_stage = next(stage for stage in report.stages if stage.name.value == "T1_TARGETED_TESTS")
+        assert t1_stage.commands[0].command == command
+        assert t1_stage.commands[0].exit_code == 0
 
 
 class TestGraceBaseSha:
@@ -425,8 +564,8 @@ class TestProfilePipeline:
         assert report.final_verdict == FinalVerdict.ACCEPTED
         assert any("explicit-fast-t1" in c for c in runner.calls)
 
-    def test_normal_runs_t1_not_t2(self, tmp_path):
-        """NORMAL runs T1 defaults but skips T2."""
+    def test_normal_requires_targeted_t1_and_skips_t2(self, tmp_path):
+        """NORMAL runs architect-targeted T1 and does not run full guardrails."""
         scripts = tmp_path / "scripts"
         scripts.mkdir()
         (scripts / "guardrails.sh").write_text("echo normal")
@@ -441,9 +580,11 @@ class TestProfilePipeline:
             packet_id="p1", title="test",
             allowed_write_scope=["src/"], frozen_scope=[],
             acceptance_profile=AcceptanceProfile.NORMAL,
-            verification={},
+            verification={"t1": [["npm", "test"]]},
         )
-        runner = FakeRunner()
+        runner = FakeRunner({
+            "npm test": CommandResult(command="npm test", cwd="/", exit_code=0),
+        })
         pipe = AcceptancePipeline(
             repo_root=tmp_path,
             command_runner=runner,
@@ -454,13 +595,13 @@ class TestProfilePipeline:
         assert report.final_verdict == FinalVerdict.ACCEPTED, (
             f"NORMAL should accept, verdict={report.final_verdict}"
         )
-        t1_ran = any("guardrails.sh" in c for c in runner.calls)
-        t2_ran = any("strict" in c for c in runner.calls)
+        t1_ran = any("npm test" in c for c in runner.calls)
+        t2_ran = any("guardrails.sh" in c for c in runner.calls)
         assert t1_ran, f"NORMAL should run T1, got calls: {runner.calls}"
         assert not t2_ran, f"NORMAL should not run T2, got calls: {runner.calls}"
 
-    def test_strict_runs_t1_and_t2(self, tmp_path):
-        """STRICT runs T1 defaults and T2 strict guardrails."""
+    def test_strict_runs_targeted_t1_and_filters_full_guardrails(self, tmp_path):
+        """STRICT runs targeted T1 without invoking repository-wide guardrails."""
         scripts = tmp_path / "scripts"
         scripts.mkdir()
         (scripts / "guardrails.sh").write_text("echo full")
@@ -490,10 +631,10 @@ class TestProfilePipeline:
         t1_ran = any("echo ok" in c for c in runner.calls)
         t2_ran = any("guardrails.sh" in c for c in runner.calls)
         assert t1_ran, f"STRICT should run T1, got calls: {runner.calls}"
-        assert t2_ran, f"STRICT should run T2 guardrails, got calls: {runner.calls}"
+        assert not t2_ran, f"STRICT should filter full guardrails, got calls: {runner.calls}"
 
-    def test_strict_fails_without_guardrails(self, tmp_path):
-        """STRICT without guardrails.sh and without explicit T2 → fail."""
+    def test_strict_skips_t2_without_targeted_command(self, tmp_path):
+        """STRICT accepts targeted T1 and skips absent targeted T2."""
         from grace_control.core.acceptance_pipeline import AcceptancePipeline
         from grace_control.core.command_runner import CommandRunner
         from grace_control.core.scope_guard import ScopeGuard
@@ -513,8 +654,8 @@ class TestProfilePipeline:
             evidence_collector=EvidenceCollector(),
         )
         report = pipe.run(packet=pkt, changed_files=["src/main.py"])
-        assert report.final_verdict != FinalVerdict.ACCEPTED
+        assert report.final_verdict == FinalVerdict.ACCEPTED
         t2_stage = [s for s in report.stages if "T2" in s.name.value]
-        assert any("guardrails" in (s.summary or "").lower() for s in t2_stage), (
-            f"expected guardrails message, got: {[s.summary for s in t2_stage]}"
+        assert any(s.status.value == "skipped" for s in t2_stage), (
+            f"expected skipped T2, got: {[s.summary for s in t2_stage]}"
         )

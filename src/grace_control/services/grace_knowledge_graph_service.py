@@ -1,7 +1,7 @@
 # ############################################################################
 # AI_HEADER: grace_knowledge_graph_service
-# ROLE: Parse grace/knowledge-graph.xml and extract relevant module/path map
-#        for the Architect prompt.
+# ROLE: Parse a target project's GRACE knowledge graph and extract the relevant
+#       module/path map for the Architect prompt.
 # ############################################################################
 
 from __future__ import annotations
@@ -16,6 +16,11 @@ from pydantic import BaseModel
 from grace_control.core.structured_logger import GraceLogger
 
 _log = GraceLogger("grace_knowledge_graph")
+
+_KNOWLEDGE_GRAPH_CANDIDATES = (
+    Path("grace/knowledge-graph.xml"),
+    Path("docs/knowledge-graph.xml"),
+)
 
 
 class GraceModule(BaseModel):
@@ -63,16 +68,19 @@ class GraceKnowledgeGraphService:
             )
 
     def load(self, target_repo_root: Path) -> GraceKnowledgeGraph | None:
-        """Parse grace/knowledge-graph.xml from target repo."""
-        kg_path = target_repo_root / "grace" / "knowledge-graph.xml"
-        if not kg_path.exists():
-            _log.info("kg_not_found", path=str(kg_path))
+        """Parse the first supported knowledge-graph path in a target repo."""
+        candidate_paths = [target_repo_root / relative for relative in _KNOWLEDGE_GRAPH_CANDIDATES]
+        kg_path = next((path for path in candidate_paths if path.is_file()), None)
+        if kg_path is None:
+            searched = [str(path) for path in candidate_paths]
+            _log.info("kg_not_found", paths=searched)
             self._emit(event="knowledge_graph.load_missing", status="missing",
-                       payload={"path": str(kg_path)})
+                       payload={"paths": searched})
             return None
 
         try:
-            self._emit(event="knowledge_graph.load_started", status="started")
+            self._emit(event="knowledge_graph.load_started", status="started",
+                       payload={"path": str(kg_path)})
             tree = ET.parse(kg_path)
             root = tree.getroot()
             project = root.get("project", "")
@@ -107,7 +115,8 @@ class GraceKnowledgeGraphService:
             kg = GraceKnowledgeGraph(project=project, updated=updated, modules=modules, slices=slices)
             _log.info("kg_loaded", project=project, modules=len(modules), slices=len(slices))
             self._emit(event="knowledge_graph.load_completed", status="completed",
-                       payload={"project": project, "module_count": len(modules), "slice_count": len(slices)})
+                       payload={"path": str(kg_path), "project": project,
+                                "module_count": len(modules), "slice_count": len(slices)})
             return kg
 
         except Exception as e:

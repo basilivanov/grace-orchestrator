@@ -136,6 +136,14 @@ def _classify(signal, reason, state, domain, merge_err, ev_verdict, rv_verdict) 
                                     "security required", "billing required", "data-loss approval"]):
         return FailureClass.TRUE_BLOCKER
 
+    # Reviewer is the later gate and must override an earlier verifier PASS.
+    if rv_verdict == "RETURN_TO_ARCHITECT":
+        return FailureClass.ARCHITECT_REPACK_NEEDED
+    if rv_verdict == "REWORK_TO_CODER":
+        return FailureClass.RETRYABLE_CODER
+    if rv_verdict and rv_verdict != "PASS":
+        return FailureClass.RETRYABLE_REVIEWER
+
     # ── Evidence Verifier ───────────────────────────────────────────
     if ev_verdict == "RETURN_TO_ARCHITECT":
         return FailureClass.ARCHITECT_REPACK_NEEDED
@@ -174,6 +182,10 @@ def _classify(signal, reason, state, domain, merge_err, ev_verdict, rv_verdict) 
     if state in ("rejected", "failed") and "scope" in reason:
         if "impossible" in reason or "cannot" in reason:
             return FailureClass.ARCHITECT_REPACK_NEEDED
+        return FailureClass.RETRYABLE_CODER
+
+    # ── Agent runtime timeouts ─────────────────────────────────────
+    if "timed out" in reason or "timeout" in reason:
         return FailureClass.RETRYABLE_CODER
 
     # ── Deterministic acceptance ────────────────────────────────────

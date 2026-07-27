@@ -103,8 +103,8 @@ def test_wave_gate_multiple_features_isolated(db):
         assert d.query(Packet).filter_by(id="P-FB-2").first().state == PacketState.DRAFT.value
 
 
-def test_wave_gate_blocked_packet_does_not_block_gate(db):
-    """BLOCKED is terminal — wave gate should open even with blocked packets."""
+def test_wave_gate_blocked_packet_marks_wave_degraded(db):
+    """BLOCKED requires recovery and must not release dependent work."""
     with get_db() as d:
         make_feature(d, fid="F1")
         make_wave(d, wid="W01", fid="F1")
@@ -113,8 +113,52 @@ def test_wave_gate_blocked_packet_does_not_block_gate(db):
         make_packet(d, pid="P2", fid="F1", wid="W01", state=PacketState.BLOCKED.value)
         make_packet(d, pid="P3", fid="F1", wid="W02", state=PacketState.DRAFT.value)
 
-    assert check_wave_gates() == 1  # BLOCKED is terminal → gate opens
+    assert check_wave_gates() == 0
 
     with get_db() as d:
+        from grace_control.db.schema import Feature, Packet, Wave
+        assert d.query(Packet).filter_by(id="P3").first().state == PacketState.DRAFT.value
+        assert d.query(Wave).filter_by(id="W01").first().status == "DEGRADED"
+        assert d.query(Feature).filter_by(id="F1").first().degraded_reason
+
+
+def test_wave_gate_uses_merged_rework_instead_of_failed_parent(db):
+    with get_db() as d:
         from grace_control.db.schema import Packet
-        assert d.query(Packet).filter_by(id="P3").first().state == PacketState.READY.value
+
+        make_feature(d, fid="F-REWORK")
+        make_wave(d, wid="W01-REWORK", fid="F-REWORK", order=1)
+        make_wave(d, wid="W02-REWORK", fid="F-REWORK", order=2)
+        make_packet(
+            d,
+            pid="PARENT-REWORK",
+            fid="F-REWORK",
+            wid="W01-REWORK",
+            state=PacketState.FAILED.value,
+        )
+        d.add(Packet(
+            id="CHILD-REWORK",
+            feature_id="F-REWORK",
+            wave_id="W01-REWORK",
+            slug="child-rework",
+            title="Rework: PARENT-REWORK",
+            spec_json={
+                "origin": "review_rework",
+                "parent_packet_id": "PARENT-REWORK",
+            },
+            state=PacketState.MERGED.value,
+        ))
+        make_packet(
+            d,
+            pid="NEXT-REWORK",
+            fid="F-REWORK",
+            wid="W02-REWORK",
+            state=PacketState.DRAFT.value,
+        )
+
+    assert check_wave_gates() == 1
+    with get_db() as d:
+        from grace_control.db.schema import Packet
+
+        next_packet = d.query(Packet).filter_by(id="NEXT-REWORK").first()
+        assert next_packet.state == PacketState.READY.value

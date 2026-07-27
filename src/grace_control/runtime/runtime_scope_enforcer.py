@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fnmatch
 from pathlib import Path
 
 from pydantic import BaseModel
@@ -139,6 +140,10 @@ def _in_scope(file_path: str, scope_set: frozenset[str]) -> bool:
         return True
     # Directory prefix match (scope "src/foo" matches "src/foo/bar.py")
     for sp in scope_set:
+        if any(marker in sp for marker in ("*", "?", "[")):
+            if fnmatch.fnmatchcase(normalized, sp):
+                return True
+            continue
         if normalized == sp or normalized.startswith(sp + "/"):
             return True
         # Also match if file is exactly a directory scope entry (e.g. "src/foo" matches itself)

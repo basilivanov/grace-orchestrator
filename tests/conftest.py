@@ -29,6 +29,7 @@ def _apply_test_settings() -> None:
     """Relax safety checks for test environments (no real git repos)."""
     from grace_control.config.settings import settings
     settings.agent_runtime_allow_non_git_scope_skip = True
+    settings.agent_runtime_fail_on_bad_git_root = False
 
 
 @pytest.fixture(autouse=True)

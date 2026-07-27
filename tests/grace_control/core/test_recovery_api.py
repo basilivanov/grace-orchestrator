@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -112,3 +113,70 @@ def test_evaluate_endpoint_blocker(MockCtrl):
     data = resp.json()["data"]
     assert data["action"] == "block_feature"
     assert data["max_attempts_reached"] is True
+
+
+@patch("grace_control.services.rework_packet_service.create_architect_repack_packet")
+@patch("grace_control.db.get_db")
+def test_repack_endpoint_returns_replacement(mock_db, mock_create):
+    mock_db.return_value.__enter__.return_value = object()
+    mock_create.return_value = (
+        SimpleNamespace(
+            id="pkt_repacked",
+            feature_id="feat_test",
+            wave_id="wave_test",
+            state="ready",
+            acceptance_profile="STRICT",
+        ),
+        True,
+    )
+
+    response = client.post(
+        "/api/recovery/repack/pkt_failed",
+        json={
+            "reason": "Compose service conflicts with the merged dependency",
+            "verification": {
+                "t0": ["test -f app.py"],
+                "t1": ["pytest -q"],
+                "t2": ["docker compose up -d postgres && pytest -q"],
+            },
+            "coder_instructions": ["Use the merged compose contract"],
+            "scope": ["app.py", "service.py"],
+            "frozen_scope": ["docs/archived"],
+            "expected_evidence": [{
+                "id": "EV-REPACK",
+                "kind": "test",
+                "expectation": "exists",
+            }],
+        },
+    )
+
+    assert response.status_code == 200
+    assert mock_create.call_args.kwargs["scope"] == ["app.py", "service.py"]
+    assert mock_create.call_args.kwargs["frozen_scope"] == ["docs/archived"]
+    assert mock_create.call_args.kwargs["expected_evidence"] == [{
+        "id": "EV-REPACK",
+        "kind": "test",
+        "expectation": "exists",
+    }]
+    assert response.json()["data"] == {
+        "packet_id": "pkt_repacked",
+        "parent_packet_id": "pkt_failed",
+        "feature_id": "feat_test",
+        "wave_id": "wave_test",
+        "state": "ready",
+        "acceptance_profile": "STRICT",
+        "created": True,
+    }
+
+
+def test_repack_endpoint_rejects_unknown_override_fields():
+    response = client.post(
+        "/api/recovery/repack/pkt_failed",
+        json={
+            "reason": "Compose service conflicts with the merged dependency",
+            "verification": {"t2": ["pytest -q"]},
+            "acceptance_profile": "FAST",
+        },
+    )
+
+    assert response.status_code == 422

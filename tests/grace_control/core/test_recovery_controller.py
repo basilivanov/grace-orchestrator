@@ -103,6 +103,149 @@ def test_build_signal_counts_previous_attempts():
     assert len(signal.previous_executor_ids) == 3
 
 
+def test_build_signal_preserves_blocked_reviewer_context():
+    runs = [
+        MockRun("blocked", 1, {
+            "legacy_result": {
+                "domain_status": "blocked",
+                "evidence": {"executor_id": "coder-mini-swe"},
+            },
+            "acceptance_report": {"final_verdict": "accepted"},
+            "evidence_verifier_report": {"verdict": "PASS"},
+            "reviewer_report": {
+                "verdict": "RETURN_TO_ARCHITECT",
+                "summary": "Packet scope freezes required production behavior.",
+            },
+        }),
+    ]
+
+    with patch("grace_control.db.get_db") as mock_db:
+        mock_ctx = MagicMock()
+        mock_db.return_value.__enter__.return_value = mock_ctx
+        mock_query = MagicMock()
+        mock_ctx.query.return_value = mock_query
+
+        mock_filter_packet = MagicMock()
+        mock_filter_run = MagicMock()
+        mock_query.filter_by.side_effect = [mock_filter_packet, mock_filter_run]
+        mock_filter_packet.first.return_value = MockPacket
+
+        mock_order = MagicMock()
+        mock_filter_run.order_by.return_value = mock_order
+        mock_order.limit.return_value = MagicMock()
+        mock_order.limit.return_value.all.return_value = runs
+
+        signal = RecoveryController().build_signal("pkt_test")
+
+    assert signal.coder_attempt_count == 1
+    assert signal.current_executor_id == "coder-mini-swe"
+    assert signal.reason == "Packet scope freezes required production behavior."
+    assert signal.reviewer_verdict == "RETURN_TO_ARCHITECT"
+
+
+def test_build_signal_keeps_unresolved_reviewer_context_across_retry():
+    runs = [
+        MockRun("rejected", 2, {
+            "reason": "Worktree disappeared during the later coder retry.",
+            "legacy_result": {
+                "domain_status": "rejected",
+                "evidence": {"executor_id": "coder-deepseek"},
+            },
+            "acceptance_report": {"final_verdict": "rejected"},
+            "evidence_verifier_report": {
+                "verdict": "REWORK_TO_CODER",
+                "summary": "Agent changed a production file outside scope.",
+            },
+            "reviewer_report": {
+                "verdict": "REWORK_TO_CODER",
+                "summary": "Agent changed a production file outside scope.",
+            },
+        }),
+        MockRun("blocked", 1, {
+            "legacy_result": {
+                "domain_status": "blocked",
+                "evidence": {"executor_id": "coder-flash"},
+            },
+            "acceptance_report": {"final_verdict": "accepted"},
+            "evidence_verifier_report": {"verdict": "PASS"},
+            "reviewer_report": {
+                "verdict": "RETURN_TO_ARCHITECT",
+                "summary": "Production scope must be expanded.",
+            },
+        }),
+    ]
+
+    with patch("grace_control.db.get_db") as mock_db:
+        mock_ctx = MagicMock()
+        mock_db.return_value.__enter__.return_value = mock_ctx
+        mock_query = MagicMock()
+        mock_ctx.query.return_value = mock_query
+        mock_filter_packet = MagicMock()
+        mock_filter_run = MagicMock()
+        mock_query.filter_by.side_effect = [mock_filter_packet, mock_filter_run]
+        mock_filter_packet.first.return_value = MockPacket
+        mock_order = MagicMock()
+        mock_filter_run.order_by.return_value = mock_order
+        mock_order.limit.return_value = MagicMock()
+        mock_order.limit.return_value.all.return_value = runs
+
+        signal = RecoveryController().build_signal("pkt_test")
+
+    assert signal.coder_attempt_count == 2
+    assert signal.current_executor_id == "coder-deepseek"
+    assert signal.evidence_verifier_verdict == "REWORK_TO_CODER"
+    assert signal.reviewer_verdict == "RETURN_TO_ARCHITECT"
+    assert signal.reason == "Production scope must be expanded."
+
+
+def test_build_signal_latest_reviewer_pass_supersedes_historical_return():
+    runs = [
+        MockRun("blocked", 2, {
+            "legacy_result": {
+                "domain_status": "completed",
+                "evidence": {"executor_id": "coder-deepseek"},
+            },
+            "acceptance_report": {"final_verdict": "accepted"},
+            "evidence_verifier_report": {"verdict": "PASS"},
+            "reviewer_report": {
+                "verdict": "PASS",
+                "summary": "Expanded architect-approved scope is now correct.",
+            },
+        }),
+        MockRun("blocked", 1, {
+            "legacy_result": {
+                "domain_status": "blocked",
+                "evidence": {"executor_id": "coder-flash"},
+            },
+            "acceptance_report": {"final_verdict": "accepted"},
+            "evidence_verifier_report": {"verdict": "PASS"},
+            "reviewer_report": {
+                "verdict": "RETURN_TO_ARCHITECT",
+                "summary": "Production scope must be expanded.",
+            },
+        }),
+    ]
+
+    with patch("grace_control.db.get_db") as mock_db:
+        mock_ctx = MagicMock()
+        mock_db.return_value.__enter__.return_value = mock_ctx
+        mock_query = MagicMock()
+        mock_ctx.query.return_value = mock_query
+        mock_filter_packet = MagicMock()
+        mock_filter_run = MagicMock()
+        mock_query.filter_by.side_effect = [mock_filter_packet, mock_filter_run]
+        mock_filter_packet.first.return_value = MockPacket
+        mock_order = MagicMock()
+        mock_filter_run.order_by.return_value = mock_order
+        mock_order.limit.return_value = MagicMock()
+        mock_order.limit.return_value.all.return_value = runs
+
+        signal = RecoveryController().build_signal("pkt_test")
+
+    assert signal.reviewer_verdict == "PASS"
+    assert signal.reason == "Expanded architect-approved scope is now correct."
+
+
 # ── evaluate tests (async) ───────────────────────────────────────────────────
 
 
@@ -180,6 +323,8 @@ def test_apply_retry_same_coder_sets_READY():
     mock_packet.id = "pkt_test"
     mock_packet.state = "rejected"
     mock_packet.spec_json = {}
+    mock_packet.attempt_count = 2
+    mock_packet.max_attempts = 2
 
     with patch("grace_control.db.get_db") as mock_db:
         mock_ctx = MagicMock()
@@ -192,6 +337,7 @@ def test_apply_retry_same_coder_sets_READY():
         ctrl._apply_retry_same_coder("pkt_test")
 
     assert mock_packet.state == "ready"
+    assert mock_packet.max_attempts == 3
 
 
 def test_apply_switch_coder_stores_requested_executor():
@@ -200,6 +346,8 @@ def test_apply_switch_coder_stores_requested_executor():
     mock_packet.id = "pkt_test"
     mock_packet.state = "rejected"
     mock_packet.spec_json = {}
+    mock_packet.attempt_count = 3
+    mock_packet.max_attempts = 3
 
     decision = RecoveryDecision(
         action=RecoveryAction.SWITCH_CODER,
@@ -219,6 +367,7 @@ def test_apply_switch_coder_stores_requested_executor():
         ctrl._apply_switch_coder("pkt_test", decision)
 
     assert mock_packet.spec_json.get("recovery", {}).get("requested_executor_id") == "coder-sonnet"
+    assert mock_packet.max_attempts == 4
 
 
 def test_apply_return_architect_sets_BLOCKED():

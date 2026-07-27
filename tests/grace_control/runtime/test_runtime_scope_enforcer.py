@@ -25,6 +25,14 @@ class TestScopeUnit:
         )
         assert result.ok
 
+    def test_allows_evidence_file_matching_glob_scope(self):
+        result = RuntimeScopeEnforcer.enforce(
+            changed_files=["verification-output/W00-P01-verification.log"],
+            allowed_scope=["verification-output/W00*.log"],
+            frozen_scope=[],
+        )
+        assert result.ok
+
     def test_rejects_out_of_scope_file(self):
         result = RuntimeScopeEnforcer.enforce(
             changed_files=["src/foo/bar.py", "outside/x.py"],

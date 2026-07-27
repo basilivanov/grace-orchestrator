@@ -28,6 +28,58 @@ from grace_control.core.structured_logger import GraceLogger, get_trace_id
 _log = GraceLogger("recovery_controller")
 
 
+def _build_coder_retry_context(db, packet_id: str, decision=None) -> dict[str, Any]:
+    from grace_control.core.runtime_redaction import RuntimeRedactor
+    from grace_control.db.schema import PacketRun
+
+    latest = db.query(PacketRun).filter_by(packet_id=packet_id).order_by(
+        PacketRun.run_number.desc()
+    ).first()
+    result = latest.result_json if latest and isinstance(latest.result_json, dict) else {}
+    acceptance = result.get("acceptance_report", {})
+    if not isinstance(acceptance, dict):
+        acceptance = {}
+
+    redactor = RuntimeRedactor()
+    failed_checks: list[dict[str, Any]] = []
+    for stage in acceptance.get("stages", []) or []:
+        if not isinstance(stage, dict):
+            continue
+        for command in stage.get("commands", []) or []:
+            if not isinstance(command, dict) or command.get("exit_code") in (None, 0):
+                continue
+            failed_checks.append({
+                "stage": str(stage.get("name", ""))[:80],
+                "command": redactor.redact_string(str(command.get("command", "")))[:1_000],
+                "exit_code": command.get("exit_code"),
+            })
+            if len(failed_checks) >= 5:
+                break
+        if len(failed_checks) >= 5:
+            break
+
+    action = getattr(getattr(decision, "action", None), "value", "retry_same_coder")
+    failure_class = getattr(
+        getattr(decision, "failure_class", None),
+        "value",
+        "",
+    )
+    reason = redactor.redact_string(str(getattr(decision, "reason", "") or ""))[:1_000]
+    summary = redactor.redact_string(str(acceptance.get("summary", "") or ""))[:1_000]
+    context: dict[str, Any] = {
+        "action": action,
+        "reason": reason,
+        "failure_class": failure_class,
+        "previous_attempt": getattr(latest, "run_number", None),
+        "acceptance_summary": summary,
+        "failed_checks": failed_checks,
+    }
+    executor_hint = str(getattr(decision, "next_executor_hint", "") or "")
+    if executor_hint:
+        context["requested_executor_id"] = executor_hint
+    return context
+
+
 def _apply_create_stage_run(packet_id: str, decision, trace_id: str | None = None):
     """Создаёт pending StageRun для recovery-возврата, если решение предполагает повтор."""
     from grace_control.core.stage_instrumentation import create_for_return
@@ -142,14 +194,47 @@ class RecoveryController:
             reviewer_reject = 0
             merge_count = 0
             architect_repairs = 0
+            unresolved_architect_ev: dict[str, Any] = {}
+            unresolved_architect_rv: dict[str, Any] = {}
 
             for run in runs:
                 r = dict(run.result_json or {})
-                exec_id = r.get("executor_id", "")
+                r_acc = r.get("acceptance_report", {})
+                r_ev = r.get("evidence_verifier_report", {})
+                r_rv = r.get("reviewer_report", {})
+                if (
+                    not unresolved_architect_ev
+                    and isinstance(r_ev, dict)
+                    and r_ev.get("verdict") == "RETURN_TO_ARCHITECT"
+                ):
+                    unresolved_architect_ev = dict(r_ev)
+                if (
+                    not unresolved_architect_rv
+                    and isinstance(r_rv, dict)
+                    and r_rv.get("verdict") == "RETURN_TO_ARCHITECT"
+                ):
+                    unresolved_architect_rv = dict(r_rv)
+                if not acc and isinstance(r_acc, dict):
+                    acc = dict(r_acc)
+                if not ev and isinstance(r_ev, dict):
+                    ev = dict(r_ev)
+                if not rv and isinstance(r_rv, dict):
+                    rv = dict(r_rv)
+                r_legacy = r.get("legacy_result", {})
+                if not isinstance(r_legacy, dict):
+                    r_legacy = {}
+                r_evidence = r_legacy.get("evidence", {})
+                if not isinstance(r_evidence, dict):
+                    r_evidence = {}
+                exec_id = (
+                    r.get("executor_id", "")
+                    or r_legacy.get("executor_id", "")
+                    or r_evidence.get("executor_id", "")
+                )
                 if exec_id and exec_id not in executor_ids:
                     executor_ids.append(exec_id)
                 prev_ids.append(exec_id)
-                if run.status in ("rejected", "failed"):
+                if run.status in ("rejected", "failed", "blocked"):
                     coder_count += 1
                 if "verifier" in (r.get("domain_status") or ""):
                     verifier_reject += 1
@@ -159,6 +244,15 @@ class RecoveryController:
                     merge_count += 1
                 if "architect" in (r.get("domain_status") or ""):
                     architect_repairs += 1
+
+            # A coder retry cannot resolve a scope/contract conflict.  Keep the
+            # newest unresolved architect return authoritative until an actual
+            # architect repair creates a replacement packet.  A later PASS is
+            # allowed to supersede it because no recovery is then required.
+            if rv.get("verdict") != "PASS" and unresolved_architect_rv:
+                rv = unresolved_architect_rv
+            elif ev.get("verdict") != "PASS" and unresolved_architect_ev:
+                ev = unresolved_architect_ev
 
         _log.info("build_signal",
             packet_id=packet_id,
@@ -174,7 +268,18 @@ class RecoveryController:
             packet_id=p_id,
             packet_state=p_state,
             domain_status=legacy.get("domain_status", ""),
-            reason=result.get("reason", ""),
+            reason=(
+                (
+                    rv.get("summary", "")
+                    if rv.get("verdict") == "RETURN_TO_ARCHITECT"
+                    else ""
+                )
+                or result.get("reason", "")
+                or rv.get("summary", "")
+                or ev.get("summary", "")
+                or legacy.get("reason", "")
+                or legacy.get("error", "")
+            ),
             acceptance_verdict=acc.get("final_verdict", ""),
             evidence_verifier_verdict=ev.get("verdict", ""),
             reviewer_verdict=rv.get("verdict", ""),
@@ -186,7 +291,7 @@ class RecoveryController:
             verifier_reject_count=verifier_reject,
             reviewer_reject_count=reviewer_reject,
             merge_attempt_count=merge_count,
-            current_executor_id=prev_ids[-1] if prev_ids else None,
+            current_executor_id=next((item for item in prev_ids if item), None),
             previous_executor_ids=prev_ids,
         )
 
@@ -272,6 +377,13 @@ class RecoveryController:
             sm = PacketStateMachine()
             sm.transition(PacketState(packet.state), PacketState.READY)
             packet.state = PacketState.READY.value
+            packet.max_attempts = max(
+                packet.max_attempts or 0,
+                (packet.attempt_count or 0) + 1,
+            )
+            spec = dict(packet.spec_json or {})
+            spec["recovery"] = _build_coder_retry_context(db, packet_id, decision)
+            packet.spec_json = spec
             db.flush()
         _log.info("apply_retry_same_coder_done", packet_id=packet_id, new_state="ready")
 
@@ -289,9 +401,13 @@ class RecoveryController:
             sm = PacketStateMachine()
             sm.transition(PacketState(packet.state), PacketState.READY)
             packet.state = PacketState.READY.value
+            packet.max_attempts = max(
+                packet.max_attempts or 0,
+                (packet.attempt_count or 0) + 1,
+            )
 
             spec = dict(packet.spec_json or {})
-            spec["recovery"] = {"requested_executor_id": decision.next_executor_hint}
+            spec["recovery"] = _build_coder_retry_context(db, packet_id, decision)
             packet.spec_json = spec
             db.flush()
         _log.info("apply_switch_coder_done", packet_id=packet_id,
@@ -309,18 +425,32 @@ class RecoveryController:
                 _log.warn("apply_return_to_architect_skip", packet_id=packet_id, reason="packet_not_found")
                 return
             sm = PacketStateMachine()
-            sm.transition(PacketState(packet.state), PacketState.BLOCKED_FINAL)
-            packet.state = PacketState.BLOCKED_FINAL.value
+            current = PacketStateMachine.normalize_state(packet.state)
+            if sm.can_transition(current, PacketState.BLOCKED_FINAL):
+                sm.transition(current, PacketState.BLOCKED_FINAL)
+                packet.state = PacketState.BLOCKED_FINAL.value
+            elif current != PacketState.FAILED:
+                _log.warn(
+                    "apply_return_to_architect_state_preserved",
+                    packet_id=packet_id,
+                    state=current.value,
+                )
 
             spec = dict(packet.spec_json or {})
             spec["architect_repair"] = {
                 "reason": decision.reason,
                 "failure_class": decision.failure_class.value,
                 "instruction": decision.architect_instruction,
+                "repack_endpoint": f"/api/recovery/repack/{packet_id}",
             }
             packet.spec_json = spec
+            new_state = packet.state
             db.flush()
-        _log.info("apply_return_to_architect_done", packet_id=packet_id, new_state="blocked")
+        _log.info(
+            "apply_return_to_architect_done",
+            packet_id=packet_id,
+            new_state=new_state,
+        )
 
     def _apply_block_feature(self, packet_id: str, decision: RecoveryDecision):
         _log.info("apply_block_feature_start", packet_id=packet_id,

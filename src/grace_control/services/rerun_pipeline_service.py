@@ -10,14 +10,17 @@
 # invariants:
 #   - Verifier PASS alone never returns accepted (chains to reviewer)
 #   - Reviewer rerun requires persisted verifier verdict == PASS
-#   - All accepted results preserve merge metadata (worktree, branch)
-# side_effects: LLM calls via run_evidence_verifier / run_reviewer_gate
+#   - All accepted results preserve merge metadata (worktree, branch, commit_sha)
+#   - current_evidence_dir is created before any gate is called
+#   - Gates read from source_run_dir; current_evidence_dir is for output only
+# side_effects: LLM calls via run_evidence_verifier / run_reviewer_gate; filesystem mkdir
 # error_behavior: Returns controlled failure RerunResult with stable failure_code
 # observability: GraceLogger with packet_id, run_id, stage, duration_ms, verdict
 # non_goals:
 #   - Does not load context (call rerun_context_service separately)
 #   - Does not persist anything
 #   - Does not touch PacketRun or Packet in DB
+#   - Does not write artifacts to source run directory
 # END_MODULE_CONTRACT
 
 # START_MODULE_MAP
@@ -95,13 +98,20 @@ async def execute_rerun(
 ) -> RerunResult:
     """Execute a single rerun stage. Chains verifier→reviewer when verifier PASSes.
 
-    Returns a RerunResult ready for persistence and/or merge.
+    current_evidence_dir is created before any gate runs. Gates read artifacts
+    from source_run_dir; current_evidence_dir is for output artifacts only.
     """
+    # Create output evidence dir before gates
+    current_evidence_dir.mkdir(parents=True, exist_ok=True)
+
     _log.info("rerun_stage_started", packet_id=context.packet_id,
                run_id=context.current_run_id, stage=stage.value,
                source_run_id=context.source_run_id)
 
     last_acceptance = _build_acceptance_report(context)
+
+    # Gates read from source_run_dir (read-only), not current_evidence_dir
+    source_run_dir = Path(context.source_run_dir)
 
     # Carrier for original acceptance report dict in result evidence
     def _make_ev(extra: dict | None = None) -> dict:
@@ -109,13 +119,21 @@ async def execute_rerun(
         ev["acceptance_report"] = context.acceptance_report
         return ev
 
+    def _result(**kw) -> RerunResult:
+        kw.setdefault("source_run_id", context.source_run_id)
+        kw.setdefault("worktree_path", context.source_worktree_path)
+        kw.setdefault("branch_name", context.branch_name)
+        kw.setdefault("commit_sha", context.commit_sha)
+        kw.setdefault("duration_ms", int((time.time() - started_at) * 1000))
+        return RerunResult(**kw)
+
     try:
         if stage == RerunStage.VERIFIER:
             evr = await run_evidence_verifier(
                 packet=packet_contract,
                 acceptance_report=last_acceptance,
                 worktree_path=Path(context.source_worktree_path),
-                run_dir=Path(context.source_run_dir),
+                run_dir=source_run_dir,
                 changed_files=[],
                 artifacts=[],
             )
@@ -123,17 +141,10 @@ async def execute_rerun(
                 _log.info("rerun_verifier_completed", packet_id=context.packet_id,
                            run_id=context.current_run_id, verdict=evr.verdict.value,
                            duration_ms=int((time.time() - started_at) * 1000))
-                return RerunResult(
+                return _result(
                     accepted=False, domain_status="rejected",
                     reason=evr.summary or "verifier rerun rejected",
-                    duration_ms=int((time.time() - started_at) * 1000),
-                    source_run_id=context.source_run_id,
-                    worktree_path=context.source_worktree_path,
-                    branch_name=context.branch_name,
-                    evidence=_make_ev({
-                        "verifier_verdict": evr.verdict.value,
-                        "summary": evr.summary,
-                    }),
+                    evidence=_make_ev({"verifier_verdict": evr.verdict.value, "summary": evr.summary}),
                     evidence_verifier_report=evr.model_dump(),
                 )
 
@@ -145,7 +156,7 @@ async def execute_rerun(
                 acceptance_report=last_acceptance,
                 evidence_verifier_report=evr,
                 worktree_path=Path(context.source_worktree_path),
-                run_dir=Path(context.source_run_dir),
+                run_dir=source_run_dir,
                 changed_files=[],
                 artifacts=[],
             )
@@ -154,16 +165,12 @@ async def execute_rerun(
                        run_id=context.current_run_id,
                        verdict=rvr.verdict.value, accepted=accepted,
                        duration_ms=int((time.time() - started_at) * 1000))
-            return RerunResult(
+            return _result(
                 accepted=accepted,
                 domain_status="accepted" if accepted else "rejected",
                 reason=rvr.summary or (
                     "reviewer rerun accepted" if accepted else "reviewer rerun rejected"
                 ),
-                duration_ms=int((time.time() - started_at) * 1000),
-                source_run_id=context.source_run_id,
-                worktree_path=context.source_worktree_path,
-                branch_name=context.branch_name,
                 evidence=_make_ev({
                     "verifier_verdict": evr.verdict.value,
                     "reviewer_verdict": rvr.verdict.value,
@@ -181,11 +188,9 @@ async def execute_rerun(
                 _log.warn("rerun_verifier_context_missing", packet_id=context.packet_id,
                            run_id=context.current_run_id,
                            source_run_id=context.source_run_id)
-                return RerunResult(
+                return _result(
                     accepted=False, domain_status="rejected",
                     reason="RERUN_VERIFIER_CONTEXT_MISSING: previous verifier verdict not PASS",
-                    duration_ms=int((time.time() - started_at) * 1000),
-                    source_run_id=context.source_run_id,
                     evidence=_make_ev({"rerun_error": "RERUN_VERIFIER_CONTEXT_MISSING"}),
                 )
 
@@ -194,7 +199,7 @@ async def execute_rerun(
                 acceptance_report=last_acceptance,
                 evidence_verifier_report=last_verifier_report,
                 worktree_path=Path(context.source_worktree_path),
-                run_dir=Path(context.source_run_dir),
+                run_dir=source_run_dir,
                 changed_files=[],
                 artifacts=[],
             )
@@ -203,16 +208,12 @@ async def execute_rerun(
                        run_id=context.current_run_id,
                        verdict=rvr.verdict.value, accepted=accepted,
                        duration_ms=int((time.time() - started_at) * 1000))
-            return RerunResult(
+            return _result(
                 accepted=accepted,
                 domain_status="accepted" if accepted else "rejected",
                 reason=rvr.summary or (
                     "reviewer rerun accepted" if accepted else "reviewer rerun rejected"
                 ),
-                duration_ms=int((time.time() - started_at) * 1000),
-                source_run_id=context.source_run_id,
-                worktree_path=context.source_worktree_path,
-                branch_name=context.branch_name,
                 evidence=_make_ev({
                     "reviewer_verdict": rvr.verdict.value,
                     "summary": rvr.summary,
@@ -223,19 +224,15 @@ async def execute_rerun(
         _log.error("rerun_stage_failed", packet_id=context.packet_id,
                     run_id=context.current_run_id, stage=stage.value,
                     error=str(e)[:200])
-        return RerunResult(
+        return _result(
             accepted=False, domain_status="failed",
             reason=str(e)[:500],
-            duration_ms=int((time.time() - started_at) * 1000),
-            source_run_id=context.source_run_id,
             evidence={"error": str(e)[:500]},
         )
 
     _log.error("rerun_unknown_stage", packet_id=context.packet_id,
                 stage=stage.value)
-    return RerunResult(
+    return _result(
         accepted=False, domain_status="failed",
         reason=f"unknown rerun stage: {stage.value}",
-        duration_ms=int((time.time() - started_at) * 1000),
-        source_run_id=context.source_run_id,
     )

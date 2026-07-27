@@ -21,6 +21,14 @@ from grace_control.core.contracts import (
     StageResult,
     StageStatus,
 )
+from grace_control.db import init_db
+
+
+@pytest.fixture(autouse=True)
+def initialize_stage_instrumentation_db():
+    """Initialize the DB used by the stage-instrumentation decorator."""
+    init_db("sqlite:///:memory:")
+    yield
 
 
 class _MockBackend:
@@ -94,7 +102,7 @@ def _make_mock_packet(attempt=1, profile="FAST", feature_id="feat_w2"):
     p.slug = "test-packet"
     p.title = "Test"
     p.description = "Desc"
-    p.spec_json = {}
+    p.spec_json = {"scope": ["src/"]}
     p.state = "running"
     p.acceptance_profile = profile
     p.attempt_count = attempt
@@ -466,7 +474,10 @@ class TestWorktreeRegression:
         import inspect
         src = inspect.getsource(PacketExecutionAdapter._call_executor)
         assert "_effective_repo = target_root if _effective_target_repo else self.project_root" in src
-        assert "git.worktree_add(_effective_repo, wt_path, branch, base_ref=base_ref)" in src
+        assert (
+            "git.worktree_add(\n                _effective_repo, wt_path, branch, "
+            "base_ref=workspace_base_ref,"
+        ) in src
 
 
 class TestOpenCodeAdapterIntegration:
@@ -504,7 +515,7 @@ class TestOpenCodeAdapterIntegration:
 class TestTargetRepoRootPropagation:
     """Regression: feature spec target_repo_root must override global settings."""
 
-    async def test_target_repo_root_from_spec_overrides_settings(self):
+    async def test_target_repo_root_from_spec_overrides_settings(self, db):
         from grace_control.config.settings import settings as _s
         import tempfile
         tempdir = Path(tempfile.mkdtemp())
@@ -540,11 +551,20 @@ class TestTargetRepoRootPropagation:
             adapter._inspector = _MM()
             adapter._inspector.is_git_worktree.return_value = True
             adapter._inspector.has_changes.return_value = True
-            adapter._inspector.base_sha.return_value = "a" * 40
+            orchestrator_sha = "a" * 40
+            target_sha = "c" * 40
+            adapter._inspector.base_sha.side_effect = (
+                lambda repo, _ref: target_sha
+                if Path(repo) == spec_target
+                else orchestrator_sha
+            )
             adapter._committer = _MM()
             adapter._committer.commit.return_value = "b" * 40
+            executor_base_sha = ""
 
             async def _fake_call(self, *a, **kw):
+                nonlocal executor_base_sha
+                executor_base_sha = a[4]
                 return BackendResult(
                     accepted=True, domain_status="accepted",
                     worktree_path=spec_target, branch_name="agent/test",
@@ -560,7 +580,19 @@ class TestTargetRepoRootPropagation:
                     stages=[StageResult(name=StageName.T0_SCOPE_AND_LINT,
                                         status=StageStatus.PASSED, summary="ok")],
                     summary="passed",
-                ), "", {"ok": True}, ["file1.py"], spec_target, spec_target / "runs"
+                ), "", {"ok": True}, ["src/file1.py"], spec_target, spec_target / "runs"
+
+            async def _fake_route(self, *a, **kw):
+                return BackendResult(
+                    accepted=True,
+                    domain_status="accepted",
+                    worktree_path=spec_target,
+                    branch_name="agent/test",
+                    commit_sha="b" * 40,
+                    stdout="",
+                    stderr="",
+                    duration_ms=100,
+                )
 
             claim_data = {
                 "attempt": 1, "feature_id": "f1", "wave_id": "w1",
@@ -584,16 +616,20 @@ class TestTargetRepoRootPropagation:
 
             with patch.object(PacketExecutionAdapter, "_call_executor", _fake_call):
                 with patch.object(PacketExecutionAdapter, "_run_acceptance", _fake_acc):
-                    with patch("grace_control.adapters.packet_executor.get_db") as mock_db:
-                        db = _MM()
-                        mock_db.return_value.__enter__.return_value = db
-                        db.query.return_value.filter_by.return_value.first.return_value = None
+                    with patch.object(PacketExecutionAdapter, "_route_after", _fake_route):
+                        with patch("grace_control.adapters.packet_executor.get_db") as mock_db:
+                            db_session = _MM()
+                            mock_db.return_value.__enter__.return_value = db_session
+                            db_session.query.return_value.filter_by.return_value.first.return_value = None
 
-                        result = await adapter.execute("pkt-repo-test", "w1", claim_data=claim_data)
+                            result = await adapter.execute("pkt-repo-test", "w1", claim_data=claim_data)
 
             assert result.accepted, f"expected accepted, got {result.reason}"
             assert adapter._packet_target_repo == str(spec_target), \
                 f"expected {spec_target}, got {adapter._packet_target_repo}"
+            assert executor_base_sha == target_sha, \
+                f"expected target base {target_sha}, got {executor_base_sha}"
+            adapter._inspector.base_sha.assert_called_once_with(spec_target, _s.base_branch)
 
             cleanup = adapter._effective_cleanup_root({})
             assert str(spec_target) in str(cleanup), \
@@ -674,6 +710,70 @@ class TestNoChangeClassification:
         )
         status, sha = result
         assert status == "committed", f"expected committed, got {status}"
+
+    async def test_agent_self_commit_is_reused_when_worktree_is_clean(self):
+        """A coder-created HEAD commit must remain available to evidence and rework."""
+        from unittest.mock import MagicMock
+        from grace_control.adapters.packet_executor import PacketExecutionAdapter
+        from grace_control.agent.backend import ExecutionResult as BackendResult
+        from pathlib import Path
+
+        adapter = PacketExecutionAdapter(
+            project_root=Path("/tmp"), state_root=Path("/tmp"), worktree_root=Path("/tmp"),
+        )
+        adapter._inspector = MagicMock()
+        adapter._inspector.is_git_worktree.return_value = True
+        adapter._inspector.has_changes.return_value = True
+        adapter._inspector.base_sha.return_value = "b" * 40
+        adapter._committer = MagicMock()
+        adapter._committer.commit.return_value = ""
+
+        pkt_contract = MagicMock()
+        pkt_contract.allowed_write_scope = ["src/router.js"]
+
+        status, sha = adapter._inspected_worktree(
+            BackendResult(
+                accepted=True,
+                domain_status="accepted",
+                worktree_path=Path("/tmp"),
+                branch_name="agent/test",
+                commit_sha="",
+                stdout="",
+                stderr="",
+                duration_ms=100,
+            ),
+            pkt_contract,
+            "pkt-self-commit",
+            1,
+            base_sha="a" * 40,
+        )
+
+        assert status == "committed"
+        assert sha == "b" * 40
+
+    async def test_rework_executor_continues_coder_ladder(self):
+        """A replacement packet must select the next coder instead of resetting to step one."""
+        from unittest.mock import patch
+        from grace_control.adapters.packet_executor import PacketExecutionAdapter
+        from pathlib import Path
+
+        adapter = PacketExecutionAdapter(
+            project_root=Path("/tmp"), state_root=Path("/tmp"), worktree_root=Path("/tmp"),
+        )
+        packet_data = {
+            "acceptance_profile": "STRICT",
+            "attempt_count": 1,
+            "spec_json": {"scope": ["src/"], "coder_ladder_base_attempt": 2},
+        }
+
+        with patch(
+            "grace_control.core.executor_selector.select_executor",
+            return_value={"executor_id": "coder-two"},
+        ) as select:
+            result = adapter._resolve_executor(packet_data)
+
+        assert result["executor_id"] == "coder-two"
+        select.assert_called_once_with("coder", attempt=2)
 
     async def test_no_changes_with_fail_rejected_and_has_failure_code(self):
         """No changes + fail_on_no_changes=True → reject with AGENT_NO_CHANGES_PRODUCED."""

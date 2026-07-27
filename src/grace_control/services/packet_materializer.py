@@ -99,7 +99,31 @@ class PacketMaterializer:
         packet_dir.mkdir(parents=True, exist_ok=True)
 
         spec_json = packet_data["spec_json"] if isinstance(packet_data["spec_json"], dict) else {}
-        spec_str = yaml.dump(spec_json, default_flow_style=False, allow_unicode=True)
+        feature_context = spec_json.get("feature_context", {})
+        if not isinstance(feature_context, dict):
+            feature_context = {}
+        feature_title = str(feature_context.get("title", "")).strip()
+        feature_description = str(feature_context.get("description", "")).strip()
+        source_context_parts = []
+        if feature_title:
+            source_context_parts.append(f"### Source Feature\n{feature_title}")
+        if feature_description:
+            source_context_parts.append(
+                "### Source TZ / Specification\n"
+                f"{feature_description}"
+            )
+        source_context = "\n\n".join(source_context_parts)
+
+        # The full source specification is rendered in section 2.  Keep the
+        # diagnostic YAML useful without duplicating a potentially large TZ.
+        spec_for_dump = dict(spec_json)
+        if feature_context:
+            spec_for_dump["feature_context"] = {
+                "feature_id": feature_context.get("feature_id", ""),
+                "title": feature_title,
+                "description": "(rendered verbatim in section 2)",
+            }
+        spec_str = yaml.dump(spec_for_dump, default_flow_style=False, allow_unicode=True)
 
         scope = spec_json.get("scope", [])
         if isinstance(scope, str):
@@ -153,6 +177,9 @@ class PacketMaterializer:
         if isinstance(coder_instructions, str):
             coder_instructions = [coder_instructions]
         ci_lines = "\n".join(f"- {c}" for c in coder_instructions) if coder_instructions else "- (none)"
+        recovery_context = self._render_recovery_context(spec_json.get("recovery"))
+        if recovery_context:
+            ci_lines = f"### Retry Context\n{recovery_context}\n\n### Required Actions\n{ci_lines}"
 
         # Section 15: Workspace mode
         workspace_mode = spec_json.get("workspace_mode", "full_git_worktree")
@@ -180,6 +207,7 @@ class PacketMaterializer:
 
 ## 2. Business Requirement
 {pd.get('description') or pd.get('title', '')}
+{source_context}
 
 ## 3. Role and Non-Goals
 - Role: coder
@@ -235,6 +263,36 @@ Mode: {workspace_mode}
         return packet_file
 
     # ── W04: Context section helpers ─────────────────────────────────────
+
+    def _render_recovery_context(self, recovery: object) -> str:
+        """Render bounded recovery facts prominently for a retrying coder."""
+        if not isinstance(recovery, dict) or not recovery:
+            return ""
+        parts = []
+        field_labels = (
+            ("previous_attempt", "Previous attempt"),
+            ("action", "Recovery action"),
+            ("failure_class", "Failure class"),
+            ("reason", "Decision reason"),
+            ("acceptance_summary", "Acceptance summary"),
+            ("requested_executor_id", "Requested executor"),
+        )
+        for key, label in field_labels:
+            value = recovery.get(key)
+            if value not in (None, ""):
+                parts.append(f"- {label}: {str(value)[:1_000]}")
+        failed_checks = recovery.get("failed_checks", [])
+        if isinstance(failed_checks, list):
+            for item in failed_checks[:5]:
+                if not isinstance(item, dict):
+                    continue
+                parts.append(
+                    "- Failed check: "
+                    f"stage={str(item.get('stage', ''))[:80]} "
+                    f"exit={item.get('exit_code')} "
+                    f"command={str(item.get('command', ''))[:1_000]}"
+                )
+        return "\n".join(parts)
 
     def _render_file_tree(self, scope: list[str], target_root: Path | None) -> str:
         """Section 6: list scope files with sizes and structure."""

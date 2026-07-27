@@ -66,10 +66,11 @@ def test_cancelled_transitions():
     assert sm.can_transition(PacketState.READY, PacketState.CANCELLED)
     assert sm.can_transition(PacketState.RUNNING, PacketState.CANCELLED)
     assert sm.can_transition(PacketState.REJECTED, PacketState.CANCELLED)
+    assert sm.can_transition(PacketState.BLOCKED_FINAL, PacketState.CANCELLED)
     # Terminal states cannot transition
     assert not sm.can_transition(PacketState.CANCELLED, PacketState.READY)
     assert not sm.can_transition(PacketState.MERGED, PacketState.CANCELLED)
-    assert not sm.can_transition(PacketState.FAILED, PacketState.CANCELLED)
+    assert sm.can_transition(PacketState.FAILED, PacketState.CANCELLED)
 
 
 def test_packet_lifecycle(test_db):

@@ -62,6 +62,14 @@ class SafePlanAutofixer:
                 self._try_fix_noncanonical_path(patched, err, report)
             elif code == "E_EVIDENCE_CONTRADICTS_INSTRUCTIONS":
                 self._try_fix_evidence_contradiction(patched, err, report)
+            elif code == "E_SCOPE_PYTHON_FILE_LIMIT":
+                self._try_fix_redundant_broad_sweep(patched, err, report)
+            elif code == "E_EVIDENCE_ABSOLUTE_PATTERN":
+                self._try_fix_absolute_evidence_pattern(patched, err, report)
+            elif code == "E_EVIDENCE_DESCRIPTIVE_PATTERN":
+                self._try_fix_descriptive_evidence_pattern(patched, err, report)
+            elif code == "E_EVIDENCE_DIFF_HAS_PATTERN":
+                self._try_fix_diff_evidence_pattern(patched, err, report)
             else:
                 report.skipped.append({
                     "code": "SKIPPED_UNSUPPORTED_ERROR",
@@ -80,6 +88,194 @@ class SafePlanAutofixer:
         return report
 
     # ── Helpers ────────────────────────────────────────────────────
+
+    def _try_fix_diff_evidence_pattern(
+        self,
+        plan: dict,
+        err: dict,
+        report: PlanAutofixReport,
+    ) -> None:
+        """Remove patterns from controller-produced diff evidence."""
+        packet_title = err.get("packet_title", "")
+        for wave in plan.get("waves", []):
+            for packet in wave.get("packets", []) or []:
+                if packet.get("title") != packet_title:
+                    continue
+                for evidence in packet.get("expected_evidence", []) or []:
+                    if evidence.get("kind") != "diff" or not evidence.get("artifact_patterns"):
+                        continue
+                    previous = list(evidence.get("artifact_patterns", []))
+                    evidence["artifact_patterns"] = []
+                    report.fixes.append({
+                        "code": "AUTO_USE_CONTROLLER_DIFF_EVIDENCE",
+                        "reason": "E_EVIDENCE_DIFF_HAS_PATTERN",
+                        "previous_patterns": previous,
+                        "packet_title": packet_title,
+                    })
+                    return
+        report.skipped.append({
+            "code": "SKIPPED_DIFF_EVIDENCE_PATTERN_NOT_FOUND",
+            "reason": "no patterned diff evidence was found in the packet",
+            "error_code": "E_EVIDENCE_DIFF_HAS_PATTERN",
+            "packet_title": packet_title,
+        })
+
+    def _try_fix_redundant_broad_sweep(
+        self,
+        plan: dict,
+        err: dict,
+        report: PlanAutofixReport,
+    ) -> None:
+        """Leave broad coder sweeps for an architect to split explicitly.
+
+        A plan alone cannot prove that earlier packet scopes cover every file
+        below broad directories such as app, scripts, and tests.  Silently
+        deleting a cleanup packet can therefore delete required implementation
+        work.  The safe deterministic action is no action; architect recovery
+        must replace the broad packet with bounded packets or prove it is not
+        needed in a newly compiled plan.
+        """
+        packet_title = err.get("packet_title", "")
+        report.skipped.append({
+            "code": "SKIPPED_BROAD_SWEEP_REQUIRES_ARCHITECT_SPLIT",
+            "reason": "plan metadata cannot prove repository-wide scope is redundant",
+            "error_code": "E_SCOPE_PYTHON_FILE_LIMIT",
+            "packet_title": packet_title,
+        })
+
+    def _try_fix_absolute_evidence_pattern(
+        self,
+        plan: dict,
+        err: dict,
+        report: PlanAutofixReport,
+    ) -> None:
+        """Drop an external absolute path from a coder evidence pattern."""
+        packet_title = err.get("packet_title", "")
+        details = err.get("details") if isinstance(err.get("details"), dict) else {}
+        path = details.get("pattern", "")
+        if not path:
+            match = re.search(r"artifact pattern '([^']+)'", err.get("message", ""))
+            path = match.group(1) if match else ""
+        for wave in plan.get("waves", []):
+            for packet in wave.get("packets", []) or []:
+                if packet.get("title") != packet_title:
+                    continue
+                for evidence in packet.get("expected_evidence", []) or []:
+                    patterns = evidence.get("artifact_patterns", [])
+                    if path in patterns:
+                        evidence["artifact_patterns"] = [p for p in patterns if p != path]
+                        report.fixes.append({
+                            "code": "AUTO_DROP_ABSOLUTE_EVIDENCE_PATTERN",
+                            "reason": "E_EVIDENCE_ABSOLUTE_PATTERN",
+                            "pattern": path,
+                            "packet_title": packet_title,
+                        })
+                        return
+        report.skipped.append({
+            "code": "SKIPPED_ABSOLUTE_EVIDENCE_PATTERN_NOT_FOUND",
+            "reason": "absolute artifact pattern was not found in packet evidence",
+            "error_code": "E_EVIDENCE_ABSOLUTE_PATTERN",
+            "packet_title": packet_title,
+        })
+
+    def _try_fix_descriptive_evidence_pattern(
+        self,
+        plan: dict,
+        err: dict,
+        report: PlanAutofixReport,
+    ) -> None:
+        """Replace a prose evidence label with deterministic command artifacts."""
+        packet_title = err.get("packet_title", "")
+        details = err.get("details") if isinstance(err.get("details"), dict) else {}
+        pattern = details.get("pattern", "")
+        evidence_id = details.get("evidence_id", "")
+        for wave in plan.get("waves", []):
+            for packet in wave.get("packets", []) or []:
+                if packet.get("title") != packet_title:
+                    continue
+                evidence_items = packet.get("expected_evidence", []) or []
+                evidence = next(
+                    (
+                        item for item in evidence_items
+                        if isinstance(item, dict)
+                        and (not evidence_id or item.get("id") == evidence_id)
+                        and pattern in (item.get("artifact_patterns", []) or [])
+                    ),
+                    None,
+                )
+                if evidence is None:
+                    break
+                replacement = self._command_artifact_paths(packet, evidence, pattern)
+                if not replacement:
+                    path_match = re.match(r"^([^\s]+\.[A-Za-z0-9]+)\s+", pattern)
+                    if path_match:
+                        replacement = [path_match.group(1)]
+                if not replacement:
+                    break
+                existing = evidence.get("artifact_patterns", []) or []
+                evidence["artifact_patterns"] = [
+                    value for value in existing if value != pattern
+                ] + replacement
+                report.fixes.append({
+                    "code": "AUTO_CANONICALIZE_EVIDENCE_PATTERN",
+                    "reason": "E_EVIDENCE_DESCRIPTIVE_PATTERN",
+                    "pattern": pattern,
+                    "replacement": replacement,
+                    "packet_title": packet_title,
+                })
+                return
+        report.skipped.append({
+            "code": "SKIPPED_DESCRIPTIVE_EVIDENCE_PATTERN",
+            "reason": "no unambiguous verification command or relative file path",
+            "error_code": "E_EVIDENCE_DESCRIPTIVE_PATTERN",
+            "packet_title": packet_title,
+            "pattern": pattern,
+        })
+
+    @staticmethod
+    def _command_artifact_paths(packet: dict, evidence: dict, pattern: str) -> list[str]:
+        """Map a descriptive stdout label to its verification stdout artifacts."""
+        verification = packet.get("verification", {}) or {}
+        if not isinstance(verification, dict):
+            return []
+        lowered = pattern.lower()
+        producer = str(evidence.get("producer", "")).lower()
+        needle = ""
+        if "pytest" in lowered or producer == "pytest":
+            needle = "pytest"
+        elif "alembic" in lowered or producer == "alembic":
+            needle = "alembic"
+        elif lowered.endswith(" output"):
+            needle = lowered.removesuffix(" output").strip()
+        elif lowered.startswith("run: "):
+            needle = lowered.removeprefix("run: ").strip()
+        path_tokens = re.findall(r"[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+", pattern)
+        matches: list[str] = []
+        for stage in ("t0", "t1", "t2"):
+            commands = verification.get(stage, []) or []
+            for index, command in enumerate(commands, start=1):
+                if not isinstance(command, str):
+                    continue
+                command_lower = command.lower()
+                if command_lower.strip() == lowered:
+                    matched = True
+                elif needle:
+                    exact_command_label = (
+                        lowered.endswith(" output") or lowered.startswith("run: ")
+                    )
+                    matched = (
+                        command_lower.strip() == needle
+                        if exact_command_label else needle in command_lower
+                    )
+                elif path_tokens:
+                    matched = any(token in command for token in path_tokens)
+                    if matched and "grace_lint.py" in command_lower:
+                        matched = False
+                else:
+                    matched = False
+                if matched:
+                    matches.append(f"{stage}/cmd_{index:03d}_stdout.log")
+        return list(dict.fromkeys(matches))
 
     def _try_fix_source_split(
         self,
@@ -477,12 +673,26 @@ class SafePlanAutofixer:
         report: PlanAutofixReport,
     ) -> None:
         """Change expectation from 'exists' to 'deleted' when instructions
-        explicitly remove the same file path. This is deterministic:
-        if the compiler flagged it, the fix is unambiguous."""
+        explicitly remove the same file path.
+
+        The compiler must provide a positive explicit-target marker.  A loose
+        keyword match is not enough to make deletion safe: instructions often
+        say to remove stale content from a file that must continue to exist.
+        """
         details = err.get("details") if isinstance(err.get("details"), dict) else {}
         file_path = details.get("file", "")
         evidence_id = details.get("evidence_id", "")
         suggested = details.get("suggested_fix", "deleted")
+
+        if details.get("remove_target_explicit") is not True:
+            report.skipped.append({
+                "code": "SKIPPED_AMBIGUOUS_EVIDENCE_DELETION",
+                "reason": "compiler did not prove that the evidence path is the deletion target",
+                "error_code": "E_EVIDENCE_CONTRADICTS_INSTRUCTIONS",
+                "evidence_id": evidence_id,
+                "file": file_path,
+            })
+            return
 
         if not file_path or not evidence_id:
             # Fall back to parsing error message

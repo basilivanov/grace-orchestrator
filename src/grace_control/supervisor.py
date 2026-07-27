@@ -283,6 +283,34 @@ def _spawn(argv: list[str], cwd: Path, env: dict[str, str], *, stderr_path: str 
     )
 
 
+# START_FUNCTION_CONTRACT
+# name: _registered_child_matches
+# purpose: Verify that a persisted child record still identifies a live
+#          process owned by the current supervisor user.
+# inputs: record — serialized ChildRecord loaded from supervisor.json.
+# returns: True only when PID ownership and command-line identity both match.
+# side_effects: Reads process metadata from /proc.
+# emitted_logs: None.
+# error_behavior: Returns False when process metadata is missing or unreadable.
+# END_FUNCTION_CONTRACT
+def _registered_child_matches(record: dict[str, Any]) -> bool:
+    try:
+        pid = int(record["pid"])
+        proc_dir = Path(f"/proc/{pid}")
+        if proc_dir.stat().st_uid != os.geteuid():
+            return False
+        actual_argv = [
+            part.decode(errors="replace")
+            for part in (proc_dir / "cmdline").read_bytes().split(b"\0")
+            if part
+        ]
+    except (KeyError, TypeError, ValueError, OSError):
+        return False
+
+    expected_argv = [str(part) for part in record.get("argv", []) if part]
+    return bool(expected_argv) and all(part in actual_argv for part in expected_argv)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Control server: FastAPI on a unix socket
 # ─────────────────────────────────────────────────────────────────────────────
@@ -574,45 +602,45 @@ class Supervisor:
 
     async def _reap_orphans(self) -> None:
         prev = self.registry.load()
-        api = prev.get("api")
-        if api and api.get("pid"):
-            _log.info("orphan_api_reaping", pid=api["pid"])
-            try:
-                os.kill(api["pid"], signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-        for w in prev.get("workers", []):
-            if w.get("pid"):
-                _log.info("orphan_worker_reaping", pid=w["pid"])
-                try:
-                    os.kill(w["pid"], signal.SIGTERM)
-                except ProcessLookupError:
-                    pass
-        # Give them time to die
-        await asyncio.sleep(self.cfg.terminate_grace)
-        # Force kill any stragglers that match our process names
-        for name in ("run_api.py", "live_worker.py", "grace_control.cli"):
-            try:
-                procs = subprocess.run(
-                    ["pgrep", "-af", name],
-                    capture_output=True, text=True, timeout=3,
+        records = [
+            record
+            for record in [prev.get("api"), *prev.get("workers", [])]
+            if isinstance(record, dict) and record.get("pid")
+        ]
+        signalled: list[dict[str, Any]] = []
+        for record in records:
+            if not _registered_child_matches(record):
+                _log.info(
+                    "orphan_record_skipped",
+                    role=record.get("role", "unknown"),
+                    pid=record["pid"],
+                    reason="pid_owner_or_command_mismatch",
                 )
-                for line in procs.stdout.strip().splitlines():
-                    if not line.strip():
-                        continue
-                    parts = line.strip().split(None, 1)
-                    if not parts:
-                        continue
-                    try:
-                        pid = int(parts[0])
-                        # Don't kill ourselves
-                        if pid == os.getpid():
-                            continue
-                        os.kill(pid, signal.SIGKILL)
-                        _log.info("orphan_force_killed", name=name, pid=pid)
-                    except (ValueError, ProcessLookupError):
-                        pass
-            except (subprocess.TimeoutExpired, FileNotFoundError):
+                continue
+            _log.info(
+                "orphan_child_reaping",
+                role=record.get("role", "unknown"),
+                pid=record["pid"],
+            )
+            try:
+                os.kill(int(record["pid"]), signal.SIGTERM)
+                signalled.append(record)
+            except (ProcessLookupError, PermissionError):
+                pass
+        if not signalled:
+            return
+        await asyncio.sleep(self.cfg.terminate_grace)
+        for record in signalled:
+            if not _registered_child_matches(record):
+                continue
+            try:
+                os.kill(int(record["pid"]), signal.SIGKILL)
+                _log.info(
+                    "orphan_force_killed",
+                    role=record.get("role", "unknown"),
+                    pid=record["pid"],
+                )
+            except (ProcessLookupError, PermissionError):
                 pass
 
     def _persist(self) -> None:

@@ -36,6 +36,16 @@ from grace_control.services.packet_service import (
 )
 
 
+@pytest.fixture(autouse=True)
+def event_loop_for_sync_tests():
+    """Provide an explicit loop for legacy synchronous async-service tests."""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    yield
+    loop.close()
+    asyncio.set_event_loop(None)
+
+
 @pytest.fixture
 def test_db():
     """Fresh in-memory DB for each test."""
@@ -381,6 +391,45 @@ def test_failed_remains_terminal_only_for_exhausted_attempts(test_db):
     with get_db() as db:
         p = db.query(Packet).filter_by(id="PKT-001").first()
         assert p.state == PacketState.FAILED.value
+
+
+def test_release_finalizes_running_packet_run(test_db):
+    from datetime import UTC, datetime
+    from grace_control.db.schema import PacketRun
+
+    svc = PacketService()
+    with get_db() as db:
+        _make_ready_packet(db, "PKT-RUN", max_attempts=1)
+
+    claim = asyncio.get_event_loop().run_until_complete(svc.claim("PKT-RUN", "w1"))
+    with get_db() as db:
+        db.add(PacketRun(
+            id="run-pkt-run-1",
+            packet_id="PKT-RUN",
+            run_number=1,
+            worker_id="w1",
+            status="running",
+            result_json={"executor_id": "coder-mini-swe"},
+            started_at=datetime.now(UTC),
+        ))
+
+    asyncio.get_event_loop().run_until_complete(
+        svc.release(
+            "PKT-RUN",
+            "blocked_recoverable",
+            {"failure_type": "agent_timeout", "reason": "Agent timed out after 600s"},
+            worker_id="w1",
+            lease_id=claim.lease_id,
+            claimed_attempt=claim.claimed_attempt,
+        )
+    )
+
+    with get_db() as db:
+        run = db.query(PacketRun).filter_by(id="run-pkt-run-1").first()
+        assert run.status == "blocked_recoverable"
+        assert run.finished_at is not None
+        assert run.result_json["executor_id"] == "coder-mini-swe"
+        assert run.result_json["failure_type"] == "agent_timeout"
 
 
 def test_retry_raises_when_attempts_exhausted(test_db):

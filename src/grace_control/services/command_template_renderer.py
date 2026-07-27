@@ -17,7 +17,18 @@ from pathlib import Path
 
 
 class CommandTemplateRenderer:
-    KNOWN_KEYS = {"model", "effort", "packet_id", "worktree_path", "state_root", "role", "attempt", "packet_path", "packet_markdown"}
+    KNOWN_KEYS = {
+        "model",
+        "effort",
+        "packet_id",
+        "worktree_path",
+        "state_root",
+        "role",
+        "attempt",
+        "packet_path",
+        "packet_markdown",
+        "python_executable",
+    }
 
     def render(self, command: list[str], ctx: dict) -> list[str]:
         if isinstance(command, str):

@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Start GRACE Control Plane API server."""
 import os
+from pathlib import Path
 import uvicorn
 
 # Honor either GRACE_DB_URL (set by supervisor) or GRACE_DATABASE_URL (env yaml).
 # Fallback to a sane default ONLY if neither is set, so ad-hoc runs still work.
 if "GRACE_DB_URL" not in os.environ and "GRACE_DATABASE_URL" in os.environ:
     os.environ["GRACE_DB_URL"] = os.environ["GRACE_DATABASE_URL"]
-os.environ.setdefault("GRACE_DB_URL", "sqlite:////tmp/grace_live.db")
+os.environ.setdefault("GRACE_DB_URL", f"sqlite:///{Path.cwd() / 'grace.db'}")
 
 # Protect API from OOM killer: set oom_score_adj to OOM_SCORE_ADJ_MIN (-1000).
 # When opencode run consumes 4+ GB RSS and system runs out of memory,

@@ -13,6 +13,81 @@ When given a TZ/спецификацию:
 - If implementation conflicts with TZ, change implementation.
 - If exact implementation is impossible, stop and return BLOCKER.
 
+## GRACE Canon
+
+Every file you create must follow this exact GRACE canon template:
+
+```python
+# ############################################################################
+# AI_HEADER: module_name — one-line description of what this module does
+# ROLE: Detailed role. Who calls it, what it provides. One or two sentences.
+# ############################################################################
+
+# START_MODULE_CONTRACT
+# purpose: What this module does. Who calls it, what it returns.
+# inputs: List of inputs, parameters, or dependencies.
+# returns: What this module returns or provides.
+# side_effects: File writes, DB inserts, network calls, subprocess spawns.
+# emitted_logs: List of GraceLogger msg= names this module emits.
+# error_behavior: What exceptions this module may raise and when.
+# END_MODULE_CONTRACT
+
+# START_MODULE_MAP
+# mapping:
+#   - class: ClassName
+#     methods:
+#       - method_one
+#       - method_two
+#   - function: standalone_func
+# END_MODULE_MAP
+
+from __future__ import annotations
+from grace_control.core.structured_logger import GraceLogger
+
+_log = GraceLogger("component_name")
+
+
+# START_BLOCK_CLASS
+# START_FUNCTION_CONTRACT
+# name: method_name
+# purpose: What this method does.
+# inputs: param_name — description.
+# returns: What it returns (type and meaning).
+# side_effects: File writes, DB inserts, etc.
+# emitted_logs: my_func_start, my_func_done.
+# error_behavior: Exceptions this method may raise and when.
+# END_FUNCTION_CONTRACT
+def method_name(self, param: str) -> str:
+    _log.info("method_start", param=param)
+    ...
+    _log.info("method_done", result=result)
+    return result
+# END_BLOCK_CLASS
+
+
+# START_BLOCK_MAIN
+# START_FUNCTION_CONTRACT
+# name: run
+# purpose: Entry point.
+# ...
+# END_FUNCTION_CONTRACT
+def run() -> dict:
+    _log.info("run_start")
+    ...
+    return {}
+# END_BLOCK_MAIN
+```
+
+Rules:
+- Use `# ############################################################################` above and below `AI_HEADER`.
+- Every public function/method must have `START_FUNCTION_CONTRACT` before it.
+- Group related methods with `START_BLOCK_name / END_BLOCK_name`.
+- Use `GraceLogger`, never `print()` or `logging.getLogger()`.
+- `_log = GraceLogger("name")` must appear once at module level.
+- Log messages must be static strings: `_log.info("msg_name", ctx_key=value)`.
+- Do not import `prefect_grace`.
+- Run `python3 scripts/grace_lint.py` before declaring completion.
+
 ## Debugging and observability tools
 
 ### grace trace — execution timeline

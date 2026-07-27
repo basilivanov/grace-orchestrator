@@ -27,6 +27,10 @@ def _signal(**kw) -> FailureSignal:
 
 
 class TestClassification:
+    def test_agent_timeout_is_retryable_coder(self):
+        fc = classify_failure(_signal(reason="Agent timed out after 600s", attempt_count=3))
+        assert fc == FailureClass.RETRYABLE_CODER
+
     def test_acceptance_test_failure_is_retryable_coder(self):
         fc = classify_failure(_signal(reason="test failure: pytest exited with code 1"))
         assert fc == FailureClass.RETRYABLE_CODER
@@ -88,6 +92,15 @@ class TestClassification:
     def test_reviewer_return_to_architect_is_architect_repack(self):
         fc = classify_failure(_signal(packet_state="accepted", domain_status="accepted",
                                        reviewer_verdict="RETURN_TO_ARCHITECT"))
+        assert fc == FailureClass.ARCHITECT_REPACK_NEEDED
+
+    def test_reviewer_return_to_architect_overrides_verifier_pass(self):
+        fc = classify_failure(_signal(
+            packet_state="blocked_recoverable",
+            domain_status="blocked",
+            evidence_verifier_verdict="PASS",
+            reviewer_verdict="RETURN_TO_ARCHITECT",
+        ))
         assert fc == FailureClass.ARCHITECT_REPACK_NEEDED
 
     def test_reviewer_invalid_json_is_retryable_reviewer(self):

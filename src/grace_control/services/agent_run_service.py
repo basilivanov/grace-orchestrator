@@ -19,6 +19,7 @@
 from __future__ import annotations
 import json
 import re
+import sys
 from pathlib import Path
 from typing import Any
 from grace_control.services.agent_artifact_collector import AgentArtifactCollector
@@ -121,7 +122,9 @@ class AgentRunService:
             "state_root": str(state_root),
             "attempt": "1",
             "packet_markdown": packet_markdown,
+            "python_executable": sys.executable,
         }
+        effective_run_dir = run_dir or (state_root / "agents" / packet_id)
 
         # Input mode must be resolved before command render (P0-2: {packet_path} needs ctx).
         input_mode = executor.get("input_mode", "none")
@@ -130,7 +133,6 @@ class AgentRunService:
         if input_mode == "stdin" and input_template:
             stdin_text = self._renderer.render([input_template], ctx)[0]
         elif input_mode == "file":
-            effective_run_dir = run_dir or (state_root / "agents" / packet_id)
             packet_path = effective_run_dir / "EXECUTION_PACKET.md"
             packet_path.parent.mkdir(parents=True, exist_ok=True)
             packet_path.write_text(packet_markdown)
@@ -175,6 +177,14 @@ class AgentRunService:
         # Build subprocess env FIRST so extras resolution sees injected vars.
         raw_env = executor.get("env", {})
         env = self._env_builder.build(raw_env)
+        # An agent always works in its isolated checkout.  Parent supervisor
+        # roots point at the merge destination and must not leak as writable
+        # project roots: several CLI agents prefer these variables over cwd.
+        isolated_root = str(worktree_path.resolve())
+        env["GRACE_PROJECT_ROOT"] = isolated_root
+        env["GRACE_TARGET_REPO_ROOT"] = isolated_root
+        env["GRACE_AGENT_WORKTREE"] = isolated_root
+        env["GRACE_AGENT_RUN_DIR"] = str(effective_run_dir.resolve())
 
         # Render env-driven extras (e.g. `--attach $OPENCODE_SERVER_URL`)
         # against the final subprocess env (not just os.environ).
@@ -291,9 +301,19 @@ class AgentRunService:
             # exists check above is the primary guard.
             pass
 
+        # The run directory and isolated worktree are both observable progress
+        # surfaces.  A long visual/browser test may update screenshots or
+        # reports without producing agent stdout; those changes must extend
+        # the inactivity window while remaining bounded to one-level stats.
+        progress_paths: list[Path | str] = [effective_run_dir, worktree_path]
+        if stdout_log_path:
+            progress_paths.append(stdout_log_path)
+        if stderr_log_path:
+            progress_paths.append(stderr_log_path)
         result = await self._supervisor.run(
             command, cwd=cwd, env=env, timeout_seconds=timeout_seconds, stdin_text=stdin_text,
             stdout_log_path=stdout_log_path, stderr_log_path=stderr_log_path,
+            progress_paths=progress_paths,
         )
 
         accepted = (not result.timed_out and result.exit_code == 0)
@@ -304,7 +324,6 @@ class AgentRunService:
         else:
             domain_status = "failed"
 
-        effective_run_dir = run_dir or (state_root / "agents" / packet_id)
         artifacts = self._collector.collect(
             effective_run_dir, stdout=result.stdout, stderr=result.stderr,
             exit_code=result.exit_code, duration_ms=result.duration_ms,
@@ -339,6 +358,7 @@ class AgentRunService:
             "cwd": str(cwd),
             "worktree_path": str(worktree_path),
             "duration_ms": result.duration_ms,
+            "timeout_reason": result.timeout_reason,
             "reason": "" if result.exit_code == 0 else f"exit_code={result.exit_code}",
             "artifacts": list(artifacts.values()),
             "session_id": result_session_id,

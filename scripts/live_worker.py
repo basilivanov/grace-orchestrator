@@ -18,7 +18,7 @@ os.environ.setdefault("GRACE_ALLOW_SANDBOX_BYPASS", "true")
 # Fallback to a sane default ONLY if neither is set, so ad-hoc runs still work.
 if "GRACE_DB_URL" not in os.environ and "GRACE_DATABASE_URL" in os.environ:
     os.environ["GRACE_DB_URL"] = os.environ["GRACE_DATABASE_URL"]
-os.environ.setdefault("GRACE_DB_URL", "sqlite:////tmp/grace_live.db")
+os.environ.setdefault("GRACE_DB_URL", f"sqlite:///{Path.cwd() / 'grace.db'}")
 
 # Protect worker from OOM killer: only the opencode run subprocess should
 # be a candidate when memory runs out, not the worker or the API.

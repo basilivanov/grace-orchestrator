@@ -119,7 +119,23 @@ class TerminalStateCleanup:
         pattern = self._branch_pattern(packet_id, attempt)
         repo_root = Path(project_root).resolve() if project_root else self.project_root
 
-        # Step 1: list branches matching the pattern.
+        # Step 1: remove worktree dir(s). Git refuses to delete a branch while
+        # it is still checked out by a linked worktree.
+        attempts_to_clean = (
+            [attempt]
+            if attempt is not None
+            else list(range(1, max_attempts + 1))
+        )
+        for att in attempts_to_clean:
+            slug = f"{packet_id}-attempt-{att:04d}"
+            wt = self.worktree_root / slug
+            if not wt.exists():
+                continue
+            removed = self._remove_worktree(wt, slug, packet_id, result, repo_root=repo_root)
+            if removed:
+                result.worktree_removed = True
+
+        # Step 2: delete packet branches after their worktrees are detached.
         list_result = self._git._run(
             ["branch", "--list", pattern], repo_root
         )
@@ -158,21 +174,6 @@ class TerminalStateCleanup:
                         branch=branch,
                         stderr=del_result.stderr[:200],
                     )
-
-        # Step 2: remove worktree dir(s).
-        attempts_to_clean = (
-            [attempt]
-            if attempt is not None
-            else list(range(1, max_attempts + 1))
-        )
-        for att in attempts_to_clean:
-            slug = f"{packet_id}-attempt-{att:04d}"
-            wt = self.worktree_root / slug
-            if not wt.exists():
-                continue
-            removed = self._remove_worktree(wt, slug, packet_id, result, repo_root=repo_root)
-            if removed:
-                result.worktree_removed = True
 
         _log.info(
             "terminal_cleanup_done",

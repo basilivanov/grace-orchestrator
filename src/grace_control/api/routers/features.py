@@ -210,17 +210,18 @@ async def regenerate_plan(feature_id: str) -> dict:
         _reg_feat = _reg_db.query(Feature).filter_by(id=feature_id).first()
         _reg_spec = _reg_feat.spec_json or {} if _reg_feat else {}
         _reg_approval_mode = _reg_spec.get("approval_mode", "auto") if isinstance(_reg_spec, dict) else "auto"
+        _reg_target_repo = _reg_spec.get("target_repo_root") if isinstance(_reg_spec, dict) else None
 
     # Start background planning (same as create_feature draft_plan)
     async def _bg_regenerate():
         try:
             with get_db() as bg_db:
                 planning = FeaturePlanningService(bg_db)
-                context = await planning.run_context_builder(feature_id)
+                context = await planning.run_context_builder(feature_id, _reg_target_repo)
                 if context.get("error") == "CONTEXT_BUILDER_MUTATED_TARGET_REPO":
                     _log.error("regenerate_architect_skipped_due_to_mutation", feature_id=feature_id)
                     return
-                await planning.run_architect(feature_id, context)
+                await planning.run_architect(feature_id, context, _reg_target_repo)
                 _log.info("regenerate_completed", feature_id=feature_id)
             if _reg_approval_mode == "auto":
                 with get_db() as auto_db:

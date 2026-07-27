@@ -31,6 +31,9 @@ REPAIRABLE_COMPILER_ERRORS = {
     "E_EVIDENCE_DIFF_VERIFICATION_ONLY",
     "E_SCOPE_PATH_NOT_CANONICAL",
     "E_EVIDENCE_CONTRADICTS_INSTRUCTIONS",
+    "E_SCOPE_PYTHON_FILE_LIMIT",
+    "E_EVIDENCE_ABSOLUTE_PATTERN",
+    "E_EVIDENCE_DESCRIPTIVE_PATTERN",
 }
 
 # ── Errors that CANNOT be repaired (shell env, venv, syntax) ────────────
@@ -80,7 +83,8 @@ def build_repair_prompt(
         if sug:
             errors_text += f"  Suggestion: {sug}\n"
 
-    plan_json = json.dumps(previous_plan, indent=2, ensure_ascii=False)[:4000]
+    plan_json = json.dumps(previous_plan, separators=(",", ":"), ensure_ascii=False)[:120000]
+    feature_description = feature_description[:6000]
 
     prompt = f"""Your previous plan was rejected by Plan Compiler.
 Do NOT regenerate the whole plan from scratch.
@@ -97,7 +101,7 @@ Description: {feature_description}
 
 ## Compiler errors
 {errors_text}
-## Previous plan (JSON, truncated to 4000 chars)
+## Previous plan (JSON, bounded for repair)
 {plan_json}
 
 ## Required corrections
@@ -116,6 +120,10 @@ Description: {feature_description}
   but instructions say to delete/remove that same file. Change the evidence
   expectation to 'deleted' (or 'absent'), or remove the delete instruction
   from coder_instructions if the file must be kept.
+- If E_SCOPE_PYTHON_FILE_LIMIT: split the named coder packet into bounded
+  dependent coder packets, or remove a redundant broad cleanup packet when
+  its files are already covered by bounded packets. Preserve the final
+  repository-wide commands in a bounded evidence packet.
 - Keep ALL other parts unchanged.
 
 Respond with the corrected JSON plan now. Start with {{"waves":"""
@@ -129,10 +137,15 @@ async def run_architect_repair(
     compiler_errors: list[dict],
     previous_session: AgentSessionHandle | None = None,
     adapter: AgentSessionAdapter | None = None,
+    cwd: Path | None = None,
 ) -> tuple[dict | None, str | None]:
     """Run architect repair: attempt resume, build prompt, call LLM, parse result."""
     if adapter is None:
-        adapter = OpenCodeSessionAdapter()
+        adapter = OpenCodeSessionAdapter(
+            default_model="openai/gpt-5.5",
+            default_executor_id="architect-mini-swe",
+            runner_name="mini-swe",
+        )
 
     prompt = build_repair_prompt(
         feature_description=feature_description,
@@ -146,7 +159,7 @@ async def run_architect_repair(
         result = await adapter.resume(previous_session, prompt)
     else:
         from grace_control.core.agent_session_adapter import AgentRunRequest
-        request = AgentRunRequest(prompt=prompt, role="architect")
+        request = AgentRunRequest(prompt=prompt, role="architect", cwd=cwd)
         result = await adapter.run_new(request)
 
     if not result.accepted or not result.output.strip():

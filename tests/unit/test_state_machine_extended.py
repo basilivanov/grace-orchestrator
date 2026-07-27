@@ -17,6 +17,7 @@ def test_all_valid_transitions_enumerated():
         (PacketState.RUNNING, PacketState.CANCELLED),
         (PacketState.REJECTED, PacketState.READY),
         (PacketState.REJECTED, PacketState.CANCELLED),
+        (PacketState.BLOCKED_FINAL, PacketState.CANCELLED),
         (PacketState.ACCEPTED, PacketState.MERGED),
     ]
     for f, t in valid:
@@ -32,7 +33,9 @@ def test_all_invalid_transitions():
     ]
     for term in (PacketState.MERGED, PacketState.FAILED, PacketState.CANCELLED):
         for s in PacketState:
-            if s != term:
+            if s != term and not (
+                term == PacketState.FAILED and s == PacketState.CANCELLED
+            ):
                 invalid.append((term, s))
     for f, t in invalid:
         assert not sm.can_transition(f, t), f"{f.value} → {t.value} should be invalid"
@@ -47,6 +50,7 @@ def test_terminal_states_complete():
     assert sm.is_terminal(PacketState.MERGED)
     assert sm.is_terminal(PacketState.FAILED)
     assert sm.is_terminal(PacketState.CANCELLED)
+    assert sm.is_terminal(PacketState.BLOCKED_FINAL)
     assert not sm.is_terminal(PacketState.DRAFT)
     assert not sm.is_terminal(PacketState.READY)
     assert not sm.is_terminal(PacketState.RUNNING)
@@ -82,10 +86,22 @@ def test_state_roundtrip_from_string():
     assert PacketState("failed") == PacketState.FAILED
 
 
-def test_all_8_states_exist():
+def test_all_canonical_and_compatibility_states_exist():
     states = {s.value for s in PacketState}
-    assert states == {"draft", "ready", "running", "accepted", "merged", "rejected", "failed", "cancelled"}
-    assert len(states) == 8
+    assert states == {
+        "draft",
+        "ready",
+        "running",
+        "accepted",
+        "merged",
+        "rejected",
+        "blocked",
+        "blocked_recoverable",
+        "blocked_final",
+        "failed",
+        "cancelled",
+    }
+    assert len(states) == 11
 
 
 def test_transition_idempotency_raises():

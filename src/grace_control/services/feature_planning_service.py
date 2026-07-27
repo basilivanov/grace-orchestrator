@@ -7,11 +7,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import shutil
 import subprocess
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
+from grace_control.core.execution_environment import ExecutionEnvironment
 from grace_control.core.structured_logger import GraceLogger
 
 _log = GraceLogger("feature_planning")
@@ -24,6 +27,31 @@ from grace_control.core.stage_instrumentation import stage
 
 _CONTENT_PREVIEW_CHARS = 2500
 _MAX_RELEVANT_FILES = 15
+
+
+def _format_environment_facts(environment: ExecutionEnvironment) -> str:
+    """Render deterministic repository facts without adding semantic guesses."""
+    lines = [
+        "DETERMINISTIC ENVIRONMENT FACTS",
+        "Python: " + (
+            ", ".join(environment.python_candidates)
+            if environment.python_candidates
+            else "none detected"
+        ),
+        f"Shell: {environment.shell}",
+    ]
+    for label, values in (
+        ("Executable scripts", environment.executable_scripts),
+        ("Verification entrypoints", environment.verification_entrypoints),
+        ("Compose services", environment.compose_services),
+        ("Ignored patterns", environment.ignored_patterns),
+        ("Config sources", environment.config_sources),
+    ):
+        lines.append(f"{label}:")
+        lines.extend(f"- {value}" for value in values)
+        if not values:
+            lines.append("- none detected")
+    return "\n".join(lines)
 
 
 class CONTEXT_BUILDER_MUTATED_TARGET_REPO(Exception):
@@ -46,8 +74,13 @@ def _git_snapshot(repo_root: Path) -> dict | None:
             ["git", "status", "--short"],
             cwd=str(repo_root), capture_output=True, text=True, timeout=10,
         )
+        branch = subprocess.run(
+            ["git", "symbolic-ref", "--quiet", "--short", "HEAD"],
+            cwd=str(repo_root), capture_output=True, text=True, timeout=10,
+        )
         return {
             "head": head.stdout.strip(),
+            "branch": branch.stdout.strip() if branch.returncode == 0 else "",
             "status_short": status.stdout.strip(),
             "is_clean": status.stdout.strip() == "",
         }
@@ -55,15 +88,79 @@ def _git_snapshot(repo_root: Path) -> dict | None:
         return None
 
 
-def _git_reset_hard(repo_root: Path, head_sha: str) -> None:
-    """Reset target repo to a known clean state."""
-    try:
-        subprocess.run(["git", "reset", "--hard", head_sha],
-                        cwd=str(repo_root), capture_output=True, text=True, timeout=30)
-        subprocess.run(["git", "clean", "-fd"],
-                        cwd=str(repo_root), capture_output=True, text=True, timeout=30)
-    except Exception:
-        pass
+def _remove_planning_workspace(workspace: Path | None) -> None:
+    """Remove a disposable planning workspace without touching its source repo."""
+    if workspace is None or not workspace.exists():
+        return
+    shutil.rmtree(workspace, ignore_errors=True)
+
+
+def _prepare_planning_workspace(repo_root: Path, log_dir: Path, role: str) -> Path:
+    """Create an independent clone/copy for a read-only planning agent.
+
+    A linked worktree is intentionally not used: exploratory planning commands
+    must not share git worktree administration with live coder worktrees.
+    """
+    source = repo_root.resolve()
+    workspace = (log_dir / f"{role}-repository").resolve()
+    _remove_planning_workspace(workspace)
+
+    snapshot = _git_snapshot(source)
+    if snapshot is not None:
+        cloned = subprocess.run(
+            ["git", "clone", "--quiet", "--no-hardlinks", str(source), str(workspace)],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        if cloned.returncode != 0:
+            raise RuntimeError(
+                f"planning workspace clone failed: {cloned.stderr.strip()[:300]}"
+            )
+        detached = subprocess.run(
+            ["git", "checkout", "--quiet", "--detach", snapshot["head"]],
+            cwd=str(workspace),
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if detached.returncode != 0:
+            _remove_planning_workspace(workspace)
+            raise RuntimeError(
+                f"planning workspace checkout failed: {detached.stderr.strip()[:300]}"
+            )
+        return workspace
+
+    shutil.copytree(
+        source,
+        workspace,
+        ignore=shutil.ignore_patterns(
+            ".git", ".grace", ".venv", "node_modules", "__pycache__", ".pytest_cache"
+        ),
+    )
+    return workspace
+
+
+def _planning_workspace_mutation(
+    before: dict | None,
+    after: dict | None,
+) -> dict | None:
+    """Describe a planning workspace mutation, including branch-only changes."""
+    if before is None or after is None:
+        return None
+    if (
+        before.get("head") == after.get("head")
+        and before.get("branch") == after.get("branch")
+        and after.get("is_clean")
+    ):
+        return None
+    return {
+        "pre_head": before.get("head", ""),
+        "post_head": after.get("head", ""),
+        "pre_branch": before.get("branch", ""),
+        "post_branch": after.get("branch", ""),
+        "status_short": after.get("status_short", "")[:2000],
+    }
 
 
 def normalize_architect_plan(plan: dict) -> dict:
@@ -240,7 +337,7 @@ class FeaturePlanningService:
 
         # ── Mutation guard: pre-snapshot target repo ──
         worktree_root = target_repo_root or _ctx_settings.target_repo_root or "."
-        root = Path(worktree_root)
+        root = Path(worktree_root).resolve()
         pre_snapshot = _git_snapshot(root)
         if pre_snapshot and not pre_snapshot["is_clean"]:
             _log.warn("context_builder_pre_snapshot_dirty",
@@ -251,7 +348,10 @@ class FeaturePlanningService:
             component="FeaturePlanningService", status="running",
         )
 
+        agent_root: Path | None = None
         try:
+            agent_root = _prepare_planning_workspace(root, log_dir, "context-builder")
+            agent_pre_snapshot = _git_snapshot(agent_root)
             # Determine scope from feature spec_json
             spec = feature.spec_json or {} if feature else {}
             scope = spec.get("scope") if isinstance(spec, dict) else None
@@ -273,7 +373,7 @@ class FeaturePlanningService:
 
             ctx_model = resolve_model("context_collector")
             collector = ContextCollector(
-                project_root=root,
+                project_root=agent_root,
                 model=ctx_model.get("model"),
                 cli=ctx_model.get("command", "opencode"),
                 executor_id=ctx_model.get("executor_id"),
@@ -285,7 +385,7 @@ class FeaturePlanningService:
                 code_ctx = await collector.collect(
                     task_description=task_desc,
                     target_scope=scope,
-                    project_root=root,
+                    project_root=agent_root,
                 )
             finally:
                 _hb_task.cancel()
@@ -344,51 +444,32 @@ class FeaturePlanningService:
                 component="FeaturePlanningService", status="completed",
             )
 
-            # ── Mutation guard: post-run check ──
-            post_snapshot = _git_snapshot(root)
-            if post_snapshot and pre_snapshot and pre_snapshot["is_clean"]:
-                if not post_snapshot["is_clean"]:
-                    diff_result = subprocess.run(
-                        ["git", "diff", "--exit-code"],
-                        cwd=str(root), capture_output=True, text=True, timeout=30,
-                    )
-                    status_result = subprocess.run(
-                        ["git", "status", "--short"],
-                        cwd=str(root), capture_output=True, text=True, timeout=10,
-                    )
-                    mutation_evidence = {
-                        "pre_head": pre_snapshot["head"],
-                        "post_head": post_snapshot["head"],
-                        "diff_exit_code": diff_result.returncode,
-                        "status_short": status_result.stdout.strip()[:2000],
-                        "diff_stdout": diff_result.stdout[:4000] if diff_result.stdout else "",
-                        "diff_stderr": diff_result.stderr[:1000] if diff_result.stderr else "",
-                    }
-                    # Save mutation evidence to planning log dir
-                    evidence_dir = Path(log_dir)
-                    evidence_dir.mkdir(parents=True, exist_ok=True)
-                    (evidence_dir / "context-builder-diff.txt").write_text(
-                        diff_result.stdout if diff_result.stdout else ""
-                    )
-                    (evidence_dir / "context-builder-status.txt").write_text(
-                        status_result.stdout
-                    )
-                    _log.error("CONTEXT_BUILDER_MUTATED_TARGET_REPO",
-                               feature_id=feature_id,
-                               mutation_evidence=mutation_evidence)
-                    # Reset target repo to clean state
-                    _git_reset_hard(root, pre_snapshot["head"])
-                    # Mark planning run failed and raise
-                    cb_run.status = "failed"
-                    cb_run.error = "CONTEXT_BUILDER_MUTATED_TARGET_REPO"
-                    raise CONTEXT_BUILDER_MUTATED_TARGET_REPO(
-                        f"context-builder mutated target repo at {root}. "
-                        f"Repo has been reset to pre-run state. "
-                        f"Evidence saved in {evidence_dir}"
-                    )
+            # ── Mutation guard: post-run check in disposable clone ──
+            mutation_evidence = _planning_workspace_mutation(
+                agent_pre_snapshot,
+                _git_snapshot(agent_root),
+            )
+            if mutation_evidence is not None:
+                evidence_dir = Path(log_dir)
+                evidence_dir.mkdir(parents=True, exist_ok=True)
+                (evidence_dir / "context-builder-status.txt").write_text(
+                    mutation_evidence.get("status_short", "")
+                )
+                _log.error(
+                    "CONTEXT_BUILDER_MUTATED_TARGET_REPO",
+                    feature_id=feature_id,
+                    mutation_evidence=mutation_evidence,
+                )
+                cb_run.status = "failed"
+                cb_run.error = "CONTEXT_BUILDER_MUTATED_TARGET_REPO"
+                raise CONTEXT_BUILDER_MUTATED_TARGET_REPO(
+                    "context-builder mutated its isolated planning workspace; "
+                    f"target repo remained untouched at {root}. "
+                    f"Evidence saved in {evidence_dir}"
+                )
         except Exception as e:
             if isinstance(e, CONTEXT_BUILDER_MUTATED_TARGET_REPO):
-                # Mutation guard: re-raise after cleanup is already done above
+                # Mutation guard: re-raise; the disposable clone is removed in finally.
                 cb_run.finished_at = datetime.now(UTC)
                 cb_run.duration_ms = int((cb_run.finished_at - cb_run.started_at).total_seconds() * 1000)
                 cb_run.result_json = {"summary": str(e)[:200], "file_count": 0, "files": [], "error": "CONTEXT_BUILDER_MUTATED_TARGET_REPO"}
@@ -411,6 +492,8 @@ class FeaturePlanningService:
             }
             cb_run.status = "failed"
             cb_run.error = str(e)[:500]
+        finally:
+            _remove_planning_workspace(agent_root)
 
         cb_run.finished_at = datetime.now(UTC)
         cb_run.duration_ms = int((cb_run.finished_at - cb_run.started_at).total_seconds() * 1000)
@@ -470,12 +553,36 @@ class FeaturePlanningService:
         )
 
         try:
+            if os.environ.get("GRACE_CONTEXT_DISABLED", "").lower() in {"1", "true", "yes", "on"}:
+                plan = self._fallback_plan(feature_id, task_desc)
+                arch_run.status = "done"
+                arch_run.executor_id = "architect-disabled"
+                arch_run.model = "disabled"
+                arch_run.result_json = plan
+                _log.info("architect_context_disabled", feature_id=feature_id)
+                self._finalize_plan(feature_id, plan, arch_run, run_id)
+                return plan
+
             # Build prompt — reuses the same prompt structure as _call_architect_llm
             self._event_logger.emit(
                 trace=self._trace_ctx, event="architect.prompt_build_started", stage="architect",
                 component="FeaturePlanningService", status="running",
             )
-            prompt = self._build_architect_prompt(task_desc, context)
+            worktree_root = (
+                target_repo_root
+                or context.get("target_repo_root")
+                or _arch_settings.target_repo_root
+                or "."
+            )
+            from grace_control.core.execution_environment import probe_execution_environment
+            execution_environment = probe_execution_environment(
+                target_repo_root=Path(worktree_root),
+            )
+            prompt = self._build_architect_prompt(
+                task_desc,
+                context,
+                execution_environment,
+            )
             # Persist prompt artifact
             prompt_ref = self._artifact_store.write_text(
                 trace=self._trace_ctx, stage="architect", name="prompt.txt",
@@ -487,22 +594,47 @@ class FeaturePlanningService:
                 artifact_refs=[prompt_ref],
             )
 
-            worktree_root = target_repo_root or _arch_settings.target_repo_root or ""
+            architect_root: Path | None = None
 
             _hb_task = asyncio.create_task(self._heartbeat_worker(run_id, interval_s=5.0))
             try:
+                if worktree_root:
+                    architect_root = _prepare_planning_workspace(
+                        Path(worktree_root),
+                        log_dir,
+                        "architect",
+                    )
+                architect_pre_snapshot = (
+                    _git_snapshot(architect_root) if architect_root else None
+                )
                 for attempt in range(2):
                     try:
                         from grace_control.core.llm_runner import run_llm
-                        cli_name = "deepseek-v4-pro" if worktree_root else "architect-premium"
+                        from grace_control.core.executor_selector import resolve_model
+
+                        executor = resolve_model("architect")
                         raw = await run_llm(
                             prompt, role="architect",
-                            model="",
-                            cli=cli_name,
-                            cwd=Path(worktree_root) if worktree_root else None,
+                            model=executor["model"],
+                            cli=executor["executor_id"],
+                            cwd=architect_root,
+                            session_dir=Path(log_dir),
                             stdout_log_path=arch_run.stdout_path,
                             stderr_log_path=arch_run.stderr_path,
                         )
+                        mutation_evidence = _planning_workspace_mutation(
+                            architect_pre_snapshot,
+                            _git_snapshot(architect_root) if architect_root else None,
+                        )
+                        if mutation_evidence is not None:
+                            _log.error(
+                                "architect_mutated_planning_workspace",
+                                feature_id=feature_id,
+                                mutation_evidence=mutation_evidence,
+                            )
+                            raise RuntimeError(
+                                "architect mutated isolated planning workspace"
+                            )
                         # Persist raw response
                         raw_ref = self._artifact_store.write_text(
                             trace=self._trace_ctx, stage="architect", name="raw_response.txt",
@@ -530,7 +662,8 @@ class FeaturePlanningService:
                         )
 
                         arch_run.status = "done"
-                        arch_run.model = cli_name
+                        arch_run.executor_id = executor["executor_id"]
+                        arch_run.model = executor["model"]
                         arch_run.result_json = plan
                         break
                     except Exception as e:
@@ -543,6 +676,7 @@ class FeaturePlanningService:
                     await _hb_task
                 except (asyncio.CancelledError, Exception):
                     pass
+                _remove_planning_workspace(architect_root)
 
         except Exception as e:
             plan = self._fallback_plan(feature_id, task_desc)
@@ -608,7 +742,12 @@ class FeaturePlanningService:
 
         self.db.commit()
 
-    def _build_architect_prompt(self, task: str, context: dict) -> str:
+    def _build_architect_prompt(
+        self,
+        task: str,
+        context: dict,
+        execution_environment: ExecutionEnvironment,
+    ) -> str:
         """W03: Thin renderer around the canonical architect prompt.
 
         Loads the canonical prompt from architect_prompt.md and prepends
@@ -644,6 +783,8 @@ Business requirement: {task}
 Codebase context:
 - Summary: {context.get('summary', 'Unknown')}
 - Complexity: {context.get('complexity_score', '?')}/300
+
+{_format_environment_facts(execution_environment)}
 """
 
         if relevant_blocks:
@@ -749,7 +890,10 @@ Other files (paths only):
                 component="FeaturePlanningService", status="running",
             )
             from grace_control.services.scope_path_canonicalizer import ScopePathCanonicalizer
-            canonical = ScopePathCanonicalizer().canonicalize_plan(plan)
+            canonical = ScopePathCanonicalizer().canonicalize_plan(
+                plan,
+                target_repo_root=target_root,
+            )
             # Persist canonicalizer input/output/fixes
             self._artifact_store.write_json(
                 trace=self._trace_ctx, stage="scope_canonicalizer", name="input_plan.json",
@@ -926,6 +1070,15 @@ Other files (paths only):
                 target_repo = spec.get("target_repo_root") if isinstance(spec, dict) else None
                 if target_repo:
                     enriched_spec["target_repo_root"] = target_repo
+                # Packet coders must receive the source feature/TZ, not only the
+                # architect's compact packet summary.  This is especially
+                # important for the first documentation/canon wave where the
+                # target repository does not yet contain requirements files.
+                enriched_spec["feature_context"] = {
+                    "feature_id": feature_id,
+                    "title": feature.title or "",
+                    "description": feature.description or "",
+                }
                 packet = Packet(
                     id=pkt_id,
                     feature_id=feature_id,
@@ -934,6 +1087,7 @@ Other files (paths only):
                     title=pkt.get("title", f"Packet {i}"),
                     spec_json=enriched_spec,
                     state=PacketState.READY.value if is_first_wave else PacketState.DRAFT.value,
+                    acceptance_profile=enriched_spec.get("acceptance_profile", "NORMAL"),
                 )
                 self.db.add(packet)
                 packet_ids.append(pkt_id)
@@ -1194,6 +1348,7 @@ Other files (paths only):
                 previous_plan=plan,
                 compiler_errors=compiler_errors,
                 previous_session=previous_session,
+                cwd=target_root,
             )
 
             if error or repaired_plan is None:
@@ -1216,7 +1371,10 @@ Other files (paths only):
 
             # Canonicalize scope paths after LLM repair before recompile
             from grace_control.services.scope_path_canonicalizer import ScopePathCanonicalizer
-            canonical = ScopePathCanonicalizer().canonicalize_plan(plan)
+            canonical = ScopePathCanonicalizer().canonicalize_plan(
+                plan,
+                target_repo_root=target_root,
+            )
             if canonical.changed and canonical.plan:
                 plan = canonical.plan
                 spec["plan_json"] = plan

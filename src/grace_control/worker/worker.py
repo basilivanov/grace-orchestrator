@@ -31,7 +31,8 @@ class WorkerFailureType(str, Enum):
     Each type maps to a specific release/retry behavior:
     - agent_timeout: Agent exceeded timeout → retryable if attempts remain
     - agent_nonzero: Agent returned non-zero exit → retryable if safe
-    - scope_violation: Agent wrote outside scope → blocked (not blindly retried)
+    - scope_violation: Agent wrote outside scope → blocked_recoverable
+      (not blindly retried; recovery controller decides the next action)
     - worktree_preflight_failed: Git worktree setup failed → retryable
     - stale_lease: Lease expired, another worker claimed → abandon, do not retry
     - api_error: API call failed → retryable with backoff
@@ -83,7 +84,7 @@ def is_failure_retryable(failure_type: WorkerFailureType) -> bool:
     """W07: Determine if a failure type should be released as retryable.
 
     - STALE_LEASE: NOT retryable — another worker owns the packet.
-    - SCOPE_VIOLATION: NOT automatically retryable — needs human/recovery.
+    - SCOPE_VIOLATION: NOT automatically retryable — needs recovery.
     - All others: retryable when attempts remain.
     """
     if failure_type in (WorkerFailureType.STALE_LEASE, WorkerFailureType.SCOPE_VIOLATION):
@@ -114,6 +115,7 @@ class ExecutionState:
     claimed_attempt: int | None = None
     attempt: int = 0
     max_attempts: int = 0
+    target_repo_root: str = ""
 
     @property
     def has_attempts_remaining(self) -> bool:
@@ -129,7 +131,7 @@ class ExecutionState:
         Rules:
         - No failure → use result-based status (accepted/rejected/blocked)
         - STALE_LEASE → do not release (already abandoned)
-        - SCOPE_VIOLATION → blocked (not blindly retried)
+        - SCOPE_VIOLATION → blocked_recoverable (recovery-controlled)
         - Retryable failure + attempts remaining → rejected (retryable)
         - Retryable failure + no attempts remaining → failed (terminal)
         """
@@ -142,13 +144,17 @@ class ExecutionState:
             return ""
 
         if self.failure_type == WorkerFailureType.SCOPE_VIOLATION:
-            return "blocked"
+            return "blocked_recoverable"
 
         if is_failure_retryable(self.failure_type):
             if self.has_attempts_remaining:
                 return "rejected"  # retryable
-            else:
-                return "failed"  # terminal — no attempts left
+            recovery_enabled = os.environ.get(
+                "GRACE_RECOVERY_CONTROLLER_ENABLED", "false"
+            ).lower() == "true"
+            if recovery_enabled:
+                return "blocked_recoverable"
+            return "failed"  # terminal — no attempts left
 
         # Default: rejected (retryable) — safe default
         return "rejected"
@@ -170,7 +176,7 @@ def release_status_from_result(result: ExecutionResult, *, max_attempts: int = 0
 
     W01/W07: Timeout/runtime failure with attempts remaining → "rejected" (retryable),
     not "failed" (terminal). Only truly terminal cases become "failed".
-    Scope violations → "blocked" (not blindly retried).
+    Scope violations → "blocked_recoverable" (recovery-controlled).
     """
     if result.accepted:
         return "accepted"
@@ -180,7 +186,7 @@ def release_status_from_result(result: ExecutionResult, *, max_attempts: int = 0
     reason = (result.reason or "").lower()
     ds = (result.domain_status or "").lower()
     if "scope" in ds or "scope" in reason or "frozen" in reason:
-        return "blocked"
+        return "blocked_recoverable"
     # W01: Default to rejected (retryable) rather than failed (terminal).
     # The queue/owner will decide if attempts are exhausted and mark FAILED.
     return "rejected"
@@ -291,6 +297,11 @@ class Worker:
             claimed_attempt=claim.claimed_attempt,
             attempt=claim.attempt,
             max_attempts=claim.max_attempts,
+            target_repo_root=str(
+                claim.spec.get("target_repo_root", "")
+                if isinstance(claim.spec, dict)
+                else ""
+            ),
         )
 
         self.log.info("packet_claimed", worker_id=self.worker_id,
@@ -348,11 +359,17 @@ class Worker:
         packet_id = claim.packet_id
 
         try:
-            self.log.info("execution_started", packet_id=packet_id, timeout_s=agent_timeout)
+            try:
+                configured_hard_timeout = int(os.environ.get("GRACE_AGENT_MAX_TIMEOUT", "0"))
+            except ValueError:
+                configured_hard_timeout = 0
+            hard_timeout = max(agent_timeout, configured_hard_timeout or max(agent_timeout * 3, 1800))
+            self.log.info("execution_started", packet_id=packet_id,
+                idle_timeout_s=agent_timeout, hard_timeout_s=hard_timeout)
             result = await asyncio.wait_for(
                 self.executor.execute(packet_id, self.worker_id,
                     claim_data=claim.model_dump()),
-                timeout=agent_timeout,
+                timeout=hard_timeout,
             )
             self.log.info("execution_completed",
                 packet_id=packet_id, accepted=result.accepted,
@@ -371,10 +388,10 @@ class Worker:
 
         except asyncio.TimeoutError:
             self.log.error("execution_timed_out", packet_id=packet_id,
-                timeout_s=agent_timeout)
+                idle_timeout_s=agent_timeout, hard_timeout_s=hard_timeout)
             # W07: Classify as agent_timeout
             exec_state.failure_type = WorkerFailureType.AGENT_TIMEOUT
-            exec_state.error_message = f"Agent timed out after {agent_timeout}s"
+            exec_state.error_message = f"Agent exceeded execution timeout (idle={agent_timeout}s, hard={hard_timeout}s)"
             exec_state.result_data = {"accepted": False, "reason": "timeout"}
             return None
 
@@ -447,7 +464,10 @@ class Worker:
             self.log.warn("merge_skipped_no_result", packet_id=packet_id)
             return
 
-        target_repo = str(self._git_context.target_repo_root)
+        target_repo = (
+            exec_state.target_repo_root
+            or str(self._git_context.target_repo_root)
+        )
         self.log.info("merging", packet_id=packet_id,
             worktree=result.worktree_path, branch=result.branch_name,
             target_repo=target_repo, sha=result.commit_sha[:12])
@@ -488,7 +508,7 @@ class Worker:
         """W07: Handle rejection retry and recovery based on failure classification.
 
         - Rejected + retryable → retry via API
-        - Blocked → apply recovery controller
+        - Blocked / blocked_recoverable → apply recovery controller
         - Stale lease → do nothing (already abandoned)
         """
         exec_state.phase = "post_release"
@@ -505,7 +525,7 @@ class Worker:
                 reason=exec_state.error_message,
                 failure_type=exec_state.failure_type.value if exec_state.failure_type else None)
             await self._handle_rejection(packet_id)
-        elif status == "blocked":
+        elif status in ("blocked", "blocked_recoverable"):
             self.log.warn("packet_blocked", packet_id=packet_id,
                 reason=exec_state.error_message,
                 failure_type=exec_state.failure_type.value if exec_state.failure_type else None)

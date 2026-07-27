@@ -107,28 +107,33 @@ def function_name(param1: str, param2: int) -> bool:
 ## 7. Структурированное логирование (GraceLogger)
 
 ```python
-from prefect_grace.platform.structured_logger import log_event, trace_context
+from grace_control.core.structured_logger import GraceLogger, trace_context
+
+_log = GraceLogger("worker")
 
 # Логирование с контекстом
-log_event("INFO", "packet_claimed", packet_id="PKT-001", worker_id="w1")
-log_event("ERROR", "execution_failed", packet_id="PKT-001", error=str(e))
+_log.info("packet_claimed", packet_id="PKT-001", worker_id="w1")
+_log.error("execution_failed", packet_id="PKT-001", error=str(e))
 
 # Trace-контекст для сквозного trace_id
-with trace_context(trace_id=packet_id):
-    log_event("INFO", "execution_started")
+with trace_context(packet_id):
+    _log.info("execution_started")
     # все логи внутри блока получают этот trace_id
 ```
 
 Формат вывода — JSONL (одна строка JSON на событие):
 ```json
-{"timestamp":"2026-05-31T10:00:00Z","level":"INFO","component":"worker","trace_id":"PKT-001","message":"Packet claimed","packet_id":"PKT-001"}
+{"ts":"2026-05-31T10:00:00+00:00Z","level":"INFO","component":"worker","msg":"packet_claimed","trace_id":"PKT-001","ctx":{"packet_id":"PKT-001","worker_id":"w1"}}
 ```
 
 Правила:
-- НЕ использовать `print()` — только `log_event()`
+- НЕ использовать `print()` — только `GraceLogger`
 - НЕ использовать `logging.getLogger()` напрямую
-- Всегда указывать `packet_id` в параметрах лога
-- `trace_context` для всех операций внутри одного пакета
+- `_log = GraceLogger("component_name")` объявляется один раз на уровне модуля
+- Имена сообщений должны быть статическими строками: `_log.info("msg_name", ctx_key=value)`
+- Всегда указывать `packet_id` в параметрах лога, когда операция относится к пакету
+- `trace_context(packet_id)` для всех операций внутри одного пакета
+- НЕ импортировать `prefect_grace`
 
 ---
 
@@ -163,6 +168,8 @@ T0 жестко прописан в пайплайне — запускаетс�
 - [ ] Функция ≤ 4000 токенов
 - [ ] `python3 scripts/grace_lint.py` чисто (Канон)
 - [ ] `python3 -m ruff check src/` чисто
-- [ ] `log_event()` вместо `print()`/`logging.getLogger()`
-- [ ] `trace_context(trace_id=packet_id)` обёрнут вокруг основного вызова
-- [ ] `packet_id` во всех log_event вызовах
+- [ ] `GraceLogger` вместо `print()`/`logging.getLogger()`
+- [ ] `_log = GraceLogger("component_name")` объявлен один раз на уровне модуля
+- [ ] `trace_context(packet_id)` обёрнут вокруг основного вызова
+- [ ] `packet_id` во всех пакетных `_log.*(...)` вызовах
+- [ ] `prefect_grace` не импортируется

@@ -75,6 +75,92 @@ class TestEvidenceCollector:
         ) is False
 
 
+class TestCanonicalEvidenceKinds:
+    def _passed_stage(self) -> StageResult:
+        return StageResult(
+            name=StageName.T1_TARGETED_TESTS,
+            status=StageStatus.PASSED,
+            summary="ok",
+            commands=[CommandResult(command="pytest -q", cwd="/", exit_code=0)],
+        )
+
+    def test_test_evidence_is_satisfied_by_successful_acceptance_command(self, tmp_path):
+        from grace_control.core.evidence import check_expected_evidence
+
+        issues = check_expected_evidence(
+            expected=[EvidenceRequirement(id="tests", kind="test")],
+            stage_results=[self._passed_stage()],
+            worktree_path=tmp_path,
+            changed_files=[],
+            profile=AcceptanceProfile.STRICT,
+        )
+
+        assert issues == []
+
+    def test_runtime_log_evidence_is_satisfied_by_successful_cli_command(self, tmp_path):
+        from grace_control.core.evidence import check_expected_evidence
+
+        issues = check_expected_evidence(
+            expected=[EvidenceRequirement(id="demo", kind="runtime_log")],
+            stage_results=[self._passed_stage()],
+            worktree_path=tmp_path,
+            changed_files=[],
+            profile=AcceptanceProfile.STRICT,
+        )
+
+        assert issues == []
+
+    def test_contract_evidence_requires_each_artifact_pattern(self, tmp_path):
+        from grace_control.core.evidence import check_expected_evidence
+
+        (tmp_path / "docs").mkdir()
+        (tmp_path / "AGENTS.md").write_text("rules")
+        (tmp_path / "docs" / "requirements.xml").write_text("<requirements/>")
+        requirement = EvidenceRequirement(
+            id="canon",
+            kind="contract",
+            artifact_patterns=["AGENTS.md", "docs/*.xml"],
+        )
+
+        assert check_expected_evidence(
+            expected=[requirement],
+            stage_results=[],
+            worktree_path=tmp_path,
+            changed_files=[],
+            profile=AcceptanceProfile.STRICT,
+        ) == []
+
+        (tmp_path / "docs" / "requirements.xml").unlink()
+        assert check_expected_evidence(
+            expected=[requirement],
+            stage_results=[],
+            worktree_path=tmp_path,
+            changed_files=[],
+            profile=AcceptanceProfile.STRICT,
+        )
+
+    def test_contract_evidence_can_use_run_directory_artifacts(self, tmp_path):
+        from grace_control.core.evidence import check_expected_evidence
+
+        run_dir = tmp_path / "runs" / "R01" / "t2"
+        run_dir.mkdir(parents=True)
+        (run_dir / "cmd_002_stdout.log").write_text("pip freeze\n")
+        requirement = EvidenceRequirement(
+            id="venv",
+            kind="contract",
+            artifact_patterns=["t2/cmd_002_stdout.log"],
+        )
+
+        assert check_expected_evidence(
+            expected=[requirement],
+            stage_results=[],
+            worktree_path=tmp_path / "worktree",
+            changed_files=[],
+            profile=AcceptanceProfile.STRICT,
+            run_dir=tmp_path / "runs" / "R01",
+        ) == []
+
+
 # ══════════════════════════════════════════════════════════════════════
 # Typed evidence expectations (check_expected_evidence with expectation)
 # ══════════════════════════════════════════════════════════════════════

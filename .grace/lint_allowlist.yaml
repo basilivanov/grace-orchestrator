@@ -9,6 +9,14 @@ rules:
     path: src/grace_control/config/project_config.py
     reason: project_config env reads by design
     expires_wave: never
+  - rule: GRC100
+    path: src/grace_control/runtime/mini_swe_runner.py
+    reason: runtime wrapper owns provider and process environment construction
+    expires_wave: never
+  - rule: GRC101
+    path: src/grace_control/runtime/mini_swe_runner.py
+    reason: runtime wrapper is the subprocess boundary for mini-swe-agent
+    expires_wave: never
   - rule: GRC103
     path: src/grace_control/adapters/packet_executor.py
     reason: adapter wires PacketRun.status ("running", "failed") by design

@@ -12,13 +12,38 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from grace_control.config.agent_profiles import AgentProfile, load_agent_profiles
 
 
+def _profile_priority_key(profile: AgentProfile) -> tuple[int, int]:
+    return (getattr(profile, "priority", 0), profile.timeout_seconds)
+
+
+def _coder_ladder(profiles: list[AgentProfile]) -> list[AgentProfile]:
+    """Return enabled mini-swe coders in configured fallback order."""
+    mini_profiles = [
+        profile for profile in profiles
+        if isinstance(profile.command, list)
+        and "grace_control.runtime.mini_swe_runner" in " ".join(profile.command)
+    ]
+    candidates = mini_profiles or profiles
+    configured = [
+        item.strip()
+        for item in os.environ.get("GRACE_CODER_EXECUTOR_LADDER", "").split(",")
+        if item.strip()
+    ]
+    if configured:
+        by_id = {profile.executor_id: profile for profile in candidates}
+        ordered = [by_id[executor_id] for executor_id in configured if executor_id in by_id]
+        if ordered:
+            return ordered
+    return sorted(candidates, key=_profile_priority_key, reverse=True)
+
+
 def select_executor(role: str, attempt: int = 1) -> dict[str, Any]:
-    import os
     from grace_control.config.agent_profiles import get_agent_profile
     if role == "coder":
         live_profile = os.environ.get("GRACE_LIVE_EXECUTOR_PROFILE")
@@ -47,8 +72,11 @@ def select_executor(role: str, attempt: int = 1) -> dict[str, Any]:
     if not matching:
         return profiles[0].to_dict()
 
-    matching.sort(key=lambda p: p.timeout_seconds, reverse=True)
-    index = min(attempt - 1, len(matching) - 1)
+    if role == "coder":
+        matching = _coder_ladder(matching)
+    else:
+        matching.sort(key=_profile_priority_key, reverse=True)
+    index = (attempt - 1) % len(matching) if role == "coder" else min(attempt - 1, len(matching) - 1)
     return matching[index].to_dict()
 
 
@@ -78,7 +106,10 @@ def get_escalation(role: str) -> list[dict[str, Any]]:
     # W09: Skip disabled profiles
     profiles = [p for p in profiles if not p.disabled]
     matching = [p for p in profiles if _profile_matches_role(p.executor_id, role)]
-    matching.sort(key=lambda p: p.timeout_seconds, reverse=False)
+    if role == "coder":
+        matching = _coder_ladder(matching)
+    else:
+        matching.sort(key=_profile_priority_key, reverse=True)
     return [p.to_dict() for p in matching]
 
 
@@ -109,18 +140,22 @@ def resolve_model(role: str) -> dict[str, Any]:
                 continue
             break
         else:
-            matching.sort(key=lambda p: p.timeout_seconds, reverse=True)
+            matching.sort(key=_profile_priority_key, reverse=True)
             best = matching[0]
     else:
-        matching.sort(key=lambda p: p.timeout_seconds, reverse=True)
+        matching.sort(key=_profile_priority_key, reverse=True)
         best = matching[0]
 
     cmd = best.command
     cli_name = cmd[0] if isinstance(cmd, list) and cmd else "opencode"
-    kind_map = {"opencode": "opencode", "agy": "agy"}
+    kind_map = {"opencode": "opencode", "agy": "agy", "python3": "mini-swe", "python": "mini-swe"}
     kind = "opencode"
-    for prefix, k in kind_map.items():
-        if cli_name.startswith(prefix):
-            kind = k
-            break
+    command_text = " ".join(cmd) if isinstance(cmd, list) else str(cmd)
+    if "grace_control.runtime.mini_swe_runner" in command_text:
+        kind = "mini-swe"
+    else:
+        for prefix, k in kind_map.items():
+            if cli_name.startswith(prefix):
+                kind = k
+                break
     return {"model": best.model or "gemini-3.5-flash", "command": cli_name, "kind": kind, "executor_id": best.executor_id}

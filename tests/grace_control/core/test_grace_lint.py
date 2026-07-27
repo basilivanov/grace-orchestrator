@@ -81,6 +81,14 @@ def test_grc004_block_balanced():
     assert not any(v.code == "GRC004" for v in _v(src))
 
 
+def test_grc004_multiple_blocks_preserve_source_order():
+    src = (
+        "# START_BLOCK_PROMPT\nx = 1\n# END_BLOCK_PROMPT\n"
+        "# START_BLOCK_MINI\ny = 2\n# END_BLOCK_MINI\n"
+    )
+    assert not any(v.code == "GRC004" for v in _v(src))
+
+
 # ── GRC005 ──────────────────────────────────────────────────────────────
 
 

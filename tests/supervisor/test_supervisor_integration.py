@@ -178,7 +178,12 @@ def test_reap_orphans_kills_stale_pids(tmp_path: Path) -> None:
     try:
         # Write a supervisor.json claiming this pid is "api"
         PidRegistry(tmp_path).save(
-            ChildRecord(role="api", pid=sleeper.pid, started_at=time.time(), argv=["x"]),
+            ChildRecord(
+                role="api",
+                pid=sleeper.pid,
+                started_at=time.time(),
+                argv=[PYTHON, "-c", "import time; time.sleep(60)"],
+            ),
             [],
         )
         # Spawn a supervisor and let it reap

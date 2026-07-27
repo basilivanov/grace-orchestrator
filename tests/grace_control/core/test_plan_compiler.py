@@ -25,16 +25,12 @@ def _env(**kwargs) -> ExecutionEnvironment:
     """Shortcut to build test environment."""
     defaults = {
         "shell": "/bin/sh",
-        "shell_is_bash": False,
-        "shell_supports_source": False,
-        "subprocess_shell_default": True,
-        "project_root": "/opt/solarsage-astro",
-        "target_repo_root": "/opt/solarsage-astro",
-        "worktree_root": "/opt/solarsage-astro/.grace/worktrees",
-        "state_root": "/opt/solarsage-astro/.grace/state",
-        "api_python_path": "/usr/bin/python3",
-        "has_api_venv": False,
-        "package_manager": "pnpm",
+        "python_candidates": ["python", "python3"],
+        "executable_scripts": [],
+        "verification_entrypoints": ["scripts/grace_lint.py"],
+        "compose_services": [],
+        "ignored_patterns": [],
+        "config_sources": [],
     }
     defaults.update(kwargs)
     return ExecutionEnvironment(**defaults)
@@ -80,16 +76,109 @@ class TestShellEnvironment:
         assert not result.ok
         assert any("bash" in e.code.lower() for e in result.errors)
 
+    def test_accepts_source_word_inside_quoted_grep_pattern(self):
+        """Quoted forbidden-text assertions are data, not shell syntax."""
+        compiler = PlanCompiler()
+        env = _env()
+        result = compiler.compile_plan(
+            _plan(_pkt(t0=[
+                '! grep -R "source \\|bash\\|BIDDER_APPLY_ENABLED=true" scripts/run_pr_gate.sh',
+                "node -e 'console.log(\"browser source safety check passed\")'",
+            ])),
+            env,
+        )
+        assert result.ok
+
     def test_rejects_missing_venv_reference(self):
         """venv activation should fail when venv doesn't exist."""
         compiler = PlanCompiler()
-        env = _env(has_api_venv=False)
+        env = _env(python_candidates=[])
         result = compiler.compile_plan(
             _plan(_pkt(t1=["cd apps/api && . .venv/bin/activate && pytest"])),
             env,
         )
         assert not result.ok
         assert any("venv" in e.code.lower() for e in result.errors)
+
+    def test_allows_venv_reference_after_explicit_bootstrap_packet(self):
+        compiler = PlanCompiler()
+        env = _env(python_candidates=[])
+        packet = _pkt(
+            scope=[".venv/", "scripts/bootstrap.py"],
+            description="Bootstrap the reusable project venv before tests.",
+            instructions=["Create and install the project venv."],
+            t1=[".venv/bin/python -m pytest -q"],
+        )
+
+        result = compiler.compile_plan(_plan(packet), env)
+
+        assert result.ok
+        assert any(e.code == "W_VENV_PLANNED_BOOTSTRAP" for e in result.warnings)
+
+    def test_allows_generated_venv_bootstrap_outside_tracked_scope(self):
+        compiler = PlanCompiler()
+        env = _env(python_candidates=[])
+        packet = _pkt(
+            scope=["pyproject.toml", "scripts/bootstrap.py"],
+            description="Bootstrap /opt/project/.venv before later verification.",
+            instructions=["Create the reusable .venv as a generated, ignored side effect."],
+            t1=[".venv/bin/python -m pytest -q"],
+        )
+
+        result = compiler.compile_plan(_plan(packet), env)
+
+        assert result.ok
+        assert any(e.code == "W_VENV_PLANNED_BOOTSTRAP" for e in result.warnings)
+
+    def test_rejects_venv_use_without_create_or_bootstrap_intent(self):
+        compiler = PlanCompiler()
+        env = _env(python_candidates=[])
+        packet = _pkt(
+            scope=["pyproject.toml"],
+            description="Use the existing .venv to install dependencies.",
+            t1=[".venv/bin/python -m pytest -q"],
+        )
+
+        result = compiler.compile_plan(_plan(packet), env)
+
+        assert not result.ok
+        assert any(e.code == "E_VENV_MISSING" for e in result.errors)
+
+    def test_enforces_feature_declared_python_file_limit(self, tmp_path):
+        app_dir = tmp_path / "app"
+        app_dir.mkdir()
+        for index in range(16):
+            (app_dir / f"module_{index}.py").write_text("", encoding="utf-8")
+        compiler = PlanCompiler()
+        env = _env(target_repo_root=str(tmp_path))
+
+        result = compiler.compile_plan(
+            _plan(_pkt(scope=["app"])),
+            env,
+            feature_description="Coder packets contain at most 15 Python files.",
+            target_repo_root=tmp_path,
+        )
+
+        assert not result.ok
+        error = next(e for e in result.errors if e.code == "E_SCOPE_PYTHON_FILE_LIMIT")
+        assert error.details["python_file_count"] == 16
+        assert error.details["python_file_limit"] == 15
+
+    def test_does_not_invent_python_file_limit(self, tmp_path):
+        app_dir = tmp_path / "app"
+        app_dir.mkdir()
+        for index in range(16):
+            (app_dir / f"module_{index}.py").write_text("", encoding="utf-8")
+        compiler = PlanCompiler()
+        env = _env(target_repo_root=str(tmp_path))
+
+        result = compiler.compile_plan(
+            _plan(_pkt(scope=["app"])),
+            env,
+            target_repo_root=tmp_path,
+        )
+
+        assert result.ok
 
     def test_rejects_bash_syntax_under_sh(self):
         """[[ ... ]] should fail under sh — bash-only syntax."""
@@ -105,7 +194,7 @@ class TestShellEnvironment:
     def test_accepts_posix_syntax(self):
         """POSIX syntax should pass even under dash."""
         compiler = PlanCompiler()
-        env = _env(shell_is_bash=False)
+        env = _env(shell="/bin/sh")
         result = compiler.compile_plan(
             _plan(_pkt(t0=["test -f file.yml && echo ok"])),
             env,
@@ -117,7 +206,7 @@ class TestShellEnvironment:
         # Even if $SHELL=/bin/bash, the compiler hardcodes /bin/sh
         env = _env()
         assert env.shell == "/bin/sh" or "sh" in env.shell
-        assert not env.shell_is_bash
+        assert env.shell == "/bin/sh"
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -126,6 +215,33 @@ class TestShellEnvironment:
 
 
 class TestCommandSyntax:
+
+    def test_rejects_negative_search_that_scans_regression_tests(self):
+        compiler = PlanCompiler()
+        env = _env()
+        result = compiler.compile_plan(
+            _plan(_pkt(
+                scope=["src/http/router.js", "test/api.test.js"],
+                t0=['! grep -R "legacy.example" -n src docs test'],
+            )),
+            env,
+        )
+
+        assert not result.ok
+        assert any(e.code == "E_NEGATIVE_SEARCH_SCANS_TESTS" for e in result.errors)
+
+    def test_accepts_negative_search_limited_to_product_paths(self):
+        compiler = PlanCompiler()
+        env = _env()
+        result = compiler.compile_plan(
+            _plan(_pkt(
+                scope=["src/http/router.js", "test/api.test.js"],
+                t0=['! grep -R "legacy.example" -n src docs'],
+            )),
+            env,
+        )
+
+        assert result.ok
 
     def test_warns_unquoted_grep_pattern_with_spaces(self):
         compiler = PlanCompiler()
@@ -190,6 +306,53 @@ class TestCommandSyntax:
 
 class TestScopeAcceptance:
 
+    def test_accepts_repo_root_app_layout_and_alembic_template(self):
+        compiler = PlanCompiler()
+        env = _env()
+        pkt = _pkt(scope=[
+            "app/core/config.py",
+            "app/storage/migrations/script.py.mako",
+        ])
+        result = compiler.compile_plan(_plan(pkt), env)
+        assert result.ok
+
+    def test_rejects_recursive_grace_lint_broader_than_file_scope(self, tmp_path):
+        bidder = tmp_path / "app" / "bidder"
+        bidder.mkdir(parents=True)
+        (bidder / "smart_window.py").write_text("", encoding="utf-8")
+        (bidder / "time_window.py").write_text("", encoding="utf-8")
+        (bidder / "service.py").write_text("", encoding="utf-8")
+        compiler = PlanCompiler()
+        env = _env(target_repo_root=str(tmp_path))
+        pkt = _pkt(
+            scope=["app/bidder/smart_window.py", "app/bidder/time_window.py"],
+            t1=["python3 scripts/grace_lint.py app/bidder"],
+        )
+
+        result = compiler.compile_plan(_plan(pkt), env, target_repo_root=tmp_path)
+
+        assert not result.ok
+        assert any(error.code == "E_SCOPE_ACCEPTANCE_IMPOSSIBLE" for error in result.errors)
+
+    def test_accepts_recursive_grace_lint_when_all_files_are_in_scope(self, tmp_path):
+        bidder = tmp_path / "app" / "bidder"
+        bidder.mkdir(parents=True)
+        (bidder / "smart_window.py").write_text("", encoding="utf-8")
+        (bidder / "time_window.py").write_text("", encoding="utf-8")
+        lint_script = tmp_path / "scripts" / "grace_lint.py"
+        lint_script.parent.mkdir()
+        lint_script.write_text("raise SystemExit(0)\n", encoding="utf-8")
+        compiler = PlanCompiler()
+        env = _env(target_repo_root=str(tmp_path))
+        pkt = _pkt(
+            scope=["app/bidder/smart_window.py", "app/bidder/time_window.py"],
+            t1=["python3 scripts/grace_lint.py app/bidder"],
+        )
+
+        result = compiler.compile_plan(_plan(pkt), env, target_repo_root=tmp_path)
+
+        assert result.ok
+
     def test_rejects_symbol_delete_when_tests_outside_scope(self):
         compiler = PlanCompiler()
         env = _env()
@@ -197,7 +360,7 @@ class TestScopeAcceptance:
             title="Move method from ServiceA to ServiceB",
             scope=["apps/api/app/services/service_a.py",
                    "apps/api/app/services/service_b.py"],
-            t1=["cd apps/api && python -m pytest tests/test_service_a.py -q"],
+            t1=["cd apps/api && python3 -m pytest tests/test_service_a.py -q"],
             instructions=["remove _build_llm_input from NatalReportService",
                          "delete the old method entirely"],
             acceptance=["All existing tests pass"],
@@ -213,7 +376,7 @@ class TestScopeAcceptance:
         pkt = _pkt(
             title="Add new method to ServiceB",
             scope=["apps/api/app/services/service_b.py"],
-            t1=["cd apps/api && python -m pytest tests/test_service_b.py -q"],
+            t1=["cd apps/api && python3 -m pytest tests/test_service_b.py -q"],
             instructions=["add new helper method to ServiceB"],
         )
         result = compiler.compile_plan(_plan(pkt), env)
@@ -241,7 +404,7 @@ class TestScopeAcceptance:
             title="Move method from ServiceA to ServiceB",
             scope=["apps/api/app/services/service_a.py",
                    "apps/api/app/services/service_b.py"],
-            t1=["cd apps/api && python -m pytest tests/test_service_a.py -q"],
+            t1=["cd apps/api && python3 -m pytest tests/test_service_a.py -q"],
             instructions=["remove _build_llm_input from NatalReportService",
                          "delete the old method entirely"],
             acceptance=["All existing tests pass"],
@@ -258,7 +421,7 @@ class TestScopeAcceptance:
             title="Move method with compatibility shim",
             scope=["apps/api/app/services/service_a.py",
                    "apps/api/app/services/service_b.py"],
-            t1=["cd apps/api && python -m pytest tests/test_service_a.py -q"],
+            t1=["cd apps/api && python3 -m pytest tests/test_service_a.py -q"],
             instructions=["move method to ServiceB",
                          "keep old method as compatibility shim in ServiceA",
                          "add deprecated stub wrapper"],
@@ -276,7 +439,7 @@ class TestScopeAcceptance:
             title="Move method with test scope",
             scope=["apps/api/app/services/service_a.py",
                    "tests/test_service_a.py"],
-            t1=["cd apps/api && python -m pytest tests/test_service_a.py -q"],
+            t1=["cd apps/api && python3 -m pytest tests/test_service_a.py -q"],
             instructions=["remove _build_llm_input from ServiceA"],
             acceptance=["All existing tests pass"],
             role="coder",
@@ -316,7 +479,23 @@ class TestEvidence:
                        "artifact_patterns": ["agent.patch"]}],
         )
         result = compiler.compile_plan(_plan(pkt), env)
+        assert not result.ok
+        assert any(e.code == "E_EVIDENCE_DIFF_HAS_PATTERN" for e in result.errors)
         assert any("agent.patch" in str(w.message) for w in result.warnings)
+
+    def test_accepts_controller_diff_evidence_without_pattern(self):
+        compiler = PlanCompiler()
+        env = _env()
+        pkt = _pkt(
+            title="Modify file",
+            scope=["path/to/file.py"],
+            evidence=[{"id": "EV1", "kind": "diff", "required": True,
+                       "artifact_patterns": []}],
+        )
+
+        result = compiler.compile_plan(_plan(pkt), env)
+
+        assert result.ok
 
     def test_accepts_file_evidence_for_creation(self):
         compiler = PlanCompiler()
@@ -329,6 +508,139 @@ class TestEvidence:
         )
         result = compiler.compile_plan(_plan(pkt), env)
         assert result.ok
+
+    def test_rejects_descriptive_artifact_pattern(self):
+        compiler = PlanCompiler()
+        env = _env()
+        pkt = _pkt(
+            title="Run tests",
+            t1=["python3 -m pytest tests/unit/test_example.py -q"],
+            evidence=[{
+                "id": "EV-TEST",
+                "kind": "test",
+                "producer": "pytest",
+                "artifact_patterns": ["pytest stdout for tests/unit/test_example.py"],
+            }],
+        )
+
+        result = compiler.compile_plan(_plan(pkt), env)
+
+        assert any(e.code == "E_EVIDENCE_DESCRIPTIVE_PATTERN" for e in result.errors)
+
+    def test_rejects_command_output_artifact_label(self):
+        compiler = PlanCompiler()
+        env = _env()
+        pkt = _pkt(
+            title="Run npm tests",
+            t1=["npm test"],
+            evidence=[{
+                "id": "EV-TEST",
+                "kind": "test",
+                "producer": "cli",
+                "artifact_patterns": ["npm test output"],
+            }],
+        )
+
+        result = compiler.compile_plan(_plan(pkt), env)
+
+        assert any(e.code == "E_EVIDENCE_DESCRIPTIVE_PATTERN" for e in result.errors)
+
+    def test_rejects_run_command_artifact_label(self):
+        compiler = PlanCompiler()
+        env = _env()
+        pkt = _pkt(
+            title="Run npm tests",
+            t1=["npm test"],
+            evidence=[{
+                "id": "EV-TEST",
+                "kind": "test",
+                "producer": "cli",
+                "artifact_patterns": ["run: npm test"],
+            }],
+        )
+
+        result = compiler.compile_plan(_plan(pkt), env)
+
+        assert any(e.code == "E_EVIDENCE_DESCRIPTIVE_PATTERN" for e in result.errors)
+
+    def test_rejects_bare_verification_command_as_artifact_pattern(self):
+        compiler = PlanCompiler()
+        env = _env()
+        pkt = _pkt(
+            title="Run npm tests",
+            t1=["npm run check"],
+            evidence=[{
+                "id": "EV-TEST",
+                "kind": "test",
+                "producer": "cli",
+                "artifact_patterns": ["npm run check"],
+            }],
+        )
+
+        result = compiler.compile_plan(_plan(pkt), env)
+
+        assert any(e.code == "E_EVIDENCE_DESCRIPTIVE_PATTERN" for e in result.errors)
+
+    def test_rejects_ephemeral_root_command_output_artifact(self):
+        compiler = PlanCompiler()
+        env = _env()
+        pkt = _pkt(
+            title="Run npm tests",
+            t1=["npm test"],
+            evidence=[{
+                "id": "EV-TEST",
+                "kind": "test",
+                "producer": "cli",
+                "artifact_patterns": [".grace-t1-npm-test.stdout"],
+            }],
+        )
+
+        result = compiler.compile_plan(_plan(pkt), env)
+
+        assert any(
+            e.code == "E_EVIDENCE_EPHEMERAL_ROOT_ARTIFACT"
+            for e in result.errors
+        )
+
+    def test_rejects_contract_sentence_as_artifact_pattern(self):
+        compiler = PlanCompiler()
+        env = _env()
+        pkt = _pkt(
+            title="Document source links",
+            evidence=[{
+                "id": "EV-CONTRACT",
+                "kind": "contract",
+                "producer": "agent",
+                "artifact_patterns": [
+                    "GET /api/sources discoveryLinks include all required public links",
+                ],
+            }],
+        )
+
+        result = compiler.compile_plan(_plan(pkt), env)
+
+        assert any(e.code == "E_EVIDENCE_DESCRIPTIVE_PATTERN" for e in result.errors)
+
+    def test_rejects_unknown_visual_evidence_kind_and_descriptive_pattern(self):
+        compiler = PlanCompiler()
+        env = _env()
+        pkt = _pkt(
+            title="Verify dashboard",
+            evidence=[{
+                "id": "EV-VISUAL",
+                "kind": "visual",
+                "producer": "manual",
+                "coder_blocking": False,
+                "artifact_patterns": [
+                    "dashboard state description or screenshot reference for mobile UI",
+                ],
+            }],
+        )
+
+        result = compiler.compile_plan(_plan(pkt), env)
+
+        assert any(e.code == "E_EVIDENCE_KIND_UNKNOWN" for e in result.errors)
+        assert any(e.code == "E_EVIDENCE_DESCRIPTIVE_PATTERN" for e in result.errors)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -380,8 +692,7 @@ class TestEnvironmentProbe:
     def test_probe_returns_environment(self):
         env = probe_execution_environment()
         assert env.shell
-        assert env.project_root
-        assert env.api_python_path is not None
+        assert isinstance(env.python_candidates, list)
 
     def test_probe_detects_shell(self):
         env = probe_execution_environment()
@@ -411,7 +722,7 @@ def _split_plan(scope_files: list[str], t0_cmds: list[str] | None = None) -> dic
         scope=scope_files,
         t0=t0_cmds or [],
         evidence=[{"id": "EV1", "kind": "diff", "required": True,
-                    "artifact_patterns": ["llm/*.py"]}],
+                    "artifact_patterns": []}],
     )
     return _plan(pkt)
 
@@ -689,6 +1000,29 @@ class TestEvidenceContradiction:
         result = compiler.compile_plan(plan, env)
         assert result.ok
 
+    def test_remove_file_content_does_not_mean_delete_evidence_file(self):
+        """Removing stale links from an XML document must preserve exists evidence."""
+        plan = _plan(_pkt(
+            title="Repair documentation",
+            scope=["docs/development-plan.xml", "docs/verification-matrix.md"],
+            evidence=[{
+                "id": "plan-xml",
+                "kind": "contract",
+                "artifact_patterns": ["docs/development-plan.xml"],
+                "expectation": "exists",
+            }],
+            instructions=[
+                "Reconcile docs/development-plan.xml with W00-W07 history and remove stale log links from docs/verification-matrix.md",
+            ],
+        ))
+        result = PlanCompiler().compile_plan(plan, _env())
+
+        assert result.ok
+        assert not any(
+            error.code == "E_EVIDENCE_CONTRADICTS_INSTRUCTIONS"
+            for error in result.errors
+        )
+
     def test_consolidate_instruction_triggers_contradiction(self):
         """'consolidate' implies removing old file — contradiction with 'exists' evidence."""
         plan = _plan(_pkt(
@@ -747,6 +1081,7 @@ class TestEvidenceContradiction:
         assert ev_err.details is not None
         assert ev_err.details.get("suggested_fix") == "deleted"
         assert ev_err.details.get("file") == "src/module.py"
+        assert ev_err.details.get("remove_target_explicit") is True
         assert "delete" in ev_err.details.get("remove_keywords", [])
 
     def test_unknown_evidence_expectation_rejected_by_compiler(self):
