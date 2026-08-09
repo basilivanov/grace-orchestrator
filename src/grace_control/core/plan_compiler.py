@@ -18,7 +18,9 @@ from typing import Literal
 from pydantic import BaseModel
 
 from grace_control.core.contracts import SUPPORTED_EVIDENCE_KINDS
+from grace_control.core.dag_validator import validate_dag
 from grace_control.core.execution_environment import ExecutionEnvironment
+from grace_control.core.prompts import _normalize_conflict_keys
 from grace_control.core.structured_logger import GraceLogger
 
 _log = GraceLogger("plan_compiler")
@@ -435,6 +437,8 @@ class PlanCompiler:
         if not waves:
             return result  # Empty plan is valid (nothing to do)
 
+        self._validate_dependencies(result, plan)
+
         # Enforce a feature-declared per-packet Python-file limit. This keeps
         # the compiler generic while making an explicit business constraint
         # executable instead of trusting a contradictory plan assertion.
@@ -492,6 +496,20 @@ class PlanCompiler:
                 title = packet.get("title", f"wave-{wi}-pkt-{pi}")
                 scope = packet.get("scope", [])
                 role = packet.get("role", "coder")
+
+                try:
+                    packet["conflict_keys"] = _normalize_conflict_keys(
+                        packet.get("conflict_keys", [])
+                    )
+                except ValueError as exc:
+                    _add_error(
+                        result,
+                        "E_CONFLICT_KEYS_INVALID",
+                        f"waves[{wi}].packets[{pi}].conflict_keys",
+                        str(exc),
+                        title,
+                        "use a list of non-empty, unique strings",
+                    )
 
                 # ── W02: Fail-closed scope type validation ──────────────
                 # Scope MUST be a list. A string scope is truthy but iterates
@@ -725,6 +743,55 @@ class PlanCompiler:
         _log.info("compile_done", ok=result.ok, errors=len(result.errors),
                   warnings=len(result.warnings))
         return result
+
+    def _validate_dependencies(self, result: CompileResult, plan: dict) -> None:
+        """Validate packet-title references, cycles, and new-plan wave order."""
+        packets: list[dict] = []
+        has_explicit_conflict_keys = False
+        for wave_index, wave in enumerate(plan.get("waves", [])):
+            if not isinstance(wave, dict):
+                continue
+            for packet_index, packet in enumerate(wave.get("packets", []) or []):
+                if not isinstance(packet, dict):
+                    continue
+                title = packet.get("title", f"wave-{wave_index}-pkt-{packet_index}")
+                has_explicit_conflict_keys |= "conflict_keys" in packet
+                packets.append({
+                    "id": title,
+                    "title": title,
+                    "depends_on": packet.get("depends_on", []),
+                    "scope": packet.get("scope", []),
+                    "wave_index": wave_index,
+                })
+
+        if not packets:
+            return
+
+        legacy_contract = bool(plan.get("_legacy_packet_contract"))
+        validation = validate_dag(
+            packets,
+            strict_wave_order=has_explicit_conflict_keys and not legacy_contract,
+        )
+        for issue in validation.errors:
+            if issue.startswith("Missing dependency"):
+                code = "E_DEPENDENCY_MISSING"
+                field_path = "depends_on"
+            elif issue.startswith("Cycle detected"):
+                code = "E_DEPENDENCY_CYCLE"
+                field_path = "depends_on"
+            elif issue.startswith("Dependency wave order invalid"):
+                code = "E_DEPENDENCY_WAVE_ORDER"
+                field_path = "depends_on"
+            elif issue.startswith("Duplicate packet"):
+                code = "E_PACKET_TITLE_DUPLICATE"
+                field_path = "title"
+            elif issue.startswith("Scope conflict"):
+                code = "E_SCOPE_CONFLICT"
+                field_path = "scope"
+            else:
+                code = "E_DEPENDENCY_INVALID"
+                field_path = "depends_on"
+            _add_error(result, code, field_path, issue)
 
     def _validate_source_split(
         self,

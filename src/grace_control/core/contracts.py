@@ -38,10 +38,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Any, Literal
+
+from grace_control.core.prompts import _normalize_conflict_keys
 
 
 class AcceptanceProfile(str, Enum):
@@ -172,6 +174,7 @@ class ExecutionPacketContract:
     verification: dict[str, list[str]] = field(default_factory=dict)
     expected_evidence: list[EvidenceRequirement] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
+    conflict_keys: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -291,6 +294,12 @@ def validate_packet_contract(packet: ExecutionPacketContract) -> list[str]:
     overlap = set(packet.allowed_write_scope) & set(packet.frozen_scope)
     if overlap:
         errors.append(f"scope/frozen_scope overlap: {sorted(overlap)} — cannot be both writable and frozen")
+    try:
+        normalized_conflict_keys = _normalize_conflict_keys(packet.conflict_keys)
+        if normalized_conflict_keys != packet.conflict_keys:
+            errors.append("conflict_keys must contain trimmed, unique strings")
+    except ValueError as exc:
+        errors.append(str(exc))
     # NORMAL/STRICT no longer requires verification.t1 — auto defaults
     # from gate_resolver fill in when architect does not provide them.
     # validate_packet_contract is called before resolution, so skip
@@ -390,6 +399,10 @@ def validate_scope_paths(scope_list: list[str], frozen_list: list[str] | None = 
 
 def build_packet_contract(packet_data: dict) -> ExecutionPacketContract:
     spec = packet_data.get("spec_json") or {}
+    try:
+        conflict_keys = _normalize_conflict_keys(spec.get("conflict_keys", []))
+    except ValueError as exc:
+        raise ScopeContractError([str(exc)]) from exc
     scope_list = spec.get("scope", [])
     if isinstance(scope_list, str):
         scope_list = [scope_list]
@@ -534,6 +547,7 @@ def build_packet_contract(packet_data: dict) -> ExecutionPacketContract:
             "t3_visual": verification_raw.get("t3_visual", []) if isinstance(verification_raw, dict) else [],
         },
         expected_evidence=expected_evidence,
+        conflict_keys=conflict_keys,
         metadata={
             "origin": spec.get("origin", ""),
             "session_id": spec.get("session_id", ""),

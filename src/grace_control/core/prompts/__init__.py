@@ -20,6 +20,7 @@ CANONICAL_PACKET_FIELDS: list[str] = [
     "frozen_scope",
     "acceptance_profile",
     "depends_on",
+    "conflict_keys",
     "description",
     "coder_instructions",
     "acceptance_criteria",
@@ -36,6 +37,7 @@ REQUIRED_PACKET_FIELDS: list[str] = [
     "frozen_scope",
     "acceptance_profile",
     "depends_on",
+    "conflict_keys",
     "description",
     "coder_instructions",
     "acceptance_criteria",
@@ -54,6 +56,28 @@ LEGACY_FIELD_MAP: dict[str, str] = {
 # ── Canonical architect prompt file ─────────────────────────────────────
 
 _ARCHITECT_PROMPT_PATH = Path(__file__).resolve().parent / "architect_prompt.md"
+
+
+def _normalize_conflict_keys(value: object) -> list[str]:
+    """Normalize and validate semantic parallel-conflict keys."""
+    if not isinstance(value, list):
+        raise ValueError("conflict_keys must be a list of strings")
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for index, raw_key in enumerate(value):
+        if not isinstance(raw_key, str):
+            raise ValueError(f"conflict_keys[{index}] must be a string")
+        key = raw_key.strip()
+        if not key:
+            raise ValueError(f"conflict_keys[{index}] must not be empty")
+        if key in seen:
+            raise ValueError(
+                f"conflict_keys contains duplicate key after normalization: {key!r}"
+            )
+        seen.add(key)
+        normalized.append(key)
+    return normalized
 
 
 def load_architect_prompt() -> str:
@@ -103,4 +127,7 @@ def canonicalize_packet_fields(packet: dict) -> tuple[dict, list[str]]:
                     f"'{canonical_field}' is already set — remove '{legacy_field}'"
                 )
 
+    result["conflict_keys"] = _normalize_conflict_keys(
+        result.get("conflict_keys", [])
+    )
     return result, warnings

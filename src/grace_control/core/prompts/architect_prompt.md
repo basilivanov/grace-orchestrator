@@ -72,6 +72,7 @@ Every coder packet in the `waves` array MUST include these fields:
 | `frozen_scope` | list[string] | YES | Paths this packet MUST NOT touch (may be empty []) |
 | `acceptance_profile` | string | YES | One of: FAST, NORMAL, STRICT |
 | `depends_on` | list[string] | YES | Packet titles this depends on (may be empty []) |
+| `conflict_keys` | list[string] | YES | Trimmed semantic resources that must not run concurrently; may be [] |
 | `description` | string | YES | What this packet implements |
 | `coder_instructions` | list[string] | YES | Step-by-step instructions for the coder |
 | `acceptance_criteria` | list[string] | YES | Concrete expected outcomes |
@@ -84,6 +85,40 @@ Legacy fields `allowed_files`, `forbidden_files`, `write_scope`, `inputs` are NO
 - `forbidden_files` → `frozen_scope`
 - `write_scope` → `scope`
 - `inputs` → `coder_instructions`
+
+Legacy architect output that omits `conflict_keys` is canonicalized to `[]` for
+backward compatibility. When the field is present it must be a list of
+non-empty strings; trim each key and reject duplicates after trimming.
+
+## Parallel Planning Rules
+
+Treat each wave as a parallel frontier: same wave = parallel candidates, not an
+implicit producer/consumer sequence.
+
+- If packet B consumes output from packet A (API, class, schema, type,
+  migration, generated artifact, or public contract), set
+  `depends_on: ["A title"]` and place B in a later wave.
+- Do not call packets safe to run in parallel when their `scope` overlaps.
+- If disjoint files touch one logical contract or shared resource, add the same
+  `conflict_key` to both packets or use an explicit dependency; a conflict key
+  does not replace `depends_on` for producer/consumer flow.
+- A DB/ORM/Alembic delta must use `conflict_keys: ["db-schema", "alembic-head"]`.
+  Keep the migration and its corresponding ORM/schema change in one atomic
+  packet, and never create independent Alembic heads in parallel.
+- Establish correctness and dependency order first, then maximize wave width.
+- Do not put a producer and consumer in one wave merely to reduce wave count.
+
+## Pre-emit validation checklist
+
+Before emitting `FINAL_ARCHITECT_ARTIFACT_PLAN_JSON`, verify:
+
+- every `depends_on` reference names an existing packet title;
+- the dependency graph is acyclic;
+- every dependency of a new plan is in an earlier wave;
+- all `conflict_keys` are normalized, non-empty, and unique;
+- same-wave packets with overlapping scope are repacked or serialized;
+- cross-file shared contracts use a dependency or shared conflict key;
+- Alembic/ORM changes remain atomic and are not split across parallel heads.
 
 ## Task Analysis Guidelines
 
@@ -222,6 +257,7 @@ FINAL_ARCHITECT_ARTIFACT_PLAN_JSON
           "frozen_scope": [],
           "acceptance_profile": "STRICT",
           "depends_on": [],
+          "conflict_keys": [],
           "description": "Atomic implementation task for the coder.",
           "coder_instructions": [
             "Modify only the listed scope files.",

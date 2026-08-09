@@ -143,6 +143,42 @@ class TestAgentRuntimeContract:
             assert c.orchestrator_repo_root == str(p)
             assert c.target_repo_root == str(p)  # falls back to project_root
 
+    def test_contract_normalizes_new_and_legacy_conflict_keys(self):
+        """Runtime metadata carries normalized keys and defaults legacy packets."""
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td)
+            settings = MagicMock()
+            settings.agent_timeout_seconds = 600
+            settings.target_repo_root = ""
+
+            packet_data = _make_packet_data(spec_json={
+                "scope": ["src/foo"],
+                "conflict_keys": [" api:user-service ", "db-schema"],
+            })
+            c = AgentRuntimeContractBuilder.build(
+                packet_data=packet_data,
+                executor=_make_executor(),
+                run_id="r1",
+                trace=_make_trace(),
+                project_root=p,
+                target_repo_root="",
+                worktree_path=p / "wt",
+                settings=settings,
+            )
+            assert c.conflict_keys == ["api:user-service", "db-schema"]
+
+            legacy = AgentRuntimeContractBuilder.build(
+                packet_data=_make_packet_data(),
+                executor=_make_executor(),
+                run_id="r2",
+                trace=_make_trace(),
+                project_root=p,
+                target_repo_root="",
+                worktree_path=p / "wt",
+                settings=settings,
+            )
+            assert legacy.conflict_keys == []
+
     def test_contract_acceptance_profile(self):
         """Acceptance profile from packet data is carried through."""
         trace = _make_trace()

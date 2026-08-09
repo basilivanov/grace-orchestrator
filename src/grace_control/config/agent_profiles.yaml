@@ -293,6 +293,7 @@ agents:
       - frozen_scope (list of paths that MUST NOT be touched; may be empty [])
       - acceptance_profile: FAST | NORMAL | STRICT
       - depends_on (list of packet titles; may be empty [])
+      - conflict_keys (list of trimmed, unique semantic resource keys; may be empty [])
       - description
       - coder_instructions (list of strings)
       - acceptance_criteria (list of strings)
@@ -338,6 +339,7 @@ agents:
       - frozen_scope (list of paths that MUST NOT be touched; may be empty [])
       - acceptance_profile: FAST | NORMAL | STRICT
       - depends_on (list of packet titles; may be empty [])
+      - conflict_keys (list of trimmed, unique semantic resource keys; may be empty [])
       - description
       - coder_instructions (list of strings)
       - acceptance_criteria (list of strings)

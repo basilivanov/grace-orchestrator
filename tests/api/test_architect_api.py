@@ -65,6 +65,31 @@ async def test_plan_scope_conflict_422_does_not_create_orphan_feature(api):
 
 
 @pytest.mark.asyncio
+async def test_plan_missing_dependency_422(api):
+    r = await api.post("/api/architect/plan", json={
+        "feature_spec": {"title": "MissingDependency", "waves": [{"title": "W1", "packets": [
+            {"title": "Consumer", "scope": ["consumer.py"], "depends_on": ["Missing producer"]},
+        ]}]},
+    })
+
+    assert r.status_code == 422
+    assert any("Missing dependency" in error for error in r.json()["detail"]["errors"])
+
+
+@pytest.mark.asyncio
+async def test_new_plan_same_wave_dependency_422(api):
+    r = await api.post("/api/architect/plan", json={
+        "feature_spec": {"title": "SameWaveDependency", "waves": [{"title": "W1", "packets": [
+            {"title": "Producer", "scope": ["producer.py"], "depends_on": [], "conflict_keys": []},
+            {"title": "Consumer", "scope": ["consumer.py"], "depends_on": ["Producer"], "conflict_keys": []},
+        ]}]},
+    })
+
+    assert r.status_code == 422
+    assert any("Dependency wave order invalid" in error for error in r.json()["detail"]["errors"])
+
+
+@pytest.mark.asyncio
 async def test_plan_allows_ordered_packets_to_revisit_scope_by_title(api):
     r = await api.post("/api/architect/plan", json={
         "feature_spec": {"title": "OrderedScopeReuse", "waves": [
@@ -184,3 +209,21 @@ async def test_plan_packet_level_verification_overrides_root(api):
     assert spec["verification"] == ["packet command"]
 
 
+@pytest.mark.asyncio
+async def test_plan_materializes_normalized_conflict_keys(api):
+    r = await api.post("/api/architect/plan", json={
+        "feature_spec": {"title": "ConflictMaterialization", "waves": [{"title": "W1", "packets": [
+            {
+                "title": "Semantic packet",
+                "scope": ["contract.py"],
+                "conflict_keys": [" api:user-service ", "db-schema"],
+            },
+        ]}]},
+    })
+    assert r.status_code == 200
+
+    packet_id = r.json()["data"]["packets"][0]
+    packet = await api.get(f"/api/packets/{packet_id}")
+    assert packet.json()["data"]["spec_json"]["conflict_keys"] == [
+        "api:user-service", "db-schema"
+    ]

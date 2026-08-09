@@ -68,7 +68,7 @@ ROLE_CONTRACTS: dict[str, str] = {
 - Follow the canonical architect output envelope from the task prompt.
 - The top-level object must contain a waves array. Each coder packet inside a
   wave must use the exact packet fields and types from the prompt: title, role,
-  scope, frozen_scope, acceptance_profile, depends_on, description,
+  scope, frozen_scope, acceptance_profile, depends_on, conflict_keys, description,
   coder_instructions, acceptance_criteria, verification, and expected_evidence.
 - Do not flatten a wave plan into a single top-level coder packet.""",
     "reviewer": """You are the GRACE Reviewer.

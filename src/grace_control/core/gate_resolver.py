@@ -149,6 +149,7 @@ def enrich_packet(pkt_spec: dict, dep_ids: list[str] | None = None) -> dict:
         enriched["depends_on"] = dep_ids
     # W02: No enriched.setdefault("scope", []) — missing scope is an error
     enriched.setdefault("depends_on", [])
+    enriched.setdefault("conflict_keys", [])
     enriched.setdefault("acceptance_profile", "NORMAL")
     return enriched
 

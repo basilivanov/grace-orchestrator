@@ -122,6 +122,7 @@ def create_rework_packet(
         "frozen_scope": frozen_scope,
         "priority": "immediate",
         "acceptance_profile": acceptance_profile,
+        "conflict_keys": original_spec.get("conflict_keys", []),
         "rework_source": verdict_source,
         "rework_summary": summary,
         "coder_ladder_base_attempt": coder_ladder_base_attempt,

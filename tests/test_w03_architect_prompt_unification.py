@@ -217,6 +217,7 @@ def test_architect_output_schema_required_fields():
     assert "frozen_scope" in prompt
     assert "acceptance_profile" in prompt
     assert "depends_on" in prompt
+    assert "conflict_keys" in prompt
     assert "description" in prompt
     assert "coder_instructions" in prompt
     assert "acceptance_criteria" in prompt
@@ -237,6 +238,61 @@ def test_architect_output_schema_required_fields():
     for legacy_field in LEGACY_FIELD_MAP:
         assert legacy_field not in CANONICAL_PACKET_FIELDS, \
             f"Legacy field '{legacy_field}' should not be in CANONICAL_PACKET_FIELDS"
+
+
+def test_architect_prompt_defines_parallel_safety_rules():
+    prompt = load_architect_prompt()
+
+    for rule in (
+        "same wave = parallel candidates",
+        "producer and consumer",
+        "overlapping",
+        "db-schema",
+        "alembic-head",
+        "pre-emit",
+    ):
+        assert rule.lower() in prompt.lower(), f"Missing parallel-safety rule: {rule}"
+
+
+def test_conflict_keys_are_materialized_and_legacy_packets_default_to_empty():
+    from grace_control.services.feature_planning_service import normalize_architect_plan
+
+    plan = normalize_architect_plan({
+        "waves": [{"title": "Wave 1", "packets": [{
+            "title": "Contract packet",
+            "role": "coder",
+            "scope": ["src/contract.py"],
+            "conflict_keys": [" api:user-service ", "db-schema"],
+        }]}],
+    })
+    assert plan["waves"][0]["packets"][0]["conflict_keys"] == [
+        "api:user-service", "db-schema"
+    ]
+
+    legacy = normalize_architect_plan({
+        "waves": [{"title": "Legacy wave", "packets": [{
+            "title": "Legacy packet",
+            "role": "coder",
+            "scope": ["src/legacy.py"],
+        }]}],
+    })
+    assert legacy["waves"][0]["packets"][0]["conflict_keys"] == []
+    assert legacy["_legacy_packet_contract"] is True
+
+
+@pytest.mark.parametrize("conflict_keys", ["api:user-service", [""], ["api", " api "]])
+def test_invalid_conflict_keys_are_rejected(conflict_keys):
+    from grace_control.services.feature_planning_service import normalize_architect_plan
+
+    with pytest.raises(ValueError, match="conflict_keys"):
+        normalize_architect_plan({
+            "waves": [{"title": "Wave 1", "packets": [{
+                "title": "Invalid packet",
+                "role": "coder",
+                "scope": ["src/invalid.py"],
+                "conflict_keys": conflict_keys,
+            }]}],
+        })
 
 
 # ─── Test 6: Integration — allowed_files becomes scope before compiler ────

@@ -20,7 +20,7 @@ from grace_control.config.agent_profiles import get_agent_profile
 # Section 6/7 test: file tree + previews
 # ═══════════════════════════════════════════════════════════════════════════
 
-def test_execution_packet_contains_file_tree_and_previews():
+def test_execution_packet_contains_file_tree_and_previews(db):
     """W04 §1: EXECUTION_PACKET.md must include file tree (sizes) and
     selected file previews (first lines)."""
     materializer = PacketMaterializer()
@@ -108,6 +108,33 @@ def test_execution_packet_contains_source_feature_specification_once(db):
     assert "### Source TZ / Specification" in content
     assert content.count("EXACT_TZ_SENTINEL with required_field_name") == 1
     assert "description: (rendered verbatim in section 2)" in content
+
+
+def test_execution_packet_materializes_conflict_keys_and_legacy_default(db):
+    materializer = PacketMaterializer()
+    with tempfile.TemporaryDirectory() as tmp:
+        path = materializer.materialize({
+            "id": "pkt_conflict_keys",
+            "title": "Semantic contract",
+            "spec_json": {
+                "scope": ["src/contract.py"],
+                "conflict_keys": [" api:user-service ", "db-schema"],
+            },
+        }, Path(tmp))
+        content = path.read_text()
+
+    assert "api:user-service" in content
+    assert "db-schema" in content
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = materializer.materialize({
+            "id": "pkt_legacy_conflict_keys",
+            "title": "Legacy packet",
+            "spec_json": {"scope": ["src/legacy.py"]},
+        }, Path(tmp))
+        content = path.read_text()
+
+    assert "conflict_keys: []" in content
 
 
 # START_FUNCTION_CONTRACT

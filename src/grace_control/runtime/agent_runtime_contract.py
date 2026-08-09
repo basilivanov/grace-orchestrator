@@ -8,6 +8,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from grace_control.core.prompts import _normalize_conflict_keys
 from grace_control.core.runtime_artifacts import RuntimeArtifactStore
 from grace_control.core.runtime_trace import RuntimeTraceContext
 
@@ -67,6 +68,7 @@ class AgentRuntimeContract(BaseModel):
     model: str | None = None
     packet_scope: list[str] = []
     frozen_scope: list[str] = []
+    conflict_keys: list[str] = []
     acceptance_profile: str | None = None
     runtime_artifacts_dir: str
     events_jsonl_path: str | None = None
@@ -90,6 +92,9 @@ class AgentRuntimeContractBuilder:
         spec = packet_data.get("spec_json") or {}
         if isinstance(spec, str):
             spec = {}
+        conflict_keys = _normalize_conflict_keys(
+            spec.get("conflict_keys", []) if isinstance(spec, dict) else []
+        )
 
         try:
             linux_user = pwd.getpwuid(os.getuid()).pw_name
@@ -126,6 +131,7 @@ class AgentRuntimeContractBuilder:
             model=executor.get("model", ""),
             packet_scope=spec.get("scope", []) if isinstance(spec, dict) else [],
             frozen_scope=executor.get("frozen_scope", []),
+            conflict_keys=conflict_keys,
             acceptance_profile=packet_data.get("acceptance_profile", ""),
             runtime_artifacts_dir=artifacts_dir,
             events_jsonl_path=None,

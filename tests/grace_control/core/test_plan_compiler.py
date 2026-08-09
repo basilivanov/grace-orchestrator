@@ -1123,3 +1123,30 @@ class TestEvidenceContradiction:
         # Must see UNKNOWN, not CONTRADICTS
         assert any(e.code == "E_EVIDENCE_EXPECTATION_UNKNOWN" for e in result.errors)
         assert not any(e.code == "E_EVIDENCE_CONTRADICTS_INSTRUCTIONS" for e in result.errors)
+
+
+def test_plan_compiler_rejects_missing_dependency_title():
+    plan = _plan({
+        **_pkt(title="Consumer"),
+        "depends_on": ["Missing producer"],
+        "conflict_keys": [],
+    })
+
+    result = PlanCompiler().compile_plan(plan, _env())
+
+    assert not result.ok
+    assert any(error.code == "E_DEPENDENCY_MISSING" for error in result.errors)
+
+
+def test_plan_compiler_rejects_new_same_wave_dependency():
+    plan = {
+        "waves": [{"title": "Wave 1", "packets": [
+            {**_pkt(title="Producer"), "depends_on": [], "conflict_keys": []},
+            {**_pkt(title="Consumer"), "depends_on": ["Producer"], "conflict_keys": []},
+        ]}],
+    }
+
+    result = PlanCompiler().compile_plan(plan, _env())
+
+    assert not result.ok
+    assert any(error.code == "E_DEPENDENCY_WAVE_ORDER" for error in result.errors)

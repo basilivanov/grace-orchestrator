@@ -68,3 +68,44 @@ def test_validate_dag_allows_transitively_ordered_scope_overlap():
 
     assert result.valid
     assert result.conflicts == []
+
+
+def test_validate_dag_rejects_missing_dependency_reference():
+    result = validate_dag([{"id": "P1", "depends_on": ["missing"], "scope": []}])
+
+    assert not result.valid
+    assert any("Missing dependency" in error for error in result.errors)
+
+
+def test_validate_dag_resolves_dependency_by_packet_title():
+    result = validate_dag([
+        {"id": "packet-a", "title": "Producer", "depends_on": [], "scope": []},
+        {"id": "packet-b", "title": "Consumer", "depends_on": ["Producer"], "scope": []},
+    ])
+
+    assert result.valid
+    assert result.ordered_packets == ["packet-a", "packet-b"]
+
+
+def test_validate_dag_rejects_same_wave_dependency_for_new_plan():
+    result = validate_dag(
+        [
+            {"id": "P1", "depends_on": [], "scope": [], "wave_index": 0},
+            {"id": "P2", "depends_on": ["P1"], "scope": [], "wave_index": 0},
+        ],
+        strict_wave_order=True,
+    )
+
+    assert not result.valid
+    assert any("Dependency wave order invalid" in error for error in result.errors)
+
+
+def test_validate_dag_keeps_legacy_same_wave_dependency_compatible():
+    result = validate_dag(
+        [
+            {"id": "P1", "depends_on": [], "scope": [], "wave_index": 0},
+            {"id": "P2", "depends_on": ["P1"], "scope": [], "wave_index": 0},
+        ]
+    )
+
+    assert result.valid

@@ -106,6 +106,36 @@ class TestPacketContract:
             "verification-output/W00*.log",
         ]
 
+    def test_conflict_keys_are_normalized_and_legacy_defaults_to_empty(self):
+        packet = build_packet_contract({
+            "id": "p1",
+            "title": "Semantic contract",
+            "spec_json": {
+                "scope": ["src/contract.py"],
+                "conflict_keys": [" api:user-service ", "db-schema"],
+            },
+        })
+        assert packet.conflict_keys == ["api:user-service", "db-schema"]
+
+        legacy = build_packet_contract({
+            "id": "p2",
+            "title": "Legacy packet",
+            "spec_json": {"scope": ["src/legacy.py"]},
+        })
+        assert legacy.conflict_keys == []
+
+    @pytest.mark.parametrize("conflict_keys", ["db-schema", [""], ["db-schema", " db-schema "]])
+    def test_invalid_conflict_keys_are_rejected(self, conflict_keys):
+        with pytest.raises(ValueError, match="conflict_keys"):
+            build_packet_contract({
+                "id": "p1",
+                "title": "Invalid contract",
+                "spec_json": {
+                    "scope": ["src/contract.py"],
+                    "conflict_keys": conflict_keys,
+                },
+            })
+
     def test_valid_normal(self):
         p = ExecutionPacketContract(packet_id="p1", title="t",
             allowed_write_scope=["src/"], frozen_scope=["legacy/"],

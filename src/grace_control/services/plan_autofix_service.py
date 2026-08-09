@@ -472,6 +472,7 @@ class SafePlanAutofixer:
             "scope": new_refs,
             "frozen_scope": sorted(existing_frozen) if existing_frozen else [],
             "depends_on": depends_on,
+            "conflict_keys": [],
             "acceptance_profile": "NORMAL",
             "coder_instructions": [
                 "Update active consumers to import from the new package structure "

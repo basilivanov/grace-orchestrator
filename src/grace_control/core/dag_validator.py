@@ -43,22 +43,89 @@ class ValidationResult:
     errors: list[str] = field(default_factory=list)
 
 #START_BLOCK_VALIDATOR
-def validate_dag(packets: list[dict]) -> ValidationResult:
-    """Validate packet DAG: no cycles, resolve order, detect scope conflicts."""
+def validate_dag(
+    packets: list[dict],
+    *,
+    strict_wave_order: bool | None = None,
+) -> ValidationResult:
+    """Validate packet DAG, dependency references, and optional wave order."""
     errors: list[str] = []
+    if strict_wave_order is None:
+        strict_wave_order = any(
+            isinstance(packet, dict) and "conflict_keys" in packet
+            for packet in packets
+        )
 
     graph: dict[str, list[str]] = {}
     scope_map: dict[str, list[str]] = {}
+    wave_map: dict[str, int] = {}
+    aliases: dict[str, str] = {}
+    raw_dependencies: dict[str, object] = {}
+    seen_ids: set[str] = set()
     for p in packets:
-        pid = p.get("id", p.get("packet_id", ""))
-        deps = p.get("depends_on", [])
-        if isinstance(deps, str):
-            deps = [d.strip() for d in deps.split(",") if d.strip()]
-        graph[pid] = deps
+        pid = p.get("id") or p.get("packet_id") or p.get("title", "")
+        if not pid:
+            errors.append("Packet is missing an id or title")
+            continue
+        if pid in seen_ids:
+            errors.append(f"Duplicate packet title/id: {pid}")
+            continue
+        if pid in aliases and aliases[pid] != pid:
+            errors.append(f"Duplicate packet title/id: {pid}")
+            continue
+        title = p.get("title")
+        if title and title in aliases and aliases[title] != pid:
+            errors.append(f"Duplicate packet title/id: {title}")
+            continue
+        seen_ids.add(pid)
+        aliases[pid] = pid
+        if title:
+            aliases[title] = pid
+        raw_dependencies[pid] = p.get("depends_on", [])
         scope = p.get("scope", p.get("spec_json", {}).get("scope", []))
         if isinstance(scope, str):
             scope = [scope]
         scope_map[pid] = scope
+        wave_index = p.get("wave_index")
+        if isinstance(wave_index, int):
+            wave_map[pid] = wave_index
+
+    for pid, raw_deps in raw_dependencies.items():
+        deps = raw_deps
+        if isinstance(deps, str):
+            deps = [d.strip() for d in deps.split(",") if d.strip()]
+        elif not isinstance(deps, list):
+            errors.append(f"Invalid depends_on for {pid}: expected list of packet titles")
+            deps = []
+        else:
+            invalid_dependencies = [d for d in deps if not isinstance(d, str)]
+            if invalid_dependencies:
+                errors.append(
+                    f"Invalid depends_on for {pid}: all references must be strings"
+                )
+            deps = [d.strip() for d in deps if isinstance(d, str)]
+        graph[pid] = [aliases.get(dependency, dependency) for dependency in deps]
+
+    for packet_id, dependencies in graph.items():
+        for dependency in dependencies:
+            if not isinstance(dependency, str) or dependency not in graph:
+                errors.append(
+                    f"Missing dependency: packet {packet_id} references {dependency!r}"
+                )
+
+    if strict_wave_order:
+        for packet_id, dependencies in graph.items():
+            packet_wave = wave_map.get(packet_id)
+            if packet_wave is None:
+                continue
+            for dependency in dependencies:
+                dependency_wave = wave_map.get(dependency)
+                if dependency_wave is not None and dependency_wave >= packet_wave:
+                    errors.append(
+                        "Dependency wave order invalid: "
+                        f"{packet_id} (wave {packet_wave}) depends on "
+                        f"{dependency} (wave {dependency_wave}); dependency must be earlier"
+                    )
 
     cycles = _detect_cycles(graph)
 
@@ -85,7 +152,7 @@ def validate_dag(packets: list[dict]) -> ValidationResult:
 
 def _detect_cycles(graph: dict[str, list[str]]) -> list[list[str]]:
     WHITE, GRAY, BLACK = 0, 1, 2
-    color: dict[str, int] = {n: WHITE for n in graph}
+    color: dict[str, int] = dict.fromkeys(graph, WHITE)
     cycles: list[list[str]] = []
 
     def dfs(node: str, path: list[str]):

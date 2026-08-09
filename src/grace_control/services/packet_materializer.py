@@ -24,6 +24,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import yaml
+
+from grace_control.core.prompts import _normalize_conflict_keys
 from grace_control.core.stage_instrumentation import stage
 
 
@@ -117,6 +119,12 @@ class PacketMaterializer:
         # The full source specification is rendered in section 2.  Keep the
         # diagnostic YAML useful without duplicating a potentially large TZ.
         spec_for_dump = dict(spec_json)
+        try:
+            spec_for_dump["conflict_keys"] = _normalize_conflict_keys(
+                spec_json.get("conflict_keys", [])
+            )
+        except ValueError as exc:
+            raise ValueError(f"Packet {packet_id} has invalid conflict_keys: {exc}") from exc
         if feature_context:
             spec_for_dump["feature_context"] = {
                 "feature_id": feature_context.get("feature_id", ""),

@@ -172,10 +172,12 @@ def normalize_architect_plan(plan: dict) -> dict:
     1. Unwraps nested ``plan.waves`` if the LLM wrapped its output.
     2. Wraps bare ``packets`` into a single wave.
     3. Ensures every wave has a ``packets`` list.
-    4. Sets ``acceptance_profile`` / ``depends_on`` defaults.
+    4. Sets ``acceptance_profile`` / ``depends_on`` / ``conflict_keys`` defaults.
     5. **W03**: Canonicalizes legacy packet fields (``allowed_files`` →
        ``scope``, etc.) with visible warnings.
-    6. **W03**: Persists canonicalization warnings under
+    6. Marks all-field-missing packets as legacy for backward-compatible
+       same-wave dependency handling.
+    7. **W03**: Persists canonicalization warnings under
        ``plan["_architect_schema_warnings"]``.
 
     Returns the same plan dict (mutated in-place for efficiency).
@@ -196,16 +198,21 @@ def normalize_architect_plan(plan: dict) -> dict:
 
     # W03: Collect schema canonicalization warnings across all packets
     _schema_warnings: list[str] = []
+    has_packets = False
+    has_explicit_conflict_keys = False
 
     for wi, w in enumerate(plan.get("waves", [])):
         if "packets" not in w:
             w["packets"] = []
         for pi, pkt in enumerate(w["packets"]):
+            has_packets = True
+            has_explicit_conflict_keys |= "conflict_keys" in pkt
             # W02: Do NOT setdefault("scope", []) — empty
             # scope must be caught by the plan compiler as
             # E_CODER_EMPTY_SCOPE, not hidden by a default.
             pkt.setdefault("acceptance_profile", "NORMAL")
             pkt.setdefault("depends_on", [])
+            pkt.setdefault("conflict_keys", [])
 
             # W03: Canonicalize legacy packet fields with visible warnings.
             # This runs BEFORE the plan compiler so that legacy fields
@@ -218,6 +225,11 @@ def normalize_architect_plan(plan: dict) -> dict:
                 _schema_warnings.append(
                     f"waves[{wi}].packets[{pi}]: {_w}"
                 )
+
+    if has_packets and not has_explicit_conflict_keys:
+        plan["_legacy_packet_contract"] = True
+    else:
+        plan.pop("_legacy_packet_contract", None)
 
     # W03: Persist canonicalization warnings on the plan so they are
     # visible in parsed_plan.json and downstream artifacts.

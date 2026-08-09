@@ -27,7 +27,10 @@ from grace_control.core.structured_logger import GraceLogger
 from grace_control.db import get_db
 from grace_control.db.schema import Feature, Packet, Wave
 from grace_control.services.feature_intake_service import FeatureIntakeService
-from grace_control.services.feature_planning_service import FeaturePlanningService
+from grace_control.services.feature_planning_service import (
+    FeaturePlanningService,
+    normalize_architect_plan,
+)
 
 router = APIRouter()
 _log = GraceLogger("architect")
@@ -60,14 +63,19 @@ async def create_plan(request: dict) -> dict:
             "constraints": spec.get("constraints", {}),
             "verification": spec.get("verification", {"t0": [], "t1": [], "t2": []}),
         }
+        try:
+            plan = normalize_architect_plan(plan)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail={"errors": [str(exc)]}) from exc
 
         dag_packets = _build_predefined_dag_packets(plan["waves"])
         if dag_packets:
-            vresult = validate_dag(dag_packets)
+            vresult = validate_dag(
+                dag_packets,
+                strict_wave_order=not bool(plan.get("_legacy_packet_contract")),
+            )
             if not vresult.valid:
-                detail = {}
-                if vresult.conflicts:
-                    detail["errors"] = [str(c) for c in vresult.conflicts]
+                detail = {"errors": vresult.errors}
                 if vresult.cycles:
                     detail["cycles"] = vresult.cycles
                 raise HTTPException(status_code=422, detail=detail)
@@ -228,12 +236,12 @@ def _extract_action(title: str) -> str:
 def _build_predefined_dag_packets(waves: list[dict]) -> list[dict]:
     """Normalize title and legacy action dependency references for DAG checks."""
     packet_specs = [
-        packet
-        for wave in waves
+        (wave_index, packet)
+        for wave_index, wave in enumerate(waves)
         for packet in wave.get("packets", [])
     ]
     aliases: dict[str, str] = {}
-    for packet in packet_specs:
+    for _wave_index, packet in packet_specs:
         title = packet["title"]
         canonical_id = packet.get("id") or packet.get("packet_id") or title
         aliases[title] = canonical_id
@@ -241,15 +249,22 @@ def _build_predefined_dag_packets(waves: list[dict]) -> list[dict]:
         aliases[canonical_id] = canonical_id
 
     normalized: list[dict] = []
-    for packet in packet_specs:
+    for wave_index, packet in packet_specs:
         title = packet["title"]
         canonical_id = packet.get("id") or packet.get("packet_id") or title
         raw_dependencies = packet.get("depends_on", [])
         if isinstance(raw_dependencies, str):
             raw_dependencies = [raw_dependencies]
+        elif not isinstance(raw_dependencies, list):
+            raw_dependencies = [raw_dependencies]
         normalized.append({
             "id": canonical_id,
-            "depends_on": [aliases.get(dependency, dependency) for dependency in raw_dependencies],
+            "title": title,
+            "depends_on": [
+                aliases.get(dependency, dependency) if isinstance(dependency, str) else dependency
+                for dependency in raw_dependencies
+            ],
             "scope": packet.get("scope", []),
+            "wave_index": wave_index,
         })
     return normalized
