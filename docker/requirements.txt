@@ -1,5 +1,7 @@
 # Core dependencies
 prefect>=3.6.25,<4
+SQLAlchemy>=2.0,<3
+alembic>=1.13,<2
 pydantic>=2.12,<3
 pydantic-settings>=2.3,<3
 PyYAML>=6.0.1

@@ -1,12 +1,13 @@
 # ############################################################################
 # AI_HEADER: test_db_schema
-# ROLE: Unit tests for GRACE Control Plane DB schema — 7 tables, SQLite.
+# ROLE: Unit tests for GRACE Control Plane DB schema and SQLite baseline.
 # ############################################################################
 
 from __future__ import annotations
 
-import pytest
 from datetime import UTC, datetime, timedelta
+
+import pytest
 
 from grace_control.db import get_db, init_db
 from grace_control.db.schema import (
@@ -31,9 +32,10 @@ def test_all_tables_exist(test_db):
     from grace_control.db.schema import Base
     tables = sorted(Base.metadata.tables.keys())
     assert tables == [
-        "agent_sessions", "events", "features", "leases", "packet_runs",
-        "packets", "self_evolution_sessions", "waves", "workers",
-    ], f"Expected 9 tables, got {tables}"
+        "agent_sessions", "events", "feature_planning_runs", "features",
+        "leases", "packet_runs", "packets", "self_evolution_sessions",
+        "stage_metrics", "stage_runs", "waves", "workers",
+    ], f"Expected 12 tables, got {tables}"
 
 
 def test_create_feature(test_db):
@@ -176,4 +178,4 @@ def test_event_log(test_db):
 def test_in_memory_db(test_db):
     from grace_control.db.schema import Base
     tables = Base.metadata.tables.keys()
-    assert len(tables) == 9
+    assert len(tables) == 12
