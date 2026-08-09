@@ -23,6 +23,20 @@ _ADDITIVE_COLUMNS = (
     ("leases", "claimed_attempt"),
     ("workers", "pid"),
 )
+_CANONICAL_STAGE_INDEXES = (
+    "ix_stage_runs_packet_id",
+    "ix_stage_runs_run_id",
+    "ix_stage_runs_feature_id",
+    "ix_stage_runs_wave_id",
+    "ix_stage_runs_stage_key",
+    "ix_stage_runs_trace_id",
+)
+_LEGACY_STAGE_INDEXES = (
+    ("ix_stage_runs_packet", "packet_id"),
+    ("ix_stage_runs_stage", "stage_key"),
+    ("ix_stage_runs_status", "status"),
+    ("ix_stage_runs_trace", "trace_id"),
+)
 
 
 def _db_url(db_path: Path) -> str:
@@ -39,7 +53,17 @@ def _columns(db_path: Path, table_name: str) -> set[str]:
         return {row[1] for row in connection.execute(f"PRAGMA table_info({table_name})")}
 
 
-def _create_legacy_fixture(db_path: Path, *, drop_additive_columns: bool = False) -> None:
+def _index_names(db_path: Path, table_name: str) -> set[str]:
+    with sqlite3.connect(db_path) as connection:
+        return {row[1] for row in connection.execute(f"PRAGMA index_list({table_name})")}
+
+
+def _create_legacy_fixture(
+    db_path: Path,
+    *,
+    drop_additive_columns: bool = False,
+    use_legacy_stage_indexes: bool = False,
+) -> None:
     legacy_engine = create_engine(_db_url(db_path))
     Base.metadata.create_all(legacy_engine)
     with legacy_engine.begin() as connection:
@@ -54,6 +78,13 @@ def _create_legacy_fixture(db_path: Path, *, drop_additive_columns: bool = False
         if drop_additive_columns:
             for table_name, column_name in _ADDITIVE_COLUMNS:
                 connection.execute(text(f"ALTER TABLE {table_name} DROP COLUMN {column_name}"))
+        if use_legacy_stage_indexes:
+            for index_name in _CANONICAL_STAGE_INDEXES:
+                connection.execute(text(f'DROP INDEX IF EXISTS "{index_name}"'))
+            for index_name, column_name in _LEGACY_STAGE_INDEXES:
+                connection.execute(
+                    text(f'CREATE INDEX IF NOT EXISTS "{index_name}" ON stage_runs ("{column_name}")')
+                )
     legacy_engine.dispose()
 
 
@@ -62,6 +93,35 @@ def test_empty_sqlite_gets_baseline_and_head(tmp_path):
     init_db(_db_url(db_path))
 
     assert set(Base.metadata.tables).issubset(set(inspect(__import__("grace_control.db", fromlist=["engine"]).engine).get_table_names()))
+    assert _version(db_path) == [("0001_grace_legacy_baseline",)]
+
+
+def test_empty_sqlite_can_be_created_by_alembic_cli(tmp_path):
+    db_path = tmp_path / "cli-empty.db"
+    db_url = _db_url(db_path)
+    env = os.environ.copy()
+    env["GRACE_DB_URL"] = db_url
+    env["PYTHONPATH"] = "src"
+
+    subprocess.run(
+        ["alembic", "upgrade", "head"],
+        cwd=Path(__file__).resolve().parents[3],
+        env=env,
+        capture_output=True,
+        check=True,
+        text=True,
+    )
+
+    with sqlite3.connect(db_path) as connection:
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+            )
+        }
+    assert tables - {"alembic_version"} == set(Base.metadata.tables)
+    assert len(tables - {"alembic_version"}) == 12
     assert _version(db_path) == [("0001_grace_legacy_baseline",)]
 
 
@@ -85,6 +145,34 @@ def test_legacy_fixture_missing_additive_columns_is_normalized(tmp_path):
     for table_name, column_name in _ADDITIVE_COLUMNS:
         assert column_name in _columns(db_path, table_name)
     assert _version(db_path) == [("0001_grace_legacy_baseline",)]
+
+
+def test_legacy_stage_indexes_are_normalized_before_stamp(tmp_path):
+    db_path = tmp_path / "legacy-indexes.db"
+    _create_legacy_fixture(db_path, use_legacy_stage_indexes=True)
+
+    assert _index_names(db_path, "stage_runs") >= {name for name, _column in _LEGACY_STAGE_INDEXES}
+    assert not _index_names(db_path, "stage_runs") & set(_CANONICAL_STAGE_INDEXES)
+
+    init_db(_db_url(db_path))
+
+    stage_indexes = _index_names(db_path, "stage_runs")
+    assert set(_CANONICAL_STAGE_INDEXES).issubset(stage_indexes)
+    assert not stage_indexes & {name for name, _column in _LEGACY_STAGE_INDEXES}
+    assert _version(db_path) == [("0001_grace_legacy_baseline",)]
+
+
+def test_events_only_database_is_not_detected_as_legacy_grace(tmp_path):
+    db_path = tmp_path / "not-grace.db"
+    engine = create_engine(_db_url(db_path))
+    with engine.begin() as connection:
+        connection.execute(text("CREATE TABLE events (id INTEGER PRIMARY KEY)"))
+
+    from grace_control.db import _is_legacy_grace_db
+
+    with engine.connect() as connection:
+        assert not _is_legacy_grace_db(connection)
+    engine.dispose()
 
 
 def test_repeated_init_is_idempotent_and_skips_legacy_bridge(tmp_path, monkeypatch):

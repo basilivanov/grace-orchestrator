@@ -9,8 +9,9 @@
 # returns: None from init_db; a transactional SQLAlchemy Session from get_db.
 # side_effects: Creates database files, runs Alembic migrations, applies a
 #               one-time legacy SQLite bridge, and writes structured logs.
-# emitted_logs: db_init_start, legacy_bootstrap_start, legacy_bootstrap_done,
-#               legacy_schema_incomplete, alembic_upgrade_done, db_init_done.
+# emitted_logs: db_init_start, legacy_bootstrap_start, legacy_indexes_normalized,
+#               legacy_bootstrap_done, legacy_schema_incomplete,
+#               alembic_upgrade_done, db_init_done.
 # error_behavior: Propagates SQLAlchemy/Alembic failures; get_db raises
 #                 RuntimeError before init_db has completed.
 # END_MODULE_CONTRACT
@@ -43,6 +44,26 @@ engine = None
 SessionLocal = None
 _ALEMBIC_BASELINE_REVISION = "0001_grace_legacy_baseline"
 _BASELINE_TABLES = frozenset(Base.metadata.tables)
+_LEGACY_SIGNATURE_TABLES = frozenset({"features", "waves", "packets"})
+_BASELINE_INDEXES: tuple[tuple[str, str, tuple[str, ...], bool], ...] = tuple(
+    (
+        index.name,
+        table.name,
+        tuple(column.name for column in index.columns),
+        bool(index.unique),
+    )
+    for table in Base.metadata.tables.values()
+    for index in table.indexes
+    if index.name
+)
+_SQLITE_LEGACY_INDEX_NAMES = frozenset(
+    {
+        "ix_stage_runs_packet",
+        "ix_stage_runs_stage",
+        "ix_stage_runs_status",
+        "ix_stage_runs_trace",
+    }
+)
 
 
 # START_BLOCK_RESOLUTION
@@ -80,8 +101,9 @@ def resolve_db_url(db_url: str | None = None) -> str:
 # returns: None.
 # side_effects: Creates an engine, runs Alembic migrations, may perform the
 #               private one-time SQLite legacy bootstrap, and initializes sessions.
-# emitted_logs: db_init_start, legacy_bootstrap_start, legacy_bootstrap_done,
-#               legacy_schema_incomplete, alembic_upgrade_done, db_init_done.
+# emitted_logs: db_init_start, legacy_bootstrap_start, legacy_indexes_normalized,
+#               legacy_bootstrap_done, legacy_schema_incomplete,
+#               alembic_upgrade_done, db_init_done.
 # error_behavior: Propagates database and Alembic errors.
 # END_FUNCTION_CONTRACT
 def init_db(db_url: str | None = None) -> None:
@@ -181,6 +203,7 @@ def _run_alembic_migrations(eng: Engine) -> None:
             _log.info("legacy_bootstrap_start", reason="pre_alembic_grace_db")
             if connection.dialect.name == "sqlite":
                 _run_sqlite_column_migrations(connection)
+                _normalize_sqlite_legacy_indexes(connection)
 
             missing_tables, missing_columns = _baseline_schema_gaps(connection)
             if missing_columns:
@@ -202,7 +225,7 @@ def _run_alembic_migrations(eng: Engine) -> None:
 
 def _is_legacy_grace_db(connection: Connection) -> bool:
     tables = set(inspect(connection).get_table_names())
-    return bool(tables.intersection(_BASELINE_TABLES))
+    return _LEGACY_SIGNATURE_TABLES.issubset(tables)
 
 
 def _baseline_schema_gaps(connection: Connection) -> tuple[list[str], dict[str, list[str]]]:
@@ -221,17 +244,45 @@ def _baseline_schema_gaps(connection: Connection) -> tuple[list[str], dict[str, 
 
 def _verify_baseline_schema(connection: Connection) -> None:
     missing_tables, missing_columns = _baseline_schema_gaps(connection)
-    if missing_tables or missing_columns:
+    missing_indexes = _baseline_index_gaps(connection)
+    if missing_tables or missing_columns or missing_indexes:
         _log.error(
             "legacy_schema_incomplete",
             reason="baseline_check_failed",
             missing_tables=missing_tables,
             missing_columns=missing_columns,
+            missing_indexes=missing_indexes,
         )
         raise RuntimeError(
             "Legacy GRACE database does not satisfy Alembic baseline: "
-            f"missing_tables={missing_tables}, missing_columns={missing_columns}"
+            f"missing_tables={missing_tables}, missing_columns={missing_columns}, "
+            f"missing_indexes={missing_indexes}"
         )
+
+
+def _baseline_index_gaps(connection: Connection) -> dict[str, list[str]]:
+    inspector = inspect(connection)
+    expected_by_table: dict[str, dict[str, tuple[tuple[str, ...], bool]]] = {}
+    for index_name, table_name, columns, unique in _BASELINE_INDEXES:
+        expected_by_table.setdefault(table_name, {})[index_name] = (columns, unique)
+
+    missing_indexes: dict[str, list[str]] = {}
+    for table_name, expected_indexes in expected_by_table.items():
+        if not inspector.has_table(table_name):
+            continue
+        actual_indexes = {
+            item["name"]: (tuple(item.get("column_names") or ()), bool(item.get("unique")))
+            for item in inspector.get_indexes(table_name)
+            if item.get("name")
+        }
+        missing = sorted(
+            index_name
+            for index_name, definition in expected_indexes.items()
+            if actual_indexes.get(index_name) != definition
+        )
+        if missing:
+            missing_indexes[table_name] = missing
+    return missing_indexes
 
 
 def _run_sqlite_column_migrations(target: Engine | Connection) -> None:
@@ -262,6 +313,45 @@ def _apply_sqlite_legacy_deltas(connection: Connection) -> None:
         columns = {item["name"] for item in inspector.get_columns(table)}
         if column not in columns:
             connection.execute(text(ddl))
+
+
+def _normalize_sqlite_legacy_indexes(connection: Connection) -> None:
+    if connection.dialect.name != "sqlite":
+        return
+
+    inspector = inspect(connection)
+    for index_name, table_name, columns, unique in _BASELINE_INDEXES:
+        if not inspector.has_table(table_name):
+            continue
+        actual_indexes = {
+            item["name"]: (tuple(item.get("column_names") or ()), bool(item.get("unique")))
+            for item in inspector.get_indexes(table_name)
+            if item.get("name")
+        }
+        expected_definition = (columns, unique)
+        actual_definition = actual_indexes.get(index_name)
+        if actual_definition == expected_definition:
+            continue
+        if actual_definition is not None:
+            connection.execute(text(f"DROP INDEX IF EXISTS {_quote_identifier(index_name)}"))
+
+        quoted_columns = ", ".join(_quote_identifier(column) for column in columns)
+        unique_sql = "UNIQUE " if unique else ""
+        connection.execute(
+            text(
+                f"CREATE {unique_sql}INDEX IF NOT EXISTS {_quote_identifier(index_name)} "
+                f"ON {_quote_identifier(table_name)} ({quoted_columns})"
+            )
+        )
+
+    for index_name in _SQLITE_LEGACY_INDEX_NAMES:
+        connection.execute(text(f"DROP INDEX IF EXISTS {_quote_identifier(index_name)}"))
+
+    _log.info("legacy_indexes_normalized", reason="canonical_index_set")
+
+
+def _quote_identifier(identifier: str) -> str:
+    return '"' + identifier.replace('"', '""') + '"'
 
 
 # END_BLOCK_MIGRATIONS

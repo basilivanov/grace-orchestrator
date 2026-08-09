@@ -26,7 +26,7 @@ classifiers = [
 
 dependencies = [
     "SQLAlchemy>=2.0.0,<3",
-    "alembic>=1.13.0,<2",
+    "alembic>=1.13.3,<2",
     "pyyaml>=6.0.0",
     "pydantic>=2.7.0",
     "pydantic-settings>=2.3.0",
