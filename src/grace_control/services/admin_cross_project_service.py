@@ -86,6 +86,22 @@ _log = GraceLogger("admin_cross_project_service")
 
 _MAX_EVENTS_PER_PROJECT = 1000
 _MAX_LOG_LINES_PER_PROJECT = 5000
+_DIAGNOSTIC_FIELDS = frozenset({
+    "packets_by_state",
+    "features_by_status",
+    "workers",
+    "runs_total",
+    "active_leases",
+    "ordinary_leases",
+    "active_parallel_leases",
+    "active_merge_leases",
+    "effective_max_concurrency",
+    "waits",
+    "packet_parallel",
+    "parallel_scope_guard",
+    "merge_serialization",
+    "stale_base_recheck",
+})
 _EVENT_FILTER_NAMES = (
     "entity_id",
     "entity_type",
@@ -139,7 +155,8 @@ class AdminCrossProjectService:
     # purpose: Return project cards, mathematically scoped aggregate counts,
     #          coverage metadata and normalized operator attention items.
     # inputs: project — optional one-or-many explicit registry keys; omitted
-    #          means enabled projects only.
+    #          means all configured projects; disabled cards are registry-only
+    #          and never receive remote requests.
     # returns: Hub overview DTO with projects, aggregates, coverage, errors and
     #          attention.
     # side_effects: Concurrently reads health, diagnostics and latest event
@@ -153,7 +170,12 @@ class AdminCrossProjectService:
         self,
         project: Sequence[str] | str | None = None,
     ) -> dict[str, Any]:
-        contexts = self._select_contexts(project)
+        selected_values = _selector_values(project) if project is not None else []
+        contexts = (
+            self._registry.list_projects()
+            if project is None or "all" in selected_values
+            else self._select_contexts(project)
+        )
 
         async def collect(context: ProjectContext) -> dict[str, Any]:
             if not context.enabled:
@@ -240,6 +262,7 @@ class AdminCrossProjectService:
         merged: list[dict[str, Any]] = []
         errors: list[dict[str, Any]] = []
         totals: list[int] = []
+        bounded_totals: list[int] = []
         partial = False
         for result in results:
             if not result.ok:
@@ -252,9 +275,10 @@ class AdminCrossProjectService:
                 continue
             total = _safe_int(data.get("total"), len(raw_events))
             totals.append(total)
+            bounded_totals.append(min(total, _MAX_EVENTS_PER_PROJECT))
             if total > fetch_limit:
                 partial = True
-            for event in raw_events:
+            for event in raw_events[:fetch_limit]:
                 if isinstance(event, Mapping):
                     merged.append(_event_row(result.context, event))
         merged.sort(key=_event_sort_key, reverse=True)
@@ -266,14 +290,11 @@ class AdminCrossProjectService:
         }
         if errors:
             partial = True
-        known_total = sum(totals) if totals else 0
-        bounded_total = min(known_total, _MAX_EVENTS_PER_PROJECT)
-        if errors:
-            has_more = page_offset + page_limit < _MAX_EVENTS_PER_PROJECT and (
-                len(merged) > page_offset + page_limit or partial
-            )
-        else:
-            has_more = page_offset + page_limit < bounded_total
+        known_total = sum(totals)
+        accessible_total = sum(bounded_totals)
+        has_more = page_offset + page_limit < accessible_total and (
+            len(merged) > page_offset + page_limit or partial
+        )
         next_offset = page_offset + page_limit if has_more else None
         next_cursor = None
         if next_offset is not None:
@@ -376,6 +397,7 @@ class AdminCrossProjectService:
         results = await self._fanout(contexts, query, operation="logs")
         rows: list[dict[str, Any]] = []
         errors: list[dict[str, Any]] = []
+        bounded_totals: list[int] = []
         partial = False
         for result in results:
             if not result.ok:
@@ -387,9 +409,10 @@ class AdminCrossProjectService:
                 errors.append(_malformed_error(result.context, "/api/admin/system/logs", "lines list is missing"))
                 continue
             source_total = _safe_int(data.get("total"), len(lines))
+            bounded_totals.append(min(source_total, _MAX_LOG_LINES_PER_PROJECT))
             if bool(data.get("truncated")) or source_total > fetch_tail:
                 partial = True
-            for line in lines:
+            for line in lines[:fetch_tail]:
                 row = _log_row(result.context, line, data.get("source"))
                 if _log_matches(row, source, worker, packet, run, stage, level, trace_id,
                                 contains, expression, since, until):
@@ -399,7 +422,8 @@ class AdminCrossProjectService:
         if errors:
             partial = True
         next_offset = None
-        if page_offset + page_limit < _MAX_LOG_LINES_PER_PROJECT and (
+        accessible_total = sum(bounded_totals)
+        if page_offset + page_limit < accessible_total and (
             len(rows) > page_offset + page_limit or partial
         ):
             next_offset = page_offset + page_limit
@@ -462,6 +486,8 @@ class AdminCrossProjectService:
         normalized: list[dict[str, Any]] = []
         errors: list[dict[str, Any]] = []
         for result in results:
+            if _matches_project(q, result.context):
+                normalized.append(_project_search_row(result.context))
             if not result.ok:
                 errors.append(_error_dto(result, "/api/admin/search"))
                 continue
@@ -473,8 +499,6 @@ class AdminCrossProjectService:
             for item in raw_results:
                 if isinstance(item, Mapping):
                     normalized.append(_search_row(result.context, item))
-            if _matches_project(q, result.context):
-                normalized.append(_project_search_row(result.context))
         normalized.sort(key=lambda item: (
             str(item.get("project_key", "")),
             str(item.get("kind", "")),
@@ -532,10 +556,13 @@ class AdminCrossProjectService:
                 "responded": diagnostics_result.ok or health_result.ok,
                 "partial": bool(current_errors),
             })
-            snapshot = _safe_json(_data_mapping(diagnostics_result.payload)) if diagnostics_result.ok else {}
+            diagnostic_data = _data_mapping(diagnostics_result.payload) if diagnostics_result.ok else {}
+            diagnostics_available = bool(_DIAGNOSTIC_FIELDS.intersection(diagnostic_data))
+            snapshot = _safe_json(diagnostic_data) if diagnostics_available else {}
+            snapshot["diagnostics_available"] = diagnostics_available
             if health_result.ok:
                 snapshot["system_health"] = _safe_json(_data_mapping(health_result.payload))
-            if not snapshot:
+            if not diagnostics_available and not health_result.ok:
                 continue
             snapshot.update({
                 "project_key": diagnostics_result.context.key,
@@ -560,7 +587,9 @@ class AdminCrossProjectService:
                 "coverage": coverage,
                 "fetched_at": _now_iso(),
             }
-        aggregate = _aggregate_snapshots(snapshots)
+        aggregate = _aggregate_snapshots(
+            [snapshot for snapshot in snapshots if snapshot.get("diagnostics_available", True)]
+        )
         aggregate["complete"] = not errors and coverage["projects_failed"] == 0
         return {
             "projects": snapshots,
@@ -782,6 +811,7 @@ class AdminCrossProjectService:
             "attention": attention,
             "responded": health.ok or diagnostics.ok or events.ok,
             "partial": bool(errors),
+            "disabled": False,
         }
 
     # START_FUNCTION_CONTRACT
@@ -836,6 +866,7 @@ class AdminCrossProjectService:
             "attention": [item],
             "responded": False,
             "partial": False,
+            "disabled": True,
         }
 
 

@@ -610,12 +610,15 @@ def _sort_attention(items: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
 def _coverage(rows: Sequence[Mapping[str, Any]], total: int) -> dict[str, Any]:
     responded = sum(1 for row in rows if row.get("responded"))
     partial = sum(1 for row in rows if row.get("partial"))
+    disabled = sum(1 for row in rows if row.get("disabled"))
+    failed = max(total - responded - disabled, 0)
     return {
         "projects_total": total,
         "projects_responded": responded,
-        "projects_failed": max(total - responded, 0),
+        "projects_failed": failed,
+        "projects_disabled": disabled,
         "projects_partial": partial,
-        "partial": partial > 0 or responded < total,
+        "partial": partial > 0 or failed > 0,
     }
 
 

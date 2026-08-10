@@ -28,9 +28,13 @@
 #       - get_json
 #   - function: test_overview_aggregates_healthy_projects_and_attention
 #   - function: test_offline_project_is_partial_and_not_counted_as_zero
+#   - function: test_default_overview_includes_disabled_without_remote_fanout
+#   - function: test_health_only_diagnostics_are_partial_not_zero_aggregates
 #   - function: test_events_forward_filters_order_and_continue_deterministically
+#   - function: test_event_and_log_continuation_uses_each_project_prefix
 #   - function: test_malformed_event_and_log_project_does_not_corrupt_healthy_data
 #   - function: test_search_diagnostics_and_project_aware_routes
+#   - function: test_search_project_metadata_survives_remote_search_failure
 #   - function: test_fanout_concurrency_and_no_cross_project_cache
 # END_MODULE_MAP
 
@@ -143,11 +147,11 @@ class _FakeProjectClient:
         return payload
 
 
-def _entry(key: str, root: str) -> dict[str, Any]:
+def _entry(key: str, root: str, *, enabled: bool = True) -> dict[str, Any]:
     return {
         "key": key,
         "name": key.title(),
-        "enabled": True,
+        "enabled": enabled,
         "unix_user": f"user-{key}",
         "project_root": root,
         "api_url": f"http://{key}.example.test:8142",
@@ -156,11 +160,11 @@ def _entry(key: str, root: str) -> dict[str, Any]:
     }
 
 
-def _registry(tmp_path) -> ProjectRegistry:
+def _registry(tmp_path, *, disabled: str | None = None) -> ProjectRegistry:
     return ProjectRegistry.from_mapping({
         "projects": [
-            _entry("alpha", str(tmp_path / "alpha")),
-            _entry("beta", str(tmp_path / "beta")),
+            _entry("alpha", str(tmp_path / "alpha"), enabled=disabled != "alpha"),
+            _entry("beta", str(tmp_path / "beta"), enabled=disabled != "beta"),
         ]
     })
 
@@ -245,8 +249,14 @@ def _payloads(key: str, root: str) -> tuple[dict[str, Any], dict[str, Any]]:
     return payloads, health
 
 
-def _service(tmp_path, *, barrier: _Barrier | None = None, offline: str | None = None):
-    registry = _registry(tmp_path)
+def _service(
+    tmp_path,
+    *,
+    barrier: _Barrier | None = None,
+    offline: str | None = None,
+    disabled: str | None = None,
+):
+    registry = _registry(tmp_path, disabled=disabled)
     clients: dict[str, _FakeProjectClient] = {}
     for context in registry.list_projects():
         payloads, health = _payloads(context.key, str(context.project_root))
@@ -286,6 +296,7 @@ async def test_overview_aggregates_healthy_projects_and_attention(tmp_path):
         "projects_total": 2,
         "projects_responded": 2,
         "projects_failed": 0,
+        "projects_disabled": 0,
         "projects_partial": 0,
         "partial": False,
     }
@@ -324,6 +335,60 @@ async def test_offline_project_is_partial_and_not_counted_as_zero(tmp_path):
     assert diagnostics["coverage"]["projects_responded"] == 1
     assert diagnostics["coverage"]["projects_failed"] == 1
     assert diagnostics["aggregate"]["projects_in_aggregate"] == 1
+
+
+# START_FUNCTION_CONTRACT
+# name: test_default_overview_includes_disabled_without_remote_fanout
+# purpose: Prove disabled registry projects remain visible as disabled cards but
+#          never receive a ProjectClient request in the default overview.
+# inputs: tmp_path — enabled and disabled project roots.
+# returns: None.
+# side_effects: Performs one enabled fake project overview read.
+# emitted_logs: None.
+# error_behavior: Fails if disabled projects disappear or count as failures.
+# END_FUNCTION_CONTRACT
+@pytest.mark.asyncio
+async def test_default_overview_includes_disabled_without_remote_fanout(tmp_path):
+    service, clients, _registry = _service(tmp_path, disabled="beta")
+    body = await service.get_projects_overview()
+    beta = next(row for row in body["projects"] if row["project_key"] == "beta")
+    assert beta["status"] == "disabled"
+    assert clients["beta"].calls == []
+    assert body["coverage"]["projects_total"] == 2
+    assert body["coverage"]["projects_responded"] == 1
+    assert body["coverage"]["projects_failed"] == 0
+    assert body["coverage"]["projects_disabled"] == 1
+    assert body["aggregate"]["projects_in_aggregate"] == 1
+
+
+# START_FUNCTION_CONTRACT
+# name: test_health_only_diagnostics_are_partial_not_zero_aggregates
+# purpose: Prove a health-only project snapshot remains visible but contributes
+#          no unavailable diagnostic counters to global aggregates.
+# inputs: tmp_path — two independent fake project APIs.
+# returns: None.
+# side_effects: Replaces only beta's diagnostics endpoint with a typed failure.
+# emitted_logs: None.
+# error_behavior: Fails if beta's missing counters become aggregate zeroes.
+# END_FUNCTION_CONTRACT
+@pytest.mark.asyncio
+async def test_health_only_diagnostics_are_partial_not_zero_aggregates(tmp_path):
+    service, clients, _registry = _service(tmp_path)
+    clients["beta"].payloads["/api/diagnostics/state"] = ProjectApiResult(
+        project_key="beta",
+        ok=False,
+        error_class="api_offline",
+        error="diagnostics unavailable",
+    )
+    body = await service.get_diagnostics()
+    beta = next(row for row in body["snapshots"] if row["project_key"] == "beta")
+    assert beta["diagnostics_available"] is False
+    assert body["coverage"]["projects_responded"] == 2
+    assert body["coverage"]["projects_failed"] == 0
+    assert body["coverage"]["projects_partial"] == 1
+    assert body["aggregate"]["projects_in_aggregate"] == 1
+    assert body["aggregate"]["packets_by_state"] == {"BLOCKED_FINAL": 1, "done": 2}
+    assert any(error["project_key"] == "beta" for error in body["errors"])
 
 
 # START_FUNCTION_CONTRACT
@@ -370,6 +435,67 @@ async def test_events_forward_filters_order_and_continue_deterministically(tmp_p
     )
     assert second["offset"] == 2
     assert second["events"][0]["timestamp"] == "2026-08-09T10:00:00+00:00"
+
+
+# START_FUNCTION_CONTRACT
+# name: test_event_and_log_continuation_uses_each_project_prefix
+# purpose: Prove continuation traverses the merged bounded prefixes from both
+#          projects instead of stopping at one project's cap.
+# inputs: tmp_path — two independent APIs with more than one per-project cap.
+# returns: None.
+# side_effects: Performs bounded fake event and log reads over continuation pages.
+# emitted_logs: None.
+# error_behavior: Fails if rows from the second project become unreachable.
+# END_FUNCTION_CONTRACT
+@pytest.mark.asyncio
+async def test_event_and_log_continuation_uses_each_project_prefix(tmp_path):
+    service, clients, _registry = _service(tmp_path)
+    for key in ("alpha", "beta"):
+        day = "2026-08-11" if key == "alpha" else "2026-08-10"
+        clients[key].payloads["/api/events"] = {
+            "data": {
+                "total": 1001,
+                "events": [
+                    {
+                        "id": f"{key}-event-{index}",
+                        "timestamp": f"{day}T10:00:00+00:00",
+                        "event_type": "packet_done",
+                        "entity_type": "packet",
+                        "entity_id": f"pkt-{key}",
+                        "payload": {"index": index},
+                    }
+                    for index in range(1001)
+                ],
+            }
+        }
+        clients[key].payloads["/api/admin/system/logs"] = {
+            "total": 5001,
+            "source": "worker",
+            "lines": [
+                {
+                    "timestamp": f"{day}T11:00:00+00:00",
+                    "level": "INFO",
+                    "message": f"{key}-{index}",
+                }
+                for index in range(5001)
+            ],
+        }
+
+    event_page = await service.query_events(limit=200)
+    for _index in range(5):
+        assert event_page["next_cursor"]
+        event_page = await service.query_events(limit=200, cursor=event_page["next_cursor"])
+    assert event_page["offset"] == 1000
+    assert any(row["project_key"] == "beta" for row in event_page["events"])
+    assert event_page["next_cursor"]
+
+    log_page = await service.query_logs(tail=500)
+    for _index in range(10):
+        assert log_page["next_cursor"]
+        log_page = await service.query_logs(tail=500, cursor=log_page["next_cursor"])
+    assert log_page["offset"] == 5000
+    assert any(row["project_key"] == "beta" for row in log_page["logs"])
+    assert log_page["next_cursor"]
 
 
 # START_FUNCTION_CONTRACT
@@ -432,6 +558,31 @@ async def test_search_diagnostics_and_project_aware_routes(tmp_path):
     assert response.status_code == 200
     assert diagnostics_response.status_code == 200
     assert diagnostics_response.json()["project_key"] == "alpha"
+
+
+# START_FUNCTION_CONTRACT
+# name: test_search_project_metadata_survives_remote_search_failure
+# purpose: Prove registry metadata search remains available when one project's
+#          canonical search endpoint is unavailable.
+# inputs: tmp_path — two independent fake project APIs.
+# returns: None.
+# side_effects: Replaces beta's search endpoint with a typed failure.
+# emitted_logs: None.
+# error_behavior: Fails if metadata is dropped with the remote error.
+# END_FUNCTION_CONTRACT
+@pytest.mark.asyncio
+async def test_search_project_metadata_survives_remote_search_failure(tmp_path):
+    service, clients, _registry = _service(tmp_path)
+    clients["beta"].payloads["/api/admin/search"] = ProjectApiResult(
+        project_key="beta",
+        ok=False,
+        error_class="capability_unavailable",
+        error="search unavailable",
+        http_status=404,
+    )
+    body = await service.search("beta")
+    assert any(row["kind"] == "project" and row["project_key"] == "beta" for row in body["results"])
+    assert any(error["project_key"] == "beta" for error in body["errors"])
 
 
 # START_FUNCTION_CONTRACT
