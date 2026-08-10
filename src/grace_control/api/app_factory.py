@@ -8,7 +8,9 @@
 # START_MODULE_CONTRACT
 # purpose: Build and return the FastAPI app with lifespan, CORS, the global
 #          exception handler, and every router wired under the right prefix.
-# inputs: settings (GraceSettings | None) — None uses the module-level singleton.
+# inputs: settings (GraceSettings | None) — None uses the module-level singleton;
+#          project_registry — optional immutable Admin Hub registry;
+#          project_client_factory — optional test/integration client factory.
 # returns: FastAPI.
 # side_effects: Includes routers; no DB or process side effects.
 # emitted_logs: None (the global exception handler logs the 500 path).
@@ -30,6 +32,7 @@ from grace_control.api.auth import AuthMiddleware
 from grace_control.api.lifespan import lifespan
 from grace_control.api.routers import (
     admin,
+    admin_hub,
     admin_pipeline,
     admin_ui,
     agents,
@@ -42,6 +45,7 @@ from grace_control.api.routers import (
     health,
     lifecycle,
     packets,
+    project_identity,
     recovery,
     self_evolution,
     tools,
@@ -49,9 +53,11 @@ from grace_control.api.routers import (
     workers,
     ws,
 )
+from grace_control.config.project_registry import ProjectRegistry, load_project_registry
 from grace_control.config.settings import GraceSettings
 from grace_control.config.settings import settings as _default_settings
 from grace_control.core.structured_logger import GraceLogger
+from grace_control.services.admin_project_service import AdminProjectService
 
 _log = GraceLogger("app_factory")
 
@@ -59,14 +65,20 @@ _log = GraceLogger("app_factory")
 # START_FUNCTION_CONTRACT
 # name: create_app
 # purpose: Build and return the FastAPI app with lifespan, CORS, and routers.
-# inputs: settings (GraceSettings | None).
+# inputs: settings (GraceSettings | None); project_registry — optional Hub
+#         registry; project_client_factory — optional project client factory.
 # returns: FastAPI.
 # side_effects: None.
 # emitted_logs: None.
 # error_behavior: Never raises during construction.
 # END_FUNCTION_CONTRACT
-def create_app(settings: GraceSettings | None = None) -> FastAPI:
+def create_app(
+    settings: GraceSettings | None = None,
+    project_registry: ProjectRegistry | None = None,
+    project_client_factory=None,
+) -> FastAPI:
     s = settings or _default_settings
+    registry = project_registry or load_project_registry()
     app = FastAPI(
         title="GRACE Control Plane",
         version="0.1.0",
@@ -99,6 +111,7 @@ def create_app(settings: GraceSettings | None = None) -> FastAPI:
     #   - JSON API at /api/admin/* (read-only, for other consumers)
     #   - HTMX UI at /admin and /admin/_partial/* (server-rendered HTML)
     app.include_router(admin.router, tags=["admin"])
+    app.include_router(admin_hub.router, tags=["admin-hub"])
     app.include_router(admin_pipeline.router, tags=["admin-pipeline"])
     app.include_router(admin_ui.router, tags=["admin-ui"])
     app.include_router(health.router, tags=["health"])
@@ -118,6 +131,10 @@ def create_app(settings: GraceSettings | None = None) -> FastAPI:
     app.include_router(tools.router, prefix="/api/tools", tags=["tools"])
     app.include_router(dev_replay.router, tags=["dev_replay"])
     app.include_router(lifecycle.router, tags=["lifecycle"])
+    app.include_router(project_identity.router, tags=["project-identity"])
+
+    app_state = app.__dict__["state"]
+    app_state.admin_project_service = AdminProjectService(registry, client_factory=project_client_factory)
 
     # Admin UI — static assets for /static/* (HTMX is loaded from CDN in the template).
     from pathlib import Path as _P
