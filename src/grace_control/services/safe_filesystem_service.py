@@ -324,6 +324,9 @@ class SafeFilesystemService:
         root_real = Path(os.path.realpath(root_path))
         if not _contained(root_real, candidate):
             raise _fs_error("SYMLINK_ESCAPE", 403, "path resolves outside the configured root")
+        resolved_relative = candidate.relative_to(root_real).as_posix()
+        if _is_secret_path(resolved_relative):
+            raise _fs_error("SECRET_PATH_DENIED", 403, "path is denied by filesystem policy")
         if not candidate.exists():
             raise _fs_error("PATH_NOT_FOUND", 404, "path was not found")
         if expect == "file" and not candidate.is_file():

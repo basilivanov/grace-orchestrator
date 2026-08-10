@@ -40,7 +40,7 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from grace_control.core.structured_logger import GraceLogger
-from grace_control.services.git_service import GitService
+from grace_control.services.git_service import GitResult, GitService
 
 _log = GraceLogger("admin_git_read")
 
@@ -260,7 +260,7 @@ class AdminGitReadService:
     # END_FUNCTION_CONTRACT
     def diff_stat(self, ref: str | None = None, path: str | None = None) -> dict[str, Any]:
         output = self._diff_output("--stat", ref, path)
-        result = _bounded_text_result(output, self._max_output_bytes)
+        result = _bounded_git_text(output)
         return {**result, "stat": result["text"]}
 
     # START_FUNCTION_CONTRACT
@@ -274,7 +274,7 @@ class AdminGitReadService:
     # END_FUNCTION_CONTRACT
     def diff(self, ref: str | None = None, path: str | None = None) -> dict[str, Any]:
         output = self._diff_output("--patch", ref, path)
-        result = _bounded_text_result(output, self._max_output_bytes)
+        result = _bounded_git_text(output)
         return {**result, "diff": result["text"]}
 
     # START_FUNCTION_CONTRACT
@@ -290,8 +290,8 @@ class AdminGitReadService:
         args = ["ls-files", "--"]
         if path:
             args.append(_validate_path(path))
-        output = self._text(args)
-        bounded = _bounded_text(output, self._max_output_bytes)
+        output = self._read_result(args)
+        bounded = _bounded_git_text(output)
         lines = [line for line in bounded["text"].splitlines() if line]
         return {
             "files": lines,
@@ -318,24 +318,21 @@ class AdminGitReadService:
         safe_ref = self._resolve_ref(ref)
         safe_path = _validate_path(path)
         limit = min(_positive_or_default(max_bytes, self._max_output_bytes), self._max_output_bytes)
-        result = self._git._run(
+        result = self._read_result(
             ["show", "--no-ext-diff", "--format=", f"{safe_ref}:{safe_path}"],
-            self.repo_root,
-            timeout=self._timeout_seconds,
+            max_output_bytes=limit,
         )
-        if not result.success:
-            raise _git_error("GIT_READ_FAILED", 404, "tracked file could not be read")
-        raw = result.stdout.encode("utf-8", errors="replace")
+        raw = result.stdout_bytes or result.stdout.encode("utf-8", errors="replace")
         bounded = raw[:limit]
         binary = b"\x00" in bounded
         return {
             "ref": safe_ref,
             "path": safe_path,
-            "size": len(raw),
+            "size": self._object_size(safe_ref, safe_path) or len(raw),
             "binary": binary,
             "content": None if binary else bounded.decode("utf-8", errors="replace"),
             "content_base64": _base64(bounded) if binary else None,
-            "truncated": len(raw) > limit,
+            "truncated": result.stdout_truncated or len(raw) > limit,
         }
 
     # START_FUNCTION_CONTRACT
@@ -350,8 +347,13 @@ class AdminGitReadService:
     def _require_repo(self) -> None:
         if not self.repo_root.is_dir():
             raise _git_error("REPO_NOT_FOUND", 404, "configured repository is unavailable")
-        info = self._git.validate_repo(self.repo_root)
-        if not info.is_git:
+        result = self._git.run_bounded(
+            ["rev-parse", "--is-inside-work-tree"],
+            self.repo_root,
+            max_output_bytes=min(self._max_output_bytes, 256),
+            timeout=self._timeout_seconds,
+        )
+        if not result.success or result.stdout.strip() != "true":
             raise _git_error("NOT_GIT_REPOSITORY", 422, "configured root is not a Git repository")
 
     # START_FUNCTION_CONTRACT
@@ -364,13 +366,36 @@ class AdminGitReadService:
     # error_behavior: Raises GitReadError on failed commands unless optional.
     # END_FUNCTION_CONTRACT
     def _text(self, args: list[str], optional: bool = False) -> str:
-        self._require_repo()
-        result = self._git._run(args, self.repo_root, timeout=self._timeout_seconds)
-        if not result.success:
+        try:
+            return self._read_result(args).stdout
+        except GitReadError:
             if optional:
                 return ""
+            raise
+
+    # START_FUNCTION_CONTRACT
+    # name: _read_result
+    # purpose: Execute one read-only Git operation through the byte-bounded
+    #          canonical process primitive.
+    # inputs: args — validated read-only Git arguments; max_output_bytes —
+    #          optional per-operation cap no greater than the service cap.
+    # returns: GitResult with bounded output and truncation metadata.
+    # side_effects: Executes Git with the configured timeout/cap.
+    # emitted_logs: git_read_rejected on repository or command failure.
+    # error_behavior: Raises GitReadError when the command cannot be completed.
+    # END_FUNCTION_CONTRACT
+    def _read_result(self, args: list[str], max_output_bytes: int | None = None) -> GitResult:
+        self._require_repo()
+        limit = min(max_output_bytes or self._max_output_bytes, self._max_output_bytes)
+        result = self._git.run_bounded(
+            args,
+            self.repo_root,
+            max_output_bytes=limit,
+            timeout=self._timeout_seconds,
+        )
+        if not result.success:
             raise _git_error("GIT_READ_FAILED", 422, "Git read command failed")
-        return _bounded_text(result.stdout, self._max_output_bytes)["text"]
+        return result
 
     # START_FUNCTION_CONTRACT
     # name: _resolve_ref
@@ -384,9 +409,10 @@ class AdminGitReadService:
     def _resolve_ref(self, ref: str, required: bool = True) -> str | None:
         safe_ref = _validate_ref(ref, "Git ref")
         self._require_repo()
-        result = self._git._run(
+        result = self._git.run_bounded(
             ["rev-parse", "--verify", f"{safe_ref}^{{commit}}"],
             self.repo_root,
+            max_output_bytes=self._max_output_bytes,
             timeout=self._timeout_seconds,
         )
         if not result.success:
@@ -404,12 +430,29 @@ class AdminGitReadService:
     # emitted_logs: git_read_rejected.
     # error_behavior: Raises GitReadError for unsafe refs/paths/command failure.
     # END_FUNCTION_CONTRACT
-    def _diff_output(self, mode: str, ref: str | None, path: str | None) -> str:
+    def _diff_output(self, mode: str, ref: str | None, path: str | None) -> GitResult:
         safe_ref = self._resolve_ref(ref or self.base_branch)
         args = ["diff", "--no-ext-diff", mode, safe_ref, "HEAD", "--"]
         if path:
             args.append(_validate_path(path))
-        return self._text(args)
+        return self._read_result(args)
+
+    # START_FUNCTION_CONTRACT
+    # name: _object_size
+    # purpose: Read the full byte size of one validated Git object without
+    #          loading its content.
+    # inputs: ref — validated commit ref; path — validated tracked path.
+    # returns: Object byte size or None when Git cannot report it.
+    # side_effects: Runs a bounded git cat-file metadata command.
+    # emitted_logs: git_read_rejected on command failure, suppressed here.
+    # error_behavior: Returns None for an unavailable size metadata lookup.
+    # END_FUNCTION_CONTRACT
+    def _object_size(self, ref: str, path: str) -> int | None:
+        try:
+            result = self._read_result(["cat-file", "-s", f"{ref}:{path}"])
+            return int(result.stdout.strip())
+        except (GitReadError, ValueError):
+            return None
 
 
 # END_BLOCK_SERVICE
@@ -460,19 +503,13 @@ def _positive_or_default(value: int | None, default: int) -> int:
     return int(value)
 
 
-def _bounded_text(value: str, maximum: int) -> dict[str, Any]:
-    raw = value.encode("utf-8", errors="replace")
-    truncated = len(raw) > maximum
+def _bounded_git_text(result: GitResult) -> dict[str, Any]:
+    raw = result.stdout_bytes or result.stdout.encode("utf-8", errors="replace")
     return {
-        "text": raw[:maximum].decode("utf-8", errors="replace"),
-        "truncated": truncated,
-        "bytes": min(len(raw), maximum),
+        "text": result.stdout,
+        "truncated": result.stdout_truncated,
+        "bytes": len(raw),
     }
-
-
-def _bounded_text_result(value: str, maximum: int) -> dict[str, Any]:
-    result = _bounded_text(value, maximum)
-    return {"text": result["text"], "truncated": result["truncated"], "bytes": result["bytes"]}
 
 
 def _mask_remote(value: str) -> str:

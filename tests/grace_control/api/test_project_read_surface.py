@@ -25,6 +25,7 @@
 #   - function: test_git_read_service_uses_real_repository_and_rejects_unsafe_inputs
 #   - function: test_project_client_retrieves_openapi
 #   - function: test_optional_capability_is_unavailable_not_broken
+#   - function: test_runtime_identity_separates_grace_and_target_heads
 # END_MODULE_MAP
 
 from __future__ import annotations
@@ -33,11 +34,13 @@ import asyncio
 import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+import grace_control.config.runtime_identity as runtime_identity
 from grace_control.api.app_factory import create_app
 from grace_control.config.project_registry import ProjectContext
 from grace_control.core.structured_logger import GraceLogger
@@ -45,6 +48,7 @@ from grace_control.db import get_db, init_db
 from grace_control.db.schema import Event, MergeLease, Packet, PacketRun, ParallelLease, StageRun
 from grace_control.services.admin_git_read_service import AdminGitReadService, GitReadError
 from grace_control.services.capability_service import CapabilityService
+from grace_control.services.git_service import GitService
 from grace_control.services.project_client import ProjectClient
 from grace_control.services.safe_filesystem_service import (
     FilesystemReadError,
@@ -299,6 +303,15 @@ def test_safe_filesystem_service_enforces_realpath_and_limits(tmp_path):
         with pytest.raises(FilesystemReadError) as error:
             service.stat("state", "escape")
         assert error.value.code == "SYMLINK_ESCAPE"
+        secret_alias = root / "public-link"
+        try:
+            secret_alias.symlink_to(root / ".env")
+        except OSError:
+            secret_alias = None
+        if secret_alias is not None:
+            with pytest.raises(FilesystemReadError) as error:
+                service.read_file("state", "public-link")
+            assert error.value.code == "SECRET_PATH_DENIED"
 
 
 # START_FUNCTION_CONTRACT
@@ -356,17 +369,45 @@ def test_git_read_service_uses_real_repository_and_rejects_unsafe_inputs(tmp_pat
     run("git", "add", "src")
     run("git", "commit", "-qm", "second")
 
-    service = AdminGitReadService(repo, target_branch="main", base_branch="HEAD~1")
+    large_content = "0123456789abcdef\n" * 1024
+    (repo / "large.txt").write_text(large_content, encoding="utf-8")
+    run("git", "add", "large.txt")
+    run("git", "commit", "-qm", "large file")
+
+    service = AdminGitReadService(repo, target_branch="main", base_branch="HEAD~2")
     assert service.repository()["current_branch"] == "main"
-    assert len(service.changed_files("HEAD~1")) == 2
-    assert "src/a.txt" in service.diff_stat("HEAD~1")["text"]
-    assert "+two" in service.diff("HEAD~1", "src/a.txt")["text"]
+    assert len(service.changed_files("HEAD~2")) == 3
+    assert "src/a.txt" in service.diff_stat("HEAD~2")["text"]
+    assert "+two" in service.diff("HEAD~2", "src/a.txt")["text"]
     assert "src/a.txt" in service.tracked_files()["files"]
     assert service.show_file("HEAD", "src/a.txt")["content"] == "two\n"
     with pytest.raises((GitReadError, ValueError)):
         service.changed_files("--output=/tmp/leak")
     with pytest.raises(GitReadError):
         service.show_file("HEAD", "../outside")
+
+    bounded_service = AdminGitReadService(
+        repo,
+        target_branch="main",
+        base_branch="HEAD~1",
+        max_output_bytes=64,
+    )
+    bounded_file = bounded_service.show_file("HEAD", "large.txt")
+    assert bounded_file["truncated"] is True
+    assert bounded_file["size"] == len(large_content.encode("utf-8"))
+    assert len(bounded_file["content"].encode("utf-8")) <= 64
+    bounded_diff = bounded_service.diff("HEAD~1", "large.txt")
+    assert bounded_diff["truncated"] is True
+    assert len(bounded_diff["text"].encode("utf-8")) <= 64
+
+    bounded_result = GitService().run_bounded(
+        ["show", "--no-ext-diff", "--format=", "HEAD:large.txt"],
+        repo,
+        max_output_bytes=64,
+        timeout=5,
+    )
+    assert bounded_result.stdout_truncated is True
+    assert len(bounded_result.stdout_bytes or b"") <= 64
 
 
 # END_BLOCK_GIT_TESTS
@@ -427,6 +468,74 @@ def test_optional_capability_is_unavailable_not_broken(monkeypatch):
     assert document["capabilities"]["sessions"] is False
     assert "sessions" in document["unavailable"]
     assert document["capabilities"]["filesystem"] is True
+
+
+# START_FUNCTION_CONTRACT
+# name: test_runtime_identity_separates_grace_and_target_heads
+# purpose: Prove code_sha identifies the GRACE runtime while target_head
+#          identifies a separately configured target repository.
+# inputs: tmp_path, monkeypatch — isolated roots and runtime identity hooks.
+# returns: None.
+# side_effects: Reads only mocked runtime metadata and temporary path values.
+# emitted_logs: None.
+# error_behavior: Fails if the two repository identities collapse into one SHA.
+# END_FUNCTION_CONTRACT
+def test_runtime_identity_separates_grace_and_target_heads(tmp_path, monkeypatch):
+    runtime_root = tmp_path / "grace-runtime"
+    target_root = tmp_path / "target-project"
+    runtime_root.mkdir()
+    target_root.mkdir()
+    project = SimpleNamespace(
+        project=SimpleNamespace(key="runtime", name="Runtime"),
+        execution=SimpleNamespace(
+            target_repo_root="",
+            state_root=".grace/state",
+            worktree_root=".grace/worktrees",
+        ),
+        git=SimpleNamespace(base_branch="main", target_branch="main", remote="origin"),
+    )
+    runtime_settings = SimpleNamespace(
+        base_branch="main",
+        target_branch="main",
+        git_remote="origin",
+        state_root=".grace/state",
+        worktree_root=".grace/worktrees",
+        runtime_artifacts_root=".grace/runs",
+        planning_logs_root=".grace/logs",
+        workspace_mode="full_git_worktree",
+        execution_backend="cli",
+    )
+    shas = {
+        runtime_root.resolve(): "grace-runtime-sha",
+        target_root.resolve(): "target-project-sha",
+    }
+
+    def current_sha(_service, repo):
+        return shas.get(Path(repo).resolve(), "")
+
+    monkeypatch.setenv("GRACE_PROJECT_ROOT", str(runtime_root))
+    monkeypatch.setenv("GRACE_TARGET_REPO_ROOT", str(target_root))
+    monkeypatch.setenv("GRACE_RUNTIME_REPO_ROOT", str(runtime_root))
+    monkeypatch.delenv("GRACE_RUNTIME_CODE_SHA", raising=False)
+    monkeypatch.delenv("GRACE_CODE_SHA", raising=False)
+    monkeypatch.setattr(runtime_identity, "get_project_config", lambda: project)
+    monkeypatch.setattr(
+        runtime_identity,
+        "get_parallel_runtime_config",
+        lambda: {
+            "max_concurrency": 2,
+            "scope_guard_enabled": True,
+            "merge_serialization_enabled": True,
+            "integration_recheck_on_stale_base": True,
+        },
+    )
+    monkeypatch.setattr(runtime_identity, "settings", runtime_settings)
+    monkeypatch.setattr(GitService, "current_sha", current_sha)
+
+    identity = runtime_identity.get_runtime_identity()
+    assert identity["code_sha"] == "grace-runtime-sha"
+    assert identity["target_head"] == "target-project-sha"
+    assert identity["code_sha"] != identity["target_head"]
 
 
 # END_BLOCK_DISCOVERY_TESTS

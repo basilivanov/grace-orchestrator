@@ -9,7 +9,8 @@
 # purpose: Build a small non-secret project identity/readiness DTO for the
 #          project-local API boundary.
 # inputs: GRACE_PROJECT_ROOT/GRACE_TARGET_DIR overrides and .grace/config.yaml.
-# returns: Mapping with display-safe project identity and runtime settings.
+# returns: Mapping with display-safe project identity, GRACE runtime SHA and
+#          target repository HEAD plus runtime settings.
 # side_effects: Reads environment and project-local configuration.
 # emitted_logs: None.
 # error_behavior: Propagates malformed project configuration errors.
@@ -75,7 +76,11 @@ def get_runtime_identity() -> dict[str, Any]:
         settings.runtime_artifacts_root,
         project_root,
     )
-    code_sha = GitService().current_sha(target_repo_root)
+    git = GitService()
+    code_sha = os.environ.get("GRACE_RUNTIME_CODE_SHA") or os.environ.get("GRACE_CODE_SHA")
+    if not code_sha:
+        code_sha = git.current_sha(_runtime_repo_root())
+    target_head = git.current_sha(target_repo_root)
     supervisor_status = _supervisor_status()
     return {
         "project_key": project.project.key,
@@ -95,6 +100,7 @@ def get_runtime_identity() -> dict[str, Any]:
             _resolve_root(settings.planning_logs_root, project_root)
         ),
         "code_sha": code_sha,
+        "target_head": target_head,
         "version": __version__,
         "api_status": "ready",
         "supervisor_status": supervisor_status,
@@ -108,6 +114,21 @@ def get_runtime_identity() -> dict[str, Any]:
 
 
 # START_BLOCK_HELPERS
+# START_FUNCTION_CONTRACT
+# name: _runtime_repo_root
+# purpose: Resolve the repository/build context that contains the running
+#          GRACE package, independently from the configured target project.
+# inputs: Optional GRACE_RUNTIME_REPO_ROOT/GRACE_RUNTIME_ROOT override.
+# returns: Absolute runtime repository or package context path.
+# side_effects: None.
+# emitted_logs: None.
+# error_behavior: Never raises for ordinary path values.
+# END_FUNCTION_CONTRACT
+def _runtime_repo_root() -> Path:
+    configured = os.environ.get("GRACE_RUNTIME_REPO_ROOT") or os.environ.get("GRACE_RUNTIME_ROOT")
+    return Path(configured or Path(__file__).resolve().parents[3]).expanduser().resolve()
+
+
 # START_FUNCTION_CONTRACT
 # name: _resolve_root
 # purpose: Resolve a configured operational root relative to the project root.

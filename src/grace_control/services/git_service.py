@@ -18,11 +18,16 @@
 #   - dataclass: GitResult
 #   - dataclass: GitRepoInfo
 #   - class: GitService
+#     methods:
+#       - run_bounded
 # END_MODULE_MAP
 
 from __future__ import annotations
 
+import os
+import selectors
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -33,14 +38,24 @@ class GitResult:
     stdout: str
     stderr: str
     returncode: int
+    stdout_truncated: bool = False
+    stderr_truncated: bool = False
+    stdout_bytes: bytes | None = None
+    stderr_bytes: bytes | None = None
 
     @classmethod
-    def from_completed(cls, p: subprocess.CompletedProcess) -> "GitResult":
+    def from_completed(cls, p: subprocess.CompletedProcess) -> GitResult:
+        stdout = p.stdout or ""
+        stderr = p.stderr or ""
+        stdout_bytes = stdout if isinstance(stdout, bytes) else str(stdout).encode("utf-8")
+        stderr_bytes = stderr if isinstance(stderr, bytes) else str(stderr).encode("utf-8")
         return cls(
             success=p.returncode == 0,
-            stdout=p.stdout or "",
-            stderr=p.stderr or "",
+            stdout=stdout.decode("utf-8", errors="replace") if isinstance(stdout, bytes) else str(stdout),
+            stderr=stderr.decode("utf-8", errors="replace") if isinstance(stderr, bytes) else str(stderr),
             returncode=p.returncode,
+            stdout_bytes=stdout_bytes,
+            stderr_bytes=stderr_bytes,
         )
 
 
@@ -84,6 +99,135 @@ class GitService:
     """All git operations for GRACE. Subprocess timeout default 60s."""
 
     DEFAULT_TIMEOUT = 60
+
+    # START_FUNCTION_CONTRACT
+    # name: run_bounded
+    # purpose: Run a read-only Git command while capping captured stdout and
+    #          stderr during subprocess consumption.
+    # inputs: args — validated Git arguments; cwd — repository directory;
+    #          max_output_bytes — per-stream byte cap; timeout — seconds.
+    # returns: GitResult with bounded output and truncation metadata.
+    # side_effects: Spawns a Git subprocess and terminates it when an output or
+    #                timeout limit is reached.
+    # emitted_logs: None.
+    # error_behavior: Returns a failed GitResult for spawn/timeout errors;
+    #                 intentional output-limit termination is a successful,
+    #                 truncated read.
+    # END_FUNCTION_CONTRACT
+    def run_bounded(
+        self,
+        args: list[str],
+        cwd: Path,
+        *,
+        max_output_bytes: int,
+        timeout: int | None = None,
+    ) -> GitResult:
+        limit = int(max_output_bytes)
+        if limit <= 0:
+            return GitResult(False, "", "Git output limit must be positive", -1)
+        process: subprocess.Popen[bytes] | None = None
+        selector: selectors.BaseSelector | None = None
+        stdout_buffer = bytearray()
+        stderr_buffer = bytearray()
+        stdout_truncated = False
+        stderr_truncated = False
+        deadline = time.monotonic() + (timeout or self.DEFAULT_TIMEOUT)
+        try:
+            process = subprocess.Popen(
+                ["git", *args],
+                cwd=str(cwd),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                stdin=subprocess.DEVNULL,
+            )
+            selector = selectors.DefaultSelector()
+            if process.stdout is not None:
+                selector.register(process.stdout, selectors.EVENT_READ, "stdout")
+            if process.stderr is not None:
+                selector.register(process.stderr, selectors.EVENT_READ, "stderr")
+            while selector.get_map():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(["git", *args], timeout or self.DEFAULT_TIMEOUT)
+                events = selector.select(remaining)
+                if not events:
+                    raise subprocess.TimeoutExpired(["git", *args], timeout or self.DEFAULT_TIMEOUT)
+                for key, _mask in events:
+                    stream = key.data
+                    buffer = stdout_buffer if stream == "stdout" else stderr_buffer
+                    room = limit - len(buffer)
+                    try:
+                        chunk = os.read(key.fd, min(8192, room + 1))
+                    except OSError:
+                        chunk = b""
+                    if not chunk:
+                        selector.unregister(key.fileobj)
+                        key.fileobj.close()
+                        continue
+                    if len(chunk) > room:
+                        buffer.extend(chunk[:room])
+                        if stream == "stdout":
+                            stdout_truncated = True
+                        else:
+                            stderr_truncated = True
+                        break
+                    buffer.extend(chunk)
+                if stdout_truncated or stderr_truncated:
+                    _terminate_process(process)
+                    return GitResult(
+                        True,
+                        _decode_output(stdout_buffer),
+                        _decode_output(stderr_buffer),
+                        0,
+                        stdout_truncated=stdout_truncated,
+                        stderr_truncated=stderr_truncated,
+                        stdout_bytes=bytes(stdout_buffer),
+                        stderr_bytes=bytes(stderr_buffer),
+                    )
+            remaining = max(deadline - time.monotonic(), 0.1)
+            returncode = process.wait(timeout=remaining)
+            return GitResult(
+                returncode == 0,
+                _decode_output(stdout_buffer),
+                _decode_output(stderr_buffer),
+                returncode,
+                stdout_bytes=bytes(stdout_buffer),
+                stderr_bytes=bytes(stderr_buffer),
+            )
+        except subprocess.TimeoutExpired as exc:
+            if process is not None:
+                _terminate_process(process)
+            return GitResult(
+                False,
+                _decode_output(stdout_buffer),
+                f"git timeout: {exc}",
+                -1,
+                stdout_truncated=stdout_truncated,
+                stderr_truncated=stderr_truncated,
+                stdout_bytes=bytes(stdout_buffer),
+                stderr_bytes=bytes(stderr_buffer),
+            )
+        except Exception as exc:
+            if process is not None:
+                _terminate_process(process)
+            return GitResult(
+                False,
+                _decode_output(stdout_buffer),
+                f"git error: {exc}",
+                -1,
+                stdout_truncated=stdout_truncated,
+                stderr_truncated=stderr_truncated,
+                stdout_bytes=bytes(stdout_buffer),
+                stderr_bytes=bytes(stderr_buffer),
+            )
+        finally:
+            if selector is not None:
+                selector.close()
+            if process is not None:
+                if process.stdout is not None:
+                    process.stdout.close()
+                if process.stderr is not None:
+                    process.stderr.close()
 
     def _run(self, args: list[str], cwd: Path, timeout: int | None = None) -> GitResult:
         try:
@@ -297,3 +441,19 @@ class GitService:
     def worktree_prune(self, repo: Path) -> GitResult:
         """Run `git worktree prune` — clean up stale administrative files."""
         return self._run(["worktree", "prune"], repo)
+
+
+def _decode_output(value: bytes | bytearray) -> str:
+    return bytes(value).decode("utf-8", errors="replace")
+
+
+def _terminate_process(process: subprocess.Popen[bytes]) -> None:
+    try:
+        process.kill()
+    except ProcessLookupError:
+        return
+    try:
+        process.wait(timeout=1)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=1)
