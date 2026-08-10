@@ -25,6 +25,7 @@
 #   - function: test_project_context_is_immutable_and_request_scoped
 #   - function: test_disabled_project_is_listed_without_remote_request
 #   - function: test_health_fanout_is_concurrent_and_isolated
+#   - function: test_concurrent_hub_requests_keep_contexts_isolated
 #   - function: test_identity_mismatch_is_degraded
 #   - function: test_browser_dto_masks_transport_secrets
 #   - function: test_project_client_decodes_health_and_rejects_malformed_json
@@ -54,6 +55,20 @@ _log = GraceLogger("test_admin_hub_project_foundation")
 
 
 # START_BLOCK_FIXTURES
+class _SharedCallBarrier:
+    def __init__(self, expected: int = 2) -> None:
+        self.expected = expected
+        self.entered = 0
+        self.all_entered = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def _enter(self) -> None:
+        self.entered += 1
+        if self.entered >= self.expected:
+            self.all_entered.set()
+        await self.release.wait()
+
+
 class _FakeProjectApi:
     def __init__(
         self,
@@ -61,10 +76,12 @@ class _FakeProjectApi:
         *,
         result: ProjectApiResult | None = None,
         delay: float = 0,
+        barrier: _SharedCallBarrier | None = None,
     ) -> None:
         self.payload = payload or {}
         self.result = result
         self.delay = delay
+        self.barrier = barrier
         self.calls = 0
         self.active = 0
         self.max_active = 0
@@ -83,6 +100,8 @@ class _FakeProjectApi:
         self.active += 1
         self.max_active = max(self.max_active, self.active)
         try:
+            if self.barrier is not None:
+                await self.barrier._enter()
             await asyncio.sleep(self.delay)
             return self.result or self.payload
         finally:
@@ -253,7 +272,8 @@ async def test_disabled_project_is_listed_without_remote_request(tmp_path):
 # START_FUNCTION_CONTRACT
 # name: test_health_fanout_is_concurrent_and_isolated
 # purpose: Prove fan-out overlaps independent APIs and retains healthy beta
-#          when alpha returns a timeout.
+#          when alpha returns a timeout. The shared barrier makes serial
+#          execution fail deterministically before either call is released.
 # inputs: tmp_path — isolated project roots.
 # returns: None; assertions prove bounded concurrent isolation.
 # side_effects: None.
@@ -263,6 +283,7 @@ async def test_disabled_project_is_listed_without_remote_request(tmp_path):
 @pytest.mark.asyncio
 async def test_health_fanout_is_concurrent_and_isolated(tmp_path):
     registry = _registry(tmp_path)
+    barrier = _SharedCallBarrier(expected=2)
     clients = {
         "alpha": _FakeProjectApi(
             result=ProjectApiResult(
@@ -272,11 +293,11 @@ async def test_health_fanout_is_concurrent_and_isolated(tmp_path):
                 error="connect/read timeout",
                 last_attempt_at="now",
             ),
-            delay=0.02,
+            barrier=barrier,
         ),
         "beta": _FakeProjectApi(
             _healthy_payload("beta", str(tmp_path / "beta")),
-            delay=0.02,
+            barrier=barrier,
         ),
     }
     service = AdminProjectService(
@@ -284,9 +305,14 @@ async def test_health_fanout_is_concurrent_and_isolated(tmp_path):
         client_factory=lambda context: clients[context.key],
         max_concurrency=2,
     )
-    rows = await service.get_projects_health()
+    fanout_task = asyncio.create_task(service.get_projects_health())
+    try:
+        await asyncio.wait_for(barrier.all_entered.wait(), timeout=1)
+        assert barrier.entered == 2
+    finally:
+        barrier.release.set()
+    rows = await fanout_task
     assert clients["alpha"].calls == clients["beta"].calls == 1
-    assert clients["alpha"].max_active == clients["beta"].max_active == 1
     assert {row["project_key"] for row in rows} == {"alpha", "beta"}
     assert next(row for row in rows if row["project_key"] == "alpha")["status"] == "timeout"
     assert next(row for row in rows if row["project_key"] == "beta")["status"] == "online"
@@ -439,3 +465,66 @@ async def test_admin_hub_routes_have_required_namespace(tmp_path):
 
 
 # END_BLOCK_CLIENT_AND_ROUTE_TESTS
+
+
+# START_BLOCK_HTTP_ISOLATION_TESTS
+# START_FUNCTION_CONTRACT
+# name: test_concurrent_hub_requests_keep_contexts_isolated
+# purpose: Prove two simultaneous ASGI requests resolve independent project
+#          contexts and runtime identities without shared selected-project state.
+# inputs: tmp_path — isolated roots for two independent fake project APIs.
+# returns: None; assertions inspect both concurrent Hub responses.
+# side_effects: Performs concurrent in-memory ASGI requests.
+# emitted_logs: None.
+# error_behavior: Fails if either request leaks the other project's context.
+# END_FUNCTION_CONTRACT
+@pytest.mark.asyncio
+async def test_concurrent_hub_requests_keep_contexts_isolated(tmp_path):
+    registry = _registry(tmp_path)
+    barrier = _SharedCallBarrier(expected=2)
+    clients = {
+        "alpha": _FakeProjectApi(
+            _healthy_payload("alpha", str(tmp_path / "alpha")),
+            barrier=barrier,
+        ),
+        "beta": _FakeProjectApi(
+            _healthy_payload("beta", str(tmp_path / "beta")),
+            barrier=barrier,
+        ),
+    }
+    app = create_app(
+        project_registry=registry,
+        project_client_factory=lambda context: clients[context.key],
+    )
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://hub.test",
+    ) as client:
+        alpha_task = asyncio.create_task(
+            client.get("/api/admin-hub/projects/alpha/health")
+        )
+        beta_task = asyncio.create_task(
+            client.get("/api/admin-hub/projects/beta/health")
+        )
+        try:
+            await asyncio.wait_for(barrier.all_entered.wait(), timeout=1)
+            assert barrier.entered == 2
+        finally:
+            barrier.release.set()
+        alpha_response, beta_response = await asyncio.gather(alpha_task, beta_task)
+
+    assert alpha_response.status_code == 200
+    assert beta_response.status_code == 200
+    alpha = alpha_response.json()
+    beta = beta_response.json()
+    assert alpha["project_key"] == "alpha"
+    assert alpha["registry"]["key"] == "alpha"
+    assert alpha["runtime"]["project_key"] == "alpha"
+    assert beta["project_key"] == "beta"
+    assert beta["registry"]["key"] == "beta"
+    assert beta["runtime"]["project_key"] == "beta"
+    assert "beta" not in str(alpha)
+    assert "alpha" not in str(beta)
+
+
+# END_BLOCK_HTTP_ISOLATION_TESTS
