@@ -4,6 +4,7 @@
 
 - Base SHA: `2071706929d776295647fa1b3699a75215b28112`
 - Feature implementation SHA: `a8c1eb824dfa9857dfcec82da848b4d1e63924a9`
+- Review fix SHA: `22766e56d1a9942cc9a024d395963a8d2c6632ee`
 
 ## Migration and upgrade path
 
@@ -86,14 +87,24 @@ abandoned accepted packets whose parallel lease expired before merge. Worktree
 cleanup keeps a registered/live packet worktree when ownership cannot be
 proven orphaned; it does not use a blind target-repository reset.
 
+The review fix makes this cleanup decision fail closed for both database
+initialization errors and ownership-query errors. In effective parallel mode,
+an ACCEPTED packet also cannot enter merge coordination without its exact
+`parallel_lease_id` and `claimed_attempt`; missing, stale, or wrong identity
+returns typed `parallel_lease_lost` before target checkout, merge, or push.
+
 ## Tests and results
 
-- `tests/test_tz06_multiworker_integration.py`: **5 passed**. This uses a
-  file-backed SQLite database, the real FastAPI claim/release/renew/diagnostic
-  routes, five real Worker-cycle/runtime checks, and stale accepted-packet
-  cleanup.
+- `tests/test_tz06_multiworker_integration.py`: **12 passed**. The final suite
+  uses file-backed SQLite, concurrent real Worker tasks through the FastAPI
+  claim/release/merge routes, isolated real git worktrees and commits, and
+  timestamp assertions for overlapping execution plus non-overlapping target
+  checkout/merge/push mutations. It covers disjoint overlap, same-scope and
+  same-key waits with later progress, dependency-to-MERGED/fresh-base order,
+  stale-base clean/conflict/verification paths, crash/expiry recovery,
+  parallel fencing, diagnostics, and the concurrency=1 contender path.
 - TZ03/TZ04/TZ05 plus TZ006, worker, cleanup, diagnostics, supervisor, and
-  crash integration set: **70 passed**.
+  crash integration set: **80 passed**.
 - Alembic/database schema, packet executor, and real recovery set: **82
   passed**.
 - `python3 -m py_compile` on all changed Python modules and the TZ006 test:
@@ -110,22 +121,23 @@ those files were not broadened as part of TZ006.
 
 ## Multi-worker smoke proof
 
-Four artificially slow independent packets use a delay of approximately
-80 ms. The test records monotonic start/end timestamps for every real Worker
-execution and asserts that at least one later packet starts before an earlier
-packet finishes. The observed run completed in approximately 1.8 seconds
-including database setup, while the packet execution intervals overlap; the
-proof is timestamp-based and has no machine-specific absolute performance
-threshold. Parallel lease retention/renewal and the concurrency=1 legacy
-queue behavior are covered by the TZ03/TZ006 regression tests.
+Four independent packets run through concurrent real Worker cycles against a
+file-backed SQLite database. Each test executor creates a real isolated git
+worktree and commit. Monotonic execution intervals overlap, while an
+instrumented real `GitService` records target checkout/fetch/merge/push and
+worktree mutation intervals and asserts they do not overlap. Later packets
+exercise the stale-base integration recheck and still merge cleanly; the
+target repository contains all four packet files and every packet ends in
+`MERGED`. Parallel lease retention/renewal, typed waits, crash recovery, and
+the concurrency=1 legacy queue behavior are covered by the same final suite.
 
 ## Known limitations
 
-- The TZ006 smoke fixture uses real Worker tasks with an ASGI-backed control
-  plane; full OS-level Supervisor spawning is covered by the existing
-  Supervisor integration tests rather than by a long-lived multi-process
-  performance test.
-- The merge and stale-base suites use deterministic Git doubles and isolated
-  repositories to make race/fencing outcomes reproducible; production uses the
-  same coordinator and integration-recheck services.
+- The TZ006 proof uses real Worker tasks with an ASGI-backed control plane and
+  real git repositories; full OS-level Supervisor spawning remains covered by
+  the existing Supervisor integration tests rather than a long-lived
+  multi-process performance test.
+- Earlier TZ03/TZ04/TZ05 regression suites still use deterministic Git doubles
+  where reproducibility is useful; the final TZ006 merge/stale-base proof uses
+  the production coordinator and integration-recheck services with real git.
 - Existing unrelated admin/UI legacy assertions remain outside this scope.
