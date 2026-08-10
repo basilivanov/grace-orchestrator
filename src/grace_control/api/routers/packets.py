@@ -332,11 +332,20 @@ async def retry_packet(packet_id: str, request: dict) -> dict:
     }
 
 
+# START_FUNCTION_CONTRACT
+# name: merge_packet
+# purpose: Merge an accepted packet or return non-terminal merge-slot WAIT.
+# inputs: packet_id and request merge metadata.
+# returns: JSON merge success, 202 waiting response, or HTTP error.
+# side_effects: Delegated target-repository mutations and lifecycle events.
+# emitted_logs: merge_wait, merge_failed, packet_merged.
+# error_behavior: Real merge failures return HTTP 409; slot contention is 202.
+# END_FUNCTION_CONTRACT
 @router.post("/{packet_id}/merge")
 async def merge_packet(packet_id: str, request: dict) -> dict:
     """Merge accepted packet: ACCEPTED → MERGED. Delegates to MergeService."""
     from grace_control.config.settings import settings as _settings
-    from grace_control.services.merge_service import MergeService
+    from grace_control.services.merge_service import MergeService, is_merge_slot_wait
     from grace_control.db.schema import PacketState as _PS
 
     worktree_path = request.get("worktree_path", "")
@@ -371,10 +380,24 @@ async def merge_packet(packet_id: str, request: dict) -> dict:
         target_repo_root=target_repo_root,
         branch_name=branch_name,
         target_branch=target_branch,
+        worktree_path=worktree_path,
         worker_id=worker_id,
     )
 
     if not result.success:
+        if is_merge_slot_wait(result.error):
+            _log.info("merge_wait", packet_id=packet_id, reason=result.error[:200])
+            return JSONResponse(
+                status_code=202,
+                content={
+                    "data": {
+                        "packet_id": packet_id,
+                        "state": "waiting",
+                        "wait_reason": result.error,
+                    },
+                    "timestamp": datetime.now(UTC).isoformat() + "Z",
+                },
+            )
         _log.warn("merge_failed", packet_id=packet_id, error=result.error[:200])
         try:
             with get_db() as db:
@@ -396,13 +419,6 @@ async def merge_packet(packet_id: str, request: dict) -> dict:
     except Exception as _evt_err:
         _log.warn("merged_event_record_failed",
             packet_id=packet_id, error=str(_evt_err)[:200])
-
-    if worktree_path:
-        from pathlib import Path as _P
-        await svc.cleanup_worktree(
-            _P(worktree_path), branch_name,
-            target_repo_root=_P(target_repo_root) if target_repo_root else None,
-        )
 
     _log.info("packet_merged", packet_id=packet_id,
         commit_sha=result.commit_sha, target_repo=result.target_repo)

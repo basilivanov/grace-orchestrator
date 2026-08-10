@@ -16,6 +16,7 @@
 # START_MODULE_MAP
 # mapping:
 #   - dataclass: MergeResult
+#   - function: is_merge_slot_wait
 #   - class: MergeService
 # END_MODULE_MAP
 
@@ -38,6 +39,20 @@ from grace_control.services.merge_coordinator_service import (
 )
 
 _log = GraceLogger("merge_service")
+MERGE_SLOT_WAIT_PREFIX = "waiting_for_merge_slot:"
+
+
+# START_FUNCTION_CONTRACT
+# name: is_merge_slot_wait
+# purpose: Identify the non-terminal merge order/lease contention result.
+# inputs: error — MergeResult error text.
+# returns: True only for coordinator slot/order wait reasons.
+# side_effects: None.
+# emitted_logs: None.
+# error_behavior: False for empty or unrelated errors.
+# END_FUNCTION_CONTRACT
+def is_merge_slot_wait(error: str) -> bool:
+    return str(error).startswith(MERGE_SLOT_WAIT_PREFIX)
 
 
 @dataclass
@@ -78,9 +93,10 @@ class MergeService:
     # START_FUNCTION_CONTRACT
     # name: merge_packet
     # purpose: Serialize accepted packet checkout, merge, push, and MERGED
-    #          transition for one target repository.
+    #          transition for one target repository, including shared git
+    #          worktree cleanup while the merge lease is held.
     # inputs: packet_id, target_repo_root, branch_name, target_branch, and
-    #         optional worker_id fencing identity.
+    #         optional worktree_path and worker_id fencing identity.
     # returns: MergeResult describing success or a typed-safe failure reason.
     # side_effects: Guarded git mutations, packet transition, and lease release.
     # emitted_logs: merge_packet_start, merge_packet_done, merge_packet_failed.
@@ -95,6 +111,7 @@ class MergeService:
         branch_name: str,
         target_branch: str,
         worker_id: str | None = None,
+        worktree_path: str | Path | None = None,
     ) -> MergeResult:
         from grace_control.services.packet_service import PacketService
         svc = self._packets or PacketService()
@@ -253,6 +270,24 @@ class MergeService:
                 _log.warn("merge_branch_cleanup_failed",
                     packet_id=packet_id, error=str(error)[:200])
 
+            if worktree_path:
+                try:
+                    cleanup_path = Path(worktree_path).resolve()
+                    self._cleanup_worktree_for_merge(
+                        repo,
+                        cleanup_path,
+                        branch_name,
+                        target_repo_key=lease.target_repo_key,
+                        lease_token=lease.lease_token,
+                        packet_id=packet_id,
+                        worker_id=holder,
+                    )
+                except MergeLeaseFencedError:
+                    _log.warn("merge_worktree_cleanup_skipped_fenced", packet_id=packet_id)
+                except Exception as error:
+                    _log.warn("merge_worktree_cleanup_failed",
+                        packet_id=packet_id, error=str(error)[:200])
+
             _log.info("merge_packet_done",
                 packet_id=packet_id, commit_sha=commit_sha[:12], branch=branch_name)
             return MergeResult(True, packet_id, commit_sha, str(repo), branch_name, target_branch)
@@ -287,6 +322,16 @@ class MergeService:
                 _log.warn("merge_lease_release_failed",
                     packet_id=packet_id, error=str(error)[:200])
 
+    # START_FUNCTION_CONTRACT
+    # name: cleanup_worktree
+    # purpose: Best-effort cleanup for callers outside the merge orchestration.
+    # inputs: worktree_path, branch, and optional target_repo_root.
+    # returns: None.
+    # side_effects: Git worktree metadata and filesystem cleanup.
+    # emitted_logs: worktree_git_remove_failed, worktree_prune_failed,
+    #                worktree_branch_delete_failed, worktree_cleanup_failed.
+    # error_behavior: Logs cleanup failures and never raises.
+    # END_FUNCTION_CONTRACT
     async def cleanup_worktree(
         self,
         worktree_path: Path,
@@ -308,30 +353,84 @@ class MergeService:
             wt = worktree_path.resolve()
             if target_repo_root is not None:
                 repo = Path(target_repo_root).resolve()
-                remove = self._git.worktree_remove(repo, wt, force=True)
-                if not remove.success:
-                    _log.warn("worktree_git_remove_failed",
-                        worktree=str(wt), stderr=remove.stderr[:200])
-                prune = self._git.worktree_prune(repo)
-                if not prune.success:
-                    _log.warn("worktree_prune_failed",
-                        repo=str(repo), stderr=prune.stderr[:200])
-                # TZ_RETENTION_POLICY Phase 1: delete the merged branch.
-                # The full sweep across all attempt-branches happens in
-                # `merge_packet`; here we just remove the single branch that
-                # was passed in (the one we just merged).
-                if branch:
-                    del_result = self._git._run(
-                        ["branch", "-D", branch], repo
-                    )
-                    if not del_result.success:
-                        _log.warn("worktree_branch_delete_failed",
-                            branch=branch, stderr=del_result.stderr[:200])
-            if wt.exists():
-                import shutil
-                shutil.rmtree(wt, ignore_errors=True)
+                self._cleanup_worktree_git(repo, wt, branch)
+            self._remove_worktree_filesystem(wt)
         except Exception as e:
             _log.warn("worktree_cleanup_failed", worktree=str(worktree_path), error=str(e)[:200])
+
+    def _cleanup_worktree_for_merge(
+        self,
+        repo: Path,
+        worktree_path: Path,
+        branch: str,
+        *,
+        target_repo_key: str,
+        lease_token: str,
+        packet_id: str,
+        worker_id: str,
+    ) -> None:
+        """Run each shared cleanup mutation under the current merge fence."""
+        remove = self._coordinator.run_mutation(
+            target_repo_key=target_repo_key,
+            lease_token=lease_token,
+            packet_id=packet_id,
+            worker_id=worker_id,
+            step_name="worktree_remove",
+            operation=lambda: self._git.worktree_remove(repo, worktree_path, force=True),
+        )
+        if not remove.success:
+            _log.warn("worktree_git_remove_failed",
+                worktree=str(worktree_path), stderr=remove.stderr[:200])
+
+        prune = self._coordinator.run_mutation(
+            target_repo_key=target_repo_key,
+            lease_token=lease_token,
+            packet_id=packet_id,
+            worker_id=worker_id,
+            step_name="worktree_prune",
+            operation=lambda: self._git.worktree_prune(repo),
+        )
+        if not prune.success:
+            _log.warn("worktree_prune_failed",
+                repo=str(repo), stderr=prune.stderr[:200])
+
+        if branch:
+            del_result = self._coordinator.run_mutation(
+                target_repo_key=target_repo_key,
+                lease_token=lease_token,
+                packet_id=packet_id,
+                worker_id=worker_id,
+                step_name="worktree_branch_delete",
+                operation=lambda: self._git._run(["branch", "-D", branch], repo),
+            )
+            if not del_result.success:
+                _log.warn("worktree_branch_delete_failed",
+                    branch=branch, stderr=del_result.stderr[:200])
+
+        self._remove_worktree_filesystem(worktree_path)
+
+    def _cleanup_worktree_git(self, repo: Path, worktree_path: Path, branch: str) -> None:
+        remove = self._git.worktree_remove(repo, worktree_path, force=True)
+        if not remove.success:
+            _log.warn("worktree_git_remove_failed",
+                worktree=str(worktree_path), stderr=remove.stderr[:200])
+        prune = self._git.worktree_prune(repo)
+        if not prune.success:
+            _log.warn("worktree_prune_failed",
+                repo=str(repo), stderr=prune.stderr[:200])
+        # TZ_RETENTION_POLICY Phase 1: delete the merged branch. The full
+        # sweep across attempt branches happens in merge_packet.
+        if branch:
+            del_result = self._git._run(["branch", "-D", branch], repo)
+            if not del_result.success:
+                _log.warn("worktree_branch_delete_failed",
+                    branch=branch, stderr=del_result.stderr[:200])
+
+    @staticmethod
+    def _remove_worktree_filesystem(worktree_path: Path) -> None:
+        if worktree_path.exists():
+            import shutil
+            shutil.rmtree(worktree_path, ignore_errors=True)
 
     def _cleanup_packet_branches(self, repo: Path, packet_id: str) -> None:
         """Delete ALL `agent/<packet_id>-attempt-*` branches after a successful

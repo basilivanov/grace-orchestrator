@@ -16,6 +16,7 @@
 # START_MODULE_MAP
 # mapping:
 #   - class: RecordingGit
+#   - class: WorkerMergeAPI
 #   - function: test_same_repo_has_one_holder_and_second_does_not_mutate
 #   - function: test_path_aliases_share_merge_lease
 #   - function: test_different_repositories_can_mutate_concurrently
@@ -23,6 +24,8 @@
 #   - function: test_takeover_refuses_dirty_or_in_progress_repo
 #   - function: test_accepted_merge_order_is_wave_created_at_id
 #   - function: test_successful_merge_releases_parallel_lease
+#   - function: test_worker_waits_then_retries_merge_after_slot_release
+#   - function: test_merge_router_exposes_slot_wait
 # END_MODULE_MAP
 
 from __future__ import annotations
@@ -33,9 +36,11 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
+from grace_control.adapters.packet_executor import ExecutionResult
 from grace_control.core.structured_logger import GraceLogger
 from grace_control.db import get_db, init_db
 from grace_control.db.schema import (
@@ -52,8 +57,9 @@ from grace_control.services.merge_coordinator_service import (
     MergeLeaseFencedError,
     MergeLeaseTakeoverError,
 )
-from grace_control.services.merge_service import MergeService
+from grace_control.services.merge_service import MergeResult, MergeService, is_merge_slot_wait
 from grace_control.services.parallel_lease_service import ParallelLeaseService
+from grace_control.worker.worker import ExecutionState, Worker
 
 _log = GraceLogger("test_tz04_serialized_merge")
 
@@ -69,6 +75,9 @@ class RecordingGit:
         self.steps: list[tuple[str, str]] = []
         self.dirty = False
         self.merge_in_progress = False
+        self.pause_at: str | None = None
+        self.pause_entered = threading.Event()
+        self.resume_pause = threading.Event()
 
     # START_FUNCTION_CONTRACT
     # name: validate_repo
@@ -107,6 +116,8 @@ class RecordingGit:
             return GitResult(False, "", "", 1)
         if args[:2] == ["branch", "--list"]:
             return GitResult(True, "", "", 0)
+        if args[:2] == ["branch", "-D"]:
+            return self._mutate("branch_cleanup")
         return GitResult(True, "", "", 0)
 
     # START_FUNCTION_CONTRACT
@@ -123,6 +134,9 @@ class RecordingGit:
             self.active_mutations += 1
             self.max_active_mutations = max(self.max_active_mutations, self.active_mutations)
             self.steps.append(("start", step))
+        if self.pause_at == step:
+            self.pause_entered.set()
+            self.resume_pause.wait(timeout=5)
         time.sleep(0.04)
         with self._lock:
             self.steps.append(("done", step))
@@ -178,6 +192,30 @@ class RecordingGit:
         return self._mutate("push")
 
     # START_FUNCTION_CONTRACT
+    # name: worktree_remove
+    # purpose: Record shared target-repository worktree metadata cleanup.
+    # inputs: repo, worktree_path, force — cleanup target and mode.
+    # returns: Successful GitResult.
+    # side_effects: Recorder mutation event.
+    # emitted_logs: None.
+    # error_behavior: None.
+    # END_FUNCTION_CONTRACT
+    def worktree_remove(self, repo: Path, worktree_path: Path, *, force: bool = True) -> GitResult:
+        return self._mutate("worktree_remove")
+
+    # START_FUNCTION_CONTRACT
+    # name: worktree_prune
+    # purpose: Record shared target-repository worktree metadata pruning.
+    # inputs: repo — target repository path.
+    # returns: Successful GitResult.
+    # side_effects: Recorder mutation event.
+    # emitted_logs: None.
+    # error_behavior: None.
+    # END_FUNCTION_CONTRACT
+    def worktree_prune(self, repo: Path) -> GitResult:
+        return self._mutate("worktree_prune")
+
+    # START_FUNCTION_CONTRACT
     # name: current_sha
     # purpose: Return a stable target HEAD for merge result assertions.
     # inputs: repo — target repository path.
@@ -190,6 +228,62 @@ class RecordingGit:
         return "a" * 40
 
 # END_BLOCK_RECORDING_GIT
+
+
+# START_BLOCK_WORKER_MERGE_API
+class WorkerMergeAPI:
+    """Small API seam that preserves the router's merge response contract."""
+
+    # START_FUNCTION_CONTRACT
+    # name: __init__
+    # purpose: Bind a worker-facing merge API seam to a real MergeService.
+    # inputs: service — merge orchestrator; worker_id — caller identity.
+    # returns: None.
+    # side_effects: Initializes call and wait counters.
+    # emitted_logs: None.
+    # error_behavior: None.
+    # END_FUNCTION_CONTRACT
+    def __init__(self, service: MergeService, worker_id: str) -> None:
+        self.service = service
+        self.worker_id = worker_id
+        self.calls = 0
+        self.waits = 0
+        self.wait_seen = threading.Event()
+
+    # START_FUNCTION_CONTRACT
+    # name: merge_packet
+    # purpose: Execute a worker merge request and expose wait as a non-error response.
+    # inputs: packet_id and API merge metadata.
+    # returns: Router-shaped merged or waiting response.
+    # side_effects: Delegates target mutation to MergeService.
+    # emitted_logs: None.
+    # error_behavior: Raises real merge errors; slot contention becomes WAIT.
+    # END_FUNCTION_CONTRACT
+    async def merge_packet(self, packet_id: str, **kwargs) -> dict:
+        self.calls += 1
+        result = await self.service.merge_packet(
+            packet_id=packet_id,
+            target_repo_root=kwargs["target_repo_root"],
+            worktree_path=kwargs["worktree_path"],
+            branch_name=kwargs["branch_name"],
+            target_branch="main",
+            worker_id=self.worker_id,
+        )
+        if result.success:
+            return {"data": {"packet_id": packet_id, "state": "merged"}}
+        if is_merge_slot_wait(result.error):
+            self.waits += 1
+            self.wait_seen.set()
+            return {
+                "data": {
+                    "packet_id": packet_id,
+                    "state": "waiting",
+                    "wait_reason": result.error,
+                },
+            }
+        raise RuntimeError(result.error)
+
+# END_BLOCK_WORKER_MERGE_API
 
 
 # START_BLOCK_HELPERS
@@ -514,5 +608,149 @@ def test_successful_merge_releases_parallel_lease(tmp_path):
         assert db.query(Packet).filter_by(id="packet-a").one().state == PacketState.MERGED.value
         assert db.query(ParallelLease).filter_by(packet_id="packet-a").one_or_none() is None
         assert db.query(MergeLease).filter_by(target_repo_key=str(root.resolve())).one_or_none() is None
+
+
+# START_FUNCTION_CONTRACT
+# name: test_merge_router_exposes_slot_wait
+# purpose: Prove API/client callers receive merge contention as non-error WAIT.
+# inputs: api — isolated ASGI client; monkeypatch — service stub control.
+# returns: None on success.
+# side_effects: Inserts an accepted packet and invokes the merge endpoint.
+# emitted_logs: None.
+# error_behavior: Assertion failure if WAIT becomes a terminal HTTP failure.
+# END_FUNCTION_CONTRACT
+async def test_merge_router_exposes_slot_wait(api, monkeypatch):
+    packet_id = "packet-router-wait"
+    with get_db() as db:
+        db.add(Packet(
+            id=packet_id,
+            feature_id="feature-1",
+            wave_id="wave-1",
+            slug=packet_id,
+            title=packet_id,
+            spec_json={},
+            state=PacketState.ACCEPTED.value,
+            attempt_count=1,
+            max_attempts=3,
+        ))
+
+    async def waiting_merge(self, **kwargs):
+        return MergeResult(
+            False,
+            kwargs["packet_id"],
+            "",
+            "/tmp/repo",
+            kwargs["branch_name"],
+            kwargs["target_branch"],
+            error="waiting_for_merge_slot: holder is active",
+        )
+
+    monkeypatch.setattr(MergeService, "merge_packet", waiting_merge)
+    response = await api.post(
+        f"/api/packets/{packet_id}/merge",
+        json={
+            "worktree_path": "/tmp/worktree",
+            "branch_name": "agent/packet-router-wait",
+            "target_repo_root": "/tmp/repo",
+        },
+    )
+    assert response.status_code == 202
+    assert response.json()["data"]["state"] == "waiting"
+    assert response.json()["data"]["wait_reason"].startswith(
+        "waiting_for_merge_slot:"
+    )
+
+
+# START_FUNCTION_CONTRACT
+# name: test_worker_waits_then_retries_merge_after_slot_release
+# purpose: Prove worker/API WAIT retries and shared git cleanup stay fenced.
+# inputs: tmp_path — isolated DB, target, and worktree paths.
+# returns: None on success.
+# side_effects: Runs two worker merge phases and records target mutations.
+# emitted_logs: None.
+# error_behavior: Assertion failure on lost WAIT progress or cleanup overlap.
+# END_FUNCTION_CONTRACT
+def test_worker_waits_then_retries_merge_after_slot_release(tmp_path, monkeypatch):
+    root = tmp_path / "target"
+    root.mkdir()
+    base = datetime.now(UTC)
+    _seed_packets(
+        tmp_path,
+        [
+            ("packet-a", "wave-1", base, root),
+            ("packet-b", "wave-1", base + timedelta(seconds=1), root),
+        ],
+    )
+    worktree_a = tmp_path / "worktree-a"
+    worktree_b = tmp_path / "worktree-b"
+    worktree_a.mkdir()
+    worktree_b.mkdir()
+
+    git = RecordingGit()
+    git.pause_at = "worktree_remove"
+    service = MergeService(git=git)
+    api_a = WorkerMergeAPI(service, "worker-a")
+    api_b = WorkerMergeAPI(service, "worker-b")
+
+    worker_a = Worker.__new__(Worker)
+    worker_a.api = api_a
+    worker_a.worker_id = "worker-a"
+    worker_a.log = MagicMock()
+    worker_a._git_context = MagicMock(target_repo_root=root)
+    worker_b = Worker.__new__(Worker)
+    worker_b.api = api_b
+    worker_b.worker_id = "worker-b"
+    worker_b.log = MagicMock()
+    worker_b._git_context = MagicMock(target_repo_root=root)
+
+    monkeypatch.setattr(
+        "grace_control.worker.worker._MERGE_WAIT_INITIAL_DELAY_SECONDS",
+        0.01,
+    )
+    state_a = ExecutionState(packet_id="packet-a", worker_id="worker-a", release_status="accepted")
+    state_b = ExecutionState(packet_id="packet-b", worker_id="worker-b", release_status="accepted")
+    result_a = ExecutionResult(
+        accepted=True,
+        domain_status="accepted",
+        worktree_path=str(worktree_a),
+        branch_name="agent/packet-a",
+        commit_sha="a" * 40,
+    )
+    result_b = ExecutionResult(
+        accepted=True,
+        domain_status="accepted",
+        worktree_path=str(worktree_b),
+        branch_name="agent/packet-b",
+        commit_sha="b" * 40,
+    )
+
+    def run_phase(worker, state, result):
+        return asyncio.run(worker._phase_merge(state, result))
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first_future = executor.submit(run_phase, worker_a, state_a, result_a)
+        assert git.pause_entered.wait(timeout=5), "first merge did not enter shared cleanup"
+
+        second_future = executor.submit(run_phase, worker_b, state_b, result_b)
+        assert api_b.wait_seen.wait(timeout=5), "second worker did not observe merge WAIT"
+        with git._lock:
+            started_before_release = [step for kind, step in git.steps if kind == "start"]
+            assert git.active_mutations == 1
+        assert started_before_release == [
+            "checkout", "fetch", "merge", "push", "worktree_remove"
+        ]
+        assert git.max_active_mutations == 1
+
+        git.resume_pause.set()
+        first_future.result(timeout=5)
+        second_future.result(timeout=5)
+
+    assert api_b.calls >= 2
+    assert api_b.waits >= 1
+    worker_b.log.error.assert_not_called()
+    assert git.max_active_mutations == 1
+    with get_db() as db:
+        assert db.query(Packet).filter_by(id="packet-a").one().state == PacketState.MERGED.value
+        assert db.query(Packet).filter_by(id="packet-b").one().state == PacketState.MERGED.value
 
 # END_BLOCK_TESTS

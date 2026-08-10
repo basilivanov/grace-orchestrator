@@ -23,6 +23,18 @@ from grace_control.core.structured_logger import GraceLogger, trace_context
 from grace_control.worker.api_client import WorkerAPIClient
 
 
+_MERGE_WAIT_INITIAL_DELAY_SECONDS = 1.0
+_MERGE_WAIT_MAX_DELAY_SECONDS = 10.0
+
+
+def _merge_wait_delay(wait_attempt: int) -> float:
+    """Return a bounded exponential delay for expected merge-slot waits."""
+    return min(
+        _MERGE_WAIT_MAX_DELAY_SECONDS,
+        _MERGE_WAIT_INITIAL_DELAY_SECONDS * (2 ** min(wait_attempt, 10)),
+    )
+
+
 # ── W07: Failure classification ────────────────────────────────────────────
 
 class WorkerFailureType(str, Enum):
@@ -471,37 +483,62 @@ class Worker:
         self.log.info("merging", packet_id=packet_id,
             worktree=result.worktree_path, branch=result.branch_name,
             target_repo=target_repo, sha=result.commit_sha[:12])
-        try:
-            await self.api.merge_packet(packet_id,
-                target_repo_root=target_repo,
-                worktree_path=result.worktree_path,
-                branch_name=result.branch_name,
-                commit_sha=result.commit_sha,
-                worker_id=self.worker_id)
-            self.log.info("merged", packet_id=packet_id)
-        except Exception as merge_exc:
-            # W07: Merge failure — record explicit observable event
-            # so humans can take manual action. Don't silently swallow.
-            merge_error = str(merge_exc)[:500]
-            self.log.error("merge_failed_action_required",
-                packet_id=packet_id,
-                branch=result.branch_name,
-                commit_sha=result.commit_sha[:12],
-                error=merge_error)
-            # Record the merge failure as an event for observability
+        wait_attempt = 0
+        while True:
             try:
-                from grace_control.core.event_recorder import record_event
-                record_event("packet_merge_failed", "packet", packet_id, {
-                    "action_required": True,
-                    "branch": result.branch_name,
-                    "commit_sha": result.commit_sha[:12],
-                    "target_repo": target_repo,
-                    "error": merge_error,
-                    "manual_action": f"Manually merge branch {result.branch_name} into target",
-                })
-            except Exception as evt_err:
-                self.log.warn("merge_event_record_failed",
-                    packet_id=packet_id, error=str(evt_err)[:200])
+                merge_response = await self.api.merge_packet(packet_id,
+                    target_repo_root=target_repo,
+                    worktree_path=result.worktree_path,
+                    branch_name=result.branch_name,
+                    commit_sha=result.commit_sha,
+                    worker_id=exec_state.worker_id)
+            except Exception as merge_exc:
+                # W07: Merge failure — record explicit observable event
+                # so humans can take manual action. Don't silently swallow.
+                merge_error = str(merge_exc)[:500]
+                self.log.error("merge_failed_action_required",
+                    packet_id=packet_id,
+                    branch=result.branch_name,
+                    commit_sha=result.commit_sha[:12],
+                    error=merge_error)
+                # Record the merge failure as an event for observability
+                try:
+                    from grace_control.core.event_recorder import record_event
+                    record_event("packet_merge_failed", "packet", packet_id, {
+                        "action_required": True,
+                        "branch": result.branch_name,
+                        "commit_sha": result.commit_sha[:12],
+                        "target_repo": target_repo,
+                        "error": merge_error,
+                        "manual_action": f"Manually merge branch {result.branch_name} into target",
+                    })
+                except Exception as evt_err:
+                    self.log.warn("merge_event_record_failed",
+                        packet_id=packet_id, error=str(evt_err)[:200])
+                return
+
+            response_data = (
+                merge_response.get("data", {})
+                if isinstance(merge_response, dict)
+                else {}
+            )
+            wait_reason = str(response_data.get("wait_reason", ""))
+            if (
+                response_data.get("state") == "waiting"
+                and wait_reason.startswith("waiting_for_merge_slot:")
+            ):
+                delay = _merge_wait_delay(wait_attempt)
+                wait_attempt += 1
+                self.log.info("merge_slot_wait",
+                    packet_id=packet_id,
+                    attempt=wait_attempt,
+                    delay_seconds=delay,
+                    reason=wait_reason[:200])
+                await asyncio.sleep(delay)
+                continue
+
+            self.log.info("merged", packet_id=packet_id)
+            return
 
     # ── Phase 5: POST-RELEASE ───────────────────────────────────────────────
 
