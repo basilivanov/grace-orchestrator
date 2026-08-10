@@ -1,0 +1,35 @@
+<section class="cc-page-heading">
+  <div>
+    <p class="eyebrow">Files · {{ project.project_key }}</p>
+    <h1>Safe operational files</h1>
+    <p class="muted">Named roots advertised by the selected project. Browser paths are logical relative paths only.</p>
+  </div>
+  <span class="source-badge">FILE</span>
+</section>
+
+{% if error %}<div class="cc-banner warning" data-testid="filesystem-error">{{ error }}{% if error_class %} · {{ error_class }}{% endif %}</div>{% endif %}
+{% if path_error %}<div class="cc-banner warning" data-testid="filesystem-path-error">{{ path_error.code }}: {{ path_error.message }}</div>{% endif %}
+{% if not capability_available %}<div class="cc-banner info" data-testid="filesystem-unavailable">Filesystem capability unavailable for this project.</div>{% endif %}
+
+<form class="cc-inline-form cc-explorer-filters" method="get" data-testid="files-filter">
+  <label>Logical root<select name="root">{% for root_item in roots %}<option value="{{ root_item.root }}"{% if root_item.root == root %} selected{% endif %}>{{ root_item.root }}{% if not root_item.exists %} (unavailable){% endif %}</option>{% endfor %}</select></label>
+  <label>Relative directory path<input name="path" value="{{ path|default('') }}" placeholder="subdirectory/file.txt"></label>
+  <label>Preview relative file<input name="preview" value="{{ preview_path|default('') }}" placeholder="stdout.log"></label>
+  <label>Tail lines<input type="number" name="tail" min="0" max="1000" value="{{ request.query_params.get('tail', '0') }}"></label>
+  <button type="submit">Browse</button>
+</form>
+
+<section class="cc-entity-card cc-file-browser">
+  <header class="cc-section-heading"><h2>{{ root or 'No advertised root' }} / {{ path or 'root' }}</h2>{% if truncated %}<span class="text-warning">listing truncated</span>{% endif %}</header>
+  <table class="cc-table"><thead><tr><th>Name</th><th>Kind</th><th>Size</th><th>MIME</th><th>Source</th><th>Actions</th></tr></thead><tbody>
+  {% for entry in entries %}<tr><td>{% if entry.kind == 'directory' %}<a href="{{ cc_url(project.project_key, 'files', '', root=root, path=entry.path) }}">{{ entry.name }}/</a>{% else %}<a href="{{ cc_url(project.project_key, 'files', '', root=root, path=path, preview=entry.path) }}">{{ entry.name }}</a>{% endif %}</td><td>{{ entry.kind|default('unknown') }}</td><td>{{ entry.size|default('—') }}</td><td>{{ entry.mime|default('—') }}</td><td>FILE</td><td>{% if entry.kind != 'directory' %}<a href="{{ cc_url(project.project_key, 'files', '', root=root, path=path, preview=entry.path) }}">Preview</a>{% else %}Browse{% endif %}</td></tr>{% else %}<tr><td colspan="6">No entries returned.</td></tr>{% endfor %}
+  </tbody></table>
+</section>
+
+{% if preview %}
+<section class="cc-entity-card" data-testid="file-preview">
+  <div class="cc-viewer-toolbar"><h2>Preview · {{ preview.path or preview_path }}</h2><span class="source-badge">FILE</span>{% if preview.truncated %}<span class="text-warning">truncated</span>{% endif %}<button type="button" data-copy-text="file-preview-content">Copy</button><button type="button" data-download-visible="file-preview-content">Download bounded</button></div>
+  {% if stat %}<p class="small muted">{{ stat.kind|default('resource') }} · {{ stat.size|default('—') }} bytes · mtime={{ stat.mtime|default('—') }} · source=FILE</p>{% endif %}
+  {% if preview.binary %}<p class="muted">Binary file · {{ preview.size }} bytes · bounded download/metadata only.</p><pre id="file-preview-content">{{ preview.content_base64|default('') }}</pre>{% else %}<pre id="file-preview-content" class="json-preview">{{ preview.content|default('') }}</pre>{% endif %}
+</section>
+{% endif %}

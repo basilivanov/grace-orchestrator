@@ -1,4 +1,35 @@
-<section class="cc-page-heading"><div><p class="eyebrow">Logs{% if current_project %} · {{ current_project.project_key }}{% endif %}</p><h1>Bounded runtime logs</h1><p class="muted">Project attribution and partial coverage are preserved.</p></div></section>
-<form class="cc-inline-form" method="get"><input name="project" value="{{ current_project.project_key if current_project else '' }}" placeholder="project key"><input name="contains" value="{{ contains|default('') }}" placeholder="contains"><input name="level" value="{{ level|default('') }}" placeholder="level"><button>Filter</button></form>
+<section class="cc-page-heading">
+  <div>
+    <p class="eyebrow">Logs{% if current_project %} · {{ current_project.project_key }}{% endif %}</p>
+    <h1>Bounded log explorer</h1>
+    <p class="muted">Only bounded tails/cursors are fetched. Follow is opt-in and off by default.</p>
+  </div>
+  {% if partial %}<span class="coverage">bounded / partial</span>{% endif %}
+</section>
+
+<form class="cc-inline-form cc-explorer-filters" method="get" data-testid="log-filters">
+  <label>Project(s)<input name="project" value="{{ filters.project|default('') }}" placeholder="all or alpha,beta"></label>
+  <label>Source<select name="source"><option value="all">all</option>{% for source_name in source_options|default([]) if source_name != 'all' %}<option value="{{ source_name }}"{% if filters.source == source_name %} selected{% endif %}>{{ source_name }}</option>{% endfor %}</select></label>
+  <label>Worker<input name="worker" value="{{ filters.worker|default('') }}"></label>
+  <label>Packet<input name="packet" value="{{ filters.packet|default('') }}"></label>
+  <label>Run<input name="run" value="{{ filters.run|default('') }}"></label>
+  <label>Stage<input name="stage" value="{{ filters.stage|default('') }}"></label>
+  <label>Level<input name="level" value="{{ filters.level|default('') }}" placeholder="ERROR/WARN"></label>
+  <label>Trace ID<input name="trace_id" value="{{ filters.trace_id|default('') }}"></label>
+  <label>Contains<input name="contains" value="{{ filters.contains|default('') }}"></label>
+  <label>Regex<input name="regex" value="{{ filters.regex|default('') }}"></label>
+  <label>Since<input type="datetime-local" name="since" value="{{ filters.since|default('') }}"></label>
+  <label>Until<input type="datetime-local" name="until" value="{{ filters.until|default('') }}"></label>
+  <label>Tail<select name="tail">{% for tail_size in tail_options|default([100, 500, 2000]) %}<option value="{{ tail_size }}"{% if tail|int == tail_size %} selected{% endif %}>{{ tail_size }}</option>{% endfor %}</select></label>
+  <label class="cc-check"><input type="checkbox" name="follow" value="true"{% if follow %} checked{% endif %}> follow</label>
+  <label class="cc-check"><input type="checkbox" name="wrap" value="true"{% if wrap %} checked{% endif %}> wrap</label>
+  <button type="submit">Filter</button>
+</form>
+
 {% if errors %}<div class="cc-banner warning">{{ errors|length }} project log source(s) unavailable; healthy rows remain visible.</div>{% endif %}
-<div class="cc-log-list">{% for row in logs %}<article class="log-row"><div><time>{{ row.timestamp or '—' }}</time> <strong>{{ row.level or 'INFO' }}</strong> <span>{{ row.project_key or '' }} / {{ row.source or '' }}</span></div><p>{{ row.message or row.raw or row }}</p><span class="mono">packet={{ row.packet_id or '—' }} trace={{ row.trace_id or '—' }}</span></article>{% else %}<div class="cc-empty">No logs returned.</div>{% endfor %}</div>
+<section class="cc-log-viewer" data-follow="{{ 'on' if follow else 'off' }}" data-wrap="{{ 'on' if wrap else 'off' }}" data-testid="bounded-log-viewer">
+  <div class="cc-viewer-toolbar"><span class="muted">{{ tail }} line tail · source switching is explicit · source metadata is preserved</span><button type="button" data-copy-visible="logs">Copy visible</button><button type="button" data-download-visible="logs">Download bounded</button></div>
+  <div class="cc-log-list" id="logs">
+    {% for row in logs %}<article class="log-row" data-source="{{ row.source|default('API') }}"><div><time>{{ row.timestamp or '—' }}</time> <strong>{{ row.level or 'INFO' }}</strong> <span>{{ row.project_key or '' }} / {{ row.source or 'API' }}</span></div><p>{{ row.message or row.raw or row }}</p><span class="mono">worker={{ row.worker_id or '—' }} packet={{ row.packet_id or '—' }} run={{ row.run_id or '—' }} stage={{ row.stage_id or '—' }} trace={{ row.trace_id or '—' }}</span></article>{% else %}<div class="cc-empty">No logs returned.</div>{% endfor %}
+  </div>
+</section>

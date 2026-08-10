@@ -32,6 +32,7 @@
 #       - GET  /api/admin/packet/{packet_id}/sessions
 #       - GET  /api/admin/packet/{packet_id}/runs/{run_id}/artifacts
 #       - GET  /api/admin/packet/{packet_id}/runs/{run_id}/artifacts/file
+#       - GET  /api/admin/packet/{packet_id}/runs/{run_id}/artifacts/preview
 #       - GET  /api/admin/packet/{packet_id}/runs/{run_id}/logs
 #       - GET  /api/admin/feature/{feature_id}/summary
 #       - GET  /api/admin/search
@@ -262,6 +263,34 @@ def packet_run_artifact_file(
         return JSONResponse({"error": "forbidden or not found"}, status_code=403)
     content, ctype = result
     return Response(content=content, media_type=ctype)
+
+
+# START_FUNCTION_CONTRACT
+# name: packet_run_artifact_preview
+# purpose: Return a bounded JSON-safe artifact preview for the Stage 05
+#          explorer without streaming unbounded project bytes.
+# inputs: packet_id, run_id, relative path and max_bytes cap.
+# returns: Safe preview metadata/content DTO.
+# side_effects: Reads only the selected run's evidence root through the
+#                aggregation service's safe filesystem boundary.
+# emitted_logs: None.
+# error_behavior: 404 with a typed safe error when the run/path is unavailable.
+# END_FUNCTION_CONTRACT
+@router.get("/api/admin/packet/{packet_id}/runs/{run_id}/artifacts/preview")
+def packet_run_artifact_preview(
+    packet_id: str,
+    run_id: str,
+    path: str = Query("", description="Relative path inside the evidence dir"),
+    max_bytes: int = Query(512 * 1024, ge=1, le=512 * 1024),
+) -> dict:
+    with get_db() as db:
+        result = _svc.get_artifact_preview(db, packet_id, run_id, path, max_bytes=max_bytes)
+    if result is None:
+        return JSONResponse(
+            {"error": {"code": "ARTIFACT_NOT_FOUND_OR_FORBIDDEN", "message": "artifact is unavailable"}},
+            status_code=404,
+        )
+    return {**result, "source": "API"}
 
 # END_BLOCK_ARTIFACTS
 

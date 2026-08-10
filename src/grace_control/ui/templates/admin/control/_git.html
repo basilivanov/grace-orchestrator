@@ -1,0 +1,31 @@
+<section class="cc-page-heading">
+  <div>
+    <p class="eyebrow">Git · {{ project.project_key }}</p>
+    <h1>Repository and worktrees</h1>
+    <p class="muted">Read-only repository metadata and bounded diff output from the project-local Git API.</p>
+  </div>
+  <span class="source-badge">GIT</span>
+</section>
+
+{% if error %}<div class="cc-banner warning">{{ error }}{% if error_class %} · {{ error_class }}{% endif %}</div>{% endif %}
+<section class="cc-entity-card">
+  <dl class="cc-facts">
+    <div><dt>Repository / target branch</dt><dd>{{ repository.repo_display|default('—') }} / {{ repository.target_branch|default('—') }}</dd></div>
+    <div><dt>HEAD / target HEAD</dt><dd class="mono">{{ repository.head|default('—') }} / {{ repository.target_branch_head|default('—') }}</dd></div>
+    <div><dt>Remote / status</dt><dd>{{ repository.remote|default('—') }} / {{ repository.status|default(repository.clean|default('unknown')) }}</dd></div>
+  </dl>
+</section>
+
+<section class="cc-entity-card">
+  <h2>Worktrees <span class="source-badge">GIT</span></h2>
+  <p class="small muted">Display-only classifications; no delete or cleanup control is exposed.</p>
+  <table class="cc-table"><thead><tr><th>Identity</th><th>Branch</th><th>Packet / worker / attempt</th><th>Registered / exists / state</th><th>Lease / size</th><th>Class</th></tr></thead><tbody>
+  {% for worktree in worktrees %}<tr><td>{{ worktree.display_path|default('—') }}</td><td>{{ worktree.branch|default('—') }}</td><td>{{ worktree.packet_id|default('—') }} / {{ worktree.worker_id|default('—') }} / {{ worktree.attempt|default('—') }}</td><td>{{ worktree.registered|default(false) }} / {{ worktree.exists|default(false) }} / {{ worktree.packet_state|default('unknown') }}</td><td>{{ worktree.lease_owner|default('—') }} / {{ worktree.size|default('—') }}</td><td>{{ worktree.classification|default('unknown') }}</td></tr>{% else %}<tr><td colspan="6">No worktrees returned.</td></tr>{% endfor %}
+  </tbody></table>
+</section>
+
+<section class="cc-entity-card">
+  <h2>Changed files / diff stat <span class="source-badge">GIT</span></h2>
+  <pre class="json-preview">{{ {'changed_files': changed_files, 'stat': diff_stat}|tojson(indent=2) }}</pre>
+  <details><summary>Bounded unified diff{% if diff.truncated %} (truncated){% endif %}</summary><pre class="json-preview">{{ diff.diff|default(diff.text|default('')) }}</pre></details>
+</section>

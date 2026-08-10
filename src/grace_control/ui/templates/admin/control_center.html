@@ -42,6 +42,9 @@
         <a href="{{ cc_url(current_project.project_key) }}" class="{% if page == 'project' %}active{% endif %}">Current Project</a>
         <a href="{{ cc_url(current_project.project_key, 'events') }}" class="{% if page == 'events' %}active{% endif %}">Events</a>
         <a href="{{ cc_url(current_project.project_key, 'logs') }}" class="{% if page == 'logs' %}active{% endif %}">Logs</a>
+        <a href="{{ cc_url(current_project.project_key, 'files') }}" class="{% if page == 'files' %}active{% endif %}">Files</a>
+        <a href="{{ cc_url(current_project.project_key, 'git') }}" class="{% if page == 'git' %}active{% endif %}">Git</a>
+        <a href="{{ cc_url(current_project.project_key, 'api') }}" class="{% if page == 'api' %}active{% endif %}">API</a>
         <a href="/admin/search?project={{ current_project.project_key }}" class="{% if page == 'search' %}active{% endif %}">Search</a>
         <a href="{{ cc_url(current_project.project_key, 'system') }}" class="{% if page == 'system' %}active{% endif %}">System / Diagnostics</a>
       {% else %}
@@ -63,10 +66,66 @@
         {% include "control/_events.html" %}
       {% elif page == 'logs' %}
         {% include "control/_logs.html" %}
+      {% elif page == 'files' %}
+        {% include "control/_files.html" %}
+      {% elif page == 'git' %}
+        {% include "control/_git.html" %}
+      {% elif page == 'api' %}
+        {% include "control/_api.html" %}
       {% elif page == 'search' %}
         {% include "control/_search.html" %}
       {% endif %}
     </main>
   </div>
+  <script>
+    (() => {
+      let preservedScrollTop = null;
+      const textOf = (id) => document.getElementById(id)?.textContent || "";
+      const copy = async (value) => {
+        if (navigator.clipboard) await navigator.clipboard.writeText(value);
+      };
+      document.addEventListener("click", (event) => {
+        const button = event.target.closest("button");
+        if (!button) return;
+        const copyId = button.dataset.copyJson || button.dataset.copyText;
+        if (copyId) copy(textOf(copyId)).catch(() => {});
+        const toggleId = button.dataset.toggleJson;
+        if (toggleId) {
+          const target = document.getElementById(toggleId);
+          if (target) {
+            try {
+              const value = JSON.parse(target.textContent || "null");
+              const compact = target.dataset.jsonInspector === "compact";
+              target.textContent = JSON.stringify(value, null, compact ? 2 : 0);
+              target.dataset.jsonInspector = compact ? "pretty" : "compact";
+            } catch (_) { /* raw non-JSON text remains untouched */ }
+          }
+        }
+        const downloadId = button.dataset.downloadJson || button.dataset.downloadVisible;
+        if (downloadId) {
+          const value = downloadId === "logs"
+            ? Array.from(document.querySelectorAll("#logs .log-row")).map((row) => row.innerText).join("\n")
+            : textOf(downloadId);
+          const blob = new Blob([value], {type: "application/json"});
+          const link = document.createElement("a");
+          link.href = URL.createObjectURL(blob);
+          link.download = `${downloadId}.json`;
+          link.click();
+          URL.revokeObjectURL(link.href);
+        }
+      });
+      document.body.addEventListener("htmx:beforeSwap", () => {
+        const viewer = document.querySelector("[data-follow='off']");
+        preservedScrollTop = viewer ? viewer.scrollTop : null;
+      });
+      document.body.addEventListener("htmx:afterSwap", () => {
+        if (preservedScrollTop === null) return;
+        document.querySelectorAll("[data-follow='off']").forEach((viewer) => {
+          viewer.scrollTop = preservedScrollTop;
+        });
+        preservedScrollTop = null;
+      });
+    })();
+  </script>
 </body>
 </html>

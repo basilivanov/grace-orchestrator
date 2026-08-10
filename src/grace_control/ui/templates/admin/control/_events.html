@@ -1,3 +1,44 @@
-<section class="cc-page-heading"><div><p class="eyebrow">Events{% if current_project %} · {{ current_project.project_key }}{% endif %}</p><h1>Canonical timeline events</h1><p class="muted">Source timestamps, trace IDs and unknown event types remain inspectable.</p></div></section>
-<form class="cc-inline-form" method="get"><input name="project" value="{{ current_project.project_key if current_project else '' }}" placeholder="project key"><input name="entity_id" value="{{ filters.entity_id or '' }}" placeholder="entity id"><input name="event_type" value="{{ filters.event_type or '' }}" placeholder="event type"><button>Filter</button></form>
-{% for event in events %}<article class="timeline-row"><div class="timeline-head"><time>{{ event.timestamp or '—' }}</time><strong>{{ event.event_type }}</strong><span>{{ event.component or event.entity_type or 'unknown' }}</span><span class="mono">{{ event.project_key or '' }} · trace={{ event.trace_id or '—' }}</span></div><p>{{ event.reason or event.entity_id or '' }}</p><details><summary>full payload</summary><pre>{{ event.payload|tojson(indent=2) }}</pre></details></article>{% else %}<div class="cc-empty">No events returned.</div>{% endfor %}
+<section class="cc-page-heading">
+  <div>
+    <p class="eyebrow">Events{% if current_project %} · {{ current_project.project_key }}{% endif %}</p>
+    <h1>Global event explorer</h1>
+    <p class="muted">Canonical EVENT rows keep attribution, complete safe payloads and project/entity links.</p>
+  </div>
+  {% if partial %}<span class="coverage">bounded / partial</span>{% endif %}
+</section>
+
+<form class="cc-inline-form cc-explorer-filters" method="get" data-testid="event-filters">
+  <label>Project(s)<input name="project" value="{{ filters.project|default('') }}" placeholder="all or alpha,beta"></label>
+  <label>Entity ID<input name="entity_id" value="{{ filters.entity_id|default('') }}" placeholder="packet/run id"></label>
+  <label>Entity type<input name="entity_type" value="{{ filters.entity_type|default('') }}" placeholder="packet"></label>
+  <label>Event type<input name="event_type" value="{{ filters.event_type|default('') }}" placeholder="packet_failed"></label>
+  <label>Trace ID<input name="trace_id" value="{{ filters.trace_id|default('') }}" placeholder="trace"></label>
+  <label>Text<input name="text" value="{{ filters.text|default('') }}" placeholder="reason or payload"></label>
+  <label>Since<input type="datetime-local" name="since" value="{{ filters.since|default('') }}"></label>
+  <label>Until<input type="datetime-local" name="until" value="{{ filters.until|default('') }}"></label>
+  <label>Page size<select name="limit"><option value="100"{% if filters.limit|int == 100 %} selected{% endif %}>100</option><option value="200"{% if filters.limit|int == 200 %} selected{% endif %}>200</option></select></label>
+  <button type="submit">Filter</button>
+</form>
+
+{% if errors %}<div class="cc-banner warning">{{ errors|length }} project event source(s) unavailable; healthy rows remain visible.</div>{% endif %}
+{% if next_cursor %}<p class="small muted">More bounded results are available below this page.</p>{% endif %}
+
+<div class="cc-table-wrap">
+  <table class="cc-table cc-event-table">
+    <thead><tr><th>Time</th><th>Project</th><th>Event type</th><th>Entity</th><th>Component</th><th>Trace</th><th>Reason</th><th>Inspect</th></tr></thead>
+    <tbody>
+    {% for event in events %}
+      <tr data-source="EVENT">
+        <td class="mono">{{ event.timestamp or '—' }}</td>
+        <td><span class="source-badge">EVENT</span> <a href="{{ event.entity_url or cc_url(event.project_key) }}">{{ event.project_key }}</a></td>
+        <td>{{ event.event_type or 'unknown' }}</td>
+        <td>{{ event.entity_type or '—' }} / <span class="mono">{{ event.entity_id or '—' }}</span></td>
+        <td>{{ event.component or '—' }}</td>
+        <td class="mono">{{ event.trace_id or '—' }}</td>
+        <td>{{ event.reason or '—' }}</td>
+        <td><details><summary>payload</summary><div class="cc-json-actions"><button type="button" data-toggle-json="event-{{ loop.index }}">Compact/pretty</button><button type="button" data-copy-json="event-{{ loop.index }}">Copy JSON</button><button type="button" data-download-json="event-{{ loop.index }}">Download JSON</button></div><pre id="event-{{ loop.index }}" class="json-preview" data-json-inspector="pretty">{{ event.payload_json|default(event.payload|default({}))|tojson(indent=2) }}</pre></details></td>
+      </tr>
+    {% else %}<tr><td colspan="8"><div class="cc-empty">No events returned.</div></td></tr>{% endfor %}
+    </tbody>
+  </table>
+</div>

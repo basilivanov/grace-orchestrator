@@ -61,6 +61,7 @@ class _RemoteResult:
     error_class: str | None = None
     error: str | None = None
     http_status: int | None = None
+    headers: dict[str, str] | None = None
 
 
 # END_BLOCK_INTERNAL_MODELS
@@ -120,6 +121,7 @@ def _coerce_remote(context: ProjectContext, raw: Any) -> _RemoteResult:
             raw.error_class,
             _safe_error_text(raw.error),
             raw.http_status,
+            raw.headers,
         )
     if isinstance(raw, Mapping):
         if raw.get("ok") is False:
@@ -211,6 +213,8 @@ def _safe_json(value: Any) -> Any:
 
 def _secret_key(key: str) -> bool:
     normalized = key.lower().replace("-", "_")
+    if normalized.endswith("_fingerprint") or normalized in {"fingerprint", "fencing_fingerprint"}:
+        return False
     return any(marker in normalized for marker in _SECRET_MARKERS)
 
 
@@ -288,7 +292,13 @@ def _event_row(context: ProjectContext, event: Mapping[str, Any]) -> dict[str, A
     row["project_name"] = context.name
     row["payload"] = _safe_json(event.get("payload", event.get("payload_json", {})))
     row["payload_json"] = row["payload"]
-    row["detail_url"] = _entity_url(context.key, "event", event.get("id") or event.get("entity_id"))
+    row["source"] = "EVENT"
+    row["entity_url"] = _entity_url(
+        context.key,
+        str(event.get("entity_type") or "event"),
+        event.get("entity_id") or event.get("id"),
+    )
+    row["detail_url"] = row["entity_url"]
     return row
 
 
@@ -347,7 +357,7 @@ def _log_matches(
         (level, "level"),
         (trace_id, "trace_id"),
     ):
-        if expected and str(row.get(key) or "") != expected:
+        if expected and str(row.get(key) or "").casefold() != str(expected).casefold():
             return False
     text = f"{row.get('message') or ''} {row.get('raw') or ''}"
     if contains and contains.lower() not in text.lower():

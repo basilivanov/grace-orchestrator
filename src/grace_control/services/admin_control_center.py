@@ -27,6 +27,9 @@
 #       - system_page
 #       - events_page
 #       - logs_page
+#       - files_page
+#       - git_page
+#       - api_page
 #       - search_page
 # END_MODULE_MAP
 
@@ -35,9 +38,21 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Mapping, Sequence
 from typing import Any
+from urllib.parse import quote
 
 from grace_control.config.project_registry import ProjectContext
 from grace_control.core.structured_logger import GraceLogger
+from grace_control.services.admin_control_center_explorer_helpers import (
+    _artifact_kind,
+    _json_preview,
+    _json_query_params,
+    _lease_views,
+    _normalize_artifacts,
+    _normalize_worktrees,
+    _openapi_operations,
+    _safe_relative_path,
+    _stale_base_view,
+)
 from grace_control.services.admin_control_center_helpers import (
     _capability_message,
     _card_sort_key,
@@ -104,6 +119,25 @@ _ATTENTION_STATES = frozenset({
     "FAILED",
     "REJECTED",
 })
+_LOG_SOURCES = (
+    "all",
+    "API",
+    "worker",
+    "supervisor",
+    "structured",
+    "packet_stdout",
+    "packet_stderr",
+    "agent",
+    "stage_stdout",
+    "stage_stderr",
+    "acceptance",
+    "browser",
+    "visual",
+    "merge",
+    "recheck",
+    "recovery",
+)
+_LOG_TAILS = (100, 500, 2000)
 
 
 # START_BLOCK_SERVICE
@@ -195,6 +229,13 @@ class AdminControlCenterService:
         run_stage: str | None = None,
         trace_id: str | None = None,
         text: str | None = None,
+        source: str | None = None,
+        log_tail: int = 500,
+        artifact_path: str | None = None,
+        file_root: str | None = None,
+        file_path: str = "",
+        git_ref: str | None = None,
+        git_path: str | None = None,
     ) -> dict[str, Any]:
         context = self._context(project_key)
         dashboard = await self.dashboard()
@@ -248,6 +289,7 @@ class AdminControlCenterService:
             base["packet_data"] = await self._packet_page(
                 project_key,
                 entity_id,
+                project_info=self._context_info(context, card),
                 tree_packet=packet,
                 tab=base["tab"],
                 run_id=run_id,
@@ -257,6 +299,13 @@ class AdminControlCenterService:
                 run_stage=run_stage,
                 trace_id=trace_id,
                 text=text,
+                source=source,
+                log_tail=log_tail,
+                artifact_path=artifact_path,
+                file_root=file_root,
+                file_path=file_path,
+                git_ref=git_ref,
+                git_path=git_path,
             )
             if base["packet_data"]:
                 base["packet"] = base["packet_data"].get("packet") or packet
@@ -293,26 +342,32 @@ class AdminControlCenterService:
             "workers": [],
             "diagnostics": {},
             "config": {},
+            "capabilities": {},
+            "leases": {"ordinary": [], "parallel": [], "merge": []},
             "error": None,
         }
         if not context.enabled:
             model["error"] = "Project is disabled; no remote read was attempted."
             return model
-        health_result, workers_result, diagnostics_result = await asyncio.gather(
+        health_result, workers_result, diagnostics_result, capabilities_result = await asyncio.gather(
             self._read(project_key, "/api/admin/system/health", operation="health"),
             self._read(project_key, "/api/admin/system/workers", operation="workers"),
             self._read(project_key, "/api/diagnostics/state", operation="diagnostics"),
+            self._read(project_key, "/api/admin/capabilities", operation="capabilities"),
         )
         health = _unwrap(health_result.get("payload")) if health_result.get("ok") else {}
         workers = _unwrap(workers_result.get("payload")) if workers_result.get("ok") else {}
         diagnostics = _unwrap(diagnostics_result.get("payload")) if diagnostics_result.get("ok") else {}
+        capabilities = _unwrap(capabilities_result.get("payload")) if capabilities_result.get("ok") else {}
         model["health"] = _mask_secrets(health)
         model["workers"] = workers.get("workers", []) if isinstance(workers, Mapping) else []
         model["diagnostics"] = _mask_secrets(diagnostics)
         model["config"] = _mask_secrets(_effective_config(health, diagnostics))
+        model["capabilities"] = _mask_secrets(capabilities)
+        model["leases"] = _lease_views(diagnostics)
         failures = [
             result.get("error")
-            for result in (health_result, workers_result, diagnostics_result)
+            for result in (health_result, workers_result, diagnostics_result, capabilities_result)
             if not result.get("ok") and result.get("error")
         ]
         model["error"] = failures[0] if failures else None
@@ -331,29 +386,61 @@ class AdminControlCenterService:
     # END_FUNCTION_CONTRACT
     async def events_page(
         self,
-        project_key: str | None = None,
+        project_key: str | Sequence[str] | None = None,
         *,
         entity_id: str | None = None,
         entity_type: str | None = None,
         event_type: str | None = None,
+        trace_id: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        text: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+        cursor: str | None = None,
     ) -> dict[str, Any]:
-        selected = [project_key] if project_key else None
+        selected = project_key if isinstance(project_key, Sequence) and not isinstance(project_key, str) else ([project_key] if project_key else None)
+        project_label = ",".join(str(value) for value in selected) if selected else ""
         data = await self._hub.query_events(
             project=selected,
             entity_id=entity_id,
             entity_type=entity_type,
             event_type=event_type,
-            limit=200,
+            trace_id=trace_id,
+            since=since,
+            until=until,
+            text=text,
+            limit=limit,
+            offset=offset,
+            cursor=cursor,
         )
         dashboard = await self.dashboard()
-        current = self._selector_current(dashboard["projects"], project_key)
+        current = self._selector_current(dashboard["projects"], project_key if isinstance(project_key, str) else None)
         return {
             "projects": dashboard["projects"],
             "current_project": current,
             "events": [_normalize_event(row) for row in data.get("events", [])],
             "coverage": data.get("coverage", {}),
             "errors": data.get("errors", []),
-            "filters": {"entity_id": entity_id, "entity_type": entity_type, "event_type": event_type},
+            "filters": {
+                "project": project_label,
+                "entity_id": entity_id or "",
+                "entity_type": entity_type or "",
+                "event_type": event_type or "",
+                "trace_id": trace_id or "",
+                "since": since or "",
+                "until": until or "",
+                "text": text or "",
+                "limit": data.get("limit", limit),
+                "offset": data.get("offset", offset),
+                "cursor": cursor or "",
+            },
+            "next_cursor": data.get("next_cursor"),
+            "total": data.get("total"),
+            "partial": data.get("partial", False),
+            "entity_id": entity_id or "",
+            "entity_type": entity_type or "",
+            "event_type": event_type or "",
         }
 
     # START_FUNCTION_CONTRACT
@@ -368,27 +455,390 @@ class AdminControlCenterService:
     # END_FUNCTION_CONTRACT
     async def logs_page(
         self,
-        project_key: str | None = None,
+        project_key: str | Sequence[str] | None = None,
         *,
+        source: str | None = None,
+        worker: str | None = None,
+        packet: str | None = None,
+        run: str | None = None,
+        stage: str | None = None,
         contains: str | None = None,
         level: str | None = None,
+        trace_id: str | None = None,
+        regex: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        tail: int = 500,
+        cursor: str | None = None,
+        follow: bool = False,
+        wrap: bool = False,
     ) -> dict[str, Any]:
-        selected = [project_key] if project_key else None
+        selected = project_key if isinstance(project_key, Sequence) and not isinstance(project_key, str) else ([project_key] if project_key else None)
+        project_label = ",".join(str(value) for value in selected) if selected else ""
         data = await self._hub.query_logs(
             project=selected,
+            source=source,
+            worker=worker,
+            packet=packet,
+            run=run,
+            stage=stage,
             contains=contains,
             level=level,
-            tail=200,
+            trace_id=trace_id,
+            regex=regex,
+            since=since,
+            until=until,
+            tail=tail,
+            cursor=cursor,
         )
         dashboard = await self.dashboard()
         return {
             "projects": dashboard["projects"],
-            "current_project": self._selector_current(dashboard["projects"], project_key),
+            "current_project": self._selector_current(dashboard["projects"], project_key if isinstance(project_key, str) else None),
             "logs": data.get("logs", []),
             "coverage": data.get("coverage", {}),
             "errors": data.get("errors", []),
+            "filters": {
+                "project": project_label,
+                "source": source or "all",
+                "worker": worker or "",
+                "packet": packet or "",
+                "run": run or "",
+                "stage": stage or "",
+                "contains": contains or "",
+                "level": level or "",
+                "trace_id": trace_id or "",
+                "regex": regex or "",
+                "since": since or "",
+                "until": until or "",
+            },
+            "source_options": _LOG_SOURCES,
+            "tail_options": _LOG_TAILS,
+            "tail": data.get("limit", tail),
+            "cursor": cursor or "",
+            "next_cursor": data.get("next_cursor"),
+            "partial": data.get("partial", False),
+            "follow": bool(follow),
+            "wrap": bool(wrap),
             "contains": contains or "",
             "level": level or "",
+        }
+
+    # START_FUNCTION_CONTRACT
+    # name: files_page
+    # purpose: Build a project-scoped named-root filesystem explorer with
+    #          bounded directory, stat and preview reads.
+    # inputs: project_key — explicit registry key; root/path — advertised
+    #          logical root and relative directory; preview_path — optional
+    #          relative file to preview; tail — optional bounded text tail.
+    # returns: Files view model with roots, entries, preview and typed errors.
+    # side_effects: Reads only selected project /api/admin/fs endpoints.
+    # emitted_logs: Hub-owned project read logs.
+    # error_behavior: Unsafe paths are rejected before a remote read; typed
+    #                 project filesystem errors remain visible in the model.
+    # END_FUNCTION_CONTRACT
+    async def files_page(
+        self,
+        project_key: str,
+        *,
+        root: str | None = None,
+        path: str = "",
+        preview_path: str | None = None,
+        tail: int = 0,
+    ) -> dict[str, Any]:
+        shell = await self._explorer_shell(project_key)
+        model: dict[str, Any] = {
+            **shell,
+            "root": root or "",
+            "path": path or "",
+            "entries": [],
+            "roots": [],
+            "preview": None,
+            "stat": None,
+            "preview_path": preview_path or "",
+            "path_error": None,
+            "error": None,
+            "source": "FILE",
+            "capability_available": False,
+        }
+        context = self._context(project_key)
+        if not context.enabled:
+            model["error"] = "Project is disabled; filesystem capability was not requested."
+            return model
+        roots_result = await self._read(project_key, "/api/admin/fs/roots", operation="filesystem_roots")
+        roots_payload = _unwrap(roots_result.get("payload")) if roots_result.get("ok") else {}
+        roots = roots_payload.get("roots", []) if isinstance(roots_payload, Mapping) else []
+        if not roots_result.get("ok"):
+            model["error"] = _capability_message(roots_result)
+            model["error_class"] = roots_result.get("error_class")
+            model["http_status"] = roots_result.get("http_status")
+            return model
+        model["capability_available"] = True
+        model["roots"] = [dict(item) for item in roots if isinstance(item, Mapping)]
+        root_names = [str(item.get("root")) for item in model["roots"] if item.get("root")]
+        selected_root = str(root or (root_names[0] if root_names else ""))
+        model["root"] = selected_root
+        if selected_root not in root_names:
+            model["error"] = "The selected filesystem root is not advertised by this project."
+            model["error_class"] = "ROOT_NOT_FOUND"
+            return model
+        safe, clean_path, path_error = _safe_relative_path(path)
+        if not safe:
+            model["path_error"] = {"code": path_error, "message": "Only a relative logical path is allowed."}
+            return model
+        model["path"] = clean_path
+        listing_result = await self._read(
+            project_key,
+            "/api/admin/fs/list",
+            params={"root": selected_root, "path": clean_path},
+            operation="filesystem_list",
+        )
+        listing = _unwrap(listing_result.get("payload")) if listing_result.get("ok") else {}
+        if listing_result.get("ok"):
+            model["entries"] = [
+                {**dict(entry), "source": "FILE"}
+                for entry in listing.get("entries", [])
+                if isinstance(entry, Mapping)
+            ]
+            model["truncated"] = bool(listing.get("truncated"))
+        else:
+            model["error"] = _capability_message(listing_result)
+            model["error_class"] = listing_result.get("error_class")
+            model["http_status"] = listing_result.get("http_status")
+        if preview_path:
+            preview_safe, clean_preview, preview_error = _safe_relative_path(preview_path)
+            model["preview_path"] = clean_preview if preview_safe else str(preview_path)
+            if not preview_safe:
+                model["path_error"] = {"code": preview_error, "message": "Only a relative logical path is allowed."}
+                return model
+            endpoint = "/api/admin/fs/tail" if tail and tail > 0 else "/api/admin/fs/file"
+            params: dict[str, Any] = {"root": selected_root, "path": clean_preview}
+            stat_result = await self._read(
+                project_key,
+                "/api/admin/fs/stat",
+                params={"root": selected_root, "path": clean_preview},
+                operation="filesystem_stat",
+            )
+            if stat_result.get("ok"):
+                model["stat"] = {**_unwrap(stat_result.get("payload")), "source": "FILE"}
+            if tail and tail > 0:
+                params["lines"] = min(int(tail), 1000)
+            else:
+                params["max_bytes"] = 512 * 1024
+            preview_result = await self._read(
+                project_key,
+                endpoint,
+                params=params,
+                operation="filesystem_preview",
+            )
+            if preview_result.get("ok"):
+                preview = _unwrap(preview_result.get("payload"))
+                preview["source"] = "FILE"
+                model["preview"] = preview
+            else:
+                model["error"] = _capability_message(preview_result)
+                model["error_class"] = preview_result.get("error_class")
+                model["http_status"] = preview_result.get("http_status")
+        return model
+
+    # START_FUNCTION_CONTRACT
+    # name: git_page
+    # purpose: Build a bounded project/packet Git explorer from explicit Stage
+    #          02 read APIs, including display-only worktree classifications.
+    # inputs: project_key; optional packet and safe ref/path selectors.
+    # returns: Git repository, worktree, packet metadata, changed-file and diff
+    #          view model with source attribution.
+    # side_effects: Reads only selected project Git APIs.
+    # emitted_logs: Hub-owned project read logs.
+    # error_behavior: Git validation errors remain typed in the view model.
+    # END_FUNCTION_CONTRACT
+    async def git_page(
+        self,
+        project_key: str,
+        *,
+        packet: Mapping[str, Any] | None = None,
+        ref: str | None = None,
+        path: str | None = None,
+    ) -> dict[str, Any]:
+        shell = await self._explorer_shell(project_key)
+        model: dict[str, Any] = {
+            **shell,
+            "repository": {},
+            "worktrees": [],
+            "changed_files": [],
+            "diff_stat": {},
+            "diff": {},
+            "packet_git": {},
+            "ref": ref or "",
+            "path": path or "",
+            "error": None,
+            "source": "GIT",
+        }
+        context = self._context(project_key)
+        if not context.enabled:
+            model["error"] = "Project is disabled; Git capability was not requested."
+            return model
+        results = await asyncio.gather(
+            self._read(project_key, "/api/admin/git/repository", operation="git_repository"),
+            self._read(project_key, "/api/admin/git/worktrees", operation="git_worktrees"),
+            self._read(
+                project_key,
+                "/api/admin/git/changed-files",
+                params={"ref": ref} if ref else None,
+                operation="git_changed_files",
+            ),
+            self._read(
+                project_key,
+                "/api/admin/git/diff-stat",
+                params={"ref": ref, "path": path} if ref or path else None,
+                operation="git_diff_stat",
+            ),
+            self._read(
+                project_key,
+                "/api/admin/git/diff",
+                params={"ref": ref, "path": path} if ref or path else None,
+                operation="git_diff",
+            ),
+        )
+        repo_result, worktree_result, changed_result, stat_result, diff_result = results
+        if repo_result.get("ok"):
+            model["repository"] = _mask_secrets(_unwrap(repo_result.get("payload")))
+            if isinstance(model["repository"], Mapping):
+                repository = dict(model["repository"])
+                repo_root = str(repository.get("repo_root") or "")
+                repository["repo_display"] = repo_root.rstrip("/").rsplit("/", 1)[-1] if repo_root else "unknown"
+                model["repository"] = repository
+        if worktree_result.get("ok"):
+            worktrees_payload = _unwrap(worktree_result.get("payload"))
+            model["worktrees"] = _normalize_worktrees(worktrees_payload, packet)
+        if changed_result.get("ok"):
+            changed_payload = _unwrap(changed_result.get("payload"))
+            model["changed_files"] = [
+                {**dict(row), "source": "GIT"}
+                for row in changed_payload.get("changed_files", changed_payload.get("data", []))
+                if isinstance(row, Mapping)
+            ]
+        if stat_result.get("ok"):
+            model["diff_stat"] = {**_unwrap(stat_result.get("payload")), "source": "GIT"}
+        if diff_result.get("ok"):
+            model["diff"] = {**_unwrap(diff_result.get("payload")), "source": "GIT"}
+        failures = [result for result in results if not result.get("ok")]
+        if failures:
+            model["error"] = _capability_message(failures[0])
+            model["error_class"] = failures[0].get("error_class")
+            model["http_status"] = failures[0].get("http_status")
+        packet_map = packet if isinstance(packet, Mapping) else {}
+        model["packet_git"] = {
+            "branch": packet_map.get("branch") or packet_map.get("branch_name") or "unknown",
+            "commit": packet_map.get("commit_sha") or packet_map.get("head_sha") or packet_map.get("merge_commit") or "unknown",
+            "base_sha": packet_map.get("base_sha"),
+            "integration_base_sha": packet_map.get("integration_base_sha"),
+            "merge_commit": packet_map.get("merge_commit"),
+            "merge_status": packet_map.get("merge_status") or packet_map.get("integration_recheck"),
+            "source": "API",
+        }
+        return model
+
+    # START_FUNCTION_CONTRACT
+    # name: api_page
+    # purpose: Discover a selected project's OpenAPI operations and execute only
+    #          an exact discovered GET path when explicitly requested.
+    # inputs: project_key; path — exact discovered path; execute — GET-only
+    #          execution flag; params_json — bounded JSON query parameters.
+    # returns: API documentation plus optional bounded response/error DTO.
+    # side_effects: Reads selected project /openapi.json and, only for exact
+    #                 discovered GET paths, one selected project GET endpoint.
+    # emitted_logs: Hub-owned project read logs.
+    # error_behavior: Mutation execution and arbitrary/non-discovered paths are
+    #                 rejected without a project request.
+    # END_FUNCTION_CONTRACT
+    async def api_page(
+        self,
+        project_key: str,
+        *,
+        path: str | None = None,
+        execute: bool = False,
+        params_json: str | None = None,
+    ) -> dict[str, Any]:
+        shell = await self._explorer_shell(project_key)
+        model: dict[str, Any] = {
+            **shell,
+            "document": {},
+            "operations": [],
+            "selected_path": path or "",
+            "response": None,
+            "response_status": None,
+            "response_headers": {},
+            "response_error": None,
+            "mutation_execution_disabled": True,
+            "execution_requested": bool(execute),
+            "source": "API",
+        }
+        context = self._context(project_key)
+        if not context.enabled:
+            model["response_error"] = "Project is disabled; API discovery was not requested."
+            return model
+        openapi_result = await self._read(project_key, "/openapi.json", operation="openapi")
+        if not openapi_result.get("ok"):
+            model["response_error"] = _capability_message(openapi_result)
+            model["error_class"] = openapi_result.get("error_class")
+            return model
+        document = _unwrap(openapi_result.get("payload"))
+        operations, get_paths = _openapi_operations(document)
+        model["document"] = _mask_secrets(document)
+        model["operations"] = operations
+        if not execute:
+            return model
+        selected_path = str(path or "")
+        if selected_path not in get_paths:
+            model["response_error"] = "API_PATH_NOT_DISCOVERED"
+            return model
+        params, params_error = _json_query_params(params_json)
+        if params_error:
+            model["response_error"] = params_error
+            return model
+        result = await self._read(
+            project_key,
+            selected_path,
+            params=params,
+            operation="api_explorer_get",
+        )
+        model["response_status"] = result.get("http_status")
+        model["response_headers"] = result.get("headers") or {}
+        if result.get("ok"):
+            model["response"] = {
+                "body": _mask_secrets(_unwrap(result.get("payload"))),
+                "headers": result.get("headers") or {},
+                "source": "API",
+                "truncated": False,
+            }
+        else:
+            model["response_error"] = result.get("error") or result.get("error_class")
+        return model
+
+    # START_FUNCTION_CONTRACT
+    # name: _explorer_shell
+    # purpose: Build shared project selector context for project-scoped
+    #          explorer pages without changing request/global project state.
+    # inputs: project_key — explicit registry key.
+    # returns: project/projects/current_project mapping.
+    # side_effects: Bounded dashboard read through the Hub.
+    # emitted_logs: Hub-owned project read logs.
+    # error_behavior: Unknown project raises KeyError.
+    # END_FUNCTION_CONTRACT
+    async def _explorer_shell(self, project_key: str) -> dict[str, Any]:
+        context = self._context(project_key)
+        dashboard = await self.dashboard()
+        card = next(
+            (row for row in dashboard["cards"] if row.get("project_key") == project_key),
+            None,
+        )
+        if card is None:
+            card = await self._project_card(project_key)
+        return {
+            "project": self._context_info(context, card),
+            "projects": dashboard["projects"],
+            "current_project": self._selector_current(dashboard["projects"], project_key),
         }
 
     # START_FUNCTION_CONTRACT
@@ -433,6 +883,7 @@ class AdminControlCenterService:
         project_key: str,
         packet_id: str,
         *,
+        project_info: Mapping[str, Any] | None,
         tree_packet: Mapping[str, Any] | None,
         tab: str,
         run_id: str | None,
@@ -442,6 +893,13 @@ class AdminControlCenterService:
         run_stage: str | None,
         trace_id: str | None,
         text: str | None,
+        source: str | None,
+        log_tail: int,
+        artifact_path: str | None,
+        file_root: str | None,
+        file_path: str,
+        git_ref: str | None,
+        git_path: str | None,
     ) -> dict[str, Any]:
         detail_result, blocking_result = await asyncio.gather(
             self._read(project_key, f"/api/admin/packet/{packet_id}/detail", operation="packet_detail"),
@@ -453,10 +911,19 @@ class AdminControlCenterService:
         timeline: list[dict[str, Any]] = []
         sessions: dict[str, Any] = {}
         diagnostics: dict[str, Any] = {}
+        evidence: dict[str, Any] = {}
+        evidence_raw: dict[str, Any] = {}
+        artifacts: dict[str, Any] = {"artifacts": [], "truncated": False}
+        artifact_preview: dict[str, Any] | None = None
+        packet_logs: dict[str, Any] = {}
+        packet_files: dict[str, Any] = {}
+        packet_git: dict[str, Any] = {}
+        run_raw: dict[str, Any] = {}
+        stage_raw: dict[str, Any] = {}
         selected_run: dict[str, Any] | None = None
         selected_stage: dict[str, Any] | None = None
 
-        if tab in {"spec", "pipeline", "stages", "raw"}:
+        if tab in {"spec", "pipeline", "stages", "evidence", "logs", "artifacts", "files", "git", "raw"}:
             raw_result = await self._read(
                 project_key,
                 f"/api/admin/packet/{packet_id}/raw",
@@ -471,7 +938,7 @@ class AdminControlCenterService:
             )
             timeline_payload = _unwrap(timeline_result.get("payload")) if timeline_result.get("ok") else {}
             timeline = [_normalize_event(row) for row in timeline_payload.get("events", [])]
-        if tab == "runs" or run_id:
+        if tab in {"runs", "evidence", "logs", "artifacts", "files", "raw", "git"} or run_id:
             runs_result = await self._read(
                 project_key,
                 f"/api/admin/packet/{packet_id}/runs",
@@ -501,7 +968,9 @@ class AdminControlCenterService:
                             and candidate.get("packet_id") in (None, packet_id)
                         ):
                             selected_run = candidate
-        if tab in {"stages", "pipeline"} and stage_id:
+            if selected_run is None and runs and not run_id:
+                selected_run = runs[-1]
+        if tab in {"stages", "pipeline", "evidence", "logs", "raw"} and stage_id:
             stage_rows = raw.get("stages", []) if isinstance(raw, Mapping) else []
             stage_rows = self._scope_rows_to_run(stage_rows, run_id)
             stage_match = next(
@@ -519,6 +988,7 @@ class AdminControlCenterService:
                 )
                 if stage_result.get("ok"):
                     selected_stage = _normalize_stage(_unwrap(stage_result.get("payload")))
+                    stage_raw = _mask_secrets(_unwrap(stage_result.get("payload")))
         if tab == "sessions":
             sessions_result = await self._read(
                 project_key,
@@ -546,6 +1016,129 @@ class AdminControlCenterService:
             diagnostics = _unwrap(diagnostics_result.get("payload")) if diagnostics_result.get("ok") else {
                 "error": _capability_message(diagnostics_result),
             }
+
+        evidence_run = selected_run
+        if tab == "evidence" and evidence_run:
+            evidence_result = await self._read(
+                project_key,
+                f"/api/admin/packet/{packet_id}/runs/{evidence_run.get('id')}/evidence",
+                operation="evidence",
+            )
+            evidence_payload = _mask_secrets(_unwrap(evidence_result.get("payload"))) if evidence_result.get("ok") else {
+                "available": False,
+                "message": _capability_message(evidence_result),
+            }
+            if isinstance(evidence_payload, Mapping):
+                evidence_raw = dict(evidence_payload)
+            evidence = evidence_payload
+            if isinstance(evidence, Mapping):
+                evidence = dict(evidence)
+                evidence.setdefault("available", True)
+                evidence.setdefault("source", "API")
+        elif tab == "evidence":
+            evidence = {"available": False, "message": "Select a run to inspect evidence.", "source": "API"}
+
+        if tab == "logs":
+            log_run = selected_run
+            selected_source = str(source or "all")
+            if stage_id:
+                stage_selector = (
+                    selected_stage.get("stage_key")
+                    if isinstance(selected_stage, Mapping)
+                    else None
+                ) or stage_id
+                logs_result = await self._read(
+                    project_key,
+                    f"/api/admin/packet/{quote(str(packet_id), safe='-_.~')}/stages/{quote(str(stage_selector), safe='-_.~')}/logs",
+                    params={"stream": "all", "tail": min(max(int(log_tail), 1), 2000)},
+                    operation="packet_stage_logs",
+                )
+            elif log_run:
+                stream = selected_source if selected_source in {"stdout", "stderr", "agent"} else "stderr"
+                logs_result = await self._read(
+                    project_key,
+                    f"/api/admin/packet/{packet_id}/runs/{log_run.get('id')}/logs",
+                    params={"stream": stream, "tail": min(max(int(log_tail), 1), 2000)},
+                    operation="packet_run_logs",
+                )
+            else:
+                logs_result = await self._read(
+                    project_key,
+                    f"/api/admin/packet/{packet_id}/logs/aggregated",
+                    params={"sources": selected_source or "all", "tail": min(max(int(log_tail), 1), 2000)},
+                    operation="packet_logs",
+                )
+            packet_logs = _mask_secrets(_unwrap(logs_result.get("payload"))) if logs_result.get("ok") else {
+                "available": False,
+                "message": _capability_message(logs_result),
+            }
+            if isinstance(packet_logs, Mapping):
+                packet_logs = dict(packet_logs)
+                packet_logs.setdefault("available", True)
+                packet_logs.setdefault("source", selected_source or "all")
+                packet_logs.setdefault("source_label", "API")
+                packet_logs.setdefault("truncated", bool(packet_logs.get("truncated", False)))
+                packet_logs.setdefault("tail", min(max(int(log_tail), 1), 2000))
+                packet_logs.setdefault("follow", False)
+                packet_logs.setdefault("wrap", False)
+
+        if tab == "artifacts" and selected_run:
+            artifact_result = await self._read(
+                project_key,
+                f"/api/admin/packet/{packet_id}/runs/{selected_run.get('id')}/artifacts",
+                operation="artifacts",
+            )
+            if artifact_result.get("ok"):
+                artifacts = _normalize_artifacts(_unwrap(artifact_result.get("payload")))
+                artifacts["source"] = "API"
+            else:
+                artifacts = {"artifacts": [], "truncated": False, "error": _capability_message(artifact_result), "source": "API"}
+            if artifact_path:
+                preview_result = await self._read(
+                    project_key,
+                    f"/api/admin/packet/{packet_id}/runs/{selected_run.get('id')}/artifacts/preview",
+                    params={"path": artifact_path, "max_bytes": 512 * 1024},
+                    operation="artifact_preview",
+                )
+                if preview_result.get("ok"):
+                    artifact_preview = _mask_secrets(_unwrap(preview_result.get("payload")))
+                    if isinstance(artifact_preview, Mapping):
+                        artifact_preview = dict(artifact_preview)
+                        kind, previewable, category = _artifact_kind(
+                            artifact_path,
+                            artifact_preview.get("mime"),
+                            bool(artifact_preview.get("binary")),
+                            artifact_preview.get("size"),
+                        )
+                        artifact_preview.update({
+                            "path": artifact_path,
+                            "kind": kind,
+                            "category": category,
+                            "previewable": previewable,
+                            "source": "API",
+                            "json_structured": _json_preview(artifact_preview.get("content"), kind),
+                        })
+                else:
+                    artifact_preview = {"path": artifact_path, "error": _capability_message(preview_result), "source": "API"}
+        elif tab == "artifacts":
+            artifacts = {"artifacts": [], "truncated": False, "message": "Select a run to inspect artifacts.", "source": "API"}
+
+        if tab == "files":
+            packet_files = await self.files_page(
+                project_key,
+                root=file_root,
+                path=file_path,
+                preview_path=file_path if file_path and not file_path.endswith("/") else None,
+            )
+
+        if tab == "raw" and selected_run:
+            run_raw_result = await self._read(
+                project_key,
+                f"/api/admin/packet/{packet_id}/runs/{selected_run.get('id')}/raw",
+                operation="run_raw",
+            )
+            if run_raw_result.get("ok"):
+                run_raw = _mask_secrets(_unwrap(run_raw_result.get("payload")))
 
         if tab == "timeline":
             timeline = self._scope_rows_to_run(timeline, run_id)
@@ -576,6 +1169,17 @@ class AdminControlCenterService:
         stages = self._scope_rows_to_run(stages, run_id)
         if selected_stage is not None:
             selected_stage = _normalize_stage(selected_stage)
+        if tab == "git":
+            packet_git = await self.git_page(
+                project_key,
+                packet=packet,
+                ref=git_ref,
+                path=git_path,
+            )
+        stale_base = _stale_base_view(packet, selected_run, project_info)
+        packet_diagnostics = _mask_secrets(diagnostics)
+        if not isinstance(packet_diagnostics, Mapping):
+            packet_diagnostics = {}
         return {
             "packet": packet,
             "detail": detail,
@@ -587,7 +1191,18 @@ class AdminControlCenterService:
             "stages": stages,
             "selected_stage": selected_stage,
             "sessions": sessions,
-            "diagnostics": _mask_secrets(diagnostics),
+            "diagnostics": packet_diagnostics,
+            "leases": _lease_views(packet_diagnostics),
+            "evidence": evidence,
+            "evidence_raw": evidence_raw,
+            "artifacts": artifacts,
+            "artifact_preview": artifact_preview,
+            "logs": packet_logs,
+            "files": packet_files,
+            "git": packet_git,
+            "run_raw": run_raw,
+            "stage_raw": stage_raw,
+            "stale_base": stale_base,
             "raw": _mask_secrets(raw),
             "tabs": _PACKET_TABS,
             "tab": tab if tab in _PACKET_TABS else "overview",
@@ -600,6 +1215,13 @@ class AdminControlCenterService:
                 "trace_id": trace_id or "",
                 "text": text or "",
             },
+            "log_source": source or "all",
+            "log_tail": min(max(int(log_tail), 1), 2000),
+            "artifact_path": artifact_path or "",
+            "file_root": file_root or "",
+            "file_path": file_path or "",
+            "git_ref": git_ref or "",
+            "git_path": git_path or "",
         }
 
     # START_FUNCTION_CONTRACT
@@ -665,16 +1287,18 @@ class AdminControlCenterService:
         project_key: str,
         path: str,
         *,
+        params: Mapping[str, Any] | None = None,
         operation: str,
     ) -> dict[str, Any]:
         context = self._context(project_key)
-        result = await self._hub._request(context, path, operation=operation)
+        result = await self._hub._request(context, path, params=params, operation=operation)
         return {
             "ok": bool(result.ok),
             "payload": result.payload or {},
             "error": result.error or result.error_class,
             "error_class": result.error_class,
             "http_status": result.http_status,
+            "headers": result.headers or {},
         }
 
     # START_FUNCTION_CONTRACT

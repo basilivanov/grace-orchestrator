@@ -1,0 +1,23 @@
+<section class="cc-page-heading">
+  <div>
+    <p class="eyebrow">API · {{ project.project_key }}</p>
+    <h1>OpenAPI explorer</h1>
+    <p class="muted">Discovered dynamically from the selected project. Only exact discovered GET paths can execute; mutations are documentation-only in Stage 05.</p>
+  </div>
+  <span class="source-badge">API</span>
+</section>
+
+{% if response_error %}<div class="cc-banner warning" data-testid="api-explorer-error">{{ response_error }}</div>{% endif %}
+{% if mutation_execution_disabled %}<div class="cc-banner info">Mutation execution disabled until Stage 06.</div>{% endif %}
+
+<div class="cc-api-list">
+{% for operation in operations %}
+  <article class="cc-entity-card cc-api-operation" data-method="{{ operation.method }}" data-path="{{ operation.path }}">
+    <header class="cc-api-header"><div><span class="api-method method-{{ operation.method|lower }}">{{ operation.method }}</span> <code>{{ operation.path }}</code><p class="muted">{{ operation.summary or operation.description or 'No description' }}</p></div>{% if operation.can_execute %}<a class="button-link" href="{{ cc_url(project.project_key, 'api', '', path=operation.path) }}">Select GET</a>{% else %}<span class="state-chip">execution disabled</span>{% endif %}</header>
+    <details><summary>Parameters / schemas</summary><pre class="json-preview">{{ {'parameters': operation.parameters, 'request_schema': operation.request_schema, 'response_schema': operation.response_schema}|tojson(indent=2) }}</pre></details>
+    {% if operation.path == selected_path and operation.can_execute %}<form class="cc-inline-form" method="get"><input type="hidden" name="path" value="{{ operation.path }}"><input type="hidden" name="execute" value="true"><label>GET params JSON<input name="params" value="{{ request.query_params.get('params', '') }}" placeholder='{"limit":"10"}'></label><button type="submit">Execute GET</button></form>{% endif %}
+  </article>
+{% else %}<div class="cc-empty">No OpenAPI operations discovered.</div>{% endfor %}
+</div>
+
+{% if response %}<section class="cc-entity-card" data-testid="api-response"><div class="cc-viewer-toolbar"><h2>Response{% if response_status %} · HTTP {{ response_status }}{% endif %}</h2><span class="source-badge">API</span><button type="button" data-toggle-json="api-response-json">Compact/pretty</button><button type="button" data-copy-json="api-response-json">Copy JSON</button><button type="button" data-download-json="api-response-json">Download JSON</button></div><details open><summary>Headers</summary><pre class="json-preview">{{ response.headers|default({})|tojson(indent=2) }}</pre></details><pre id="api-response-json" class="json-preview">{{ response.body|tojson(indent=2) }}</pre></section>{% endif %}

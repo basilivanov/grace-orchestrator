@@ -5,7 +5,7 @@
          data-entity-type="{{ entity_type or '' }}"
          data-entity-id="{{ entity_id or '' }}"
          data-tab="{{ tab|default('overview') }}"
-         hx-get="{{ cc_partial_url(project.project_key, entity_type, entity_id, tab, run_id, stage_id, timeline_filters.event, timeline_filters.component, timeline_filters.run_stage, timeline_filters.trace_id, timeline_filters.text) }}"
+         hx-get="{{ cc_partial_url(project.project_key, entity_type, entity_id, tab, run_id, stage_id, timeline_filters.event, timeline_filters.component, timeline_filters.run_stage, timeline_filters.trace_id, timeline_filters.text, packet_data.log_source if packet_data else None, packet_data.log_tail if packet_data else None, packet_data.artifact_path if packet_data else None, packet_data.file_root if packet_data else None, packet_data.file_path if packet_data else None, packet_data.git_ref if packet_data else None, None, packet_data.git_path if packet_data else None) }}"
          hx-trigger="every 5s"
          hx-target="#cc-project-content"
          hx-swap="outerHTML">

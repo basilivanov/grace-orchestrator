@@ -56,6 +56,7 @@ class ProjectApiResult:
     error: str | None = None
     http_status: int | None = None
     last_attempt_at: str = ""
+    headers: dict[str, str] | None = None
 
 
 # END_BLOCK_RESULT
@@ -131,9 +132,19 @@ class ProjectClient:
 
         if response.status_code < 200 or response.status_code >= 300:
             error_class = "api_offline" if response.status_code >= 500 else "http_error"
+            error_message = f"project API returned HTTP {response.status_code}"
+            try:
+                error_payload = response.json()
+            except (ValueError, TypeError):
+                error_payload = {}
+            if isinstance(error_payload, Mapping):
+                typed_error = error_payload.get("error")
+                if isinstance(typed_error, Mapping):
+                    error_class = str(typed_error.get("code") or error_class)[:80]
+                    error_message = _safe_error(typed_error.get("message") or error_message)
             return self._error_result(
                 error_class,
-                f"project API returned HTTP {response.status_code}",
+                error_message,
                 attempted_at,
                 http_status=response.status_code,
             )
@@ -155,6 +166,7 @@ class ProjectClient:
             payload=decoded,
             http_status=response.status_code,
             last_attempt_at=attempted_at,
+            headers=_safe_headers(response.headers),
         )
 
     # START_FUNCTION_CONTRACT
@@ -192,6 +204,7 @@ class ProjectClient:
                     payload={**result.payload, **identity.payload},
                     http_status=result.http_status,
                     last_attempt_at=result.last_attempt_at,
+                    headers=result.headers,
                 )
         return result
 
@@ -309,6 +322,23 @@ def _has_identity(payload: Mapping[str, Any]) -> bool:
         payload.get(key) not in (None, "")
         for key in ("project_key", "project_name", "project_root", "target_repo_root")
     )
+
+
+def _safe_headers(headers: Mapping[str, Any]) -> dict[str, str]:
+    """Keep a bounded, non-credential response-header subset for inspectors."""
+    allowed = frozenset({
+        "cache-control",
+        "content-length",
+        "content-type",
+        "date",
+        "etag",
+        "last-modified",
+    })
+    return {
+        str(key).lower(): str(value)[:240]
+        for key, value in headers.items()
+        if str(key).lower() in allowed
+    }
 
 
 # END_BLOCK_HELPERS

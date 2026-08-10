@@ -39,9 +39,11 @@ import asyncio
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any
+from urllib.parse import quote
 
 from grace_control.config.project_registry import ProjectContext, ProjectRegistry
 from grace_control.core.structured_logger import GraceLogger
+from grace_control.services.admin_control_center_explorer_helpers import _event_matches_text
 from grace_control.services.admin_cross_project_helpers import (
     _aggregate_snapshots,
     _attention_for_project,
@@ -229,6 +231,7 @@ class AdminCrossProjectService:
         trace_id: str | None = None,
         since: str | None = None,
         until: str | None = None,
+        text: str | None = None,
         limit: int = 100,
         offset: int = 0,
         cursor: str | None = None,
@@ -243,6 +246,7 @@ class AdminCrossProjectService:
             "trace_id": trace_id,
             "since": since,
             "until": until,
+            "text": text,
         }
         cursor_data = _decode_cursor(cursor)
         if cursor_data is not None:
@@ -252,7 +256,10 @@ class AdminCrossProjectService:
             if cursor_data.get("filters") != _compact(filters):
                 raise ValueError("event cursor filters do not match request")
             page_offset = _bounded_offset(cursor_data.get("offset", 0))
-        fetch_limit = min(_MAX_EVENTS_PER_PROJECT, max(page_limit, page_offset + page_limit))
+        fetch_limit = min(
+            _MAX_EVENTS_PER_PROJECT,
+            max(page_limit, page_offset + page_limit, _MAX_EVENTS_PER_PROJECT if text else 0),
+        )
         params = {**filters, "limit": fetch_limit, "offset": 0}
 
         async def query(context: ProjectContext) -> _RemoteResult:
@@ -280,7 +287,9 @@ class AdminCrossProjectService:
                 partial = True
             for event in raw_events[:fetch_limit]:
                 if isinstance(event, Mapping):
-                    merged.append(_event_row(result.context, event))
+                    row = _event_row(result.context, event)
+                    if _event_matches_text(row, text):
+                        merged.append(row)
         merged.sort(key=_event_sort_key, reverse=True)
         page = merged[page_offset:page_offset + page_limit]
         coverage = {
@@ -290,8 +299,8 @@ class AdminCrossProjectService:
         }
         if errors:
             partial = True
-        known_total = sum(totals)
-        accessible_total = sum(bounded_totals)
+        known_total = sum(totals) if not text else len(merged)
+        accessible_total = len(merged) if text else sum(bounded_totals)
         has_more = page_offset + page_limit < accessible_total and (
             len(merged) > page_offset + page_limit or partial
         )
@@ -358,7 +367,7 @@ class AdminCrossProjectService:
         tail: int = 200,
         cursor: str | None = None,
     ) -> dict[str, Any]:
-        page_limit = _bounded_limit(tail, 500)
+        page_limit = _bounded_limit(tail, 2000)
         page_offset = _bounded_offset(0)
         expression = re.compile(regex) if regex else None
         contexts = self._select_contexts(project)
@@ -387,10 +396,25 @@ class AdminCrossProjectService:
         fetch_tail = min(_MAX_LOG_LINES_PER_PROJECT, max(page_limit, page_offset + page_limit))
 
         async def query(context: ProjectContext) -> _RemoteResult:
+            safe_packet = quote(str(packet), safe="-_.~") if packet else ""
+            safe_run = quote(str(run), safe="-_.~") if run else ""
+            safe_stage = quote(str(stage), safe="-_.~") if stage else ""
+            if packet and run:
+                log_path = f"/api/admin/packet/{safe_packet}/runs/{safe_run}/logs"
+                log_params: dict[str, Any] = {"tail": fetch_tail, "stream": source if source in {"stdout", "stderr", "agent"} else "stderr"}
+            elif packet and stage:
+                log_path = f"/api/admin/packet/{safe_packet}/stages/{safe_stage}/logs"
+                log_params = {"tail": fetch_tail, "stream": "all"}
+            elif packet:
+                log_path = f"/api/admin/packet/{safe_packet}/logs/aggregated"
+                log_params = {"tail": fetch_tail, "sources": source or "all"}
+            else:
+                log_path = "/api/admin/system/logs"
+                log_params = {"tail": fetch_tail}
             return await self._request(
                 context,
-                "/api/admin/system/logs",
-                {"tail": fetch_tail},
+                log_path,
+                log_params,
                 operation="logs",
             )
 
@@ -716,6 +740,7 @@ class AdminCrossProjectService:
                         "identity_mismatch",
                         "; ".join(mismatches),
                         result.http_status,
+                        result.headers,
                     )
             if result.http_status == 404 and operation in {"logs", "search"} and not result.ok:
                 return _RemoteResult(

@@ -111,10 +111,13 @@ def _packet_spec_value(packet: Packet, key: str, default: Any) -> Any:
     return value if isinstance(value, type(default)) else default
 
 
-def _build_artifact_tree(evidence_dir: Path) -> list[dict[str, Any]]:
-    """Build a nested tree of files under evidence_dir (size in bytes)."""
+def _build_artifact_tree(
+    evidence_dir: Path,
+    max_files: int = 2000,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Build a bounded nested metadata tree without reading file contents."""
     if not evidence_dir.exists():
-        return []
+        return [], False
     nodes: dict[str, dict[str, Any]] = {}
 
     def ensure_dir(rel: str) -> dict[str, Any]:
@@ -131,9 +134,15 @@ def _build_artifact_tree(evidence_dir: Path) -> list[dict[str, Any]]:
         nodes[rel] = node
         return node
 
-    for f in sorted(evidence_dir.rglob("*")):
+    file_count = 0
+    truncated = False
+    for f in evidence_dir.rglob("*"):
         if not f.is_file():
             continue
+        file_count += 1
+        if file_count > max_files:
+            truncated = True
+            break
         rel = f.relative_to(evidence_dir)
         rel_str = str(rel)
         parent_rel = str(rel.parent)
@@ -152,7 +161,7 @@ def _build_artifact_tree(evidence_dir: Path) -> list[dict[str, Any]]:
         }
         parent["children"].append(node)
 
-    return nodes[""]["children"] if "" in nodes else []
+    return (nodes[""]["children"] if "" in nodes else []), truncated
 
 
 class AdminAggregationService:
@@ -973,17 +982,43 @@ class AdminAggregationService:
             })
         return {"runs": out}
 
+    # START_FUNCTION_CONTRACT
+    # name: _run_for_selector
+    # purpose: Resolve a packet run by either the canonical persisted run ID,
+    #          the legacy packet-relative selector or its numeric run number.
+    # inputs: db, packet_id and browser/API run selector.
+    # returns: PacketRun or None.
+    # side_effects: Reads one local PacketRun query.
+    # emitted_logs: None.
+    # error_behavior: Never raises for an unknown selector.
+    # END_FUNCTION_CONTRACT
+    def _run_for_selector(self, db: Session, packet_id: str, run_id: str) -> PacketRun | None:
+        selector = str(run_id)
+        run = db.query(PacketRun).filter_by(packet_id=packet_id, id=selector).first()
+        if run:
+            return run
+        run = db.query(PacketRun).filter_by(id=f"{packet_id}-{selector}").first()
+        if run:
+            return run
+        try:
+            return db.query(PacketRun).filter_by(packet_id=packet_id, run_number=int(selector)).first()
+        except (TypeError, ValueError):
+            return None
+
     def get_packet_run(self, db: Session, packet_id: str, run_id: str) -> dict[str, Any] | None:
-        r = db.query(PacketRun).filter_by(id=f"{packet_id}-{run_id}").first()
+        r = self._run_for_selector(db, packet_id, run_id)
         if not r:
             return None
         ep = Path(r.evidence_path) if r.evidence_path else None
-        artifacts_summary = {"total_files": 0, "total_size": 0, "files": []}
+        artifacts_summary = {"total_files": 0, "total_size": 0, "files": [], "truncated": False}
         if ep and ep.exists():
             files = []
             total = 0
-            for f in sorted(ep.rglob("*")):
+            for index, f in enumerate(ep.rglob("*")):
                 if f.is_file():
+                    if index >= 2000:
+                        artifacts_summary["truncated"] = True
+                        break
                     rel = str(f.relative_to(ep))
                     sz = f.stat().st_size
                     total += sz
@@ -992,7 +1027,7 @@ class AdminAggregationService:
                         "type": _classify_artifact(f.name),
                         "size": sz,
                     })
-            artifacts_summary = {"total_files": len(files), "total_size": total, "files": files}
+            artifacts_summary.update({"total_files": len(files), "total_size": total, "files": files})
         return {
             "run": {
                 "run_id": r.id,
@@ -1033,24 +1068,34 @@ class AdminAggregationService:
                 .first()
             )
         else:
-            r = db.query(PacketRun).filter_by(id=f"{packet_id}-{run_id}").first()
+            r = self._run_for_selector(db, packet_id, run_id)
         if not r:
             return {"verdict": "", "summary": "", "stages": [], "screenshots": []}
         acc = (r.result_json or {}).get("acceptance_report", {}) or {}
         stages = []
         for st in acc.get("stages", []) or []:
-            cmds = st.get("commands", []) or []
+            if not isinstance(st, dict):
+                continue
+            cmds = [command for command in (st.get("commands", []) or []) if isinstance(command, dict)][:100]
             failed_cmds = [c for c in cmds if (c.get("exit_code") or 0) != 0 or c.get("timed_out")]
             stages.append({
                 "name": st.get("name", ""),
                 "status": st.get("status", ""),
                 "summary": st.get("summary", ""),
                 "blocking_issues": st.get("blocking_issues", []) or [],
+                "commands": cmds,
+                "failed_commands": failed_cmds,
                 "commands_summary": {
                     "passed": len(cmds) - len(failed_cmds),
                     "failed": len(failed_cmds),
                     "total": len(cmds),
                 },
+                "exit_codes": [command.get("exit_code") for command in cmds if command.get("exit_code") is not None],
+                "stdout_tail": str(st.get("stdout_tail") or st.get("stdout") or "")[-32768:],
+                "stderr_tail": str(st.get("stderr_tail") or st.get("stderr") or "")[-32768:],
+                "screenshots": list(st.get("screenshots") or [])[:100],
+                "visual": st.get("visual") if isinstance(st.get("visual"), dict) else {},
+                "browser": st.get("browser") if isinstance(st.get("browser"), dict) else {},
             })
         return {
             "verdict": acc.get("final_verdict", ""),
@@ -1064,19 +1109,21 @@ class AdminAggregationService:
     def get_packet_artifacts(
         self, db: Session, packet_id: str, run_id: str
     ) -> dict[str, Any]:
-        r = db.query(PacketRun).filter_by(id=f"{packet_id}-{run_id}").first()
+        r = self._run_for_selector(db, packet_id, run_id)
         if not r or not r.evidence_path:
             return {"tree": [], "evidence_path": ""}
         ep = Path(r.evidence_path)
+        tree, truncated = _build_artifact_tree(ep)
         return {
-            "tree": _build_artifact_tree(ep),
+            "tree": tree,
             "evidence_path": r.evidence_path,
+            "truncated": truncated,
         }
 
     def get_artifact_file(
         self, db: Session, packet_id: str, run_id: str, path: str, tail: int = 0
     ) -> tuple[bytes, str] | None:
-        r = db.query(PacketRun).filter_by(id=f"{packet_id}-{run_id}").first()
+        r = self._run_for_selector(db, packet_id, run_id)
         if not r or not r.evidence_path:
             return None
         evidence_dir = Path(r.evidence_path).resolve()
@@ -1106,6 +1153,50 @@ class AdminAggregationService:
             content = str(payload.get("content") or "").encode("utf-8")
         return content, ctype
 
+    # START_FUNCTION_CONTRACT
+    # name: get_artifact_preview
+    # purpose: Return a bounded JSON-safe artifact preview through the existing
+    #          safe evidence-root reader, including binary and truncation state.
+    # inputs: db, packet_id, run selector, relative artifact path and max bytes.
+    # returns: SafeFilesystemService preview DTO or None when unavailable.
+    # side_effects: Reads at most the requested bounded artifact prefix.
+    # emitted_logs: None.
+    # error_behavior: Unsafe/missing paths return None for the router's typed
+    #                 not-found response; no physical path is returned.
+    # END_FUNCTION_CONTRACT
+    def get_artifact_preview(
+        self,
+        db: Session,
+        packet_id: str,
+        run_id: str,
+        path: str,
+        max_bytes: int = 512 * 1024,
+    ) -> dict[str, Any] | None:
+        r = self._run_for_selector(db, packet_id, run_id)
+        if not r or not r.evidence_path:
+            return None
+        evidence_dir = Path(r.evidence_path).resolve()
+        try:
+            from grace_control.services.safe_filesystem_service import (
+                FilesystemReadError,
+                SafeFilesystemService,
+            )
+
+            reader = SafeFilesystemService(
+                {"evidence": evidence_dir},
+                max_preview_bytes=min(max(int(max_bytes), 1), 512 * 1024),
+                max_tail_lines=10000,
+                max_tail_bytes=min(max(int(max_bytes), 1), 512 * 1024),
+            )
+            payload = reader.read_file("evidence", path, max_bytes=max_bytes)
+        except (FilesystemReadError, OSError, ValueError):
+            return None
+        return {
+            key: value
+            for key, value in payload.items()
+            if key not in {"root"}
+        }
+
     # ── logs ────────────────────────────────────────────────────────────
 
     def get_packet_logs(
@@ -1117,7 +1208,7 @@ class AdminAggregationService:
         tail: int = 200,
         filter_regex: str = "",
     ) -> dict[str, Any]:
-        r = db.query(PacketRun).filter_by(id=f"{packet_id}-{run_id}").first()
+        r = self._run_for_selector(db, packet_id, run_id)
         if not r:
             return {"lines": [], "total": 0, "truncated": False, "source_file": ""}
 

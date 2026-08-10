@@ -26,6 +26,9 @@
 #       - GET /admin/p/{project_key}/wave/{wave_id}
 #       - GET /admin/p/{project_key}/packet/{packet_id}
 #       - GET /admin/p/{project_key}/system
+#       - GET /admin/p/{project_key}/git
+#       - GET /admin/p/{project_key}/files
+#       - GET /admin/p/{project_key}/api
 #       - GET /admin/events
 #       - GET /admin/logs
 #       - GET /admin/search
@@ -165,6 +168,14 @@ def _partial_url(
     run_stage: str | None = None,
     trace_id: str | None = None,
     text: str | None = None,
+    source: str | None = None,
+    tail: int | None = None,
+    artifact_path: str | None = None,
+    root: str | None = None,
+    file_path: str | None = None,
+    ref: str | None = None,
+    file: str | None = None,
+    git_path: str | None = None,
 ) -> str:
     path = f"/admin/p/{quote(str(project_key), safe='-_.~')}/_partial/content"
     params = {
@@ -178,6 +189,14 @@ def _partial_url(
         "run_stage": run_stage,
         "trace_id": trace_id,
         "text": text,
+        "source": source,
+        "tail": tail,
+        "artifact_path": artifact_path,
+        "root": root,
+        "path": file_path,
+        "ref": ref,
+        "file": file,
+        "git_path": git_path,
     }
     return f"{path}?{urlencode([(key, str(value)) for key, value in params.items() if value not in (None, '')])}"
 
@@ -385,6 +404,14 @@ async def project_packet(
     run_stage: str | None = Query(None),
     trace_id: str | None = Query(None),
     text: str | None = Query(None),
+    source: str | None = Query(None),
+    tail: int = Query(500, ge=100, le=2000),
+    artifact_path: str | None = Query(None),
+    root: str | None = Query(None),
+    path: str = Query(""),
+    ref: str | None = Query(None),
+    file: str | None = Query(None),
+    git_path: str | None = Query(None),
 ) -> HTMLResponse:
     try:
         model = await _service(request).project_page(
@@ -399,6 +426,13 @@ async def project_packet(
             run_stage=run_stage,
             trace_id=trace_id,
             text=text,
+            source=source,
+            log_tail=tail,
+            artifact_path=artifact_path or file,
+            file_root=root,
+            file_path=path,
+            git_ref=ref,
+            git_path=git_path or file,
         )
     except KeyError as exc:
         _raise_project_not_found(exc)
@@ -425,6 +459,95 @@ async def project_system(request: Request, project_key: str) -> HTMLResponse:
 
 
 # START_FUNCTION_CONTRACT
+# name: project_git
+# purpose: Render the selected project's bounded repository, worktree and diff
+#          explorer using only Stage 02 read APIs.
+# inputs: request, project_key and optional validated ref/path selectors.
+# returns: HTMLResponse project Git explorer.
+# side_effects: Selected-project Git read API calls only; no commands from the
+#                browser are accepted.
+# emitted_logs: Service-owned project read logs.
+# error_behavior: Unknown projects return 404; typed Git errors remain visible.
+# END_FUNCTION_CONTRACT
+@router.get("/admin/p/{project_key}/git", response_class=HTMLResponse)
+async def project_git(
+    request: Request,
+    project_key: str,
+    ref: str | None = Query(None),
+    path: str | None = Query(None),
+) -> HTMLResponse:
+    try:
+        model = await _service(request).git_page(project_key, ref=ref, path=path)
+    except KeyError as exc:
+        _raise_project_not_found(exc)
+    return _render(request, "git", model)
+
+
+# START_FUNCTION_CONTRACT
+# name: project_files
+# purpose: Render the selected project's advertised named-root Files explorer.
+# inputs: request, project_key and relative root/path/preview selectors.
+# returns: HTMLResponse bounded Files explorer.
+# side_effects: Selected-project Stage 02 filesystem reads only.
+# emitted_logs: Service-owned project read logs.
+# error_behavior: Unknown projects return 404; typed filesystem errors remain
+#                 in the page model without server-side path disclosure.
+# END_FUNCTION_CONTRACT
+@router.get("/admin/p/{project_key}/files", response_class=HTMLResponse)
+async def project_files(
+    request: Request,
+    project_key: str,
+    root: str | None = Query(None),
+    path: str = Query(""),
+    preview: str | None = Query(None),
+    tail: int = Query(0, ge=0, le=1000),
+) -> HTMLResponse:
+    try:
+        model = await _service(request).files_page(
+            project_key,
+            root=root,
+            path=path,
+            preview_path=preview,
+            tail=tail,
+        )
+    except KeyError as exc:
+        _raise_project_not_found(exc)
+    return _render(request, "files", model)
+
+
+# START_FUNCTION_CONTRACT
+# name: project_api
+# purpose: Render dynamic OpenAPI documentation and optional exact discovered
+#          GET execution for one selected project.
+# inputs: request, project_key, exact OpenAPI path, execute flag and bounded
+#          JSON query parameters.
+# returns: HTMLResponse API explorer.
+# side_effects: Reads selected project /openapi.json and, only for discovered
+#               GETs, one selected project API endpoint.
+# emitted_logs: Service-owned project read logs.
+# error_behavior: Mutation/arbitrary path execution is disabled in the model.
+# END_FUNCTION_CONTRACT
+@router.get("/admin/p/{project_key}/api", response_class=HTMLResponse)
+async def project_api(
+    request: Request,
+    project_key: str,
+    path: str | None = Query(None),
+    execute: bool = Query(False),
+    params: str | None = Query(None),
+) -> HTMLResponse:
+    try:
+        model = await _service(request).api_page(
+            project_key,
+            path=path,
+            execute=execute,
+            params_json=params,
+        )
+    except KeyError as exc:
+        _raise_project_not_found(exc)
+    return _render(request, "api", model)
+
+
+# START_FUNCTION_CONTRACT
 # name: project_events
 # purpose: Render selected-project Events using the canonical Hub event query.
 # inputs: request and project_key; optional entity/event filters.
@@ -440,6 +563,13 @@ async def project_events(
     entity_id: str | None = Query(None),
     entity_type: str | None = Query(None),
     event_type: str | None = Query(None),
+    trace_id: str | None = Query(None),
+    since: str | None = Query(None),
+    until: str | None = Query(None),
+    text: str | None = Query(None),
+    limit: int = Query(100, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    cursor: str | None = Query(None),
 ) -> HTMLResponse:
     try:
         model = await _service(request).events_page(
@@ -447,6 +577,13 @@ async def project_events(
             entity_id=entity_id,
             entity_type=entity_type,
             event_type=event_type,
+            trace_id=trace_id,
+            since=since,
+            until=until,
+            text=text,
+            limit=limit,
+            offset=offset,
+            cursor=cursor,
         )
     except KeyError as exc:
         _raise_project_not_found(exc)
@@ -468,9 +605,39 @@ async def project_logs(
     project_key: str,
     contains: str | None = Query(None),
     level: str | None = Query(None),
+    source: str | None = Query(None),
+    worker: str | None = Query(None),
+    packet: str | None = Query(None),
+    run: str | None = Query(None),
+    stage: str | None = Query(None),
+    trace_id: str | None = Query(None),
+    regex: str | None = Query(None),
+    since: str | None = Query(None),
+    until: str | None = Query(None),
+    tail: int = Query(500, ge=100, le=2000),
+    cursor: str | None = Query(None),
+    follow: bool = Query(False),
+    wrap: bool = Query(False),
 ) -> HTMLResponse:
     try:
-        model = await _service(request).logs_page(project_key, contains=contains, level=level)
+        model = await _service(request).logs_page(
+            project_key,
+            source=source,
+            worker=worker,
+            packet=packet,
+            run=run,
+            stage=stage,
+            contains=contains,
+            level=level,
+            trace_id=trace_id,
+            regex=regex,
+            since=since,
+            until=until,
+            tail=tail,
+            cursor=cursor,
+            follow=follow,
+            wrap=wrap,
+        )
     except KeyError as exc:
         _raise_project_not_found(exc)
     return _render(request, "logs", model)
@@ -493,10 +660,17 @@ async def project_logs(
 @router.get("/admin/events", response_class=HTMLResponse)
 async def admin_events(
     request: Request,
-    project: str | None = Query(None),
+    project: list[str] | None = Query(None),
     entity_id: str | None = Query(None),
     entity_type: str | None = Query(None),
     event_type: str | None = Query(None),
+    trace_id: str | None = Query(None),
+    since: str | None = Query(None),
+    until: str | None = Query(None),
+    text: str | None = Query(None),
+    limit: int = Query(100, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    cursor: str | None = Query(None),
 ) -> HTMLResponse:
     try:
         model = await _service(request).events_page(
@@ -504,6 +678,13 @@ async def admin_events(
             entity_id=entity_id,
             entity_type=entity_type,
             event_type=event_type,
+            trace_id=trace_id,
+            since=since,
+            until=until,
+            text=text,
+            limit=limit,
+            offset=offset,
+            cursor=cursor,
         )
     except KeyError as exc:
         _raise_project_not_found(exc)
@@ -522,12 +703,42 @@ async def admin_events(
 @router.get("/admin/logs", response_class=HTMLResponse)
 async def admin_logs(
     request: Request,
-    project: str | None = Query(None),
+    project: list[str] | None = Query(None),
     contains: str | None = Query(None),
     level: str | None = Query(None),
+    source: str | None = Query(None),
+    worker: str | None = Query(None),
+    packet: str | None = Query(None),
+    run: str | None = Query(None),
+    stage: str | None = Query(None),
+    trace_id: str | None = Query(None),
+    regex: str | None = Query(None),
+    since: str | None = Query(None),
+    until: str | None = Query(None),
+    tail: int = Query(500, ge=100, le=2000),
+    cursor: str | None = Query(None),
+    follow: bool = Query(False),
+    wrap: bool = Query(False),
 ) -> HTMLResponse:
     try:
-        model = await _service(request).logs_page(project, contains=contains, level=level)
+        model = await _service(request).logs_page(
+            project,
+            source=source,
+            worker=worker,
+            packet=packet,
+            run=run,
+            stage=stage,
+            contains=contains,
+            level=level,
+            trace_id=trace_id,
+            regex=regex,
+            since=since,
+            until=until,
+            tail=tail,
+            cursor=cursor,
+            follow=follow,
+            wrap=wrap,
+        )
     except KeyError as exc:
         _raise_project_not_found(exc)
     return _render(request, "logs", model)
@@ -584,6 +795,14 @@ async def partial_project(
     run_stage: str | None = Query(None),
     trace_id: str | None = Query(None),
     text: str | None = Query(None),
+    source: str | None = Query(None),
+    tail: int = Query(500, ge=100, le=2000),
+    artifact_path: str | None = Query(None),
+    root: str | None = Query(None),
+    path: str = Query(""),
+    ref: str | None = Query(None),
+    file: str | None = Query(None),
+    git_path: str | None = Query(None),
 ) -> HTMLResponse:
     try:
         model = await _service(request).project_page(
@@ -598,6 +817,13 @@ async def partial_project(
             run_stage=run_stage,
             trace_id=trace_id,
             text=text,
+            source=source,
+            log_tail=tail,
+            artifact_path=artifact_path or file,
+            file_root=root,
+            file_path=path,
+            git_ref=ref,
+            git_path=git_path or file,
         )
     except KeyError as exc:
         _raise_project_not_found(exc)
@@ -628,6 +854,14 @@ async def partial_project_query(
     run_stage: str | None = Query(None),
     trace_id: str | None = Query(None),
     text: str | None = Query(None),
+    source: str | None = Query(None),
+    tail: int = Query(500, ge=100, le=2000),
+    artifact_path: str | None = Query(None),
+    root: str | None = Query(None),
+    path: str = Query(""),
+    ref: str | None = Query(None),
+    file: str | None = Query(None),
+    git_path: str | None = Query(None),
 ) -> HTMLResponse:
     return await partial_project(
         request=request,
@@ -642,6 +876,14 @@ async def partial_project_query(
         run_stage=run_stage,
         trace_id=trace_id,
         text=text,
+        source=source,
+        tail=tail,
+        artifact_path=artifact_path,
+        root=root,
+        path=path,
+        ref=ref,
+        file=file,
+        git_path=git_path,
     )
 
 
