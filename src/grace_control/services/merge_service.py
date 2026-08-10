@@ -116,33 +116,14 @@ class MergeService:
         from grace_control.services.packet_service import PacketService
         svc = self._packets or PacketService()
         repo = Path(target_repo_root).resolve()
-        info = self._git.validate_repo(repo)
         holder = worker_id or f"merge:{packet_id}"
 
         _log.info("merge_packet_start",
             packet_id=packet_id, repo=str(repo), branch=branch_name, target_branch=target_branch)
 
-        if not info.is_git:
-            return MergeResult(False, packet_id, "", str(repo), branch_name, target_branch,
-                error=f"target_repo_root is not a git repo: {repo}")
-        if not info.is_clean:
-            return MergeResult(False, packet_id, "", str(repo), branch_name, target_branch,
-                error=f"target_repo is dirty: {repo}")
         if not branch_name:
             return MergeResult(False, packet_id, "", str(repo), branch_name, target_branch,
                 error="branch_name is required")
-
-        sanity = self._coordinator.check_repo_sanity(repo)
-        if not sanity.ok:
-            return MergeResult(
-                False,
-                packet_id,
-                "",
-                str(repo),
-                branch_name,
-                target_branch,
-                error=f"merge_repo_sanity_failed: {sanity.error}",
-            )
 
         if not self._coordinator.can_merge_now(packet_id, target_repo_root=repo):
             return MergeResult(
@@ -194,6 +175,26 @@ class MergeService:
             )
 
         try:
+            info = self._git.validate_repo(repo)
+            if not info.is_git:
+                return MergeResult(False, packet_id, "", str(repo), branch_name, target_branch,
+                    error=f"target_repo_root is not a git repo: {repo}")
+            if not info.is_clean:
+                return MergeResult(False, packet_id, "", str(repo), branch_name, target_branch,
+                    error=f"target_repo is dirty: {repo}")
+
+            sanity = self._coordinator.check_repo_sanity(repo)
+            if not sanity.ok:
+                return MergeResult(
+                    False,
+                    packet_id,
+                    "",
+                    str(repo),
+                    branch_name,
+                    target_branch,
+                    error=f"merge_repo_sanity_failed: {sanity.error}",
+                )
+
             checkout = self._coordinator.run_mutation(
                 target_repo_key=lease.target_repo_key,
                 lease_token=lease.lease_token,
@@ -256,13 +257,12 @@ class MergeService:
             # all attempt branches for this packet while still holding the
             # serialized target-repository lease.
             try:
-                self._coordinator.run_mutation(
+                self._cleanup_packet_branches(
+                    repo,
+                    packet_id,
                     target_repo_key=lease.target_repo_key,
                     lease_token=lease.lease_token,
-                    packet_id=packet_id,
                     worker_id=holder,
-                    step_name="branch_cleanup",
-                    operation=lambda: self._cleanup_packet_branches(repo, packet_id),
                 )
             except MergeLeaseFencedError:
                 _log.warn("merge_branch_cleanup_skipped_fenced", packet_id=packet_id)
@@ -432,16 +432,30 @@ class MergeService:
             import shutil
             shutil.rmtree(worktree_path, ignore_errors=True)
 
-    def _cleanup_packet_branches(self, repo: Path, packet_id: str) -> None:
+    def _cleanup_packet_branches(
+        self,
+        repo: Path,
+        packet_id: str,
+        *,
+        target_repo_key: str,
+        lease_token: str,
+        worker_id: str,
+    ) -> None:
         """Delete ALL `agent/<packet_id>-attempt-*` branches after a successful
         merge (TZ_RETENTION_POLICY.md Phase 1).
 
-        Best-effort: logs failures per branch, never raises. Called from
+        Each branch-list/delete command is a separately fenced mutation so a
+        multi-branch cleanup cannot outlive the merge lease. Called from
         `merge_packet` after the state transition to MERGED.
         """
         pattern = f"agent/{packet_id}-attempt-*"
-        list_result = self._git._run(
-            ["branch", "--list", pattern], repo
+        list_result = self._coordinator.run_mutation(
+            target_repo_key=target_repo_key,
+            lease_token=lease_token,
+            packet_id=packet_id,
+            worker_id=worker_id,
+            step_name="branch_list",
+            operation=lambda: self._git._run(["branch", "--list", pattern], repo),
         )
         if not list_result.success:
             _log.warn("merge_branch_list_failed",
@@ -456,7 +470,16 @@ class MergeService:
                 branch = branch[2:].strip()
             if not branch:
                 continue
-            del_result = self._git._run(["branch", "-D", branch], repo)
+            del_result = self._coordinator.run_mutation(
+                target_repo_key=target_repo_key,
+                lease_token=lease_token,
+                packet_id=packet_id,
+                worker_id=worker_id,
+                step_name="branch_delete",
+                operation=lambda branch=branch: self._git._run(
+                    ["branch", "-D", branch], repo
+                ),
+            )
             if del_result.success:
                 _log.info("merge_branch_deleted",
                     packet_id=packet_id, branch=branch)

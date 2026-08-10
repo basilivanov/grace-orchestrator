@@ -25,6 +25,8 @@
 #   - function: test_accepted_merge_order_is_wave_created_at_id
 #   - function: test_successful_merge_releases_parallel_lease
 #   - function: test_worker_waits_then_retries_merge_after_slot_release
+#   - function: test_live_merge_state_is_waited_without_sanity_failure
+#   - function: test_merge_lease_heartbeat_prevents_takeover_during_mutation
 #   - function: test_merge_router_exposes_slot_wait
 # END_MODULE_MAP
 
@@ -76,8 +78,10 @@ class RecordingGit:
         self.dirty = False
         self.merge_in_progress = False
         self.pause_at: str | None = None
+        self.pause_state: tuple[bool, bool] | None = None
         self.pause_entered = threading.Event()
         self.resume_pause = threading.Event()
+        self.mutation_delay = 0.04
 
     # START_FUNCTION_CONTRACT
     # name: validate_repo
@@ -135,9 +139,11 @@ class RecordingGit:
             self.max_active_mutations = max(self.max_active_mutations, self.active_mutations)
             self.steps.append(("start", step))
         if self.pause_at == step:
+            if self.pause_state is not None:
+                self.dirty, self.merge_in_progress = self.pause_state
             self.pause_entered.set()
             self.resume_pause.wait(timeout=5)
-        time.sleep(0.04)
+        time.sleep(self.mutation_delay)
         with self._lock:
             self.steps.append(("done", step))
             self.active_mutations -= 1
@@ -752,5 +758,178 @@ def test_worker_waits_then_retries_merge_after_slot_release(tmp_path, monkeypatc
     with get_db() as db:
         assert db.query(Packet).filter_by(id="packet-a").one().state == PacketState.MERGED.value
         assert db.query(Packet).filter_by(id="packet-b").one().state == PacketState.MERGED.value
+
+
+# START_FUNCTION_CONTRACT
+# name: test_live_merge_state_is_waited_without_sanity_failure
+# purpose: Prove a second worker receives WAIT while the first exposes dirty
+#          and MERGE_HEAD state inside its active merge mutation.
+# inputs: tmp_path — isolated DB, target, and worktree paths.
+# returns: None on success.
+# side_effects: Runs two worker merge phases and temporarily exposes unsafe git state.
+# emitted_logs: None.
+# error_behavior: Assertion failure if repo sanity runs before the order/lease wait.
+# END_FUNCTION_CONTRACT
+def test_live_merge_state_is_waited_without_sanity_failure(tmp_path, monkeypatch):
+    root = tmp_path / "target"
+    root.mkdir()
+    base = datetime.now(UTC)
+    _seed_packets(
+        tmp_path,
+        [
+            ("packet-a", "wave-1", base, root),
+            ("packet-b", "wave-1", base + timedelta(seconds=1), root),
+        ],
+    )
+    worktree_a = tmp_path / "worktree-a"
+    worktree_b = tmp_path / "worktree-b"
+    worktree_a.mkdir()
+    worktree_b.mkdir()
+
+    git = RecordingGit()
+    git.pause_at = "merge"
+    git.pause_state = (True, True)
+    service = MergeService(git=git)
+    api_a = WorkerMergeAPI(service, "worker-a")
+    api_b = WorkerMergeAPI(service, "worker-b")
+
+    worker_a = Worker.__new__(Worker)
+    worker_a.api = api_a
+    worker_a.worker_id = "worker-a"
+    worker_a.log = MagicMock()
+    worker_a._git_context = MagicMock(target_repo_root=root)
+    worker_b = Worker.__new__(Worker)
+    worker_b.api = api_b
+    worker_b.worker_id = "worker-b"
+    worker_b.log = MagicMock()
+    worker_b._git_context = MagicMock(target_repo_root=root)
+
+    monkeypatch.setattr(
+        "grace_control.worker.worker._MERGE_WAIT_INITIAL_DELAY_SECONDS",
+        0.01,
+    )
+    state_a = ExecutionState(packet_id="packet-a", worker_id="worker-a", release_status="accepted")
+    state_b = ExecutionState(packet_id="packet-b", worker_id="worker-b", release_status="accepted")
+    result_a = ExecutionResult(
+        accepted=True,
+        domain_status="accepted",
+        worktree_path=str(worktree_a),
+        branch_name="agent/packet-a",
+        commit_sha="a" * 40,
+    )
+    result_b = ExecutionResult(
+        accepted=True,
+        domain_status="accepted",
+        worktree_path=str(worktree_b),
+        branch_name="agent/packet-b",
+        commit_sha="b" * 40,
+    )
+
+    def run_phase(worker, state, result):
+        return asyncio.run(worker._phase_merge(state, result))
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first_future = executor.submit(run_phase, worker_a, state_a, result_a)
+        assert git.pause_entered.wait(timeout=5), "first merge did not enter target mutation"
+
+        second_future = executor.submit(run_phase, worker_b, state_b, result_b)
+        assert api_b.wait_seen.wait(timeout=5), "second worker did not observe merge WAIT"
+        with git._lock:
+            started_before_release = [step for kind, step in git.steps if kind == "start"]
+            assert git.active_mutations == 1
+        assert started_before_release == ["checkout", "fetch", "merge"]
+        assert git.max_active_mutations == 1
+        assert worker_b.log.error.call_count == 0
+
+        git.dirty = False
+        git.merge_in_progress = False
+        git.resume_pause.set()
+        first_future.result(timeout=5)
+        second_future.result(timeout=5)
+
+    assert api_b.calls >= 2
+    assert api_b.waits >= 1
+    worker_b.log.error.assert_not_called()
+    assert git.max_active_mutations == 1
+    with get_db() as db:
+        assert db.query(Packet).filter_by(id="packet-a").one().state == PacketState.MERGED.value
+        assert db.query(Packet).filter_by(id="packet-b").one().state == PacketState.MERGED.value
+
+
+# START_FUNCTION_CONTRACT
+# name: test_merge_lease_heartbeat_prevents_takeover_during_mutation
+# purpose: Prove a short-TTL merge lease heartbeat fences takeover during a
+#          long mutation and permits fresh-token takeover after heartbeat stop.
+# inputs: tmp_path — isolated DB and target repository path.
+# returns: None on success.
+# side_effects: Runs a paused guarded mutation, lease takeover, and second mutation.
+# emitted_logs: None.
+# error_behavior: Assertion failure on lease expiry during an active mutation.
+# END_FUNCTION_CONTRACT
+def test_merge_lease_heartbeat_prevents_takeover_during_mutation(tmp_path):
+    _database(tmp_path)
+    target = tmp_path / "target"
+    target.mkdir()
+    git = RecordingGit()
+    git.pause_at = "merge"
+    coordinator = MergeCoordinatorService(git=git, ttl_seconds=1)
+    first = coordinator.acquire(target_repo_root=target, packet_id="packet-a", worker_id="worker-a")
+
+    def run_first_mutation():
+        return coordinator.run_mutation(
+            target_repo_key=first.target_repo_key,
+            lease_token=first.lease_token,
+            packet_id="packet-a",
+            worker_id="worker-a",
+            step_name="merge",
+            operation=lambda: git.merge(target, "agent/packet-a", "main"),
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first_future = executor.submit(run_first_mutation)
+        assert git.pause_entered.wait(timeout=5), "long mutation did not start"
+        time.sleep(1.3)
+
+        while_active = coordinator.try_acquire(
+            target_repo_root=target,
+            packet_id="packet-b",
+            worker_id="worker-b",
+        )
+        assert while_active is None
+        with git._lock:
+            assert git.active_mutations == 1
+            assert git.max_active_mutations == 1
+
+        git.resume_pause.set()
+        first_future.result(timeout=5)
+
+        second = None
+        deadline = time.monotonic() + 4
+        while second is None and time.monotonic() < deadline:
+            second = coordinator.try_acquire(
+                target_repo_root=target,
+                packet_id="packet-b",
+                worker_id="worker-b",
+            )
+            if second is None:
+                time.sleep(0.05)
+        assert second is not None
+        assert second.lease_token != first.lease_token
+        coordinator.run_mutation(
+            target_repo_key=second.target_repo_key,
+            lease_token=second.lease_token,
+            packet_id="packet-b",
+            worker_id="worker-b",
+            step_name="push",
+            operation=lambda: git.push(target, "origin", "main"),
+        )
+        coordinator.release(
+            target_repo_key=second.target_repo_key,
+            lease_token=second.lease_token,
+            packet_id="packet-b",
+            worker_id="worker-b",
+        )
+
+    assert git.max_active_mutations == 1
 
 # END_BLOCK_TESTS

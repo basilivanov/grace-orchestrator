@@ -12,10 +12,12 @@
 #         GitService operations.
 # returns: MergeLease rows, sanity/order results, or guarded git results.
 # side_effects: Inserts, updates, and deletes merge_leases; reads git state;
-#               permits caller-provided guarded target mutations.
+#               renews active leases during caller-provided guarded target
+#               mutations.
 # emitted_logs: merge_lease_acquired, merge_lease_busy, merge_lease_fenced,
 #               merge_lease_renewed, merge_lease_released, merge_repo_sanity,
-#               merge_mutation_start, merge_mutation_done.
+#               merge_lease_heartbeat_failed, merge_mutation_start,
+#               merge_mutation_done.
 # error_behavior: Raises typed busy/fencing/takeover errors; sanity failures
 #                 are returned as RepoSanity with ok=False.
 # END_MODULE_CONTRACT
@@ -36,12 +38,14 @@
 #       - release
 #       - assert_current
 #       - run_mutation
+#       - _heartbeat_loop
 #       - accepted_merge_order
 #       - can_merge_now
 # END_MODULE_MAP
 
 from __future__ import annotations
 
+import threading
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -400,13 +404,14 @@ class MergeCoordinatorService:
 
     # START_FUNCTION_CONTRACT
     # name: run_mutation
-    # purpose: Execute one target-repository mutation only while the current
-    #          merge fencing token is valid.
+# purpose: Execute one target-repository mutation only while the current
+#          merge fencing token is valid and renew it for the callback lifetime.
     # inputs: lease identity, step_name, and a synchronous mutation callback.
     # returns: Callback result.
     # side_effects: Runs the caller's checkout/fetch/merge/push operation.
     # emitted_logs: merge_mutation_start, merge_mutation_done.
-    # error_behavior: Raises MergeLeaseFencedError before invoking a stale callback.
+# error_behavior: Raises MergeLeaseFencedError before a stale callback or
+#                 after heartbeat/expiry fencing is detected.
     # END_FUNCTION_CONTRACT
     def run_mutation(
         self,
@@ -424,10 +429,75 @@ class MergeCoordinatorService:
             packet_id=packet_id,
             worker_id=worker_id,
         )
+        heartbeat_stop = threading.Event()
+        heartbeat_errors: list[BaseException] = []
+        heartbeat = threading.Thread(
+            target=self._heartbeat_loop,
+            kwargs={
+                "target_repo_key": target_repo_key,
+                "lease_token": lease_token,
+                "packet_id": packet_id,
+                "worker_id": worker_id,
+                "stop_event": heartbeat_stop,
+                "errors": heartbeat_errors,
+            },
+            name=f"merge-heartbeat-{packet_id}",
+            daemon=True,
+        )
+        heartbeat.start()
         _log.info("merge_mutation_start", target_repo_key=target_repo_key, step=step_name)
-        result = operation()
+        try:
+            result = operation()
+        finally:
+            heartbeat_stop.set()
+            heartbeat.join()
+        if heartbeat_errors:
+            raise MergeLeaseFencedError(str(heartbeat_errors[0]))
+        self.assert_current(
+            target_repo_key=target_repo_key,
+            lease_token=lease_token,
+            packet_id=packet_id,
+            worker_id=worker_id,
+        )
         _log.info("merge_mutation_done", target_repo_key=target_repo_key, step=step_name)
         return result
+
+    def _heartbeat_loop(
+        self,
+        *,
+        target_repo_key: str,
+        lease_token: str,
+        packet_id: str,
+        worker_id: str | None,
+        stop_event: threading.Event,
+        errors: list[BaseException],
+    ) -> None:
+        """Renew one lease while its guarded synchronous mutation is running."""
+        interval = max(0.05, min(self._ttl_seconds / 3, 1.0))
+        while not stop_event.wait(interval):
+            try:
+                self.renew(
+                    target_repo_key=target_repo_key,
+                    lease_token=lease_token,
+                    packet_id=packet_id,
+                    worker_id=worker_id,
+                )
+            except MergeLeaseFencedError as error:
+                errors.append(error)
+                _log.warn(
+                    "merge_lease_heartbeat_failed",
+                    target_repo_key=target_repo_key,
+                    packet_id=packet_id,
+                    error=str(error)[:200],
+                )
+                return
+            except Exception as error:
+                _log.warn(
+                    "merge_lease_heartbeat_failed",
+                    target_repo_key=target_repo_key,
+                    packet_id=packet_id,
+                    error=str(error)[:200],
+                )
 
     # START_FUNCTION_CONTRACT
     # name: accepted_merge_order
