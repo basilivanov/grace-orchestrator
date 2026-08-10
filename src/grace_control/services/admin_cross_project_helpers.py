@@ -19,6 +19,7 @@
 # mapping:
 #   - class: _RemoteResult
 #     methods: []
+#   - function: _log_source_matches
 # END_MODULE_MAP
 
 from __future__ import annotations
@@ -50,6 +51,25 @@ _SECRET_MARKERS = (
     "api_key",
     "fencing",
 )
+_LOG_SOURCE_ALIASES = {
+    "api": frozenset({"api", "server", "access", "api.log"}),
+    "worker": frozenset({"worker", "worker_out", "worker_err", "worker_stdout", "worker_stderr"}),
+    "supervisor": frozenset({"supervisor"}),
+    "structured": frozenset({"structured", "grace", "jsonl", "db_events"}),
+    "packet_stdout": frozenset({"packet_stdout", "stdout", "worker_out", "worker_stdout"}),
+    "packet_stderr": frozenset({"packet_stderr", "stderr", "worker_err", "worker_stderr"}),
+    "agent": frozenset({"agent", "agent_stdout", "agent_stderr"}),
+    "stage_stdout": frozenset({"stage_stdout", "stdout"}),
+    "stage_stderr": frozenset({"stage_stderr", "stderr"}),
+    "acceptance": frozenset({"acceptance", "t0", "t1", "t2"}),
+    "browser": frozenset({"browser", "e2e"}),
+    "visual": frozenset({"visual"}),
+    "merge": frozenset({"merge"}),
+    "recheck": frozenset({"recheck"}),
+    "recovery": frozenset({"recovery"}),
+    "stdout": frozenset({"stdout", "stdout.log"}),
+    "stderr": frozenset({"stderr", "stderr.log"}),
+}
 
 
 # START_BLOCK_INTERNAL_MODELS
@@ -334,6 +354,29 @@ def _log_row(context: ProjectContext, line: Any, default_source: Any) -> dict[st
     }
 
 
+# START_FUNCTION_CONTRACT
+# name: _log_source_matches
+# purpose: Match an operator-facing source taxonomy value against actual
+#          project-local log/stream source names.
+# inputs: actual — normalized source value; expected — UI source selector.
+# returns: True when the selector is empty/all or maps to the actual source.
+# side_effects: None.
+# emitted_logs: None.
+# error_behavior: Unknown selectors use case-insensitive exact matching.
+# END_FUNCTION_CONTRACT
+def _log_source_matches(actual: Any, expected: str | None) -> bool:
+    selector = str(expected or "").casefold()
+    if selector in {"", "all"}:
+        return True
+    actual_value = str(actual or "").casefold()
+    aliases = _LOG_SOURCE_ALIASES.get(selector)
+    if actual_value in (aliases or frozenset({selector})):
+        return True
+    if selector in {"api", "stdout", "stderr"} and actual_value.startswith(selector):
+        return True
+    return selector == "worker" and actual_value.startswith("worker")
+
+
 def _log_matches(
     row: Mapping[str, Any],
     source: str | None,
@@ -357,6 +400,10 @@ def _log_matches(
         (level, "level"),
         (trace_id, "trace_id"),
     ):
+        if key == "source":
+            if not _log_source_matches(row.get(key), expected):
+                return False
+            continue
         if expected and str(row.get(key) or "").casefold() != str(expected).casefold():
             return False
     text = f"{row.get('message') or ''} {row.get('raw') or ''}"

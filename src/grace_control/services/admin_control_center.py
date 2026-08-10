@@ -50,6 +50,7 @@ from grace_control.services.admin_control_center_explorer_helpers import (
     _normalize_artifacts,
     _normalize_worktrees,
     _openapi_operations,
+    _openapi_request,
     _safe_relative_path,
     _stale_base_view,
 )
@@ -121,7 +122,7 @@ _ATTENTION_STATES = frozenset({
 })
 _LOG_SOURCES = (
     "all",
-    "API",
+    "api",
     "worker",
     "supervisor",
     "structured",
@@ -136,6 +137,8 @@ _LOG_SOURCES = (
     "merge",
     "recheck",
     "recovery",
+    "stdout",
+    "stderr",
 )
 _LOG_TAILS = (100, 500, 2000)
 
@@ -678,7 +681,7 @@ class AdminControlCenterService:
         if not context.enabled:
             model["error"] = "Project is disabled; Git capability was not requested."
             return model
-        results = await asyncio.gather(
+        repository_result, worktree_result, changed_result = await asyncio.gather(
             self._read(project_key, "/api/admin/git/repository", operation="git_repository"),
             self._read(project_key, "/api/admin/git/worktrees", operation="git_worktrees"),
             self._read(
@@ -687,22 +690,9 @@ class AdminControlCenterService:
                 params={"ref": ref} if ref else None,
                 operation="git_changed_files",
             ),
-            self._read(
-                project_key,
-                "/api/admin/git/diff-stat",
-                params={"ref": ref, "path": path} if ref or path else None,
-                operation="git_diff_stat",
-            ),
-            self._read(
-                project_key,
-                "/api/admin/git/diff",
-                params={"ref": ref, "path": path} if ref or path else None,
-                operation="git_diff",
-            ),
         )
-        repo_result, worktree_result, changed_result, stat_result, diff_result = results
-        if repo_result.get("ok"):
-            model["repository"] = _mask_secrets(_unwrap(repo_result.get("payload")))
+        if repository_result.get("ok"):
+            model["repository"] = _mask_secrets(_unwrap(repository_result.get("payload")))
             if isinstance(model["repository"], Mapping):
                 repository = dict(model["repository"])
                 repo_root = str(repository.get("repo_root") or "")
@@ -718,11 +708,37 @@ class AdminControlCenterService:
                 for row in changed_payload.get("changed_files", changed_payload.get("data", []))
                 if isinstance(row, Mapping)
             ]
+        selected_path_allowed = not path or not changed_result.get("ok") or any(
+            str(row.get("path") or "") == str(path)
+            for row in model["changed_files"]
+        )
+        if path and changed_result.get("ok") and not selected_path_allowed:
+            model["error"] = "GIT_PATH_NOT_CHANGED"
+            model["error_class"] = "GIT_PATH_NOT_CHANGED"
+            stat_result: dict[str, Any] = {"ok": False, "error": "GIT_PATH_NOT_CHANGED"}
+            diff_result: dict[str, Any] = {"ok": False, "error": "GIT_PATH_NOT_CHANGED"}
+        else:
+            stat_result, diff_result = await asyncio.gather(
+                self._read(
+                    project_key,
+                    "/api/admin/git/diff-stat",
+                    params={"ref": ref, "path": path} if ref or path else None,
+                    operation="git_diff_stat",
+                ),
+                self._read(
+                    project_key,
+                    "/api/admin/git/diff",
+                    params={"ref": ref, "path": path} if ref or path else None,
+                    operation="git_diff",
+                ),
+            )
         if stat_result.get("ok"):
             model["diff_stat"] = {**_unwrap(stat_result.get("payload")), "source": "GIT"}
         if diff_result.get("ok"):
             model["diff"] = {**_unwrap(diff_result.get("payload")), "source": "GIT"}
-        failures = [result for result in results if not result.get("ok")]
+        failures = [result for result in (repository_result, worktree_result, changed_result, stat_result, diff_result) if not result.get("ok")]
+        if path and changed_result.get("ok") and not selected_path_allowed:
+            failures = []
         if failures:
             model["error"] = _capability_message(failures[0])
             model["error_class"] = failures[0].get("error_class")
@@ -766,6 +782,8 @@ class AdminControlCenterService:
             "document": {},
             "operations": [],
             "selected_path": path or "",
+            "request_path": "",
+            "request_params": {},
             "response": None,
             "response_status": None,
             "response_headers": {},
@@ -793,14 +811,35 @@ class AdminControlCenterService:
         if selected_path not in get_paths:
             model["response_error"] = "API_PATH_NOT_DISCOVERED"
             return model
+        operation = next(
+            (
+                row
+                for row in operations
+                if row.get("method") == "GET" and row.get("path") == selected_path
+            ),
+            None,
+        )
+        if operation is None:
+            model["response_error"] = "API_PATH_NOT_DISCOVERED"
+            return model
         params, params_error = _json_query_params(params_json)
         if params_error:
             model["response_error"] = params_error
             return model
+        request_path, query_params, request_error = _openapi_request(
+            selected_path,
+            operation,
+            params,
+        )
+        if request_error:
+            model["response_error"] = request_error
+            return model
+        model["request_path"] = request_path
+        model["request_params"] = query_params
         result = await self._read(
             project_key,
-            selected_path,
-            params=params,
+            request_path,
+            params=query_params,
             operation="api_explorer_get",
         )
         model["response_status"] = result.get("http_status")
@@ -809,6 +848,8 @@ class AdminControlCenterService:
             model["response"] = {
                 "body": _mask_secrets(_unwrap(result.get("payload"))),
                 "headers": result.get("headers") or {},
+                "request_path": request_path,
+                "request_params": query_params,
                 "source": "API",
                 "truncated": False,
             }

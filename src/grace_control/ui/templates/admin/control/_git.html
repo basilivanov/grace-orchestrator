@@ -26,6 +26,14 @@
 
 <section class="cc-entity-card">
   <h2>Changed files / diff stat <span class="source-badge">GIT</span></h2>
+  <form class="cc-inline-form" method="get" data-testid="git-file-selector">
+    <label>Ref<input name="ref" value="{{ ref|default('') }}" placeholder="HEAD~1"></label>
+    <label>Changed file<select name="path"><option value="">All changed files</option>{% for changed_file in changed_files %}<option value="{{ changed_file.path }}"{% if changed_file.path == path %} selected{% endif %}>{{ changed_file.path }}</option>{% endfor %}</select></label>
+    <button type="submit">Inspect selected file</button>
+  </form>
+  {% if path %}<p class="small muted" data-testid="git-selected-file">Selected file: <span class="mono">{{ path }}</span></p>{% endif %}
+  <table class="cc-table"><thead><tr><th>Status</th><th>Changed file</th><th>Inspect</th></tr></thead><tbody>{% for changed_file in changed_files %}<tr class="{% if changed_file.path == path %}selected{% endif %}"><td>{{ changed_file.status|default('—') }}</td><td class="mono">{{ changed_file.path }}</td><td><a href="{{ cc_url(project.project_key, 'git', '', ref=ref, path=changed_file.path) }}">View bounded diff</a></td></tr>{% else %}<tr><td colspan="3">No changed files returned.</td></tr>{% endfor %}</tbody></table>
   <pre class="json-preview">{{ {'changed_files': changed_files, 'stat': diff_stat}|tojson(indent=2) }}</pre>
-  <details><summary>Bounded unified diff{% if diff.truncated %} (truncated){% endif %}</summary><pre class="json-preview">{{ diff.diff|default(diff.text|default('')) }}</pre></details>
+  {% if diff_stat.truncated or diff.truncated %}<div class="cc-banner warning" data-testid="git-truncation">Git output is bounded and truncated.</div>{% endif %}
+  <details open><summary>Bounded unified diff{% if diff.truncated %} (truncated){% endif %}</summary><pre class="json-preview">{{ diff.diff|default(diff.text|default('')) }}</pre></details>
 </section>

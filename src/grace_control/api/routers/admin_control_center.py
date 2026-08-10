@@ -99,6 +99,28 @@ def _render(request: Request, page: str, model: dict[str, Any]) -> HTMLResponse:
 
 
 # START_FUNCTION_CONTRACT
+# name: _render_fragment
+# purpose: Render one explorer fragment for bounded HTMX polling without
+#          returning the persistent Control Center shell a second time.
+# inputs: request — current request; template_name — control partial name;
+#         model — page-specific view model.
+# returns: HTMLResponse containing the requested explorer fragment.
+# side_effects: None.
+# emitted_logs: None.
+# error_behavior: Never raises for valid template models.
+# END_FUNCTION_CONTRACT
+def _render_fragment(request: Request, template_name: str, model: dict[str, Any]) -> HTMLResponse:
+    context = {
+        "request": request,
+        "cc_url": _cc_url,
+        "cc_query_url": _cc_query_url,
+        "cc_status_icon": _status_icon,
+    }
+    context.update(model)
+    return _templates.TemplateResponse(request, f"control/_{template_name}.html", context)
+
+
+# START_FUNCTION_CONTRACT
 # name: _render_project_partial
 # purpose: Render only the selected project content for HTMX polling while
 #          preserving explicit project/entity/tab query state.
@@ -142,6 +164,21 @@ def _cc_url(
                 path += f"/{quote(str(entity_id), safe='-_.~')}"
     else:
         path = "/admin"
+    query = [(key, str(value)) for key, value in params.items() if value not in (None, "", False)]
+    return f"{path}?{urlencode(query)}" if query else path
+
+
+# START_FUNCTION_CONTRACT
+# name: _cc_query_url
+# purpose: Build a bounded continuation or polling URL from an internal
+#          explorer path and active query state.
+# inputs: path — router-owned relative path; params — scalar query values.
+# returns: URL with encoded non-empty query parameters.
+# side_effects: None.
+# emitted_logs: None.
+# error_behavior: Never raises for ordinary string/scalar values.
+# END_FUNCTION_CONTRACT
+def _cc_query_url(path: str, **params: Any) -> str:
     query = [(key, str(value)) for key, value in params.items() if value not in (None, "", False)]
     return f"{path}?{urlencode(query)}" if query else path
 
@@ -225,6 +262,7 @@ def _status_icon(status: Any) -> str:
 _templates.env.globals["cc_url"] = lambda project_key, kind="", entity_id="", **params: _cc_url(
     project_key, kind, entity_id, **params
 )
+_templates.env.globals["cc_query_url"] = _cc_query_url
 _templates.env.globals["cc_partial_url"] = _partial_url
 _templates.env.globals["cc_status_icon"] = _status_icon
 
@@ -640,6 +678,8 @@ async def project_logs(
         )
     except KeyError as exc:
         _raise_project_not_found(exc)
+    if request.headers.get("HX-Request", "").casefold() == "true":
+        return _render_fragment(request, "logs", model)
     return _render(request, "logs", model)
 
 
@@ -741,6 +781,8 @@ async def admin_logs(
         )
     except KeyError as exc:
         _raise_project_not_found(exc)
+    if request.headers.get("HX-Request", "").casefold() == "true":
+        return _render_fragment(request, "logs", model)
     return _render(request, "logs", model)
 
 

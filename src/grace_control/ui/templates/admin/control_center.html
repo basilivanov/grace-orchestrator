@@ -80,6 +80,7 @@
   <script>
     (() => {
       let preservedScrollTop = null;
+      let logScrollState = null;
       const textOf = (id) => document.getElementById(id)?.textContent || "";
       const copy = async (value) => {
         if (navigator.clipboard) await navigator.clipboard.writeText(value);
@@ -115,10 +116,31 @@
         }
       });
       document.body.addEventListener("htmx:beforeSwap", () => {
-        const viewer = document.querySelector("[data-follow='off']");
-        preservedScrollTop = viewer ? viewer.scrollTop : null;
+        const viewer = document.querySelector("[data-testid='bounded-log-viewer']");
+        const list = viewer?.querySelector(".cc-log-list");
+        if (list) {
+          logScrollState = {
+            scrollTop: list.scrollTop,
+            atBottom: list.scrollHeight - list.clientHeight - list.scrollTop <= 4,
+            follow: viewer.dataset.follow === "on",
+          };
+          preservedScrollTop = null;
+          return;
+        }
+        const legacyViewer = document.querySelector("[data-follow='off']");
+        preservedScrollTop = legacyViewer ? legacyViewer.scrollTop : null;
       });
       document.body.addEventListener("htmx:afterSwap", () => {
+        if (logScrollState !== null) {
+          const list = document.querySelector("[data-testid='bounded-log-viewer'] .cc-log-list");
+          if (list) {
+            list.scrollTop = logScrollState.follow && logScrollState.atBottom
+              ? list.scrollHeight
+              : logScrollState.scrollTop;
+          }
+          logScrollState = null;
+          return;
+        }
         if (preservedScrollTop === null) return;
         document.querySelectorAll("[data-follow='off']").forEach((viewer) => {
           viewer.scrollTop = preservedScrollTop;

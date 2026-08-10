@@ -175,6 +175,8 @@ button { cursor: pointer; }
 .cc-timeline-filters label { display: flex; flex-direction: column; gap: 3px; color: var(--cc-muted); font-size: 11px; }
 .cc-timeline-filters input { min-width: 130px; }
 .cc-log-list, .cc-search-results { display: grid; gap: 8px; }
+.cc-log-list { max-height: 60vh; overflow-y: auto; padding-right: 4px; }
+.cc-continuation { display: flex; align-items: center; gap: 10px; margin: 10px 0 15px; }
 .log-row strong { color: var(--cc-yellow); }
 .cc-search-row { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; padding: 11px; background: var(--cc-panel); border: 1px solid var(--cc-border); border-radius: 7px; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }

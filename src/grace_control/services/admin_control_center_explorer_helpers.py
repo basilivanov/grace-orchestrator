@@ -25,6 +25,8 @@
 #   - function: _lease_views
 #   - function: _stale_base_view
 #   - function: _openapi_operations
+#   - function: _openapi_parameter_definitions
+#   - function: _openapi_request
 #   - function: _json_query_params
 # END_MODULE_MAP
 
@@ -32,9 +34,11 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import re
 from collections.abc import Mapping
 from pathlib import PurePosixPath
 from typing import Any
+from urllib.parse import quote
 
 from grace_control.core.structured_logger import GraceLogger
 
@@ -47,6 +51,7 @@ _IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp",
 _JSON_EXTENSIONS = frozenset({".json", ".jsonl", ".har"})
 _MARKDOWN_EXTENSIONS = frozenset({".md", ".markdown"})
 _TEXT_EXTENSIONS = frozenset({".txt", ".log", ".patch", ".diff", ".csv", ".yaml", ".yml", ".toml"})
+_OPENAPI_PATH_PARAMETER = re.compile(r"\{([^{}]+)\}")
 
 
 # START_BLOCK_PATHS
@@ -399,6 +404,49 @@ def _schema_from_responses(responses: Mapping[str, Any]) -> Any:
 
 
 # START_FUNCTION_CONTRACT
+# name: _openapi_parameter_definitions
+# purpose: Extract bounded scalar path/query parameters that are safe to expose
+#          to the discovered GET executor.
+# inputs: parameters — OpenAPI parameter objects, including path-level entries.
+# returns: Deduplicated executable parameter definitions.
+# side_effects: None.
+# emitted_logs: None.
+# error_behavior: Header, cookie, body, reference and structured parameters are
+#                 documentation-only and are not executable selectors.
+# END_FUNCTION_CONTRACT
+def _openapi_parameter_definitions(parameters: Any) -> list[dict[str, Any]]:
+    definitions: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    if not isinstance(parameters, list):
+        return definitions
+    for parameter in parameters[:100]:
+        if not isinstance(parameter, Mapping):
+            continue
+        name = parameter.get("name")
+        location = str(parameter.get("in") or "").casefold()
+        schema = parameter.get("schema")
+        if not isinstance(name, str) or not name or location not in {"path", "query"}:
+            continue
+        if not isinstance(schema, Mapping):
+            continue
+        schema_type = str(schema.get("type") or "string").casefold()
+        if schema_type in {"array", "object"}:
+            continue
+        identity = (location, name)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        definitions.append({
+            "name": name,
+            "in": location,
+            "required": bool(parameter.get("required")) or location == "path",
+            "description": str(parameter.get("description") or ""),
+            "schema": dict(schema),
+        })
+    return definitions
+
+
+# START_FUNCTION_CONTRACT
 # name: _openapi_operations
 # purpose: Convert a selected project's OpenAPI paths into bounded executable
 #          GET and documentation-only mutation rows.
@@ -433,6 +481,7 @@ def _openapi_operations(document: Any) -> tuple[list[dict[str, Any]], set[str]]:
                 "summary": operation.get("summary") or "",
                 "description": operation.get("description") or "",
                 "parameters": parameters[:100],
+                "parameter_definitions": _openapi_parameter_definitions(parameters),
                 "request_schema": request_body.get("content", {}) if isinstance(request_body, Mapping) else {},
                 "response_schema": response_schema,
                 "mutation": method_upper not in {"GET", "HEAD", "OPTIONS"},
@@ -447,14 +496,71 @@ def _openapi_operations(document: Any) -> tuple[list[dict[str, Any]], set[str]]:
 
 
 # START_FUNCTION_CONTRACT
+# name: _openapi_request
+# purpose: Validate discovered GET parameters and materialize a safe route plus
+#          query mapping without permitting arbitrary selectors.
+# inputs: path — discovered OpenAPI template; operation — discovered GET row;
+#         params — bounded scalar values keyed by declared parameter name.
+# returns: (request_path, query_params, error) tuple.
+# side_effects: None.
+# error_behavior: Rejects undeclared values, missing path/query requirements,
+#                 unresolved templates and overlong materialized routes.
+# END_FUNCTION_CONTRACT
+def _openapi_request(
+    path: str,
+    operation: Mapping[str, Any],
+    params: Mapping[str, Any],
+) -> tuple[str, dict[str, Any], str | None]:
+    definitions = operation.get("parameter_definitions", [])
+    if not isinstance(definitions, list):
+        definitions = []
+    declared = {
+        str(item.get("name")): item
+        for item in definitions
+        if isinstance(item, Mapping) and item.get("name")
+    }
+    if any(key not in declared for key in params):
+        return path, {}, "API_PARAMS_UNDECLARED"
+    path_values: dict[str, str] = {}
+    query_values: dict[str, str] = {}
+    for name, definition in declared.items():
+        location = str(definition.get("in") or "")
+        required = bool(definition.get("required"))
+        if name not in params:
+            if required or location == "path":
+                return path, {}, "API_PATH_PARAM_REQUIRED" if location == "path" else "API_QUERY_PARAM_REQUIRED"
+            continue
+        value = str(params[name])
+        if not value and (required or location == "path"):
+            return path, {}, "API_PATH_PARAM_REQUIRED" if location == "path" else "API_QUERY_PARAM_REQUIRED"
+        if location == "path":
+            path_values[name] = value
+        elif location == "query":
+            query_values[name] = value
+
+    placeholders = set(_OPENAPI_PATH_PARAMETER.findall(path))
+    if placeholders - set(path_values):
+        return path, {}, "API_PATH_PARAM_REQUIRED"
+    if set(path_values) - placeholders:
+        return path, {}, "API_PATH_PARAM_UNDECLARED"
+    request_path = _OPENAPI_PATH_PARAMETER.sub(
+        lambda match: quote(path_values[match.group(1)], safe="-_.~"),
+        path,
+    )
+    if "{" in request_path or "}" in request_path or len(request_path) > 4096:
+        return path, {}, "API_PATH_INVALID"
+    return request_path, query_values, None
+
+
+# START_FUNCTION_CONTRACT
 # name: _json_query_params
-# purpose: Parse a bounded JSON object of GET query parameters for a discovered
-#          OpenAPI operation.
+# purpose: Parse a bounded JSON object of GET query/path parameters for a
+#          discovered OpenAPI operation.
 # inputs: value — optional JSON object string from the browser.
 # returns: params mapping, error string or None.
 # side_effects: None.
-# error_behavior: Rejects arrays, nested objects, excessive keys and malformed
-#                 JSON before any project request is attempted.
+# error_behavior: Rejects nulls, arrays, nested objects, excessive keys and
+#                 malformed JSON before any project request is attempted.
 # END_FUNCTION_CONTRACT
 def _json_query_params(value: str | None) -> tuple[dict[str, Any], str | None]:
     if not value:
@@ -467,7 +573,7 @@ def _json_query_params(value: str | None) -> tuple[dict[str, Any], str | None]:
         return {}, "API_PARAMS_INVALID"
     result: dict[str, Any] = {}
     for key, item in parsed.items():
-        if not isinstance(key, str) or not key or isinstance(item, (Mapping, list, tuple)):
+        if not isinstance(key, str) or not key or item is None or isinstance(item, (Mapping, list, tuple)):
             return {}, "API_PARAMS_INVALID"
         text = str(item)
         if len(text) > 512:

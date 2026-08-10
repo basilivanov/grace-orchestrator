@@ -88,6 +88,34 @@ _log = GraceLogger("admin_cross_project_service")
 
 _MAX_EVENTS_PER_PROJECT = 1000
 _MAX_LOG_LINES_PER_PROJECT = 5000
+_RUN_LOG_STREAMS = {
+    "stdout": "stdout",
+    "packet_stdout": "stdout",
+    "stderr": "stderr",
+    "packet_stderr": "stderr",
+    "agent": "agent",
+}
+_STAGE_LOG_STREAMS = {
+    "stdout": "stdout",
+    "stage_stdout": "stdout",
+    "stderr": "stderr",
+    "stage_stderr": "stderr",
+}
+_AGGREGATED_LOG_SOURCES = {
+    "api": "server",
+    "worker": "worker_stdout,worker_stderr",
+    "supervisor": "supervisor",
+    "structured": "db_events",
+    "packet_stdout": "worker_stdout",
+    "packet_stderr": "worker_stderr",
+    "agent": "agent",
+    "acceptance": "db_events",
+    "browser": "agent",
+    "visual": "agent",
+    "merge": "db_events",
+    "recheck": "db_events",
+    "recovery": "recovery",
+}
 _DIAGNOSTIC_FIELDS = frozenset({
     "packets_by_state",
     "features_by_status",
@@ -396,18 +424,27 @@ class AdminCrossProjectService:
         fetch_tail = min(_MAX_LOG_LINES_PER_PROJECT, max(page_limit, page_offset + page_limit))
 
         async def query(context: ProjectContext) -> _RemoteResult:
+            source_key = str(source or "").casefold()
             safe_packet = quote(str(packet), safe="-_.~") if packet else ""
             safe_run = quote(str(run), safe="-_.~") if run else ""
             safe_stage = quote(str(stage), safe="-_.~") if stage else ""
             if packet and run:
                 log_path = f"/api/admin/packet/{safe_packet}/runs/{safe_run}/logs"
-                log_params: dict[str, Any] = {"tail": fetch_tail, "stream": source if source in {"stdout", "stderr", "agent"} else "stderr"}
+                log_params: dict[str, Any] = {
+                    "tail": fetch_tail,
+                    "stream": _RUN_LOG_STREAMS.get(source_key, "stderr"),
+                }
             elif packet and stage:
                 log_path = f"/api/admin/packet/{safe_packet}/stages/{safe_stage}/logs"
-                log_params = {"tail": fetch_tail, "stream": "all"}
+                log_params = {"tail": fetch_tail, "stream": _STAGE_LOG_STREAMS.get(source_key, "all")}
             elif packet:
                 log_path = f"/api/admin/packet/{safe_packet}/logs/aggregated"
-                log_params = {"tail": fetch_tail, "sources": source or "all"}
+                log_params = {
+                    "tail": fetch_tail,
+                    "sources": _AGGREGATED_LOG_SOURCES.get(source_key, "all")
+                    if source_key not in {"", "all"}
+                    else "all",
+                }
             else:
                 log_path = "/api/admin/system/logs"
                 log_params = {"tail": fetch_tail}

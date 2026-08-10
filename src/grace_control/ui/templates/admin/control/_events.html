@@ -21,7 +21,12 @@
 </form>
 
 {% if errors %}<div class="cc-banner warning">{{ errors|length }} project event source(s) unavailable; healthy rows remain visible.</div>{% endif %}
-{% if next_cursor %}<p class="small muted">More bounded results are available below this page.</p>{% endif %}
+{% if next_cursor %}
+<nav class="cc-continuation" aria-label="Events pagination" data-testid="events-continuation">
+  <span class="small muted">More bounded results are available.</span>
+  <a class="button-link" data-testid="events-next" href="{{ cc_query_url(request.url.path, project=filters.project, entity_id=filters.entity_id, entity_type=filters.entity_type, event_type=filters.event_type, trace_id=filters.trace_id, since=filters.since, until=filters.until, text=filters.text, limit=filters.limit, cursor=next_cursor) }}">Next page</a>
+</nav>
+{% endif %}
 
 <div class="cc-table-wrap">
   <table class="cc-table cc-event-table">
