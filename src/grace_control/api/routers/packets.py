@@ -18,6 +18,7 @@
 #   - function: get_packet
 #   - function: claim_packet
 #   - function: release_packet
+#   - function: renew_parallel_lease
 #   - function: cancel_packet
 #   - function: merge_packet
 # END_MODULE_MAP
@@ -25,7 +26,7 @@
 from __future__ import annotations
 
 import os
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
@@ -35,10 +36,48 @@ from grace_control.core.event_recorder import record_event
 from grace_control.core.structured_logger import GraceLogger
 from grace_control.core.telegram_notify import notify_event
 from grace_control.db import get_db
-from grace_control.db.schema import Lease, Packet, PacketRun, PacketState, Worker
+from grace_control.db.schema import Event, Packet, PacketRun, PacketState, Worker
 
 router = APIRouter()
 _log = GraceLogger("packets")
+
+
+# START_FUNCTION_CONTRACT
+# name: _packet_parallel_observability
+# purpose: Build the small packet-level parallel execution read model used by
+#          packet detail and runtime diagnostics endpoints.
+# inputs: db — active session; packet — Packet row; runs — packet runs.
+# returns: Dict with base/integration SHAs, recheck result, and current wait.
+# side_effects: Read-only queries against PacketRun and Event.
+# emitted_logs: None.
+# error_behavior: Missing or malformed legacy JSON becomes an empty read model.
+# END_FUNCTION_CONTRACT
+def _packet_parallel_observability(db, packet: Packet, runs: list[PacketRun]) -> dict:
+    latest = max(runs, key=lambda run: run.run_number, default=None)
+    result_json = latest.result_json if latest and isinstance(latest.result_json, dict) else {}
+    parallel = result_json.get("parallel_execution")
+    parallel = dict(parallel) if isinstance(parallel, dict) else {}
+    wait_reason = None
+    if packet.state in {PacketState.READY.value, PacketState.ACCEPTED.value}:
+        wait_event = (
+            db.query(Event)
+            .filter(
+                Event.event_type == "packet_wait",
+                Event.entity_type == "packet",
+                Event.entity_id == packet.id,
+            )
+            .order_by(Event.timestamp.desc(), Event.id.desc())
+            .first()
+        )
+        if wait_event and isinstance(wait_event.payload_json, dict):
+            wait_reason = wait_event.payload_json.get("reason")
+    return {
+        "base_sha": latest.base_sha if latest else None,
+        "integration_base_sha": latest.integration_base_sha if latest else None,
+        "current_wait_reason": wait_reason,
+        "integration_recheck": parallel.get("integration_recheck"),
+        "parallel_execution": parallel,
+    }
 
 
 @router.get("/")
@@ -73,6 +112,7 @@ async def get_packet(packet_id: str) -> dict:
         if not p:
             raise HTTPException(status_code=404, detail="Packet not found")
         runs = db.query(PacketRun).filter_by(packet_id=packet_id).all()
+        parallel_observability = _packet_parallel_observability(db, p, runs)
         recovery_data = None
         for r in runs:
             rj = r.result_json or {}
@@ -96,6 +136,7 @@ async def get_packet(packet_id: str) -> dict:
                 "attempt_count": p.attempt_count, "max_attempts": p.max_attempts,
                 "spec_json": p.spec_json,
                 "recovery": recovery_data,
+                "parallel_execution": parallel_observability,
                 "runs": [
                     {
                         "id": r.id, "run_number": r.run_number, "status": r.status,
@@ -103,6 +144,14 @@ async def get_packet(packet_id: str) -> dict:
                         "started_at": r.started_at.isoformat() + "Z" if r.started_at else None,
                         "finished_at": r.finished_at.isoformat() + "Z" if r.finished_at else None,
                         "duration_ms": r.duration_ms,
+                        "base_sha": r.base_sha,
+                        "integration_base_sha": r.integration_base_sha,
+                        "integration_recheck": (
+                            (r.result_json or {}).get("parallel_execution", {}).get("integration_recheck")
+                            if isinstance(r.result_json, dict)
+                            and isinstance((r.result_json or {}).get("parallel_execution"), dict)
+                            else None
+                        ),
                     }
                     for r in runs
                 ],
@@ -122,14 +171,26 @@ async def claim_packet(request: dict) -> dict:
     """
     worker_id = request["worker_id"]
 
-    from grace_control.config.settings import get_max_concurrency, settings
+    from grace_control.config.settings import (
+        get_parallel_runtime_config,
+        parallel_runtime_safety_error,
+    )
 
-    if get_max_concurrency() > 1 and settings.parallel_scope_guard_enabled:
+    runtime_config = get_parallel_runtime_config()
+    max_concurrency = int(runtime_config["max_concurrency"])
+    if max_concurrency > 1:
+        safety_error = parallel_runtime_safety_error()
+        if safety_error:
+            _log.error("parallel_claim_rejected_unsafe", worker_id=worker_id, reason=safety_error)
+            raise HTTPException(status_code=503, detail=safety_error)
+
+    if max_concurrency > 1:
         from grace_control.services.safe_queue_claim_service import SafeQueueClaimService
 
-        result, reason = SafeQueueClaimService().claim_next_atomic(worker_id)
+        claim_service = SafeQueueClaimService()
+        result, reason = claim_service.claim_next_atomic(worker_id)
         if result is None:
-            detail = reason or "No packets available"
+            detail = claim_service.get_last_wait_reason() or reason or "No packets available"
             raise HTTPException(status_code=404, detail=detail)
     else:
         from grace_control.services.queue_service import claim_next
@@ -272,6 +333,65 @@ async def renew_lease(packet_id: str, request: dict) -> dict:
     }
 
 
+# START_FUNCTION_CONTRACT
+# name: renew_parallel_lease
+# purpose: Renew the independent parallel resource lease after the ordinary
+#          packet lease has been released by an ACCEPTED result.
+# inputs: packet_id, worker_id, parallel_lease_id, claimed_attempt.
+# returns: JSON response with the renewed expiry timestamp.
+# side_effects: Updates one parallel_leases row.
+# emitted_logs: parallel_lease_renewed, parallel_lease_fenced.
+# error_behavior: Returns 409 for stale fencing identity and 404 for a missing
+#                 packet/parallel lease.
+# END_FUNCTION_CONTRACT
+@router.post("/{packet_id}/renew-parallel-lease")
+async def renew_parallel_lease(packet_id: str, request: dict) -> dict:
+    worker_id = request.get("worker_id", "")
+    parallel_lease_id = request.get("parallel_lease_id")
+    claimed_attempt = request.get("claimed_attempt")
+    if not worker_id or not parallel_lease_id or claimed_attempt is None:
+        raise HTTPException(
+            status_code=422,
+            detail="worker_id, parallel_lease_id and claimed_attempt are required",
+        )
+
+    from grace_control.services.parallel_lease_service import (
+        ParallelLeaseFencedError,
+        ParallelLeaseService,
+    )
+
+    with get_db() as db:
+        packet = db.query(Packet).filter_by(id=packet_id).first()
+        if packet is None:
+            raise HTTPException(status_code=404, detail="Packet not found")
+        try:
+            expires_at = ParallelLeaseService().renew(
+                db,
+                packet_id=packet_id,
+                worker_id=worker_id,
+                lease_id=parallel_lease_id,
+                claimed_attempt=claimed_attempt,
+            )
+        except ParallelLeaseFencedError as error:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "parallel_lease_lost": True,
+                    "reason": str(error),
+                    "packet_id": packet_id,
+                },
+            )
+    return {
+        "data": {
+            "packet_id": packet_id,
+            "parallel_lease_id": parallel_lease_id,
+            "expires_at": expires_at.isoformat() + "Z",
+            "renewed": True,
+        },
+        "timestamp": datetime.now(UTC).isoformat() + "Z",
+    }
+
+
 @router.post("/{packet_id}/cancel")
 async def cancel_packet(packet_id: str, request: dict) -> dict:
     """Cancel packet: any non-terminal state → CANCELLED. Delegates to PacketService.
@@ -351,6 +471,8 @@ async def merge_packet(packet_id: str, request: dict) -> dict:
     worktree_path = request.get("worktree_path", "")
     branch_name = request.get("branch_name", "")
     commit_sha = request.get("commit_sha", "")
+    parallel_lease_id = request.get("parallel_lease_id")
+    claimed_attempt = request.get("claimed_attempt")
     target_branch = request.get("target_branch") or _settings.target_branch
     worker_id = request.get("worker_id") or f"merge:{packet_id}"
     target_repo_root = (
@@ -384,6 +506,8 @@ async def merge_packet(packet_id: str, request: dict) -> dict:
         worktree_path=worktree_path,
         worker_id=worker_id,
         commit_sha=commit_sha,
+        parallel_lease_id=parallel_lease_id,
+        claimed_attempt=claimed_attempt,
     )
 
     if not result.success:
@@ -441,6 +565,20 @@ async def get_packet_runtime_diagnostics(packet_id: str) -> dict:
         run = db.query(PacketRun).filter_by(packet_id=packet_id).order_by(
             PacketRun.run_number.desc()
         ).first()
+        wait_reason = None
+        if p.state in {PacketState.READY.value, PacketState.ACCEPTED.value}:
+            wait_event = (
+                db.query(Event)
+                .filter(
+                    Event.event_type == "packet_wait",
+                    Event.entity_type == "packet",
+                    Event.entity_id == packet_id,
+                )
+                .order_by(Event.timestamp.desc(), Event.id.desc())
+                .first()
+            )
+            if wait_event and isinstance(wait_event.payload_json, dict):
+                wait_reason = wait_event.payload_json.get("reason")
 
     if not run:
         return {"data": {"packet_id": packet_id, "status": "no_runs",
@@ -467,6 +605,9 @@ async def get_packet_runtime_diagnostics(packet_id: str) -> dict:
             details = details or scope["summary"]
 
     artifact_refs = diagnostics_evidence.get("artifact_refs", [])
+    parallel_execution = rj.get("parallel_execution") or {}
+    if not isinstance(parallel_execution, dict):
+        parallel_execution = {}
     read_model = {
         "packet_id": packet_id,
         "status": status,
@@ -476,6 +617,11 @@ async def get_packet_runtime_diagnostics(packet_id: str) -> dict:
         "changed_files": changed,
         "artifact_refs": artifact_refs,
         "run_id": run.id,
+        "base_sha": run.base_sha,
+        "integration_base_sha": run.integration_base_sha,
+        "current_wait_reason": wait_reason,
+        "integration_recheck": parallel_execution.get("integration_recheck"),
+        "integration_recheck_evidence": rj.get("integration_recheck_evidence", {}),
     }
     return {"data": read_model, "timestamp": datetime.now(UTC).isoformat() + "Z"}
 

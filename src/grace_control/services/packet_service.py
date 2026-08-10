@@ -295,6 +295,7 @@ class PacketService:
         worker = db.query(Worker).filter_by(id=worker_id).first()
         if worker:
             worker.current_packet_id = packet_id
+            worker.status = "busy"
 
         from grace_control.services.rework_packet_service import resolve_rework_spec
         resolved_spec = resolve_rework_spec(db, packet)

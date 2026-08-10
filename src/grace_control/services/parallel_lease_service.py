@@ -23,6 +23,7 @@
 #     methods:
 #       - acquire
 #       - renew
+#       - assert_current
 #       - release
 #       - expire
 #       - active_leases
@@ -178,6 +179,31 @@ class ParallelLeaseService:
             claimed_attempt=claimed_attempt,
         )
         return lease.expires_at
+
+    # START_FUNCTION_CONTRACT
+    # name: assert_current
+    # purpose: Validate parallel lease ownership without extending its TTL.
+    # inputs: db — active transaction; packet_id, worker_id, lease_id,
+    #         claimed_attempt — exact fencing identity; now — optional clock.
+    # returns: None when the identity is current and unexpired.
+    # side_effects: None beyond a read-only lease query.
+    # emitted_logs: parallel_lease_fenced on rejection.
+    # error_behavior: Raises ParallelLeaseFencedError for missing, mismatched,
+    #                 or expired identity.
+    # END_FUNCTION_CONTRACT
+    def assert_current(
+        self,
+        db,
+        *,
+        packet_id: str,
+        worker_id: str,
+        lease_id: str,
+        claimed_attempt: int,
+        now: datetime | None = None,
+    ) -> None:
+        current_time = _utc(now or datetime.now(UTC))
+        lease = db.query(ParallelLease).filter_by(packet_id=packet_id).first()
+        self._assert_fenced(lease, worker_id, lease_id, claimed_attempt, current_time)
 
     # START_FUNCTION_CONTRACT
     # name: release

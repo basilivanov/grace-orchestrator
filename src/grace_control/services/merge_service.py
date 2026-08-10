@@ -27,12 +27,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from grace_control.config.settings import settings
+from grace_control.config.settings import (
+    get_parallel_runtime_config,
+    parallel_runtime_safety_error,
+)
 from grace_control.core.contracts import build_packet_contract
 from grace_control.core.stage_instrumentation import stage
 from grace_control.core.structured_logger import GraceLogger
 from grace_control.db import get_db
-from grace_control.db.schema import Packet, PacketRun, PacketState
+from grace_control.db.schema import Event, Packet, PacketRun, PacketState
 from grace_control.services.git_service import GitService
 from grace_control.services.integration_recheck_service import (
     IntegrationRecheckResult,
@@ -43,6 +46,10 @@ from grace_control.services.merge_coordinator_service import (
     MergeLeaseBusyError,
     MergeLeaseFencedError,
     MergeLeaseTakeoverError,
+)
+from grace_control.services.parallel_lease_service import (
+    ParallelLeaseFencedError,
+    ParallelLeaseService,
 )
 
 _log = GraceLogger("merge_service")
@@ -108,7 +115,8 @@ class MergeService:
     #          transition for one target repository, including shared git
     #          worktree cleanup while the merge lease is held.
     # inputs: packet_id, target_repo_root, branch_name, target_branch, and
-    #         optional worktree_path and worker_id fencing identity.
+    #         optional worktree_path, worker_id, and parallel lease fencing
+    #         identity.
     # returns: MergeResult describing success or a typed-safe failure reason.
     # side_effects: Guarded git mutations, packet transition, and lease release.
     # emitted_logs: merge_packet_start, merge_packet_done, merge_packet_failed.
@@ -125,11 +133,26 @@ class MergeService:
         worker_id: str | None = None,
         worktree_path: str | Path | None = None,
         commit_sha: str | None = None,
+        parallel_lease_id: str | None = None,
+        claimed_attempt: int | None = None,
     ) -> MergeResult:
         from grace_control.services.packet_service import PacketService
         svc = self._packets or PacketService()
         repo = Path(target_repo_root).resolve()
         holder = worker_id or f"merge:{packet_id}"
+
+        safety_error = parallel_runtime_safety_error()
+        if safety_error:
+            _log.error("merge_rejected_unsafe_parallel_mode", packet_id=packet_id, reason=safety_error)
+            return MergeResult(
+                False,
+                packet_id,
+                "",
+                str(repo),
+                branch_name,
+                target_branch,
+                error=safety_error,
+            )
 
         _log.info("merge_packet_start",
             packet_id=packet_id, repo=str(repo), branch=branch_name, target_branch=target_branch)
@@ -139,6 +162,11 @@ class MergeService:
                 error="branch_name is required")
 
         if not self._coordinator.can_merge_now(packet_id, target_repo_root=repo):
+            self._record_merge_wait(
+                packet_id,
+                "waiting_for_merge_slot: deterministic accepted merge order",
+                target_repo_key=str(repo),
+            )
             return MergeResult(
                 False,
                 packet_id,
@@ -158,6 +186,11 @@ class MergeService:
                 worker_id=holder,
             )
         except MergeLeaseBusyError as error:
+            self._record_merge_wait(
+                packet_id,
+                f"waiting_for_merge_slot: {error}",
+                target_repo_key=str(repo),
+            )
             return MergeResult(
                 False,
                 packet_id,
@@ -189,6 +222,13 @@ class MergeService:
             )
 
         try:
+            if parallel_lease_id:
+                self._assert_parallel_lease_current(
+                    packet_id=packet_id,
+                    worker_id=holder,
+                    parallel_lease_id=parallel_lease_id,
+                    claimed_attempt=claimed_attempt,
+                )
             info = self._git.validate_repo(repo)
             if not info.is_git:
                 return MergeResult(False, packet_id, "", str(repo), branch_name, target_branch,
@@ -217,7 +257,7 @@ class MergeService:
             conflict_keys = merge_snapshot["conflict_keys"]
             current_head = self._target_branch_head(repo, target_branch)
             integration_recheck_enabled = bool(
-                getattr(settings, "integration_recheck_on_stale_base", True)
+                get_parallel_runtime_config()["integration_recheck_on_stale_base"]
             )
             missing_base_sha = not base_sha
             stale_base = bool(base_sha and current_head and base_sha != current_head)
@@ -434,7 +474,13 @@ class MergeService:
                 packet_id=packet_id,
                 worker_id=holder,
                 step_name="checkout",
-                operation=lambda: self._git.checkout(repo, target_branch),
+                operation=lambda: self._guarded_parallel_mutation(
+                    parallel_lease_id=parallel_lease_id,
+                    packet_id=packet_id,
+                    worker_id=holder,
+                    claimed_attempt=claimed_attempt,
+                    operation=lambda: self._git.checkout(repo, target_branch),
+                ),
             )
             if not checkout.success:
                 return MergeResult(False, packet_id, "", str(repo), branch_name, target_branch,
@@ -446,7 +492,13 @@ class MergeService:
                 packet_id=packet_id,
                 worker_id=holder,
                 step_name="fetch",
-                operation=lambda: self._git.fetch(repo, "origin"),
+                operation=lambda: self._guarded_parallel_mutation(
+                    parallel_lease_id=parallel_lease_id,
+                    packet_id=packet_id,
+                    worker_id=holder,
+                    claimed_attempt=claimed_attempt,
+                    operation=lambda: self._git.fetch(repo, "origin"),
+                ),
             )  # best-effort: local repos may not have origin
 
             if validated_integration_base:
@@ -486,9 +538,50 @@ class MergeService:
                 packet_id=packet_id,
                 worker_id=holder,
                 step_name="merge",
-                operation=lambda: self._git.merge(repo, branch_name, target_branch),
+                operation=lambda: self._guarded_parallel_mutation(
+                    parallel_lease_id=parallel_lease_id,
+                    packet_id=packet_id,
+                    worker_id=holder,
+                    claimed_attempt=claimed_attempt,
+                    operation=lambda: self._git.merge(repo, branch_name, target_branch),
+                ),
             )
             if not merge.success:
+                if self._is_merge_conflict(merge.stderr):
+                    self._abort_failed_merge(
+                        repo,
+                        target_repo_key=lease.target_repo_key,
+                        lease_token=lease.lease_token,
+                        packet_id=packet_id,
+                        worker_id=holder,
+                    )
+                    failure = IntegrationRecheckResult(
+                        status="failed",
+                        base_sha=base_sha,
+                        integration_base_sha=current_head,
+                        failure_class="merge_conflict",
+                        evidence={
+                            "stderr": merge.stderr[:1000],
+                            "target_unchanged": True,
+                            "target_branch": target_branch,
+                        },
+                    )
+                    parallel_execution.update(
+                        integration_base_sha=current_head,
+                        integration_recheck="failed",
+                    )
+                    return await self._block_stale_packet(
+                        svc=svc,
+                        packet_id=packet_id,
+                        failure=failure,
+                        parallel_execution=parallel_execution,
+                        worktree_path=worktree_path,
+                        repo=repo,
+                        branch_name=branch_name,
+                        target_branch=target_branch,
+                        lease=lease,
+                        worker_id=holder,
+                    )
                 return MergeResult(False, packet_id, "", str(repo), branch_name, target_branch,
                     error=f"merge failed: {merge.stderr}")
 
@@ -498,7 +591,13 @@ class MergeService:
                 packet_id=packet_id,
                 worker_id=holder,
                 step_name="push",
-                operation=lambda: self._git.push(repo, "origin", target_branch),
+                operation=lambda: self._guarded_parallel_mutation(
+                    parallel_lease_id=parallel_lease_id,
+                    packet_id=packet_id,
+                    worker_id=holder,
+                    claimed_attempt=claimed_attempt,
+                    operation=lambda: self._git.push(repo, "origin", target_branch),
+                ),
             )
             if not push.success:
                 # Push optional — local repos (tests, dev) may have no origin.
@@ -565,6 +664,16 @@ class MergeService:
                 target_branch,
                 error=f"merge_lease_lost: {error}",
             )
+        except ParallelLeaseFencedError as error:
+            return MergeResult(
+                False,
+                packet_id,
+                commit_sha,
+                str(repo),
+                branch_name,
+                target_branch,
+                error=f"parallel_lease_lost: {error}",
+            )
         except Exception as error:
             _log.warn("merge_state_transition_failed",
                 packet_id=packet_id, error=str(error)[:200])
@@ -604,6 +713,148 @@ class MergeService:
             return stdout.strip()
         fallback = self._git.current_sha(repo)
         return fallback if isinstance(fallback, str) else ""
+
+    # START_FUNCTION_CONTRACT
+    # name: _assert_parallel_lease_current
+    # purpose: Fence a worker merge against a lost or reclaimed parallel lease.
+    # inputs: packet_id, worker_id, parallel_lease_id, claimed_attempt.
+    # returns: None when the exact parallel lease identity is current.
+    # side_effects: Read-only query against parallel_leases.
+    # emitted_logs: parallel_lease_fenced.
+    # error_behavior: Raises ParallelLeaseFencedError for stale identity.
+    # END_FUNCTION_CONTRACT
+    @staticmethod
+    def _assert_parallel_lease_current(
+        *,
+        packet_id: str,
+        worker_id: str,
+        parallel_lease_id: str,
+        claimed_attempt: int | None,
+    ) -> None:
+        if claimed_attempt is None:
+            raise ParallelLeaseFencedError("claimed_attempt is required")
+        with get_db() as db:
+            ParallelLeaseService().assert_current(
+                db,
+                packet_id=packet_id,
+                worker_id=worker_id,
+                lease_id=parallel_lease_id,
+                claimed_attempt=claimed_attempt,
+            )
+
+    # START_FUNCTION_CONTRACT
+    # name: _guarded_parallel_mutation
+    # purpose: Recheck parallel ownership immediately before a target mutation.
+    # inputs: Optional parallel lease identity and a synchronous operation.
+    # returns: Operation result.
+    # side_effects: Read-only lease check followed by the provided mutation.
+    # emitted_logs: parallel_lease_fenced.
+    # error_behavior: Raises ParallelLeaseFencedError before mutation when the
+    #                 supplied identity is stale; legacy calls remain allowed.
+    # END_FUNCTION_CONTRACT
+    def _guarded_parallel_mutation(
+        self,
+        *,
+        parallel_lease_id: str | None,
+        packet_id: str,
+        worker_id: str,
+        claimed_attempt: int | None,
+        operation,
+    ):
+        if parallel_lease_id:
+            self._assert_parallel_lease_current(
+                packet_id=packet_id,
+                worker_id=worker_id,
+                parallel_lease_id=parallel_lease_id,
+                claimed_attempt=claimed_attempt,
+            )
+        return operation()
+
+    # START_FUNCTION_CONTRACT
+    # name: _record_merge_wait
+    # purpose: Persist merge-slot contention as a non-terminal typed wait.
+    # inputs: packet_id, reason, target_repo_key.
+    # returns: None.
+    # side_effects: Inserts one packet_wait Event row.
+    # emitted_logs: None.
+    # error_behavior: Read/write failures are contained so WAIT remains a
+    #                 valid merge response.
+    # END_FUNCTION_CONTRACT
+    @staticmethod
+    def _record_merge_wait(packet_id: str, reason: str, *, target_repo_key: str) -> None:
+        try:
+            with get_db() as db:
+                db.add(Event(
+                    event_type="packet_wait",
+                    entity_type="packet",
+                    entity_id=packet_id,
+                    payload_json={
+                        "reason": "waiting_for_merge_slot",
+                        "detail": reason,
+                        "target_repo_key": target_repo_key,
+                        "packet_id": packet_id,
+                        "expected_wait": True,
+                    },
+                    timestamp=datetime.now(UTC),
+                ))
+        except Exception as error:
+            _log.warn("merge_wait_event_failed", packet_id=packet_id, error=str(error)[:200])
+
+    # START_FUNCTION_CONTRACT
+    # name: _is_merge_conflict
+    # purpose: Classify a failed git merge as a recoverable text conflict.
+    # inputs: stderr — git merge diagnostic text.
+    # returns: True when git reports a conflict or unresolved merge state.
+    # side_effects: None.
+    # emitted_logs: None.
+    # error_behavior: Empty/non-string diagnostics are not classified.
+    # END_FUNCTION_CONTRACT
+    @staticmethod
+    def _is_merge_conflict(stderr: str | None) -> bool:
+        text = str(stderr or "").lower()
+        return any(
+            marker in text
+            for marker in (
+                "conflict",
+                "automatic merge failed",
+                "fix conflicts",
+                "unmerged files",
+            )
+        )
+
+    # START_FUNCTION_CONTRACT
+    # name: _abort_failed_merge
+    # purpose: Abort only the current fenced failed merge so the target repo is
+    #          left unchanged before a recoverable packet block.
+    # inputs: repo and current merge lease identity.
+    # returns: None.
+    # side_effects: Executes the fenced `git merge --abort` mutation.
+    # emitted_logs: merge_abort_failed.
+    # error_behavior: Logs a failed abort and leaves takeover blocked by repo
+    #                 sanity rather than attempting a destructive reset.
+    # END_FUNCTION_CONTRACT
+    def _abort_failed_merge(
+        self,
+        repo: Path,
+        *,
+        target_repo_key: str,
+        lease_token: str,
+        packet_id: str,
+        worker_id: str,
+    ) -> None:
+        try:
+            result = self._coordinator.run_mutation(
+                target_repo_key=target_repo_key,
+                lease_token=lease_token,
+                packet_id=packet_id,
+                worker_id=worker_id,
+                step_name="merge_abort",
+                operation=lambda: self._git._run(["merge", "--abort"], repo),
+            )
+            if not getattr(result, "success", False):
+                _log.warn("merge_abort_failed", packet_id=packet_id, error=getattr(result, "stderr", "")[:300])
+        except Exception as error:
+            _log.warn("merge_abort_failed", packet_id=packet_id, error=str(error)[:300])
 
     # START_FUNCTION_CONTRACT
     # name: _merge_snapshot

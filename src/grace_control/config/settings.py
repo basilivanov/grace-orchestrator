@@ -18,6 +18,8 @@
 #   - class: GraceSettings
 #   - instance: settings
 #   - function: get_max_concurrency
+#   - function: get_parallel_runtime_config
+#   - function: parallel_runtime_safety_error
 # END_MODULE_MAP
 
 from __future__ import annotations
@@ -240,3 +242,65 @@ settings = _build_settings()
 # END_FUNCTION_CONTRACT
 def get_max_concurrency() -> int:
     return max(1, int(os.environ.get("GRACE_MAX_CONCURRENCY", str(settings.max_concurrency))))
+
+
+# START_FUNCTION_CONTRACT
+# name: get_parallel_runtime_config
+# purpose: Resolve the effective multi-worker safety settings from the canonical
+#          settings object and explicit GRACE environment overrides.
+# inputs: None.
+# returns: Dict containing effective concurrency and all required safety guards.
+# side_effects: Reads process environment through the settings boundary.
+# emitted_logs: None.
+# error_behavior: Raises ValueError when a boolean override is malformed.
+# END_FUNCTION_CONTRACT
+def get_parallel_runtime_config() -> dict[str, object]:
+    def _bool_setting(name: str, fallback: bool) -> bool:
+        raw = os.environ.get(name)
+        if raw is None:
+            return bool(fallback)
+        normalized = raw.strip().lower()
+        if normalized not in {"true", "false", "1", "0", "yes", "no", "on", "off"}:
+            raise ValueError(f"{name} must be a boolean")
+        return normalized in {"true", "1", "yes", "on"}
+
+    return {
+        "max_concurrency": get_max_concurrency(),
+        "scope_guard_enabled": _bool_setting(
+            "GRACE_PARALLEL_SCOPE_GUARD_ENABLED",
+            settings.parallel_scope_guard_enabled,
+        ),
+        "merge_serialization_enabled": _bool_setting(
+            "GRACE_MERGE_SERIALIZATION_ENABLED",
+            settings.merge_serialization_enabled,
+        ),
+        "integration_recheck_on_stale_base": _bool_setting(
+            "GRACE_INTEGRATION_RECHECK_ON_STALE_BASE",
+            settings.integration_recheck_on_stale_base,
+        ),
+    }
+
+
+# START_FUNCTION_CONTRACT
+# name: parallel_runtime_safety_error
+# purpose: Fail closed when a multi-worker execution request lacks a required
+#          scope/key or serialized-merge safety guard.
+# inputs: worker_count — optional number of worker processes being started.
+# returns: None for a safe configuration, otherwise a typed safety reason.
+# side_effects: Reads canonical runtime settings.
+# emitted_logs: None.
+# error_behavior: Raises ValueError for malformed boolean configuration.
+# END_FUNCTION_CONTRACT
+def parallel_runtime_safety_error(worker_count: int | None = None) -> str | None:
+    config = get_parallel_runtime_config()
+    max_concurrency = int(config["max_concurrency"])
+    effective_workers = max_concurrency if worker_count is None else max(1, int(worker_count))
+    if max_concurrency <= 1 or effective_workers <= 1:
+        return None
+    if not bool(config["scope_guard_enabled"]):
+        return "parallel_safety_disabled:GRACE_PARALLEL_SCOPE_GUARD_ENABLED=false"
+    if not bool(config["merge_serialization_enabled"]):
+        return "parallel_safety_disabled:GRACE_MERGE_SERIALIZATION_ENABLED=false"
+    if not bool(config["integration_recheck_on_stale_base"]):
+        return "parallel_safety_disabled:GRACE_INTEGRATION_RECHECK_ON_STALE_BASE=false"
+    return None

@@ -54,6 +54,8 @@ class WorkerFailureType(str, Enum):
     SCOPE_VIOLATION = "scope_violation"
     WORKTREE_PREFLIGHT_FAILED = "worktree_preflight_failed"
     STALE_LEASE = "stale_lease"
+    PARALLEL_LEASE_LOST = "parallel_lease_lost"
+    MERGE_LEASE_LOST = "merge_lease_lost"
     API_ERROR = "api_error"
 
 
@@ -99,7 +101,12 @@ def is_failure_retryable(failure_type: WorkerFailureType) -> bool:
     - SCOPE_VIOLATION: NOT automatically retryable — needs recovery.
     - All others: retryable when attempts remain.
     """
-    if failure_type in (WorkerFailureType.STALE_LEASE, WorkerFailureType.SCOPE_VIOLATION):
+    if failure_type in (
+        WorkerFailureType.STALE_LEASE,
+        WorkerFailureType.PARALLEL_LEASE_LOST,
+        WorkerFailureType.MERGE_LEASE_LOST,
+        WorkerFailureType.SCOPE_VIOLATION,
+    ):
         return False
     return True
 
@@ -124,6 +131,7 @@ class ExecutionState:
 
     # Claim metadata
     lease_id: int | None = None
+    parallel_lease_id: str | None = None
     claimed_attempt: int | None = None
     attempt: int = 0
     max_attempts: int = 0
@@ -153,6 +161,13 @@ class ExecutionState:
 
         if self.failure_type == WorkerFailureType.STALE_LEASE:
             # Don't release — another worker owns this packet
+            return ""
+
+        if self.failure_type in (
+            WorkerFailureType.PARALLEL_LEASE_LOST,
+            WorkerFailureType.MERGE_LEASE_LOST,
+        ):
+            # A stale parallel/merge fence must not mutate packet state.
             return ""
 
         if self.failure_type == WorkerFailureType.SCOPE_VIOLATION:
@@ -228,6 +243,9 @@ class Worker:
         self._active_packet_id: str | None = None
         self._active_lease_id: int | None = None
         self._active_claimed_attempt: int | None = None
+        self._active_parallel_lease_id: str | None = None
+        self._active_lease_released = False
+        self._active_lease_loss_reason: str = ""
 
         effective_target_repo: str | Path = (
             _settings.target_repo_root
@@ -309,6 +327,7 @@ class Worker:
             claimed_attempt=claim.claimed_attempt,
             attempt=claim.attempt,
             max_attempts=claim.max_attempts,
+            parallel_lease_id=getattr(claim, "parallel_lease_id", None),
             target_repo_root=str(
                 claim.spec.get("target_repo_root", "")
                 if isinstance(claim.spec, dict)
@@ -326,6 +345,14 @@ class Worker:
                 # ── Phase 2: EXECUTE ────────────────────────────────────
                 result = await self._phase_execute(claim, exec_state, agent_timeout)
 
+                if self._active_lease_loss_reason:
+                    exec_state.failure_type = (
+                        WorkerFailureType.PARALLEL_LEASE_LOST
+                        if self._active_lease_loss_reason == "parallel_lease_lost"
+                        else WorkerFailureType.STALE_LEASE
+                    )
+                    exec_state.error_message = self._active_lease_loss_reason
+
                 # ── Phase 3: RELEASE ────────────────────────────────────
                 await self._phase_release(exec_state, result)
 
@@ -342,6 +369,9 @@ class Worker:
             self._active_packet_id = None
             self._active_lease_id = None
             self._active_claimed_attempt = None
+            self._active_parallel_lease_id = None
+            self._active_lease_released = False
+            self._active_lease_loss_reason = ""
 
     # ── Phase 1: CLAIM ──────────────────────────────────────────────────────
 
@@ -354,6 +384,9 @@ class Worker:
                 self._active_packet_id = claim.packet_id
                 self._active_lease_id = claim.lease_id
                 self._active_claimed_attempt = claim.claimed_attempt
+                self._active_parallel_lease_id = getattr(claim, "parallel_lease_id", None)
+                self._active_lease_released = False
+                self._active_lease_loss_reason = ""
             return claim
         except Exception as e:
             self.log.warn("claim_api_error", worker_id=self.worker_id,
@@ -453,6 +486,9 @@ class Worker:
                     worker_id=self.worker_id)
             else:
                 exec_state.release_status = status
+                if status == "accepted":
+                    self._active_lease_released = True
+                    self._active_lease_id = None
                 self.log.info("packet_released", packet_id=packet_id, status=status)
 
         except Exception as e:
@@ -485,17 +521,44 @@ class Worker:
             target_repo=target_repo, sha=result.commit_sha[:12])
         wait_attempt = 0
         while True:
+            lease_loss_reason = getattr(self, "_active_lease_loss_reason", "")
+            if lease_loss_reason:
+                exec_state.failure_type = (
+                    WorkerFailureType.PARALLEL_LEASE_LOST
+                    if lease_loss_reason == "parallel_lease_lost"
+                    else WorkerFailureType.STALE_LEASE
+                )
+                exec_state.error_message = lease_loss_reason
+                self.log.warn("merge_skipped_lease_lost", packet_id=packet_id,
+                              reason=lease_loss_reason)
+                return
             try:
                 merge_response = await self.api.merge_packet(packet_id,
                     target_repo_root=target_repo,
                     worktree_path=result.worktree_path,
                     branch_name=result.branch_name,
                     commit_sha=result.commit_sha,
-                    worker_id=exec_state.worker_id)
+                    worker_id=exec_state.worker_id,
+                    parallel_lease_id=exec_state.parallel_lease_id,
+                    claimed_attempt=exec_state.claimed_attempt)
             except Exception as merge_exc:
                 # W07: Merge failure — record explicit observable event
                 # so humans can take manual action. Don't silently swallow.
                 merge_error = str(merge_exc)[:500]
+                response = getattr(merge_exc, "response", None)
+                if response is not None:
+                    try:
+                        merge_error = f"{merge_error} {response.json()}"[:1000]
+                    except ValueError:
+                        pass
+                if "merge_lease_lost" in merge_error:
+                    exec_state.failure_type = WorkerFailureType.MERGE_LEASE_LOST
+                    exec_state.error_message = "merge_lease_lost"
+                    self.log.warn("merge_lease_lost", packet_id=packet_id)
+                elif "parallel_lease_lost" in merge_error:
+                    exec_state.failure_type = WorkerFailureType.PARALLEL_LEASE_LOST
+                    exec_state.error_message = "parallel_lease_lost"
+                    self.log.warn("parallel_lease_lost", packet_id=packet_id)
                 self.log.error("merge_failed_action_required",
                     packet_id=packet_id,
                     branch=result.branch_name,
@@ -537,6 +600,12 @@ class Worker:
                 await asyncio.sleep(delay)
                 continue
 
+            if "merge_lease_lost" in wait_reason or "merge_lease_lost" in str(response_data.get("error", "")):
+                exec_state.failure_type = WorkerFailureType.MERGE_LEASE_LOST
+                exec_state.error_message = "merge_lease_lost"
+                self.log.warn("merge_lease_lost", packet_id=packet_id)
+                return
+
             self.log.info("merged", packet_id=packet_id)
             return
 
@@ -556,6 +625,17 @@ class Worker:
         if exec_state.failure_type == WorkerFailureType.STALE_LEASE:
             # W07: Stale lease — already handled, don't retry or recover
             self.log.info("stale_lease_skip_post_release", packet_id=packet_id)
+            return
+
+        if exec_state.failure_type in (
+            WorkerFailureType.PARALLEL_LEASE_LOST,
+            WorkerFailureType.MERGE_LEASE_LOST,
+        ):
+            self.log.info(
+                "lease_lost_skip_post_release",
+                packet_id=packet_id,
+                reason=exec_state.failure_type.value,
+            )
             return
 
         if status == "rejected":
@@ -658,14 +738,41 @@ class Worker:
     # ── Heartbeat loop ──────────────────────────────────────────────────────
 
     async def _heartbeat_loop(self):
-        """W01: Heartbeat now also renews the active lease if a packet is running."""
+        """Renew ordinary or retained parallel ownership for one active packet."""
         while self.running:
             try:
                 await self.api.heartbeat(self.worker_id)
                 self.log.debug("heartbeat_sent", worker_id=self.worker_id)
 
-                # W01: Renew active lease during execution
-                if self._active_packet_id and self._active_lease_id is not None:
+                if self._active_packet_id and self._active_lease_loss_reason:
+                    self.log.warn(
+                        "lease_renewal_fenced",
+                        packet_id=self._active_packet_id,
+                        reason=self._active_lease_loss_reason,
+                    )
+                # ACCEPTED packets no longer have an ordinary packet lease but
+                # retain their parallel reservation until serialized merge.
+                elif self._active_packet_id and self._active_lease_released and self._active_parallel_lease_id:
+                    try:
+                        renew_result = await self.api.renew_parallel_lease(
+                            self._active_packet_id,
+                            self.worker_id,
+                            self._active_parallel_lease_id,
+                            self._active_claimed_attempt or 0,
+                        )
+                        if not renew_result:
+                            self._active_lease_loss_reason = (
+                                getattr(self.api, "last_lease_error", "")
+                                or "parallel_lease_lost"
+                            )
+                    except Exception as e:
+                        self.log.warn(
+                            "parallel_lease_renewal_error",
+                            packet_id=self._active_packet_id,
+                            error=str(e)[:200],
+                        )
+                # W01: Renew active ordinary lease during execution.
+                elif self._active_packet_id and self._active_lease_id is not None:
                     try:
                         renew_result = await self.api.renew_lease(
                             self._active_packet_id,
@@ -682,6 +789,9 @@ class Worker:
                                 packet_id=self._active_packet_id,
                                 lease_id=self._active_lease_id,
                             )
+                            lease_error = getattr(self.api, "last_lease_error", "")
+                            if lease_error:
+                                self._active_lease_loss_reason = lease_error
                     except Exception as e:
                         self.log.warn("lease_renewal_error",
                             packet_id=self._active_packet_id,

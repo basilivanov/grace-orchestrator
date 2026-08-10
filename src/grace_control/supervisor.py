@@ -443,6 +443,7 @@ class Supervisor:
                       workers=self.cfg.workers)
         cfg = self.cfg
         cfg.target_dir.mkdir(parents=True, exist_ok=True)
+        self._validate_parallel_worker_count(cfg.workers)
         if self._socket_path.exists():
             self._socket_path.unlink()
         self.registry.write_supervisor_pid(self._supervisor_pid)
@@ -482,10 +483,24 @@ class Supervisor:
             except OSError:
                 return False
 
+        try:
+            from grace_control.config.settings import (
+                get_parallel_runtime_config,
+                parallel_runtime_safety_error,
+            )
+
+            parallel_config = get_parallel_runtime_config()
+            parallel_error = parallel_runtime_safety_error(self.cfg.workers)
+        except (ImportError, ValueError) as error:
+            parallel_config = {}
+            parallel_error = f"parallel_runtime_config_error:{error}"
         return {
             "supervisor_pid": self._supervisor_pid,
             "target_dir": str(self.cfg.target_dir),
             "source_dir": str(self.cfg.source_dir),
+            "effective_max_concurrency": parallel_config.get("max_concurrency"),
+            "configured_workers": self.cfg.workers,
+            "parallel_safety_error": parallel_error,
             "api": (
                 {
                     "pid": self._api.pid,
@@ -562,6 +577,7 @@ class Supervisor:
         _log.info("api_started", pid=self._api.pid, argv=argv)
 
     async def _restart_workers(self, n: int) -> None:
+        self._validate_parallel_worker_count(n)
         for w in list(self._workers):
             proc = getattr(w, "_proc_ref", None)
             if proc is not None:
@@ -583,6 +599,29 @@ class Supervisor:
             self._workers.append(rec)
         self._persist()
         _log.info("workers_started", count=len(self._workers), pids=[w.pid for w in self._workers])
+
+    # START_FUNCTION_CONTRACT
+    # name: _validate_parallel_worker_count
+    # purpose: Prevent supervisor from spawning a multi-worker runtime when a
+    #          required queue/merge safety guard is disabled.
+    # inputs: worker_count — requested worker process count.
+    # returns: None for a safe configuration.
+    # side_effects: Structured error log on rejected configuration.
+    # emitted_logs: parallel_workers_rejected_unsafe.
+    # error_behavior: Raises RuntimeError with a typed safety reason.
+    # END_FUNCTION_CONTRACT
+    @staticmethod
+    def _validate_parallel_worker_count(worker_count: int) -> None:
+        from grace_control.config.settings import parallel_runtime_safety_error
+
+        safety_error = parallel_runtime_safety_error(worker_count)
+        if safety_error:
+            _log.error(
+                "parallel_workers_rejected_unsafe",
+                workers=worker_count,
+                reason=safety_error,
+            )
+            raise RuntimeError(safety_error)
 
     async def _wait_for_health(self, url: str, timeout: float) -> None:
         import httpx

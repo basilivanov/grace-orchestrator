@@ -36,7 +36,7 @@ from sqlalchemy.exc import OperationalError
 from grace_control.config.settings import get_max_concurrency
 from grace_control.core.structured_logger import GraceLogger
 from grace_control.db import get_db
-from grace_control.db.schema import Feature, Lease, Packet, PacketState, Wave
+from grace_control.db.schema import Event, Feature, Lease, Packet, PacketState, Wave
 from grace_control.services.packet_service import ClaimResult, PacketService
 from grace_control.services.parallel_conflict_service import ParallelConflictService
 from grace_control.services.parallel_lease_service import ParallelLeaseService
@@ -75,6 +75,32 @@ class SafeQueueClaimService:
         self._conflicts = ParallelConflictService()
         self._parallel_leases = ParallelLeaseService(conflict_service=self._conflicts)
         self._packets = PacketService()
+        self._last_wait_reason = ""
+        self._last_wait_packet_id: str | None = None
+
+    # START_FUNCTION_CONTRACT
+    # name: get_last_wait_reason
+    # purpose: Return the typed wait reason from the most recent claim attempt.
+    # inputs: None.
+    # returns: Typed wait reason or an empty string after a successful claim.
+    # side_effects: None.
+    # emitted_logs: None.
+    # error_behavior: None.
+    # END_FUNCTION_CONTRACT
+    def get_last_wait_reason(self) -> str:
+        return self._last_wait_reason
+
+    # START_FUNCTION_CONTRACT
+    # name: get_last_wait_packet_id
+    # purpose: Return the packet whose claim was blocked by the latest wait.
+    # inputs: None.
+    # returns: Packet ID or None when the wait was feature/global scoped.
+    # side_effects: None.
+    # emitted_logs: None.
+    # error_behavior: None.
+    # END_FUNCTION_CONTRACT
+    def get_last_wait_packet_id(self) -> str | None:
+        return self._last_wait_packet_id
 
     # START_FUNCTION_CONTRACT
     # name: claim_next_atomic
@@ -88,6 +114,8 @@ class SafeQueueClaimService:
     #                 database_locked after retries, propagates other errors.
     # END_FUNCTION_CONTRACT
     def claim_next_atomic(self, worker_id: str) -> tuple[ClaimResult | None, str]:
+        self._last_wait_reason = ""
+        self._last_wait_packet_id = None
         for attempt in range(self._max_retries):
             try:
                 _log.info("safe_claim_start", worker_id=worker_id, attempt=attempt + 1)
@@ -134,15 +162,39 @@ class SafeQueueClaimService:
             max_concurrency = get_max_concurrency()
             feature = self._select_active_feature(db)
             if feature is None:
+                self._record_wait(
+                    db,
+                    entity_id=None,
+                    reason="waiting_for_wave_completion",
+                    feature_id=None,
+                )
                 return None, "no_queued_features"
             active_capacity = self._active_capacity(db)
             if max_concurrency == 1 and active_capacity:
+                self._record_wait(
+                    db,
+                    entity_id=None,
+                    reason="waiting_for_wave_completion",
+                    feature_id=feature.id,
+                )
                 return None, "running_packet_exists"
             if active_capacity >= max_concurrency:
+                self._record_wait(
+                    db,
+                    entity_id=None,
+                    reason="waiting_for_concurrency_slot",
+                    feature_id=feature.id,
+                )
                 return None, "capacity"
 
             candidate, reason = self._select_candidate(db, feature, now)
             if candidate is None:
+                self._record_wait(
+                    db,
+                    entity_id=self._last_wait_packet_id,
+                    reason=self._last_wait_reason or reason,
+                    feature_id=feature.id,
+                )
                 return None, reason
 
             result = self._packets._claim_in_session(db, candidate.id, worker_id)
@@ -164,6 +216,39 @@ class SafeQueueClaimService:
                 parallel_lease_id=parallel.id,
                 parallel_expires_at=parallel.expires_at,
             ), "ok"
+
+    # START_FUNCTION_CONTRACT
+    # name: _record_wait
+    # purpose: Persist a typed, non-failure wait observation for diagnostics.
+    # inputs: db — active claim transaction; entity_id — optional packet;
+    #         reason — typed wait reason; feature_id — optional feature.
+    # returns: None.
+    # side_effects: Inserts one Event row without changing packet state.
+    # emitted_logs: None.
+    # error_behavior: None for valid event data.
+    # END_FUNCTION_CONTRACT
+    def _record_wait(
+        self,
+        db,
+        *,
+        entity_id: str | None,
+        reason: str,
+        feature_id: str | None,
+    ) -> None:
+        self._last_wait_reason = reason
+        self._last_wait_packet_id = entity_id
+        db.add(Event(
+            event_type="packet_wait",
+            entity_type="packet" if entity_id else "feature",
+            entity_id=entity_id or feature_id or "queue",
+            payload_json={
+                "reason": reason,
+                "feature_id": feature_id,
+                "packet_id": entity_id,
+                "expected_wait": True,
+            },
+            timestamp=datetime.now(UTC),
+        ))
 
     # START_FUNCTION_CONTRACT
     # name: _select_active_feature
@@ -281,10 +366,14 @@ class SafeQueueClaimService:
                 _log.warn("safe_feature_degraded", feature_id=feature.id, wave_id=wave.id)
                 return None, "feature_degraded"
             if raw_ready and not ready:
+                self._last_wait_reason = "waiting_for_dependency"
+                self._last_wait_packet_id = raw_ready[0].id
                 return None, "waiting_for_dependencies"
             if not ready:
                 if all(self._terminal_success(packet) for packet in effective_wave):
                     continue
+                self._last_wait_reason = "waiting_for_wave_completion"
+                self._last_wait_packet_id = None
                 return None, "waiting_for_wave_completion"
 
             ready.sort(key=lambda packet: (packet.created_at, packet.id))
@@ -298,9 +387,16 @@ class SafeQueueClaimService:
                         spec.get("conflict_keys", []),
                         active_leases,
                     ):
+                        self._last_wait_reason = ""
+                        self._last_wait_packet_id = None
                         return packet, "ok"
                 except ValueError:
                     continue
+            self._last_wait_packet_id = ready[0].id
+            self._last_wait_reason = self._candidate_conflict_wait_reason(
+                ready,
+                active_leases,
+            )
             return None, "waiting_for_conflict"
 
         if effective_feature and all(self._terminal_success(packet) for packet in effective_feature):
@@ -308,7 +404,46 @@ class SafeQueueClaimService:
             feature.updated_at = datetime.now(UTC)
             _log.info("safe_feature_done", feature_id=feature.id)
             return None, "feature_done"
+        self._last_wait_reason = "waiting_for_wave_completion"
+        self._last_wait_packet_id = None
         return None, "waiting_for_wave_completion"
+
+    # START_FUNCTION_CONTRACT
+    # name: _candidate_conflict_wait_reason
+    # purpose: Classify a blocked READY frontier as scope or semantic-key wait.
+    # inputs: ready — deterministic READY candidates; active_leases — snapshots.
+    # returns: Typed conflict wait reason.
+    # side_effects: None.
+    # emitted_logs: None.
+    # error_behavior: Returns scope wait conservatively when both checks are
+    #                 unavailable or malformed.
+    # END_FUNCTION_CONTRACT
+    def _candidate_conflict_wait_reason(self, ready, active_leases) -> str:
+        saw_scope = False
+        saw_key = False
+        for packet in ready:
+            spec = packet.spec_json if isinstance(packet.spec_json, dict) else {}
+            candidate_scope = spec.get("scope", [])
+            candidate_keys = spec.get("conflict_keys", [])
+            for lease in active_leases:
+                try:
+                    if self._conflicts.scopes_overlap(
+                        candidate_scope,
+                        getattr(lease, "scope_json", []),
+                    ):
+                        saw_scope = True
+                    if self._conflicts.conflict_keys_overlap(
+                        candidate_keys,
+                        getattr(lease, "conflict_keys_json", []),
+                    ):
+                        saw_key = True
+                except ValueError:
+                    saw_scope = True
+        if saw_scope:
+            return "waiting_for_scope_conflict"
+        if saw_key:
+            return "waiting_for_conflict_key"
+        return "waiting_for_scope_conflict"
 
     # START_FUNCTION_CONTRACT
     # name: _packets_by_title

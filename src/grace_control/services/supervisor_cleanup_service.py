@@ -27,12 +27,13 @@
 
 from __future__ import annotations
 
-import json
+import os
 import shutil
+import signal
 import subprocess
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from grace_control.core.structured_logger import GraceLogger
@@ -135,19 +136,48 @@ class SupervisorCleanupService:
         return False
 
     def _worktree_for_active_packet(self, slug: str) -> bool:
-        """Return True if any non-terminal Packet references this worktree slug."""
+        """Return True when cleanup cannot prove a worktree is orphaned.
+
+        Packet does not persist a worktree column. Active packet/run evidence
+        is matched when available; without it, retaining the registered
+        worktree is the only safe choice for a live worker.
+        """
         try:
             from grace_control.db import get_db
-            from grace_control.db.schema import Packet, PacketState
+            from grace_control.db.schema import Packet, PacketRun, PacketState
         except Exception:
-            return False  # DB unavailable — be conservative
+            return True  # DB unavailable — keep registered worktree
         try:
             with get_db() as db:
-                for p in db.query(Packet).all():
-                    if p.state in (PacketState.CLAIMED.value, PacketState.RUNNING.value,
-                                   PacketState.AWAITING_ACCEPTANCE.value, PacketState.AWAITING_VERIFICATION.value):
-                        if p.worktree_path and slug in p.worktree_path:
-                            return True
+                active_states = {PacketState.RUNNING.value, PacketState.ACCEPTED.value}
+                active_packets = [
+                    p for p in db.query(Packet).all() if p.state in active_states
+                ]
+                for packet in active_packets:
+                    packet_matches_slug = packet.id in slug or bool(
+                        packet.slug and slug.startswith(packet.slug)
+                    )
+                    runs = (
+                        db.query(PacketRun)
+                        .filter_by(packet_id=packet.id)
+                        .order_by(PacketRun.run_number.desc())
+                        .all()
+                    )
+                    known_paths: list[str] = []
+                    for run in runs:
+                        result = run.result_json if isinstance(run.result_json, dict) else {}
+                        worktree_path = result.get("worktree_path")
+                        if worktree_path:
+                            known_paths.append(str(worktree_path))
+                        evidence = result.get("evidence")
+                        if isinstance(evidence, dict):
+                            evidence_path = evidence.get("worktree_path")
+                            if evidence_path:
+                                known_paths.append(str(evidence_path))
+                    if any(slug in path for path in known_paths if path):
+                        return True
+                    if packet_matches_slug and not known_paths:
+                        return True
         except RuntimeError:
             # DB not initialized — be conservative
             return False
@@ -223,7 +253,7 @@ class SupervisorCleanupService:
         except Exception as e:
             _log.warn("lease_cleanup_unavailable", error=str(e)[:200])
             return
-        cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=older_than_minutes)
+        cutoff = datetime.now(UTC).replace(tzinfo=None) - timedelta(minutes=older_than_minutes)
         try:
             with get_db() as db:
                 stale = (
@@ -234,11 +264,17 @@ class SupervisorCleanupService:
                 for lease in stale:
                     packet = db.query(Packet).filter(Packet.id == lease.packet_id).first()
                     if packet and packet.state in (
-                        PacketState.CLAIMED.value,
                         PacketState.RUNNING.value,
+                        "claimed",
                     ):
                         packet.state = PacketState.FAILED.value
                         db.add(packet)
+                        from grace_control.services.parallel_lease_service import ParallelLeaseService
+                        ParallelLeaseService().release_for_terminal_state(
+                            db,
+                            packet.id,
+                            PacketState.FAILED.value,
+                        )
                         report.stale_leases_released += 1
                         _log.info(
                             "stale_lease_released",
@@ -246,6 +282,10 @@ class SupervisorCleanupService:
                             worker_id=lease.worker_id,
                         )
                     db.delete(lease)
+                self._recover_expired_merge_leases(db, report, cutoff=cutoff)
+                self._reclaim_expired_accepted_parallel_leases(db, report, cutoff=cutoff)
+                from grace_control.services.parallel_lease_service import ParallelLeaseService
+                ParallelLeaseService().expire(db)
         except RuntimeError as e:
             # DB not initialized — skip silently. This is normal during
             # early boot or in unit tests with no DB.
@@ -254,6 +294,111 @@ class SupervisorCleanupService:
             msg = f"stale leases: {e!s}"[:200]
             report.errors.append(msg)
             _log.warn("lease_cleanup_failed", error=str(e)[:200])
+
+    # START_FUNCTION_CONTRACT
+    # name: _recover_expired_merge_leases
+    # purpose: Reclaim expired merge leases only after target-repository sanity
+    #          confirms there is no live or interrupted mutation.
+    # inputs: db — cleanup transaction; report — mutable cleanup report;
+    #         cutoff — UTC-naive expiry boundary.
+    # returns: None.
+    # side_effects: Deletes safely reclaimable merge_leases rows only.
+    # emitted_logs: merge_lease_recovered, merge_lease_recovery_deferred.
+    # error_behavior: Keeps unsafe leases and records an error.
+    # END_FUNCTION_CONTRACT
+    def _recover_expired_merge_leases(
+        self,
+        db,
+        report: CleanupReport,
+        *,
+        cutoff: datetime,
+    ) -> None:
+        from grace_control.db.schema import MergeLease
+        from grace_control.services.merge_coordinator_service import MergeCoordinatorService
+
+        coordinator = MergeCoordinatorService()
+        expired = db.query(MergeLease).filter(MergeLease.expires_at < cutoff).all()
+        for lease in expired:
+            sanity = coordinator.check_repo_sanity(
+                lease.target_repo_key,
+                expected_target_repo_key=lease.target_repo_key,
+            )
+            if not sanity.ok:
+                message = f"merge lease {lease.target_repo_key}: {sanity.error}"[:200]
+                report.errors.append(message)
+                _log.warn(
+                    "merge_lease_recovery_deferred",
+                    target_repo_key=lease.target_repo_key,
+                    reason=sanity.error[:200],
+                )
+                continue
+            db.delete(lease)
+            _log.info(
+                "merge_lease_recovered",
+                target_repo_key=lease.target_repo_key,
+                packet_id=lease.packet_id,
+            )
+
+    # START_FUNCTION_CONTRACT
+    # name: _reclaim_expired_accepted_parallel_leases
+    # purpose: Recover an ACCEPTED packet whose worker died after releasing its
+    #          ordinary lease but before serialized merge ownership existed.
+    # inputs: db — cleanup transaction; report — mutable cleanup report;
+    #         cutoff — UTC-naive expiry boundary.
+    # returns: None.
+    # side_effects: Moves abandoned ACCEPTED packets to BLOCKED_RECOVERABLE,
+    #               releases their parallel lease, and clears worker linkage.
+    # emitted_logs: accepted_parallel_lease_recovered,
+    #               accepted_parallel_lease_deferred.
+    # error_behavior: Leaves the lease untouched when a merge lease is still
+    #                 present, so an in-flight target mutation is not fenced
+    #                 by cleanup.
+    # END_FUNCTION_CONTRACT
+    @staticmethod
+    def _reclaim_expired_accepted_parallel_leases(
+        db,
+        report: CleanupReport,
+        *,
+        cutoff: datetime,
+    ) -> None:
+        from grace_control.db.schema import Event, MergeLease, Packet, PacketState, ParallelLease, Worker
+
+        expired = db.query(ParallelLease).filter(ParallelLease.expires_at < cutoff).all()
+        for lease in expired:
+            packet = db.query(Packet).filter_by(id=lease.packet_id).first()
+            if packet is None or packet.state != PacketState.ACCEPTED.value:
+                continue
+            merge_lease = db.query(MergeLease).filter_by(packet_id=packet.id).first()
+            if merge_lease is not None:
+                _log.info(
+                    "accepted_parallel_lease_deferred",
+                    packet_id=packet.id,
+                    reason="merge_lease_present",
+                )
+                continue
+            packet.state = PacketState.BLOCKED_RECOVERABLE.value
+            db.add(Event(
+                event_type="packet_transition",
+                entity_type="packet",
+                entity_id=packet.id,
+                payload_json={
+                    "from": PacketState.ACCEPTED.value,
+                    "to": PacketState.BLOCKED_RECOVERABLE.value,
+                    "reason": "parallel_lease_expired_recovery",
+                },
+                timestamp=datetime.now(UTC),
+            ))
+            worker = db.query(Worker).filter_by(current_packet_id=packet.id).first()
+            if worker is not None:
+                worker.current_packet_id = None
+            db.delete(lease)
+            report.stale_leases_released += 1
+            _log.warn(
+                "accepted_parallel_lease_recovered",
+                packet_id=packet.id,
+                worker_id=lease.worker_id,
+                reason="worker_crash_before_merge",
+            )
 
     @staticmethod
     def _kill_frontend_processes(report: CleanupReport) -> None:
@@ -264,7 +409,6 @@ class SupervisorCleanupService:
         Only kills processes whose cwd matches our worktree or who have
         a GRACE worker environment marker.
         """
-        import re as _re
         # Kill via /proc — check cwd for worktree paths, not global patterns
         try:
             for proc_dir in Path("/proc").iterdir():
