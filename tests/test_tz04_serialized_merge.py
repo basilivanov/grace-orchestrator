@@ -49,6 +49,7 @@ from grace_control.db.schema import (
     Feature,
     MergeLease,
     Packet,
+    PacketRun,
     PacketState,
     ParallelLease,
     Wave,
@@ -347,6 +348,22 @@ def _seed_packets(
                 max_attempts=3,
                 created_at=created_at,
                 updated_at=created_at,
+            ))
+            db.add(PacketRun(
+                id=f"{packet_id}-R01",
+                packet_id=packet_id,
+                run_number=1,
+                status="accepted",
+                result_json={
+                    "parallel_execution": {
+                        "base_sha": "a" * 40,
+                        "integration_base_sha": None,
+                        "stale_base": False,
+                        "conflict_keys": [],
+                        "integration_recheck": "skipped",
+                    },
+                },
+                base_sha="a" * 40,
             ))
     return path
 

@@ -14,7 +14,7 @@ from grace_control.core.contracts import (
 )
 from grace_control.core.state_machine import StateTransitionError
 from grace_control.db import get_db, init_db
-from grace_control.db.schema import Feature, Lease, Packet, PacketState, Wave, Worker
+from grace_control.db.schema import Feature, Lease, Packet, PacketRun, PacketState, Wave, Worker
 from grace_control.services.merge_service import MergeResult, MergeService
 from grace_control.services.packet_service import (
     ClaimResult,
@@ -26,13 +26,29 @@ from grace_control.services.packet_service import (
 # ── P0#1: MergeService.transition persists MERGED ──────────────────────────
 
 
-def _make_accepted_packet(db, pid="p-merge-1"):
+def _make_accepted_packet(db, pid="p-merge-1", base_sha="abcdef1234567890"):
     db.add(Packet(
         id=pid, feature_id="F1", wave_id="W01", slug=pid,
         title=pid, spec_json={},
         state=PacketState.ACCEPTED.value,
         attempt_count=1, max_attempts=3,
         acceptance_profile=AcceptanceProfile.NORMAL.value,
+    ))
+    db.add(PacketRun(
+        id=f"{pid}-R01",
+        packet_id=pid,
+        run_number=1,
+        status="accepted",
+        result_json={
+            "parallel_execution": {
+                "base_sha": base_sha,
+                "integration_base_sha": None,
+                "stale_base": False,
+                "conflict_keys": [],
+                "integration_recheck": "skipped",
+            },
+        },
+        base_sha=base_sha,
     ))
 
 
@@ -98,6 +114,22 @@ def test_merge_rework_cancels_failed_parent_as_superseded(db):
             attempt_count=1,
             max_attempts=3,
             acceptance_profile=AcceptanceProfile.STRICT.value,
+        ))
+        session.add(PacketRun(
+            id="p-rework-accepted-R01",
+            packet_id="p-rework-accepted",
+            run_number=1,
+            status="accepted",
+            result_json={
+                "parallel_execution": {
+                    "base_sha": "1234567890abcdef",
+                    "integration_base_sha": None,
+                    "stale_base": False,
+                    "conflict_keys": [],
+                    "integration_recheck": "skipped",
+                },
+            },
+            base_sha="1234567890abcdef",
         ))
         session.commit()
 
@@ -532,7 +564,11 @@ def test_followup_5198516_merge_fails_when_transition_fails(db):
     from grace_control.services.git_service import GitResult
 
     with get_db() as session:
-        _make_accepted_packet(session, pid="p-merge-fail")
+        _make_accepted_packet(
+            session,
+            pid="p-merge-fail",
+            base_sha="deadbeef12345678",
+        )
         session.commit()
 
     git = MagicMock()

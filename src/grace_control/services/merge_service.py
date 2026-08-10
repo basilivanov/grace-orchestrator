@@ -213,10 +213,16 @@ class MergeService:
             # merge mutation. The packet run snapshot is written at effective
             # workspace creation by PacketExecutor.
             merge_snapshot = self._merge_snapshot(packet_id)
-            base_sha = merge_snapshot["base_sha"]
+            base_sha = str(merge_snapshot["base_sha"] or "").strip()
             conflict_keys = merge_snapshot["conflict_keys"]
             current_head = self._target_branch_head(repo, target_branch)
+            integration_recheck_enabled = bool(
+                getattr(settings, "integration_recheck_on_stale_base", True)
+            )
+            missing_base_sha = not base_sha
             stale_base = bool(base_sha and current_head and base_sha != current_head)
+            if missing_base_sha and integration_recheck_enabled:
+                stale_base = True
             parallel_execution = {
                 "base_sha": base_sha,
                 "integration_base_sha": None,
@@ -224,10 +230,49 @@ class MergeService:
                 "conflict_keys": conflict_keys,
                 "integration_recheck": "skipped",
             }
+            if not integration_recheck_enabled:
+                parallel_execution.update(
+                    {
+                        "integration_recheck_disabled": True,
+                        "integration_recheck_skip_reason": (
+                            "GRACE_INTEGRATION_RECHECK_ON_STALE_BASE=false"
+                        ),
+                    }
+                )
             self._update_parallel_execution(packet_id, parallel_execution)
 
             validated_integration_base = ""
-            if stale_base and getattr(settings, "integration_recheck_on_stale_base", True):
+            if missing_base_sha and integration_recheck_enabled:
+                failure = IntegrationRecheckResult(
+                    status="failed",
+                    base_sha=base_sha,
+                    integration_base_sha=current_head,
+                    failure_class="integration_verification_failed",
+                    evidence={
+                        "reason": "missing_base_sha",
+                        "base_sha": base_sha,
+                        "current_head": current_head,
+                        "target_branch": target_branch,
+                    },
+                )
+                parallel_execution.update(
+                    integration_base_sha=current_head,
+                    integration_recheck="failed",
+                )
+                return await self._block_stale_packet(
+                    svc=svc,
+                    packet_id=packet_id,
+                    failure=failure,
+                    parallel_execution=parallel_execution,
+                    worktree_path=worktree_path,
+                    repo=repo,
+                    branch_name=branch_name,
+                    target_branch=target_branch,
+                    lease=lease,
+                    worker_id=holder,
+                )
+
+            if stale_base and integration_recheck_enabled:
                 contract = merge_snapshot["packet_contract"]
                 if contract is None:
                     failure = IntegrationRecheckResult(
@@ -554,9 +599,11 @@ class MergeService:
     # END_FUNCTION_CONTRACT
     def _target_branch_head(self, repo: Path, target_branch: str) -> str:
         result = self._git._run(["rev-parse", target_branch], repo)
-        if result.success and result.stdout.strip():
-            return result.stdout.strip()
-        return self._git.current_sha(repo)
+        stdout = getattr(result, "stdout", "")
+        if getattr(result, "success", False) and isinstance(stdout, str) and stdout.strip():
+            return stdout.strip()
+        fallback = self._git.current_sha(repo)
+        return fallback if isinstance(fallback, str) else ""
 
     # START_FUNCTION_CONTRACT
     # name: _merge_snapshot
@@ -695,6 +742,12 @@ class MergeService:
         evidence = dict(failure.evidence)
         evidence.setdefault("base_sha", failure.base_sha)
         evidence.setdefault("current_head", failure.integration_base_sha)
+        failure_reason = str(evidence.get("reason", "")).strip()
+        failure_label = (
+            f"{failure.failure_class}:{failure_reason}"
+            if failure_reason
+            else failure.failure_class
+        )
         self._update_parallel_execution(
             packet_id,
             parallel_execution,
@@ -707,7 +760,7 @@ class MergeService:
             await svc.block(
                 packet_id,
                 recoverable=True,
-                reason=f"{failure.failure_class}:{failure.integration_base_sha[:12]}",
+                reason=f"{failure_label}:{failure.integration_base_sha[:12]}",
             )
             _log.warn(
                 "stale_base_packet_blocked",
@@ -725,7 +778,7 @@ class MergeService:
                 str(repo),
                 branch_name,
                 target_branch,
-                error=f"{failure.failure_class}: unable to block packet: {str(error)[:200]}",
+                error=f"{failure_label}: unable to block packet: {str(error)[:200]}",
             )
         self._update_parallel_execution(
             packet_id,
@@ -755,7 +808,7 @@ class MergeService:
             str(repo),
             branch_name,
             target_branch,
-            error=f"{failure.failure_class}: target unchanged at {failure.integration_base_sha[:12]}",
+            error=f"{failure_label}: target unchanged at {failure.integration_base_sha[:12]}",
         )
 
     # START_FUNCTION_CONTRACT

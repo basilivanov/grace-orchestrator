@@ -22,6 +22,8 @@
 #   - function: test_unchanged_base_skips_integration_recheck
 #   - function: test_target_advance_during_recheck_is_detected_and_rechecked
 #   - function: test_packet_run_persists_actual_target_base_at_workspace_creation
+#   - function: test_missing_base_sha_blocks_when_safety_enabled
+#   - function: test_missing_base_sha_uses_explicit_disabled_compatibility_path
 # END_MODULE_MAP
 
 from __future__ import annotations
@@ -29,10 +31,11 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from grace_control.adapters.packet_executor import PacketExecutionAdapter
 from grace_control.agent.backend import ExecutionResult as BackendExecutionResult
+from grace_control.config.settings import settings
 from grace_control.core.contracts import (
     AcceptanceProfile,
     AcceptanceReport,
@@ -93,7 +96,7 @@ def _target_repo(tmp_path: Path, *, conflict: bool = False) -> tuple[Path, str, 
     return repo, initial_sha, packet_sha, target_sha
 
 
-def _seed_state(tmp_path: Path, repo: Path, base_sha: str) -> None:
+def _seed_state(tmp_path: Path, repo: Path, base_sha: str | None) -> None:
     init_db(f"sqlite:///{tmp_path / 'grace.db'}")
     created = datetime.now(UTC)
     spec = {
@@ -428,6 +431,89 @@ def test_unchanged_base_skips_integration_recheck(tmp_path: Path):
     assert metadata["stale_base"] is False
     assert metadata["integration_recheck"] == "skipped"
     assert metadata["integration_base_sha"] is None
+
+
+# START_FUNCTION_CONTRACT
+# name: test_missing_base_sha_blocks_when_safety_enabled
+# purpose: Prove an accepted packet with no trustworthy base snapshot fails
+#          closed without changing the target repository.
+# inputs: tmp_path — isolated repository and database root.
+# returns: None on success.
+# side_effects: Creates an accepted NULL-base run and records a recoverable block.
+# emitted_logs: None.
+# error_behavior: Assertion failure if target mutation or missing-base evidence
+#                 is not produced.
+# END_FUNCTION_CONTRACT
+def test_missing_base_sha_blocks_when_safety_enabled(tmp_path: Path):
+    repo, _initial_sha, _packet_sha, target_sha = _target_repo(tmp_path)
+    _seed_state(tmp_path, repo, None)
+    calls: list[bool] = []
+
+    def verifier(**_kwargs):
+        calls.append(True)
+        return _report(True)
+
+    with (
+        patch.object(GitService, "checkout", side_effect=AssertionError("target checkout must not run")),
+        patch.object(GitService, "merge", side_effect=AssertionError("target merge must not run")),
+        patch.object(GitService, "push", side_effect=AssertionError("target push must not run")),
+    ):
+        result = asyncio.run(_service(repo, verifier).merge_packet(
+            "packet-05", str(repo), "agent/pkt-05", "main", worker_id="worker-05"
+        ))
+
+    git = GitService()
+    assert result.success is False
+    assert "missing_base_sha" in result.error
+    assert calls == []
+    assert git.current_sha(repo) == target_sha
+    assert (repo / "target.txt").read_text() == "target\n"
+    assert _packet_state() == PacketState.BLOCKED_RECOVERABLE.value
+    with get_db() as db:
+        assert db.query(ParallelLease).filter_by(packet_id="packet-05").one_or_none() is None
+    run = _latest_run()
+    assert run.result_json["failure_class"] == "integration_verification_failed"
+    assert run.result_json["integration_recheck_evidence"]["reason"] == "missing_base_sha"
+    metadata = run.result_json["parallel_execution"]
+    assert metadata["base_sha"] == ""
+    assert metadata["integration_base_sha"] == target_sha
+    assert metadata["stale_base"] is True
+    assert metadata["integration_recheck"] == "failed"
+
+
+# START_FUNCTION_CONTRACT
+# name: test_missing_base_sha_uses_explicit_disabled_compatibility_path
+# purpose: Prove the explicit disabled setting keeps legacy merge behavior and
+#          records that stale-base protection was intentionally skipped.
+# inputs: tmp_path, monkeypatch — isolated repository and setting override.
+# returns: None on success.
+# side_effects: Merges the accepted packet through the compatibility path.
+# emitted_logs: None.
+# error_behavior: Assertion failure if disabled behavior is implicit or blocked.
+# END_FUNCTION_CONTRACT
+def test_missing_base_sha_uses_explicit_disabled_compatibility_path(
+    tmp_path: Path,
+    monkeypatch,
+):
+    repo, _initial_sha, _packet_sha, target_sha = _target_repo(tmp_path)
+    _seed_state(tmp_path, repo, None)
+    monkeypatch.setattr(settings, "integration_recheck_on_stale_base", False)
+
+    result = asyncio.run(_service(repo, lambda **_kwargs: _report(True)).merge_packet(
+        "packet-05", str(repo), "agent/pkt-05", "main", worker_id="worker-05"
+    ))
+
+    assert result.success is True
+    assert _packet_state() == PacketState.MERGED.value
+    assert GitService().current_sha(repo) != target_sha
+    metadata = _latest_run().result_json["parallel_execution"]
+    assert metadata["base_sha"] == ""
+    assert metadata["stale_base"] is False
+    assert metadata["integration_recheck"] == "skipped"
+    assert metadata["integration_recheck_disabled"] is True
+    assert metadata["integration_recheck_skip_reason"] == (
+        "GRACE_INTEGRATION_RECHECK_ON_STALE_BASE=false"
+    )
 
 
 # START_FUNCTION_CONTRACT
