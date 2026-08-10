@@ -24,6 +24,8 @@
 #       - get_json
 #       - get_health
 #       - health
+#       - get_openapi
+#       - get_capabilities
 #       - close
 # END_MODULE_MAP
 
@@ -204,6 +206,32 @@ class ProjectClient:
     # END_FUNCTION_CONTRACT
     async def health(self) -> ProjectApiResult:
         return await self.get_health()
+
+    # START_FUNCTION_CONTRACT
+    # name: get_openapi
+    # purpose: Retrieve the project-local FastAPI OpenAPI document through the
+    #          same bounded transport used for all project reads.
+    # inputs: None.
+    # returns: ProjectApiResult containing the OpenAPI object or a typed error.
+    # side_effects: Performs one bounded GET /openapi.json request.
+    # emitted_logs: project_api_request, project_api_error.
+    # error_behavior: Converts transport, HTTP and malformed JSON failures.
+    # END_FUNCTION_CONTRACT
+    async def get_openapi(self) -> ProjectApiResult:
+        return await self.get_json("/openapi.json")
+
+    # START_FUNCTION_CONTRACT
+    # name: get_capabilities
+    # purpose: Retrieve the optional-feature capability document, if supported
+    #          by a project runtime.
+    # inputs: None.
+    # returns: ProjectApiResult; HTTP 404 remains a typed unavailable result.
+    # side_effects: Performs one bounded GET /api/admin/capabilities request.
+    # emitted_logs: project_api_request, project_api_error.
+    # error_behavior: Converts transport, HTTP and malformed JSON failures.
+    # END_FUNCTION_CONTRACT
+    async def get_capabilities(self) -> ProjectApiResult:
+        return await self.get_json("/api/admin/capabilities")
 
     # START_FUNCTION_CONTRACT
     # name: close

@@ -97,6 +97,9 @@ class EventQueryService:
                     "entity_type": e.entity_type,
                     "entity_id": e.entity_id,
                     "payload": e.payload_json or {},
+                    "payload_json": e.payload_json or {},
+                    "component": (e.payload_json or {}).get("component", ""),
+                    "reason": (e.payload_json or {}).get("reason", ""),
                     "trace_id": e.trace_id or "",
                 }
                 for e in rows

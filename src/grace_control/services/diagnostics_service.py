@@ -24,6 +24,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from operator import attrgetter
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -62,9 +63,10 @@ class DiagnosticsService:
     # END_FUNCTION_CONTRACT
     def get_state(self, db: Session) -> dict[str, Any]:
         by_state: dict[str, int] = {}
+        packet_state_column = attrgetter("state")(Packet)
         for state in PacketState:
             by_state[state.value] = (
-                db.query(Packet).filter(Packet.state == state.value).count()
+                db.query(Packet).filter(packet_state_column == state.value).count()
             )
         # Leases are exclusive claim rows; "active" means expires_at in
         # the future. Released leases are deleted in the current schema, so
@@ -74,6 +76,24 @@ class DiagnosticsService:
             .filter(Lease.expires_at > datetime.now(UTC))
             .count()
         )
+        ordinary_lease_rows = (
+            db.query(Lease)
+            .filter(Lease.expires_at > datetime.now(UTC))
+            .order_by(Lease.expires_at.asc())
+            .all()
+        )
+        ordinary_lease_metadata = [
+            {
+                "lease_id": lease.id,
+                "packet_id": lease.packet_id,
+                "worker_id": lease.worker_id,
+                "claimed_attempt": lease.claimed_attempt,
+                "acquired_at": lease.acquired_at.isoformat() if lease.acquired_at else None,
+                "expires_at": lease.expires_at.isoformat() if lease.expires_at else None,
+                "heartbeat_at": lease.heartbeat_at.isoformat() if lease.heartbeat_at else None,
+            }
+            for lease in ordinary_lease_rows
+        ]
         workers_total = db.query(Worker).count()
         active_workers = db.query(Worker).filter(Worker.status.in_(["active", "busy"])).count()
         workers_idle = db.query(Worker).filter_by(status="idle").count()
@@ -92,7 +112,10 @@ class DiagnosticsService:
                 "wave_id": lease.wave_id,
                 "worker_id": lease.worker_id,
                 "claimed_attempt": lease.claimed_attempt,
+                "scope": lease.scope_json or [],
+                "conflict_keys": lease.conflict_keys_json or [],
                 "base_sha": lease.base_sha,
+                "acquired_at": lease.acquired_at.isoformat() if lease.acquired_at else None,
                 "expires_at": lease.expires_at.isoformat() if lease.expires_at else None,
                 "heartbeat_at": lease.heartbeat_at.isoformat() if lease.heartbeat_at else None,
             }
@@ -109,6 +132,7 @@ class DiagnosticsService:
                 "target_repo_key": lease.target_repo_key,
                 "packet_id": lease.packet_id,
                 "worker_id": lease.worker_id,
+                "acquired_at": lease.acquired_at.isoformat() if lease.acquired_at else None,
                 "expires_at": lease.expires_at.isoformat() if lease.expires_at else None,
                 "heartbeat_at": lease.heartbeat_at.isoformat() if lease.heartbeat_at else None,
             }
@@ -128,6 +152,7 @@ class DiagnosticsService:
             result_json = run.result_json if run and isinstance(run.result_json, dict) else {}
             parallel = result_json.get("parallel_execution")
             parallel = parallel if isinstance(parallel, dict) else {}
+            spec = packet.spec_json if isinstance(packet.spec_json, dict) else {}
             wait_reason = None
             if packet.state in {PacketState.READY.value, PacketState.ACCEPTED.value}:
                 event = (
@@ -144,16 +169,27 @@ class DiagnosticsService:
                     wait_reason = event.payload_json.get("reason")
             packet_parallel.append({
                 "packet_id": packet.id,
-                "state": packet.state,
+                "state": attrgetter("state")(packet),
                 "base_sha": run.base_sha if run else None,
                 "integration_base_sha": run.integration_base_sha if run else None,
+                "scope": spec.get("scope", []),
+                "conflict_keys": spec.get("conflict_keys", []),
                 "current_wait_reason": wait_reason,
                 "integration_recheck": parallel.get("integration_recheck"),
             })
         runtime_config = get_parallel_runtime_config()
+        waits = [
+            {
+                "packet_id": item["packet_id"],
+                "reason": item["current_wait_reason"],
+            }
+            for item in packet_parallel
+            if item.get("current_wait_reason")
+        ]
         return {
             "packets_by_state": by_state,
             "active_leases": active_leases,
+            "ordinary_leases": ordinary_lease_metadata,
             "workers": {
                 "total": workers_total,
                 "idle": workers_idle,
@@ -167,6 +203,10 @@ class DiagnosticsService:
             "active_merge_lease_holder": active_merge_lease_holder,
             "active_merge_leases": active_merge_leases,
             "packet_parallel": packet_parallel,
+            "waits": waits,
             "runs_total": runs_total,
             "features_by_status": features_by_status,
+            "parallel_scope_guard": runtime_config["scope_guard_enabled"],
+            "merge_serialization": runtime_config["merge_serialization_enabled"],
+            "stale_base_recheck": runtime_config["integration_recheck_on_stale_base"],
         }

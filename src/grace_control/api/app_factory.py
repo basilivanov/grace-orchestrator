@@ -32,12 +32,16 @@ from grace_control.api.auth import AuthMiddleware
 from grace_control.api.lifespan import lifespan
 from grace_control.api.routers import (
     admin,
+    admin_filesystem,
+    admin_git,
     admin_hub,
     admin_pipeline,
+    admin_raw,
     admin_ui,
     agents,
     architect,
     artifacts,
+    capabilities,
     dev_replay,
     diagnostics,
     events,
@@ -54,10 +58,13 @@ from grace_control.api.routers import (
     ws,
 )
 from grace_control.config.project_registry import ProjectRegistry, load_project_registry
+from grace_control.config.runtime_identity import get_runtime_identity
 from grace_control.config.settings import GraceSettings
 from grace_control.config.settings import settings as _default_settings
 from grace_control.core.structured_logger import GraceLogger
+from grace_control.services.admin_git_read_service import AdminGitReadService
 from grace_control.services.admin_project_service import AdminProjectService
+from grace_control.services.safe_filesystem_service import SafeFilesystemService
 
 _log = GraceLogger("app_factory")
 
@@ -111,6 +118,10 @@ def create_app(
     #   - JSON API at /api/admin/* (read-only, for other consumers)
     #   - HTMX UI at /admin and /admin/_partial/* (server-rendered HTML)
     app.include_router(admin.router, tags=["admin"])
+    app.include_router(admin_raw.router, tags=["admin-raw"])
+    app.include_router(admin_filesystem.router, tags=["admin-filesystem"])
+    app.include_router(admin_git.router, tags=["admin-git"])
+    app.include_router(capabilities.router, tags=["capabilities"])
     app.include_router(admin_hub.router, tags=["admin-hub"])
     app.include_router(admin_pipeline.router, tags=["admin-pipeline"])
     app.include_router(admin_ui.router, tags=["admin-ui"])
@@ -135,6 +146,17 @@ def create_app(
 
     app_state = app.__dict__["state"]
     app_state.admin_project_service = AdminProjectService(registry, client_factory=project_client_factory)
+    identity = get_runtime_identity()
+    app_state.project_filesystem_service = SafeFilesystemService.from_runtime(
+        settings_obj=s,
+        project_root=identity["project_root"],
+    )
+    app_state.project_git_read_service = AdminGitReadService(
+        identity["target_repo_root"],
+        target_branch=str(identity["target_branch"]),
+        base_branch=str(identity["base_branch"]),
+        remote=str(identity["git_remote"]),
+    )
 
     # Admin UI — static assets for /static/* (HTMX is loaded from CDN in the template).
     from pathlib import Path as _P

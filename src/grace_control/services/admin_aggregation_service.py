@@ -23,7 +23,9 @@
 
 from __future__ import annotations
 
+import base64
 import json
+import mimetypes
 import os
 import re
 import subprocess
@@ -103,6 +105,12 @@ def _classify_artifact(name: str) -> str:
     return "file"
 
 
+def _packet_spec_value(packet: Packet, key: str, default: Any) -> Any:
+    spec = packet.spec_json if isinstance(packet.spec_json, dict) else {}
+    value = spec.get(key, default)
+    return value if isinstance(value, type(default)) else default
+
+
 def _build_artifact_tree(evidence_dir: Path) -> list[dict[str, Any]]:
     """Build a nested tree of files under evidence_dir (size in bytes)."""
     if not evidence_dir.exists():
@@ -137,6 +145,10 @@ def _build_artifact_tree(evidence_dir: Path) -> list[dict[str, Any]]:
             "type": "file",
             "size": f.stat().st_size,
             "kind": _classify_artifact(f.name),
+            "relative_path": rel_str,
+            "mtime": f.stat().st_mtime,
+            "mime": mimetypes.guess_type(f.name)[0] or "application/octet-stream",
+            "preview_capable": True,
         }
         parent["children"].append(node)
 
@@ -297,6 +309,11 @@ class AdminAggregationService:
                 "title": p.title,
                 "state": p.state,
                 "acceptance_profile": p.acceptance_profile,
+                "description": p.description or "",
+                "spec_json": p.spec_json if isinstance(p.spec_json, dict) else {},
+                "scope": _packet_spec_value(p, "scope", []),
+                "conflict_keys": _packet_spec_value(p, "conflict_keys", []),
+                "depends_on": _packet_spec_value(p, "depends_on", []),
                 "attempt_count": p.attempt_count,
                 "max_attempts": p.max_attempts,
                 "created_at": _iso(p.created_at),
@@ -653,7 +670,7 @@ class AdminAggregationService:
         # Look for verifier events
         verifier_events = [
             e for e in events
-            if (e.component or "") == "evidence_service"
+            if (e.payload_json or {}).get("component", "") == "evidence_service"
             or "verifier" in (e.event_type or "").lower()
         ]
         if not verifier_events:
@@ -675,7 +692,7 @@ class AdminAggregationService:
             "started_at": _iso(last.timestamp),
             "finished_at": _iso(last.timestamp),
             "duration_ms": 0,
-            "meta": last.reason or last.event_type,
+            "meta": (last.payload_json or {}).get("reason", "") or last.event_type,
             "target_tab": "evidence",
         }
 
@@ -948,6 +965,11 @@ class AdminAggregationService:
                 "finished_at": _iso(r.finished_at),
                 "elapsed_seconds": _elapsed_seconds(r.started_at, r.finished_at),
                 "is_running": _is_running(r.status, r.started_at, r.finished_at),
+                "tokens_in": r.tokens_in,
+                "tokens_out": r.tokens_out,
+                "cost_usd": float(r.cost_usd) if r.cost_usd is not None else None,
+                "base_sha": r.base_sha,
+                "integration_base_sha": r.integration_base_sha,
             })
         return {"runs": out}
 
@@ -984,6 +1006,11 @@ class AdminAggregationService:
                 "started_at": _iso(r.started_at),
                 "finished_at": _iso(r.finished_at),
                 "evidence_path": r.evidence_path or "",
+                "tokens_in": r.tokens_in,
+                "tokens_out": r.tokens_out,
+                "cost_usd": float(r.cost_usd) if r.cost_usd is not None else None,
+                "base_sha": r.base_sha,
+                "integration_base_sha": r.integration_base_sha,
             },
             "result_json": r.result_json or {},
             "command_preview": list(r.command_preview or []),
@@ -1053,23 +1080,30 @@ class AdminAggregationService:
         if not r or not r.evidence_path:
             return None
         evidence_dir = Path(r.evidence_path).resolve()
-        target = (evidence_dir / path).resolve()
-        if not target.is_file() or evidence_dir not in target.parents:
+        try:
+            from grace_control.services.safe_filesystem_service import (
+                FilesystemReadError,
+                SafeFilesystemService,
+            )
+
+            reader = SafeFilesystemService(
+                {"evidence": evidence_dir},
+                max_preview_bytes=1024 * 1024,
+                max_tail_lines=10000,
+                max_tail_bytes=1024 * 1024,
+            )
+            payload = (
+                reader.tail_file("evidence", path, lines=tail)
+                if tail > 0
+                else reader.read_file("evidence", path)
+            )
+        except (FilesystemReadError, OSError, ValueError):
             return None
-        ext = target.suffix.lower()
-        if ext in (".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"):
-            ctype = f"image/{'svg+xml' if ext == '.svg' else 'jpeg' if ext in ('.jpg','.jpeg') else 'gif' if ext == '.gif' else ext.lstrip('.')}"
-        elif ext == ".json":
-            ctype = "application/json"
-        elif ext in (".log", ".txt", ".md", ".har"):
-            ctype = "text/plain; charset=utf-8"
+        ctype = str(payload.get("mime") or "application/octet-stream")
+        if payload.get("binary"):
+            content = base64.b64decode(payload.get("content_base64") or "")
         else:
-            ctype = "application/octet-stream"
-        content = target.read_bytes()
-        if tail > 0 and ctype.startswith("text/"):
-            text_content = content.decode("utf-8", errors="replace")
-            lines = text_content.splitlines()
-            content = "\n".join(lines[-tail:]).encode("utf-8")
+            content = str(payload.get("content") or "").encode("utf-8")
         return content, ctype
 
     # ── logs ────────────────────────────────────────────────────────────
