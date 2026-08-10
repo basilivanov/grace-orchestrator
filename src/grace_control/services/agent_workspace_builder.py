@@ -40,6 +40,7 @@ class WorkspaceResult:
     copied_files: list[dict[str, str]] = field(default_factory=list)
     omitted_files: list[str] = field(default_factory=list)
     base_sha: str = ""
+    workspace_base_sha: str = ""
     commit_semantics: str = "workspace_only"
 
     def to_dict(self) -> dict:
@@ -50,6 +51,7 @@ class WorkspaceResult:
             "copied_files": self.copied_files,
             "omitted_files": self.omitted_files,
             "base_sha": self.base_sha,
+            "workspace_base_sha": self.workspace_base_sha,
             "commit_semantics": self.commit_semantics,
         }
 
@@ -96,6 +98,7 @@ class AgentWorkspaceBuilder:
         wt_path.mkdir(parents=True, exist_ok=True)
 
         resolved_target = self._target_root.resolve()
+        target_base_sha = self._target_head_sha(resolved_target)
         copied: list[dict[str, str]] = []
         omitted: list[str] = []
         all_rel_paths: list[str] = []
@@ -182,8 +185,9 @@ class AgentWorkspaceBuilder:
                 f"target_root={resolved_target}, omitted={omitted}"
             )
 
-        # Init minimal git repo
-        sha = self._init_minimal_repo(wt_path)
+        # The synthetic commit is useful only for no-change inspection inside
+        # the scoped copy. PacketRun.base_sha must remain the real target HEAD.
+        workspace_base_sha = self._init_minimal_repo(wt_path)
 
         return WorkspaceResult(
             workspace_path=wt_path,
@@ -191,9 +195,17 @@ class AgentWorkspaceBuilder:
             target_repo_root=resolved_target,
             copied_files=copied,
             omitted_files=omitted,
-            base_sha=sha,
+            base_sha=target_base_sha,
+            workspace_base_sha=workspace_base_sha,
             commit_semantics="workspace_only",
         )
+
+    def _target_head_sha(self, target_root: Path) -> str:
+        """Read the actual target repository HEAD, if it is available."""
+        from grace_control.services.git_service import GitService
+
+        result = GitService()._run(["rev-parse", "HEAD"], target_root)
+        return result.stdout.strip() if result.success else ""
 
     def _init_minimal_repo(self, repo_path: Path) -> str:
         """Init a git repo and create an initial commit.
@@ -237,20 +249,21 @@ class AgentWorkspaceBuilder:
         from grace_control.services.git_service import GitService
         git = GitService()
 
-        # Resolve target repo base SHA
-        base_sha_res = git._run(["rev-parse", base_ref], self._target_root)
-        base_sha = base_sha_res.stdout.strip() if base_sha_res.success else ""
-
         # Create target repo worktree
         res = git.worktree_add(self._target_root, wt_path, branch, base_ref=base_ref)
         if not res.success:
             raise RuntimeError(f"Failed to create target repo worktree: {res.stderr}")
 
+        # Read the SHA from the effective worktree after creation. This avoids
+        # confusing a synthetic workspace commit with the target base.
+        workspace_base_sha = git.current_sha(wt_path)
+
         return WorkspaceResult(
             workspace_path=wt_path,
             workspace_mode="target_repo_worktree",
             target_repo_root=self._target_root,
-            base_sha=base_sha,
+            base_sha=workspace_base_sha,
+            workspace_base_sha=workspace_base_sha,
             copied_files=[],
             omitted_files=[],
             commit_semantics="target_repo_commit",

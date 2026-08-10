@@ -46,6 +46,9 @@ _ALEMBIC_BASELINE_REVISION = "0001_grace_legacy_baseline"
 # Post-baseline runtime tables belong to later Alembic revisions.  The legacy
 # bridge must verify the schema represented by 0001, not the current metadata.
 _POST_BASELINE_TABLES = frozenset({"parallel_leases", "merge_leases"})
+_POST_BASELINE_COLUMNS = {
+    "packet_runs": frozenset({"base_sha", "integration_base_sha"}),
+}
 _BASELINE_TABLES = frozenset(
     table_name for table_name in Base.metadata.tables if table_name not in _POST_BASELINE_TABLES
 )
@@ -242,6 +245,7 @@ def _baseline_schema_gaps(connection: Connection) -> tuple[list[str], dict[str, 
     for table_name in sorted(_BASELINE_TABLES & existing_tables):
         actual_columns = {column["name"] for column in inspector.get_columns(table_name)}
         expected_columns = set(Base.metadata.tables[table_name].columns.keys())
+        expected_columns -= _POST_BASELINE_COLUMNS.get(table_name, frozenset())
         missing = sorted(expected_columns - actual_columns)
         if missing:
             missing_columns[table_name] = missing

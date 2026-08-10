@@ -112,6 +112,9 @@ class EvidenceService:
         tokens_in: int | None = None,
         tokens_out: int | None = None,
         cost_usd: float | None = None,
+        base_sha: str | None = None,
+        integration_base_sha: str | None = None,
+        parallel_execution: dict | None = None,
     ) -> None:
         try:
             with self._db() as db:
@@ -123,6 +126,7 @@ class EvidenceService:
                         if acceptance_report
                         else {"error": "acceptance pipeline failed"}
                     )
+                    previous_result = existing.result_json if isinstance(existing.result_json, dict) else {}
                     res_json = {
                         "legacy_result": legacy_result,
                         "acceptance_report": accept_dict,
@@ -138,6 +142,11 @@ class EvidenceService:
                         ),
                         "agent_commit_sha": commit_sha,
                     }
+                    previous_parallel = previous_result.get("parallel_execution")
+                    if isinstance(previous_parallel, dict):
+                        res_json["parallel_execution"] = dict(previous_parallel)
+                    if isinstance(parallel_execution, dict):
+                        res_json["parallel_execution"] = dict(parallel_execution)
                     if dev_replay:
                         res_json["dev_replay"] = dev_replay
                     # TZ §6.6: top-level diagnostics surface for UI/admin
@@ -145,6 +154,10 @@ class EvidenceService:
                     if diagnostics:
                         res_json["diagnostics"] = dict(diagnostics)
                     existing.result_json = res_json
+                    if base_sha is not None:
+                        existing.base_sha = base_sha
+                    if integration_base_sha is not None:
+                        existing.integration_base_sha = integration_base_sha
                     existing.evidence_path = evidence_path
                     existing.finished_at = datetime.now(timezone.utc)
                     existing.duration_ms = duration_ms

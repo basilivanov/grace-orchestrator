@@ -458,7 +458,7 @@ class PacketExecutionAdapter:
             pkt_contract = build_packet_contract(packet_data)
             base_ref = _settings.base_branch
             base_sha = self._inspector.base_sha(
-                _mat_target or self.project_root, base_ref
+                _mat_target or self.project_root, "HEAD"
             )
             evidence_dir = self.state_root / "packets" / packet_id / "runs" / f"R{run_number:02d}"
 
@@ -542,27 +542,34 @@ class PacketExecutionAdapter:
                 )
             # ── end rerun branch ─────────────────────────────────────────
 
-            result = await self._call_executor(packet_path, pkt_contract, run_number, base_ref, base_sha, executor, evidence_dir)
+            result = await self._call_executor(
+                packet_path,
+                pkt_contract,
+                run_number,
+                base_ref,
+                base_sha,
+                executor,
+                evidence_dir,
+                run_id=run_id,
+            )
             _log.debug("executor_run_completed", packet_id=packet_id, ok=result.ok, errors=result.errors[:2])
 
             if not hasattr(result, "evidence") or result.evidence is None:
                 result.evidence = {}
 
-            # The workspace builder is authoritative for the commit from which
-            # the executor worktree was created.  This can differ from both the
-            # orchestrator repository and the target repository's current HEAD
-            # (for example for scoped copies and rework seeds).
+            # The workspace builder reports the actual target base separately
+            # from any scoped-copy synthetic commit used for local inspection.
             workspace_evidence = result.evidence.get("workspace", {})
             if isinstance(workspace_evidence, dict):
-                workspace_base_sha = workspace_evidence.get("base_sha")
-                if isinstance(workspace_base_sha, str) and workspace_base_sha:
-                    if workspace_base_sha != base_sha:
+                workspace_target_sha = workspace_evidence.get("base_sha")
+                if isinstance(workspace_target_sha, str) and workspace_target_sha:
+                    if workspace_target_sha != base_sha:
                         _log.info(
-                            "workspace_base_sha_selected",
+                            "workspace_target_base_sha_selected",
                             packet_id=packet_id,
-                            base_sha=workspace_base_sha[:12],
+                            base_sha=workspace_target_sha[:12],
                         )
-                    base_sha = workspace_base_sha
+                    base_sha = workspace_target_sha
 
             # ── W2: capture prompt + agent output artifacts, emit with refs ─
             self._obs_event("packet.worktree_created", status="completed")
@@ -600,6 +607,11 @@ class PacketExecutionAdapter:
                 packet_id,
                 packet_data["attempt_count"],
                 base_sha=base_sha,
+                workspace_base_sha=(
+                    workspace_evidence.get("workspace_base_sha", base_sha)
+                    if isinstance(workspace_evidence, dict)
+                    else base_sha
+                ),
             )
             if wt_status == "worktree_missing":
                 return self._fast_reject("Worktree missing after agent run", executor.get("executor_id",""), run_id, start)
@@ -705,6 +717,41 @@ class PacketExecutionAdapter:
             pd["spec_json"] = resolve_rework_spec(db, p)
         return rid, pd, rn
 
+    def _persist_workspace_base_sha(
+        self,
+        run_id: str | None,
+        base_sha: str,
+        conflict_keys: list[str],
+    ) -> None:
+        """Persist target HEAD immediately after effective workspace creation."""
+        if not run_id or not base_sha:
+            return
+        try:
+            with get_db() as db:
+                run = db.query(PacketRun).filter_by(id=run_id).first()
+                if run is None:
+                    return
+                run.base_sha = base_sha
+                result_json = dict(run.result_json) if isinstance(run.result_json, dict) else {}
+                parallel = dict(result_json.get("parallel_execution") or {})
+                parallel.update(
+                    {
+                        "base_sha": base_sha,
+                        "integration_base_sha": None,
+                        "stale_base": False,
+                        "conflict_keys": list(conflict_keys),
+                        "integration_recheck": "skipped",
+                    }
+                )
+                result_json["parallel_execution"] = parallel
+                run.result_json = result_json
+        except Exception as error:
+            _log.warn(
+                "workspace_base_sha_persist_failed",
+                run_id=run_id,
+                error=str(error)[:300],
+            )
+
     def _resolve_executor(self, pd: dict) -> dict:
         from grace_control.config.agent_profiles import get_agent_profile
         from grace_control.core.complexity_router import route_packet
@@ -748,6 +795,7 @@ class PacketExecutionAdapter:
         attempt_count,
         *,
         base_sha="",
+        workspace_base_sha="",
     ):
         """Return (status, sha). status: 'committed'|'no_changes'|'worktree_missing'|'not_git'."""
         if not result.worktree_path or not Path(result.worktree_path).exists():
@@ -764,12 +812,13 @@ class PacketExecutionAdapter:
         # is clean and a wrapper commit reports "nothing to commit", but HEAD
         # is still the exact agent result needed for evidence and rework seeds.
         head_sha = self._inspector.base_sha(wt, "HEAD")
-        if base_sha and head_sha and head_sha != base_sha:
+        comparison_sha = workspace_base_sha or base_sha
+        if comparison_sha and head_sha and head_sha != comparison_sha:
             _log.info(
                 "agent_existing_commit_detected",
                 packet_id=packet_id,
                 sha=head_sha[:12],
-                base_sha=base_sha[:12],
+                base_sha=comparison_sha[:12],
             )
             return "committed", head_sha
         return "no_changes", ""
@@ -844,6 +893,8 @@ class PacketExecutionAdapter:
                 command_preview=getattr(result, "command_preview", None),
                 prompt=getattr(result, "prompt", ""), dev_replay=dev_rep,
                 diagnostics=getattr(self, "_last_diagnostics", None),
+                base_sha=base_sha,
+                parallel_execution=(getattr(result, "evidence", {}) or {}).get("parallel_execution"),
                 tokens_in=getattr(result, "tokens_in", None),
                 tokens_out=getattr(result, "tokens_out", None),
                 cost_usd=getattr(result, "cost_usd", None))
@@ -870,6 +921,8 @@ class PacketExecutionAdapter:
                 command_preview=getattr(result, "command_preview", None),
                 prompt=getattr(result, "prompt", ""), commit_sha=sha, dev_replay=dev_rep,
                 diagnostics=getattr(self, "_last_diagnostics", None),
+                base_sha=base_sha,
+                parallel_execution=(getattr(result, "evidence", {}) or {}).get("parallel_execution"),
                 tokens_in=getattr(result, "tokens_in", None),
                 tokens_out=getattr(result, "tokens_out", None),
                 cost_usd=getattr(result, "cost_usd", None))
@@ -944,11 +997,18 @@ class PacketExecutionAdapter:
         evidence_refs = [r for r in (diff_ref, ev_ref, meta_ref) if r is not None]
         self._obs_event("packet.evidence_captured", status="completed", artifact_refs=evidence_refs if evidence_refs else None)
         self._obs_event("packet.execution_completed", status=status, duration_ms=dur)
+        safe_parallel_execution = (
+            (safe_data or {}).get("evidence", {}).get("parallel_execution")
+            if isinstance((safe_data or {}).get("evidence", {}), dict)
+            else None
+        )
         self._evidence.update_run_result(run_id=run_id, status=status, legacy_result=safe_data,
             acceptance_report=accept_report, evidence_verifier_report=evr, reviewer_report=rvr,
             evidence_path=er.evidence_path, duration_ms=er.duration_ms, executor_id=executor.get("executor_id",""),
             commit_sha=commit_sha, dev_replay=dev_rep,
             diagnostics=getattr(self, "_last_diagnostics", None),
+            base_sha=base_sha,
+            parallel_execution=safe_parallel_execution,
             tokens_in=(safe_data or {}).get("tokens_in"),
             tokens_out=(safe_data or {}).get("tokens_out"),
             cost_usd=(safe_data or {}).get("cost_usd"))
@@ -1397,7 +1457,9 @@ class PacketExecutionAdapter:
             return None, None
 
     async def _call_executor(self, packet_path: Path, packet_contract, attempt: int,
-                              base_ref: str, base_sha: str, executor: dict, evidence_dir: Path | None = None):
+                              base_ref: str, base_sha: str, executor: dict,
+                              evidence_dir: Path | None = None,
+                              run_id: str | None = None):
         _preflight_result = None
         from grace_control.agent.backend import ExecutionRequest
         from grace_control.services.git_service import GitService
@@ -1433,6 +1495,14 @@ class PacketExecutionAdapter:
         # TZ §6.3: auto-upgrade scoped_copy to full_git_worktree if verification
         # contains commands that need broader repo context (pytest, tsc, etc.).
         _workspace_evidence: dict = {}
+        _workspace_base_sha = base_sha
+        _parallel_execution = {
+            "base_sha": base_sha,
+            "integration_base_sha": None,
+            "stale_base": False,
+            "conflict_keys": list(getattr(packet_contract, "conflict_keys", []) or []),
+            "integration_recheck": "skipped",
+        }
         if workspace_mode == "scoped_copy":
             try:
                 _verification = _flatten_verification_for_safety(packet_contract)
@@ -1535,8 +1605,12 @@ class PacketExecutionAdapter:
             )
             wt_path = ws.workspace_path
             base_sha = ws.base_sha
+            _workspace_base_sha = ws.workspace_base_sha or ws.base_sha
             branch = f"minimal-{slug}"
             _workspace_result = ws
+            self._persist_workspace_base_sha(
+                run_id, base_sha, _parallel_execution["conflict_keys"]
+            )
             add_result = type("Result", (), {"success": True, "stderr": ""})()
         elif workspace_mode == "target_repo_worktree":
             # Preflight checks
@@ -1587,7 +1661,11 @@ class PacketExecutionAdapter:
             )
             wt_path = ws.workspace_path
             base_sha = ws.base_sha
+            _workspace_base_sha = ws.workspace_base_sha or ws.base_sha
             _workspace_result = ws
+            self._persist_workspace_base_sha(
+                run_id, base_sha, _parallel_execution["conflict_keys"]
+            )
             add_result = type("Result", (), {"success": True, "stderr": ""})()
         else:
             _workspace_result = None
@@ -1647,6 +1725,21 @@ class PacketExecutionAdapter:
                 stderr=f"worktree path does not exist after git worktree add: {wt_path}",
                 duration_ms=0,
                 errors=[f"worktree path does not exist after git worktree add: {wt_path}"],
+            )
+
+        if workspace_mode == "full_git_worktree":
+            _workspace_base_sha = git.current_sha(wt_path)
+            base_sha = _workspace_base_sha or base_sha
+            _workspace_evidence.update(
+                {
+                    "workspace_mode": "full_git_worktree",
+                    "base_sha": base_sha,
+                    "workspace_base_sha": _workspace_base_sha,
+                    "commit_semantics": "target_repo_commit",
+                }
+            )
+            self._persist_workspace_base_sha(
+                run_id, base_sha, _parallel_execution["conflict_keys"]
             )
 
         if rework_seed_sha and workspace_mode != "scoped_copy":
@@ -1784,6 +1877,8 @@ class PacketExecutionAdapter:
                 "prev_internal_id": prev_internal_id,
             }
         # Persist workspace report in evidence
+        _parallel_execution["base_sha"] = base_sha
+        result.evidence["parallel_execution"] = dict(_parallel_execution)
         if _workspace_evidence:
             result.evidence["workspace"] = _workspace_evidence
         elif _workspace_result is not None:

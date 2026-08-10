@@ -350,6 +350,7 @@ async def merge_packet(packet_id: str, request: dict) -> dict:
 
     worktree_path = request.get("worktree_path", "")
     branch_name = request.get("branch_name", "")
+    commit_sha = request.get("commit_sha", "")
     target_branch = request.get("target_branch") or _settings.target_branch
     worker_id = request.get("worker_id") or f"merge:{packet_id}"
     target_repo_root = (
@@ -382,6 +383,7 @@ async def merge_packet(packet_id: str, request: dict) -> dict:
         target_branch=target_branch,
         worktree_path=worktree_path,
         worker_id=worker_id,
+        commit_sha=commit_sha,
     )
 
     if not result.success:

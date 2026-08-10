@@ -94,6 +94,7 @@ class GraceSettings(BaseSettings):
     max_concurrency: int = 1
     merge_serialization_enabled: bool = True
     merge_lease_ttl_seconds: int = 300
+    integration_recheck_on_stale_base: bool = True
 
     # ── Telegram (optional notification channel) ──
     telegram_token: str = ""

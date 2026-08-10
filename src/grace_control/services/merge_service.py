@@ -22,15 +22,22 @@
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from grace_control.core.stage_instrumentation import stage
 
+from grace_control.config.settings import settings
+from grace_control.core.contracts import build_packet_contract
+from grace_control.core.stage_instrumentation import stage
 from grace_control.core.structured_logger import GraceLogger
-from grace_control.db.schema import PacketState
+from grace_control.db import get_db
+from grace_control.db.schema import Packet, PacketRun, PacketState
 from grace_control.services.git_service import GitService
+from grace_control.services.integration_recheck_service import (
+    IntegrationRecheckResult,
+    IntegrationRecheckService,
+)
 from grace_control.services.merge_coordinator_service import (
     MergeCoordinatorService,
     MergeLeaseBusyError,
@@ -85,10 +92,15 @@ class MergeService:
         git: GitService | None = None,
         packets=None,
         coordinator: MergeCoordinatorService | None = None,
+        integration_recheck: IntegrationRecheckService | None = None,
     ):
         self._git = git or GitService()
         self._packets = packets  # lazy import to avoid cycle
         self._coordinator = coordinator or MergeCoordinatorService(git=self._git)
+        self._integration_recheck = integration_recheck or IntegrationRecheckService(
+            git=self._git,
+            coordinator=self._coordinator,
+        )
 
     # START_FUNCTION_CONTRACT
     # name: merge_packet
@@ -112,6 +124,7 @@ class MergeService:
         target_branch: str,
         worker_id: str | None = None,
         worktree_path: str | Path | None = None,
+        commit_sha: str | None = None,
     ) -> MergeResult:
         from grace_control.services.packet_service import PacketService
         svc = self._packets or PacketService()
@@ -136,6 +149,7 @@ class MergeService:
                 error="waiting_for_merge_slot: deterministic accepted merge order",
             )
 
+        packet_commit_sha = commit_sha or ""
         commit_sha = ""
         try:
             lease = self._coordinator.acquire(
@@ -195,6 +209,180 @@ class MergeService:
                     error=f"merge_repo_sanity_failed: {sanity.error}",
                 )
 
+            # TZ05: capture target branch state before any target checkout or
+            # merge mutation. The packet run snapshot is written at effective
+            # workspace creation by PacketExecutor.
+            merge_snapshot = self._merge_snapshot(packet_id)
+            base_sha = merge_snapshot["base_sha"]
+            conflict_keys = merge_snapshot["conflict_keys"]
+            current_head = self._target_branch_head(repo, target_branch)
+            stale_base = bool(base_sha and current_head and base_sha != current_head)
+            parallel_execution = {
+                "base_sha": base_sha,
+                "integration_base_sha": None,
+                "stale_base": stale_base,
+                "conflict_keys": conflict_keys,
+                "integration_recheck": "skipped",
+            }
+            self._update_parallel_execution(packet_id, parallel_execution)
+
+            validated_integration_base = ""
+            if stale_base and getattr(settings, "integration_recheck_on_stale_base", True):
+                contract = merge_snapshot["packet_contract"]
+                if contract is None:
+                    failure = IntegrationRecheckResult(
+                        status="failed",
+                        base_sha=base_sha,
+                        integration_base_sha=current_head,
+                        failure_class="integration_verification_failed",
+                        evidence={"error": "packet contract could not be reconstructed"},
+                    )
+                else:
+                    failure = None
+                    candidate_head = current_head
+                    for recheck_attempt in range(3):
+                        try:
+                            checked = self._integration_recheck.recheck(
+                                target_repo_root=repo,
+                                target_branch=target_branch,
+                                base_sha=base_sha,
+                                current_head=candidate_head,
+                                branch_name=branch_name,
+                                packet_contract=contract,
+                                target_repo_key=lease.target_repo_key,
+                                lease_token=lease.lease_token,
+                                packet_id=packet_id,
+                                worker_id=holder,
+                                run_dir=merge_snapshot["run_dir"],
+                                commit_sha=packet_commit_sha,
+                            )
+                        except Exception as error:
+                            checked = IntegrationRecheckResult(
+                                status="failed",
+                                base_sha=base_sha,
+                                integration_base_sha=candidate_head,
+                                failure_class="integration_verification_failed",
+                                evidence={"error": str(error)[:500]},
+                            )
+                        if not checked.passed:
+                            failure = checked
+                            break
+
+                        observed_head = self._target_branch_head(repo, target_branch)
+                        if observed_head != checked.integration_base_sha:
+                            _log.warn(
+                                "integration_target_advanced",
+                                packet_id=packet_id,
+                                previous_head=checked.integration_base_sha,
+                                current_head=observed_head,
+                                attempt=recheck_attempt + 1,
+                            )
+                            candidate_head = observed_head
+                            if recheck_attempt == 2:
+                                failure = IntegrationRecheckResult(
+                                    status="failed",
+                                    base_sha=base_sha,
+                                    integration_base_sha=observed_head,
+                                    failure_class="stale_base_conflict",
+                                    evidence={
+                                        **checked.evidence,
+                                        "target_advanced_after_recheck": True,
+                                        "validated_head": checked.integration_base_sha,
+                                        "current_head": observed_head,
+                                    },
+                                )
+                                break
+                            continue
+
+                        # One final read occurs immediately before target
+                        # checkout, closing the recheck-to-mutation window that
+                        # can otherwise merge an obsolete validation result.
+                        final_head = self._target_branch_head(repo, target_branch)
+                        if final_head != checked.integration_base_sha:
+                            candidate_head = final_head
+                            if recheck_attempt == 2:
+                                failure = IntegrationRecheckResult(
+                                    status="failed",
+                                    base_sha=base_sha,
+                                    integration_base_sha=final_head,
+                                    failure_class="stale_base_conflict",
+                                    evidence={
+                                        **checked.evidence,
+                                        "target_advanced_after_recheck": True,
+                                        "validated_head": checked.integration_base_sha,
+                                        "current_head": final_head,
+                                    },
+                                )
+                                break
+                            continue
+                        validated_integration_base = checked.integration_base_sha
+                        parallel_execution.update(
+                            integration_base_sha=validated_integration_base,
+                            integration_recheck="passed",
+                        )
+                        self._update_parallel_execution(
+                            packet_id,
+                            parallel_execution,
+                            integration_base_sha=validated_integration_base,
+                            evidence=checked.evidence,
+                        )
+                        break
+
+                if failure is not None:
+                    parallel_execution.update(
+                        integration_base_sha=failure.integration_base_sha,
+                        integration_recheck="failed",
+                    )
+                    blocked = await self._block_stale_packet(
+                        svc=svc,
+                        packet_id=packet_id,
+                        failure=failure,
+                        parallel_execution=parallel_execution,
+                        worktree_path=worktree_path,
+                        repo=repo,
+                        branch_name=branch_name,
+                        target_branch=target_branch,
+                        lease=lease,
+                        worker_id=holder,
+                    )
+                    return blocked
+            elif stale_base:
+                # Explicit backwards-compatible escape hatch. It is visible
+                # in result_json and never silently looks like a fresh base.
+                parallel_execution["integration_recheck"] = "skipped"
+                self._update_parallel_execution(packet_id, parallel_execution)
+
+            if validated_integration_base:
+                current_before_checkout = self._target_branch_head(repo, target_branch)
+                if current_before_checkout != validated_integration_base:
+                    race = IntegrationRecheckResult(
+                        status="failed",
+                        base_sha=base_sha,
+                        integration_base_sha=current_before_checkout,
+                        failure_class="stale_base_conflict",
+                        evidence={
+                            "target_advanced_after_recheck": True,
+                            "validated_head": validated_integration_base,
+                            "current_head": current_before_checkout,
+                        },
+                    )
+                    parallel_execution.update(
+                        integration_base_sha=current_before_checkout,
+                        integration_recheck="failed",
+                    )
+                    return await self._block_stale_packet(
+                        svc=svc,
+                        packet_id=packet_id,
+                        failure=race,
+                        parallel_execution=parallel_execution,
+                        worktree_path=worktree_path,
+                        repo=repo,
+                        branch_name=branch_name,
+                        target_branch=target_branch,
+                        lease=lease,
+                        worker_id=holder,
+                    )
+
             checkout = self._coordinator.run_mutation(
                 target_repo_key=lease.target_repo_key,
                 lease_token=lease.lease_token,
@@ -215,6 +403,37 @@ class MergeService:
                 step_name="fetch",
                 operation=lambda: self._git.fetch(repo, "origin"),
             )  # best-effort: local repos may not have origin
+
+            if validated_integration_base:
+                post_checkout_head = self._target_branch_head(repo, target_branch)
+                if post_checkout_head != validated_integration_base:
+                    race = IntegrationRecheckResult(
+                        status="failed",
+                        base_sha=base_sha,
+                        integration_base_sha=post_checkout_head,
+                        failure_class="stale_base_conflict",
+                        evidence={
+                            "target_advanced_after_recheck": True,
+                            "validated_head": validated_integration_base,
+                            "current_head": post_checkout_head,
+                        },
+                    )
+                    parallel_execution.update(
+                        integration_base_sha=post_checkout_head,
+                        integration_recheck="failed",
+                    )
+                    return await self._block_stale_packet(
+                        svc=svc,
+                        packet_id=packet_id,
+                        failure=race,
+                        parallel_execution=parallel_execution,
+                        worktree_path=worktree_path,
+                        repo=repo,
+                        branch_name=branch_name,
+                        target_branch=target_branch,
+                        lease=lease,
+                        worker_id=holder,
+                    )
 
             merge = self._coordinator.run_mutation(
                 target_repo_key=lease.target_repo_key,
@@ -321,6 +540,223 @@ class MergeService:
             except Exception as error:
                 _log.warn("merge_lease_release_failed",
                     packet_id=packet_id, error=str(error)[:200])
+
+    # START_FUNCTION_CONTRACT
+    # name: _target_branch_head
+    # purpose: Read the current SHA of the requested target branch without
+    #          changing the target checkout.
+    # inputs: repo — target repository; target_branch — branch/ref name.
+    # returns: Branch SHA, or current HEAD as a compatibility fallback.
+    # side_effects: Read-only git commands.
+    # emitted_logs: None.
+    # error_behavior: Falls back to GitService.current_sha when the branch ref
+    #                 cannot be resolved by a test adapter or local repository.
+    # END_FUNCTION_CONTRACT
+    def _target_branch_head(self, repo: Path, target_branch: str) -> str:
+        result = self._git._run(["rev-parse", target_branch], repo)
+        if result.success and result.stdout.strip():
+            return result.stdout.strip()
+        return self._git.current_sha(repo)
+
+    # START_FUNCTION_CONTRACT
+    # name: _merge_snapshot
+    # purpose: Load the latest PacketRun base snapshot, result metadata, packet
+    #          conflict keys, and contract needed for stale integration.
+    # inputs: packet_id — accepted packet identifier.
+    # returns: Detached plain dictionary safe to use across service calls.
+    # side_effects: Read-only database queries.
+    # emitted_logs: None.
+    # error_behavior: Missing run/contract data is represented by empty values;
+    #                 stale integration then fails closed before target merge.
+    # END_FUNCTION_CONTRACT
+    @staticmethod
+    def _merge_snapshot(packet_id: str) -> dict[str, Any]:
+        with get_db() as db:
+            packet = db.query(Packet).filter_by(id=packet_id).first()
+            run = (
+                db.query(PacketRun)
+                .filter_by(packet_id=packet_id)
+                .order_by(PacketRun.run_number.desc())
+                .first()
+            )
+            if packet is None:
+                return {
+                    "base_sha": "",
+                    "conflict_keys": [],
+                    "packet_contract": None,
+                    "run_dir": None,
+                }
+            spec = packet.spec_json if isinstance(packet.spec_json, dict) else {}
+            result_json = run.result_json if run and isinstance(run.result_json, dict) else {}
+            parallel = result_json.get("parallel_execution")
+            if not isinstance(parallel, dict):
+                parallel = {}
+            conflict_keys = parallel.get("conflict_keys", spec.get("conflict_keys", []))
+            if not isinstance(conflict_keys, list):
+                conflict_keys = []
+            packet_data = {
+                "id": packet.id,
+                "feature_id": packet.feature_id,
+                "wave_id": packet.wave_id,
+                "slug": packet.slug,
+                "title": packet.title,
+                "description": packet.description,
+                "spec_json": spec,
+                "acceptance_profile": packet.acceptance_profile,
+                "attempt_count": packet.attempt_count,
+                "max_attempts": packet.max_attempts,
+            }
+            try:
+                packet_contract = build_packet_contract(packet_data)
+            except Exception:
+                packet_contract = None
+            evidence_path = run.evidence_path if run else ""
+            run_dir = Path(evidence_path) if evidence_path else None
+            return {
+                "base_sha": (run.base_sha if run and run.base_sha else parallel.get("base_sha", "")),
+                "conflict_keys": list(conflict_keys),
+                "packet_contract": packet_contract,
+                "run_dir": run_dir,
+            }
+
+    # START_FUNCTION_CONTRACT
+    # name: _update_parallel_execution
+    # purpose: Persist TZ05 operational metadata and PacketRun integration SHA.
+    # inputs: packet_id, metadata, optional integration_base_sha, evidence,
+    #         failure_class, and run status.
+    # returns: None.
+    # side_effects: Updates the latest PacketRun result_json and nullable SHA
+    #                columns.
+    # emitted_logs: None.
+    # error_behavior: Missing PacketRun is ignored for legacy/manual merges.
+    # END_FUNCTION_CONTRACT
+    @staticmethod
+    def _update_parallel_execution(
+        packet_id: str,
+        metadata: dict[str, Any],
+        *,
+        integration_base_sha: str | None = None,
+        evidence: dict[str, Any] | None = None,
+        failure_class: str = "",
+        status: str | None = None,
+    ) -> None:
+        with get_db() as db:
+            run = (
+                db.query(PacketRun)
+                .filter_by(packet_id=packet_id)
+                .order_by(PacketRun.run_number.desc())
+                .first()
+            )
+            if run is None:
+                return
+            result_json = dict(run.result_json) if isinstance(run.result_json, dict) else {}
+            parallel = dict(result_json.get("parallel_execution") or {})
+            parallel.update(metadata)
+            result_json["parallel_execution"] = parallel
+            if failure_class:
+                result_json["failure_class"] = failure_class
+            if evidence:
+                result_json["integration_recheck_evidence"] = dict(evidence)
+            run.result_json = result_json
+            if metadata.get("base_sha") and not run.base_sha:
+                run.base_sha = metadata["base_sha"]
+            if integration_base_sha is not None:
+                run.integration_base_sha = integration_base_sha
+            if status:
+                run.status = status
+                run.finished_at = datetime.now(UTC)
+
+    # START_FUNCTION_CONTRACT
+    # name: _block_stale_packet
+    # purpose: Record stale integration evidence, transition an accepted packet
+    #          to BLOCKED_RECOVERABLE, release its parallel lease through the
+    #          state service, and clean its packet worktree under merge fencing.
+    # inputs: PacketService, packet_id, failed recheck, metadata, worktree, and
+    #         active merge lease identity.
+    # returns: Unsuccessful MergeResult describing the recoverable block.
+    # side_effects: DB result/state/lease updates and fenced worktree cleanup.
+    # emitted_logs: stale_base_packet_blocked, stale_base_cleanup_failed.
+    # error_behavior: Returns a failure result even when cleanup is best effort.
+    # END_FUNCTION_CONTRACT
+    async def _block_stale_packet(
+        self,
+        *,
+        svc,
+        packet_id: str,
+        failure: IntegrationRecheckResult,
+        parallel_execution: dict[str, Any],
+        worktree_path: str | Path | None,
+        repo: Path,
+        branch_name: str,
+        target_branch: str,
+        lease,
+        worker_id: str,
+    ) -> MergeResult:
+        evidence = dict(failure.evidence)
+        evidence.setdefault("base_sha", failure.base_sha)
+        evidence.setdefault("current_head", failure.integration_base_sha)
+        self._update_parallel_execution(
+            packet_id,
+            parallel_execution,
+            integration_base_sha=failure.integration_base_sha,
+            evidence=evidence,
+            failure_class=failure.failure_class,
+            status=PacketState.BLOCKED_RECOVERABLE.value,
+        )
+        try:
+            await svc.block(
+                packet_id,
+                recoverable=True,
+                reason=f"{failure.failure_class}:{failure.integration_base_sha[:12]}",
+            )
+            _log.warn(
+                "stale_base_packet_blocked",
+                packet_id=packet_id,
+                failure_class=failure.failure_class,
+                base_sha=failure.base_sha,
+                current_head=failure.integration_base_sha,
+            )
+        except Exception as error:
+            _log.warn("stale_base_packet_block_failed", packet_id=packet_id, error=str(error)[:300])
+            return MergeResult(
+                False,
+                packet_id,
+                "",
+                str(repo),
+                branch_name,
+                target_branch,
+                error=f"{failure.failure_class}: unable to block packet: {str(error)[:200]}",
+            )
+        self._update_parallel_execution(
+            packet_id,
+            parallel_execution,
+            integration_base_sha=failure.integration_base_sha,
+            evidence=evidence,
+            failure_class=failure.failure_class,
+            status=PacketState.BLOCKED_RECOVERABLE.value,
+        )
+        if worktree_path:
+            try:
+                self._cleanup_worktree_for_merge(
+                    repo,
+                    Path(worktree_path).resolve(),
+                    branch_name,
+                    target_repo_key=lease.target_repo_key,
+                    lease_token=lease.lease_token,
+                    packet_id=packet_id,
+                    worker_id=worker_id,
+                )
+            except Exception as error:
+                _log.warn("stale_base_cleanup_failed", packet_id=packet_id, error=str(error)[:300])
+        return MergeResult(
+            False,
+            packet_id,
+            "",
+            str(repo),
+            branch_name,
+            target_branch,
+            error=f"{failure.failure_class}: target unchanged at {failure.integration_base_sha[:12]}",
+        )
 
     # START_FUNCTION_CONTRACT
     # name: cleanup_worktree

@@ -629,7 +629,7 @@ class TestTargetRepoRootPropagation:
                 f"expected {spec_target}, got {adapter._packet_target_repo}"
             assert executor_base_sha == target_sha, \
                 f"expected target base {target_sha}, got {executor_base_sha}"
-            adapter._inspector.base_sha.assert_called_once_with(spec_target, _s.base_branch)
+            adapter._inspector.base_sha.assert_called_once_with(spec_target, "HEAD")
 
             cleanup = adapter._effective_cleanup_root({})
             assert str(spec_target) in str(cleanup), \

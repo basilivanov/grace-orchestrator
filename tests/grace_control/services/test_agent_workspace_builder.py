@@ -80,15 +80,18 @@ class TestWorkspaceBuilder:
         assert d["commit_semantics"] == "workspace_only"
 
     def test_build_scoped_copy_has_base_sha(self, target_root: Path, tmp_path: Path):
-        """Minimal repo must have its own base SHA (not from target repo)."""
+        """Scoped copy reports the actual target SHA, not its synthetic commit."""
         builder = AgentWorkspaceBuilder(target_root=target_root)
         ws = builder.build_scoped_copy(
             scope_paths=["main.py"],
             workspace_root=tmp_path,
             slug="test-ws5",
         )
-        assert ws.base_sha != ""
-        assert len(ws.base_sha) == 40  # full SHA
+        from grace_control.services.git_service import GitService
+        target_sha = GitService().current_sha(target_root)
+        assert ws.base_sha == target_sha
+        assert ws.workspace_base_sha != ""
+        assert ws.workspace_base_sha != ws.base_sha
 
     def test_missing_target_root_raises(self):
         with pytest.raises(ValueError, match="does not exist"):

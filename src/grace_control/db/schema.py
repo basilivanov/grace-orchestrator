@@ -149,6 +149,11 @@ class PacketRun(Base):
     finished_at = Column(DateTime)
     duration_ms = Column(Integer)
 
+    # TZ05: target repository SHA visible when the effective packet workspace
+    # was created, and the target SHA validated by stale-base integration.
+    base_sha = Column(String, nullable=True)
+    integration_base_sha = Column(String, nullable=True)
+
     # Admin v2: which model / which command / which prompt was used.
     # Populated by packet_executor at run_started. Nullable for legacy rows.
     model = Column(String, nullable=True)
