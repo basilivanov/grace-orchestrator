@@ -111,6 +111,9 @@ def check_expired_leases() -> int:
             db.delete(lease)
             count += 1
 
+        from grace_control.services.parallel_lease_service import ParallelLeaseService
+        count += ParallelLeaseService().expire(db)
+
     return count
 
 #END_BLOCK_CHECKER

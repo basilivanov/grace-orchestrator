@@ -122,24 +122,37 @@ async def claim_packet(request: dict) -> dict:
     """
     worker_id = request["worker_id"]
 
-    from grace_control.services.queue_service import claim_next
-    packet_id, reason = claim_next(worker_id)
+    from grace_control.config.settings import get_max_concurrency, settings
 
-    if packet_id is None:
-        from grace_control.core.wave_gate import check_wave_gates
-        check_wave_gates()
-        detail = reason or "No packets available"
-        raise HTTPException(status_code=404, detail=detail)
+    if get_max_concurrency() > 1 and settings.parallel_scope_guard_enabled:
+        from grace_control.services.safe_queue_claim_service import SafeQueueClaimService
 
-    from grace_control.services.packet_service import PacketService, PacketNotFoundError, StateTransitionError
-    svc = PacketService()
+        result, reason = SafeQueueClaimService().claim_next_atomic(worker_id)
+        if result is None:
+            detail = reason or "No packets available"
+            raise HTTPException(status_code=404, detail=detail)
+    else:
+        from grace_control.services.queue_service import claim_next
+        packet_id, reason = claim_next(worker_id)
 
-    try:
-        result = await svc.claim(packet_id, worker_id)
-    except (StateTransitionError, PacketNotFoundError) as e:
-        from grace_control.core.wave_gate import check_wave_gates
-        check_wave_gates()
-        raise HTTPException(status_code=404, detail=str(e))
+        if packet_id is None:
+            from grace_control.core.wave_gate import check_wave_gates
+            check_wave_gates()
+            detail = reason or "No packets available"
+            raise HTTPException(status_code=404, detail=detail)
+
+        from grace_control.services.packet_service import (
+            PacketNotFoundError,
+            PacketService,
+            StateTransitionError,
+        )
+        svc = PacketService()
+        try:
+            result = await svc.claim(packet_id, worker_id)
+        except (StateTransitionError, PacketNotFoundError) as error:
+            from grace_control.core.wave_gate import check_wave_gates
+            check_wave_gates()
+            raise HTTPException(status_code=404, detail=str(error))
 
     return {
         "data": {
@@ -156,6 +169,12 @@ async def claim_packet(request: dict) -> dict:
             "description": result.description,
             "acceptance_profile": result.acceptance_profile,
             "max_attempts": result.max_attempts,
+            "parallel_lease_id": result.parallel_lease_id,
+            "parallel_expires_at": (
+                result.parallel_expires_at.isoformat() + "Z"
+                if result.parallel_expires_at
+                else None
+            ),
         },
         "timestamp": datetime.now(UTC).isoformat() + "Z",
     }

@@ -33,7 +33,7 @@ from grace_control.core.stage_instrumentation import stage
 from grace_control.core.state_machine import PacketStateMachine, StateTransitionError
 from grace_control.core.structured_logger import GraceLogger
 from grace_control.db import get_db
-from grace_control.db.schema import Event, Lease, Packet, PacketRun, PacketState, Worker
+from grace_control.db.schema import Event, Lease, Packet, PacketRun, PacketState, ParallelLease, Worker
 
 _log = GraceLogger("packet_service")
 
@@ -82,6 +82,8 @@ class ClaimResult:
     description: str = ""
     acceptance_profile: str = ""
     max_attempts: int = 0
+    parallel_lease_id: str | None = None
+    parallel_expires_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -173,6 +175,8 @@ class PacketService:
         _log.info("packet_transition", packet_id=packet_id,
             from_state=from_state.value, to_state=to_state.value, reason=reason)
         asyncio.create_task(self._broadcast(packet_id, to_state.value, reason))
+        from grace_control.services.parallel_lease_service import ParallelLeaseService
+        ParallelLeaseService().release_for_terminal_state(db, packet_id, to_state.value)
         if to_state == PacketState.MERGED:
             self._supersede_rework_ancestors(db, packet)
         return packet
@@ -231,111 +235,102 @@ class PacketService:
         without `DetachedInstanceError` (P0#3 from post-refactor audit).
         """
         with self._db_factory() as db:
-            packet = db.query(Packet).filter_by(id=packet_id).with_for_update().first()
-            if not packet:
-                raise PacketNotFoundError(packet_id)
-            current = PacketStateMachine.normalize_state(packet.state)
-            if current != PacketState.READY:
-                # Auto-promote to READY if recoverable state
-                if current in (PacketState.DRAFT, PacketState.REJECTED, PacketState.BLOCKED_RECOVERABLE):
-                    self._sm.transition(current, PacketState.READY)
-                    packet.state = PacketState.READY.value
-                else:
-                    raise StateTransitionError(
-                        f"Cannot claim from state {current.value}"
-                    )
-            self._sm.transition(PacketState.READY, PacketState.RUNNING)
-            packet.state = PacketState.RUNNING.value
-            packet.attempt_count = (packet.attempt_count or 0) + 1
-
-            existing = db.query(Lease).filter_by(packet_id=packet_id).first()
-            if existing:
-                # W01: handle offset-naive datetimes from SQLite
-                existing_expiry = existing.expires_at
-                if existing_expiry.tzinfo is None:
-                    existing_expiry = existing_expiry.replace(tzinfo=UTC)
-                if existing_expiry > datetime.now(UTC):
-                    raise StateTransitionError(f"Packet {packet_id} already leased to {existing.worker_id}")
-                # W01: record stale lease expiry for observability
-                _record_event(db, "lease_expired_before_reclaim", packet_id, {
-                    "old_worker_id": existing.worker_id,
-                    "old_lease_id": existing.id,
-                    "old_claimed_attempt": existing.claimed_attempt,
-                    "new_worker_id": worker_id,
-                })
-                db.delete(existing)
-
-            # W01: lease TTL from settings, default 5 min
-            from grace_control.config.settings import settings as _settings
-            lease_ttl_seconds = getattr(_settings, "lease_ttl_seconds", 300)
-            expires_at = datetime.now(UTC) + timedelta(seconds=lease_ttl_seconds)
-            claimed_attempt = packet.attempt_count
-            lease = Lease(
-                packet_id=packet_id,
-                worker_id=worker_id,
-                claimed_attempt=claimed_attempt,
-                expires_at=expires_at,
-            )
-            db.add(lease)
-            worker = db.query(Worker).filter_by(id=worker_id).first()
-            if worker:
-                worker.current_packet_id = packet_id
-
-            from grace_control.services.rework_packet_service import resolve_rework_spec
-            resolved_spec = resolve_rework_spec(db, packet)
-            if resolved_spec != (packet.spec_json or {}):
-                packet.spec_json = resolved_spec
-                _log.info("rework_spec_hydrated", packet_id=packet_id)
-
-            # Snapshot all values needed by callers before commit; after commit
-            # SQLAlchemy expires attributes and any access to the ORM `lease`
-            # outside this session will raise DetachedInstanceError.
-            result = ClaimResult(
-                packet_id=packet_id,
-                lease_id=lease.id,  # may be None for non-pk backends — see flush below
-                worker_id=worker_id,
-                expires_at=expires_at,
-                spec=dict(resolved_spec),
-                attempt=packet.attempt_count,
-                claimed_attempt=claimed_attempt,
-                feature_id=packet.feature_id or "",
-                wave_id=packet.wave_id or "",
-                slug=packet.slug or "",
-                title=packet.title or "",
-                description=packet.description or "",
-                acceptance_profile=packet.acceptance_profile or "",
-                max_attempts=packet.max_attempts or 0,
-            )
-
-            _record_event(db, "packet_claimed", packet_id, {
-                "worker_id": worker_id, "attempt": packet.attempt_count,
-                "claimed_attempt": claimed_attempt,
-            })
-
-            db.flush()  # populate lease.id without committing yet
-            if lease.id is not None:
-                result = ClaimResult(
-                    packet_id=result.packet_id,
-                    lease_id=lease.id,
-                    worker_id=result.worker_id,
-                    expires_at=result.expires_at,
-                    spec=result.spec,
-                    attempt=result.attempt,
-                    claimed_attempt=claimed_attempt,
-                    feature_id=result.feature_id,
-                    wave_id=result.wave_id,
-                    slug=result.slug,
-                    title=result.title,
-                    description=result.description,
-                    acceptance_profile=result.acceptance_profile,
-                    max_attempts=result.max_attempts,
-                )
-
-            _log.info("packet_claimed", packet_id=packet_id, worker_id=worker_id,
-                attempt=packet.attempt_count)
+            result = self._claim_in_session(db, packet_id, worker_id)
             db.commit()
             asyncio.create_task(self._broadcast(packet_id, "running", f"claim:{worker_id}"))
             return result
+
+    # START_FUNCTION_CONTRACT
+    # name: _claim_in_session
+    # purpose: Claim a packet and create its ordinary ownership lease without
+    #         committing, so SafeQueueClaimService can add a parallel lease in
+    #         the same short transaction.
+    # inputs: db — caller-owned transaction; packet_id, worker_id — claim identity.
+    # returns: Session-safe ClaimResult DTO.
+    # side_effects: Mutates packet/worker/lease/event rows and flushes changes.
+    # emitted_logs: packet_claimed, rework_spec_hydrated.
+    # error_behavior: Raises PacketNotFoundError or StateTransitionError.
+    # END_FUNCTION_CONTRACT
+    def _claim_in_session(self, db, packet_id: str, worker_id: str) -> ClaimResult:
+        packet = db.query(Packet).filter_by(id=packet_id).with_for_update().first()
+        if not packet:
+            raise PacketNotFoundError(packet_id)
+        current = PacketStateMachine.normalize_state(packet.state)
+        if current != PacketState.READY:
+            if current in (PacketState.DRAFT, PacketState.REJECTED, PacketState.BLOCKED_RECOVERABLE):
+                self._sm.transition(current, PacketState.READY)
+                packet.state = PacketState.READY.value
+            else:
+                raise StateTransitionError(f"Cannot claim from state {current.value}")
+        self._sm.transition(PacketState.READY, PacketState.RUNNING)
+        packet.state = PacketState.RUNNING.value
+        packet.attempt_count = (packet.attempt_count or 0) + 1
+
+        existing = db.query(Lease).filter_by(packet_id=packet_id).first()
+        if existing:
+            existing_expiry = existing.expires_at
+            if existing_expiry.tzinfo is None:
+                existing_expiry = existing_expiry.replace(tzinfo=UTC)
+            if existing_expiry > datetime.now(UTC):
+                raise StateTransitionError(f"Packet {packet_id} already leased to {existing.worker_id}")
+            _record_event(db, "lease_expired_before_reclaim", packet_id, {
+                "old_worker_id": existing.worker_id,
+                "old_lease_id": existing.id,
+                "old_claimed_attempt": existing.claimed_attempt,
+                "new_worker_id": worker_id,
+            })
+            db.delete(existing)
+
+        from grace_control.config.settings import settings as _settings
+        lease_ttl_seconds = getattr(_settings, "lease_ttl_seconds", 300)
+        expires_at = datetime.now(UTC) + timedelta(seconds=lease_ttl_seconds)
+        claimed_attempt = packet.attempt_count
+        lease = Lease(
+            packet_id=packet_id,
+            worker_id=worker_id,
+            claimed_attempt=claimed_attempt,
+            expires_at=expires_at,
+        )
+        db.add(lease)
+        worker = db.query(Worker).filter_by(id=worker_id).first()
+        if worker:
+            worker.current_packet_id = packet_id
+
+        from grace_control.services.rework_packet_service import resolve_rework_spec
+        resolved_spec = resolve_rework_spec(db, packet)
+        if resolved_spec != (packet.spec_json or {}):
+            packet.spec_json = resolved_spec
+            _log.info("rework_spec_hydrated", packet_id=packet_id)
+
+        _record_event(db, "packet_claimed", packet_id, {
+            "worker_id": worker_id,
+            "attempt": packet.attempt_count,
+            "claimed_attempt": claimed_attempt,
+        })
+        db.flush()
+        result = ClaimResult(
+            packet_id=packet_id,
+            lease_id=lease.id,
+            worker_id=worker_id,
+            expires_at=expires_at,
+            spec=dict(resolved_spec),
+            attempt=packet.attempt_count,
+            claimed_attempt=claimed_attempt,
+            feature_id=packet.feature_id or "",
+            wave_id=packet.wave_id or "",
+            slug=packet.slug or "",
+            title=packet.title or "",
+            description=packet.description or "",
+            acceptance_profile=packet.acceptance_profile or "",
+            max_attempts=packet.max_attempts or 0,
+        )
+        _log.info(
+            "packet_claimed",
+            packet_id=packet_id,
+            worker_id=worker_id,
+            attempt=packet.attempt_count,
+        )
+        return result
 
     async def release(
         self,
@@ -584,6 +579,17 @@ class PacketService:
             new_expires = datetime.now(UTC) + timedelta(seconds=lease_ttl_seconds)
             lease.expires_at = new_expires
             lease.heartbeat_at = datetime.now(UTC)
+
+            from grace_control.services.parallel_lease_service import ParallelLeaseService
+            parallel_lease = db.query(ParallelLease).filter_by(packet_id=packet_id).first()
+            if parallel_lease is not None:
+                ParallelLeaseService().renew(
+                    db,
+                    packet_id=packet_id,
+                    worker_id=worker_id,
+                    lease_id=parallel_lease.id,
+                    claimed_attempt=lease.claimed_attempt,
+                )
 
             _record_event(db, "lease_renewed", packet_id, {
                 "worker_id": worker_id,

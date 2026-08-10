@@ -1,6 +1,6 @@
 # ############################################################################
 # AI_HEADER: db_schema
-# ROLE: SQLAlchemy models for GRACE Control Plane — 8 tables, 8 states.
+# ROLE: SQLAlchemy models for GRACE Control Plane — canonical tables and states.
 # ############################################################################
 
 # START_MODULE_CONTRACT
@@ -22,6 +22,7 @@
 #   - class: PacketRun
 #   - class: Worker
 #   - class: Lease
+#   - class: ParallelLease
 #   - class: Event
 #   - class: SelfEvolutionSession
 # END_MODULE_MAP
@@ -31,7 +32,18 @@ from __future__ import annotations
 import enum
 from datetime import datetime
 
-from sqlalchemy import Boolean, Column, DateTime, Integer, JSON, String, Text, Numeric, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    Index,
+    Integer,
+    JSON,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import declarative_base, relationship
 
 Base = declarative_base()
@@ -176,6 +188,35 @@ class Lease(Base):
     acquired_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     expires_at = Column(DateTime, nullable=False, index=True)
     heartbeat_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class ParallelLease(Base):
+    """Scope/key reservation held across packet execution and merge."""
+
+    __tablename__ = "parallel_leases"
+
+    id = Column(String, primary_key=True)
+    packet_id = Column(String, nullable=False)
+    feature_id = Column(String, nullable=False)
+    wave_id = Column(String, nullable=False)
+    worker_id = Column(String, nullable=False)
+    claimed_attempt = Column(Integer, nullable=False)
+    scope_json = Column(JSON, nullable=False)
+    conflict_keys_json = Column(JSON, nullable=False)
+    base_sha = Column(String, nullable=True)
+    acquired_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    expires_at = Column(DateTime, nullable=False)
+    heartbeat_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("packet_id", name="uq_parallel_leases_packet_id"),
+        Index("ix_parallel_leases_packet_id", "packet_id", unique=True),
+        Index("ix_parallel_leases_feature_id", "feature_id"),
+        Index("ix_parallel_leases_wave_id", "wave_id"),
+        Index("ix_parallel_leases_feature_wave", "feature_id", "wave_id"),
+        Index("ix_parallel_leases_worker_id", "worker_id"),
+        Index("ix_parallel_leases_expires_at", "expires_at"),
+    )
 
 
 class Event(Base):

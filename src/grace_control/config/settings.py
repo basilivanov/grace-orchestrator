@@ -17,10 +17,12 @@
 # mapping:
 #   - class: GraceSettings
 #   - instance: settings
+#   - function: get_max_concurrency
 # END_MODULE_MAP
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -85,6 +87,11 @@ class GraceSettings(BaseSettings):
     lease_ttl_seconds: int = 300            # 5 min — lease lifetime
     lease_renew_interval_seconds: int = 30   # heartbeat renews every 30s
     lease_expiration_grace_seconds: int = 30  # grace period before scanner reclaims
+
+    # TZ03: runtime scope/key guard for safe parallel claims.  The existing
+    # GRACE_MAX_CONCURRENCY=1 path remains the backward-compatible default.
+    parallel_scope_guard_enabled: bool = True
+    max_concurrency: int = 1
 
     # ── Telegram (optional notification channel) ──
     telegram_token: str = ""
@@ -217,3 +224,16 @@ def _build_settings() -> GraceSettings:
 
 
 settings = _build_settings()
+
+
+# START_FUNCTION_CONTRACT
+# name: get_max_concurrency
+# purpose: Resolve the canonical GRACE_MAX_CONCURRENCY runtime setting.
+# inputs: Environment variable GRACE_MAX_CONCURRENCY or settings default.
+# returns: At least one configured worker slot.
+# side_effects: Reads the process environment through the config boundary.
+# emitted_logs: None.
+# error_behavior: Raises ValueError when GRACE_MAX_CONCURRENCY is not an integer.
+# END_FUNCTION_CONTRACT
+def get_max_concurrency() -> int:
+    return max(1, int(os.environ.get("GRACE_MAX_CONCURRENCY", str(settings.max_concurrency))))

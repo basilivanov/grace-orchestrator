@@ -43,7 +43,11 @@ _log = GraceLogger("db_init")
 engine = None
 SessionLocal = None
 _ALEMBIC_BASELINE_REVISION = "0001_grace_legacy_baseline"
-_BASELINE_TABLES = frozenset(Base.metadata.tables)
+# `parallel_leases` belongs to the post-baseline TZ03 revision.  The legacy
+# bridge must verify the schema represented by 0001, not the current metadata.
+_BASELINE_TABLES = frozenset(
+    table_name for table_name in Base.metadata.tables if table_name != "parallel_leases"
+)
 _LEGACY_SIGNATURE_TABLES = frozenset({"features", "waves", "packets"})
 _BASELINE_INDEXES: tuple[tuple[str, str, tuple[str, ...], bool], ...] = tuple(
     (
@@ -53,6 +57,7 @@ _BASELINE_INDEXES: tuple[tuple[str, str, tuple[str, ...], bool], ...] = tuple(
         bool(index.unique),
     )
     for table in Base.metadata.tables.values()
+    if table.name != "parallel_leases"
     for index in table.indexes
     if index.name
 )
