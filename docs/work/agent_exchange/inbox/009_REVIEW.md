@@ -3,57 +3,43 @@
 Status: CHANGES REQUIRED
 
 Original implementation reviewed: `635da6421a6aff71ef577bfe99996aa24fd706a8`.
-Resubmission implementation reviewed: `7d4262ac4b6f18919f79ff62c5e1e955322a14f8`.
+First resubmission implementation reviewed: `7d4262ac4b6f18919f79ff62c5e1e955322a14f8`.
+Latest implementation reviewed: `7dc8be0e5e272b6a308d626f514bdd215968b41f`.
 
-The resubmission correctly closes the previous continuation, health-only aggregate, project-metadata search fallback, and disabled-overview issues. Two acceptance/protocol gaps remain.
+The latest implementation correctly closes the remaining Stage 03 code defect: overview now validates successful diagnostics payloads against the canonical Stage 02 field set, marks structurally unusable diagnostics as a per-project malformed/partial error, keeps the project/health visible, and excludes the unusable snapshot from count aggregates. The added acceptance test directly proves that behavior.
 
-## Required fixes
+One protocol artifact gap remains.
 
-### 1. Structurally malformed diagnostics are still counted as zero-valued overview data
+## Required fix
 
-`get_diagnostics()` now detects whether the diagnostics payload contains known diagnostic fields and excludes health-only/unavailable snapshots from count aggregates. That fix is correct.
+### Update `009_RESUBMISSION.md` to describe the latest resubmission
 
-However `get_projects_overview()` still follows the old path through `_overview_for_context()`:
-
-```python
-snapshot = _safe_json(_data_mapping(diagnostics.payload)) if diagnostics.ok else None
-...
-snapshots = [row["diagnostics"] for row in rows if row["diagnostics"] is not None]
-aggregate = _aggregate_snapshots(snapshots)
-```
-
-Therefore a project can return HTTP/transport success with a JSON object that is structurally malformed for diagnostics (for example `{"data": {"unexpected": true}}`). The project is treated as non-partial, the malformed mapping is added to the overview aggregate, and `_aggregate_snapshots()` silently contributes zero packet/worker/run/lease counts while increasing `projects_in_aggregate`.
-
-This is the same mathematical-validity requirement from the previous review: unavailable **or malformed/incomplete** diagnostics must not become healthy zero-valued aggregate data.
-
-Required:
-
-- apply the same diagnostics-availability/schema-validity concept to overview normalization;
-- keep the project card/health visible, but mark the project partial and expose a per-project malformed/partial diagnostics error when the diagnostics response is structurally unusable;
-- exclude that diagnostics payload from overview count aggregates;
-- `projects_in_aggregate` must count only projects whose diagnostic counters actually contributed;
-- add an acceptance test where project A has valid diagnostics and project B returns a successful but structurally invalid diagnostics object while health remains healthy. Overview aggregate must include only A's counters and coverage must mark B partial.
-
-Do not require every optional diagnostics field; validate only enough canonical Stage 02 diagnostic structure to distinguish a usable snapshot from an unrelated/malformed object.
-
-### 2. `009_RESUBMISSION.md` is not present in the repository
-
-The reviewer can fetch implementation commit `7d4262ac4b6f18919f79ff62c5e1e955322a14f8`, but on the repository default branch:
+The repository now contains:
 
 `docs/work/agent_exchange/outbox/009_RESUBMISSION.md`
 
-returns 404, and repository code search finds no `009_RESUBMISSION` file.
+but its committed content is still the previous resubmission report. It currently references:
 
-The coder report text supplied externally is not a substitute for the protocol artifact. Create and commit/push the required outbox file with the implementation/fix commit SHA and concise checks.
+- implementation commit `7d4262a`;
+- Task 009 acceptance result `10 passed`;
+- the previous four-fix report.
+
+It does **not** reference the latest implementation commit:
+
+`7dc8be0e5e272b6a308d626f514bdd215968b41f`
+
+or the latest malformed-overview-diagnostics fix / `11 passed` result supplied by the coder.
+
+Per the agent exchange protocol, the outbox resubmission artifact must identify the implementation being submitted for reviewer acceptance. Update the existing file (do not create a second resubmission file) so it contains the latest fix commit SHA, the malformed-overview-diagnostics fix, and the latest concise check results.
+
+No further Stage 03 code change is requested unless updating the artifact exposes a mismatch.
 
 ## Scope
 
-Do not start Task 010 / Stage 04. Fix only the overview malformed-diagnostics aggregate/coverage issue and commit the required resubmission artifact.
+Do not start Task 010 / Stage 04.
 
-Re-run the focused Task 009 acceptance tests plus the directly relevant Task 007–008/Admin diagnostics regressions and required Ruff / `py_compile` / GRACE lint / `git diff --check` checks.
-
-Then create/update:
+Update and commit/push:
 
 `docs/work/agent_exchange/outbox/009_RESUBMISSION.md`
 
-Do not start Task 010 until reviewer returns `ACCEPT 009`.
+Then return it for reviewer verification. Do not start Task 010 until reviewer returns `ACCEPT 009`.
