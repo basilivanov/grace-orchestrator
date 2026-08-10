@@ -34,9 +34,10 @@ from pathlib import Path
 
 import pytest
 
+from grace_control.core.lease_manager import check_expired_leases
 from grace_control.core.structured_logger import GraceLogger
 from grace_control.db import get_db, init_db
-from grace_control.db.schema import Feature, Packet, PacketState, ParallelLease, Wave, Worker
+from grace_control.db.schema import Feature, Lease, Packet, PacketState, ParallelLease, Wave, Worker
 from grace_control.services.packet_service import PacketService
 from grace_control.services.parallel_conflict_service import ParallelConflictService
 from grace_control.services.parallel_lease_service import (
@@ -269,8 +270,72 @@ def test_merge_release_allows_conflicting_packet(tmp_path, monkeypatch):
     asyncio.run(accept_first())
     with get_db() as db:
         assert db.query(ParallelLease).filter_by(packet_id="first").one() is not None
-        db.query(Packet).filter_by(id="first").one().state = PacketState.MERGED.value
-        ParallelLeaseService().release_for_terminal_state(db, "first", PacketState.MERGED.value)
+        db.query(ParallelLease).filter_by(packet_id="first").one().expires_at = (
+            datetime.now(UTC) - timedelta(seconds=1)
+        )
+
+    second, reason = service.claim_next_atomic("worker-1")
+    assert second is None
+    assert reason == "waiting_for_conflict"
+    with get_db() as db:
+        assert db.query(Packet).filter_by(id="second").one().state == PacketState.READY.value
+
+    asyncio.run(
+        PacketService().transition(
+            "first",
+            PacketState.MERGED,
+            reason="test_merge",
+        )
+    )
+
+    second, reason = service.claim_next_atomic("worker-1")
+    assert second is not None and second.packet_id == "second"
+    assert reason == "ok"
+
+
+# START_FUNCTION_CONTRACT
+# name: test_expired_running_parallel_lease_blocks_until_ordinary_recovery
+# purpose: Verify an expired parallel reservation remains active while its
+#          packet is RUNNING, then is removed after ordinary lease recovery.
+# inputs: tmp_path — pytest temporary directory; monkeypatch — env isolation.
+# returns: None on success.
+# side_effects: Creates a temporary database and runs lease recovery.
+# emitted_logs: None.
+# error_behavior: Pytest assertion failure on stale-running safety regression.
+# END_FUNCTION_CONTRACT
+def test_expired_running_parallel_lease_blocks_until_ordinary_recovery(tmp_path, monkeypatch):
+    monkeypatch.setenv("GRACE_MAX_CONCURRENCY", "4")
+    _seed(
+        tmp_path,
+        [
+            ("first", "wave-1", ["src/shared.py"], [], []),
+            ("second", "wave-1", ["src/shared.py"], [], []),
+        ],
+        ["wave-1"],
+    )
+    service = SafeQueueClaimService()
+    first, _reason = service.claim_next_atomic("worker-0")
+    assert first is not None and first.parallel_lease_id is not None
+
+    expired_at = datetime.now(UTC) - timedelta(minutes=2)
+    with get_db() as db:
+        first_packet = db.query(Packet).filter_by(id="first").one()
+        second_packet = db.query(Packet).filter_by(id="second").one()
+        second_packet.created_at = first_packet.created_at - timedelta(seconds=1)
+        db.query(ParallelLease).filter_by(packet_id="first").one().expires_at = expired_at
+        db.query(Lease).filter_by(packet_id="first").one().expires_at = expired_at
+
+    second, reason = service.claim_next_atomic("worker-1")
+    assert second is None
+    assert reason == "waiting_for_conflict"
+    with get_db() as db:
+        assert db.query(Packet).filter_by(id="first").one().state == PacketState.RUNNING.value
+        assert db.query(Packet).filter_by(id="second").one().state == PacketState.READY.value
+
+    assert check_expired_leases() == 2
+    with get_db() as db:
+        assert db.query(Packet).filter_by(id="first").one().state == PacketState.READY.value
+        assert db.query(ParallelLease).filter_by(packet_id="first").one_or_none() is None
 
     second, reason = service.claim_next_atomic("worker-1")
     assert second is not None and second.packet_id == "second"

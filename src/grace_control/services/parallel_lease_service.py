@@ -42,6 +42,11 @@ from grace_control.services.parallel_conflict_service import ParallelConflictSer
 
 _log = GraceLogger("parallel_lease")
 
+_CONFLICT_ACTIVE_PACKET_STATES = frozenset({
+    PacketState.RUNNING.value,
+    PacketState.ACCEPTED.value,
+})
+
 
 class ParallelLeaseConflictError(RuntimeError):
     """Raised when a packet already owns a live parallel lease."""
@@ -210,7 +215,8 @@ class ParallelLeaseService:
 
     # START_FUNCTION_CONTRACT
     # name: expire
-    # purpose: Remove all parallel leases whose TTL has elapsed.
+    # purpose: Remove elapsed parallel leases unless their packet state still
+    #          protects the reservation through execution or merge.
     # inputs: db — active transaction; now — optional UTC clock.
     # returns: Number of removed leases.
     # side_effects: Deletes expired parallel_leases rows.
@@ -248,7 +254,8 @@ class ParallelLeaseService:
 
     # START_FUNCTION_CONTRACT
     # name: active_leases
-    # purpose: Return live parallel leases, optionally scoped to feature and wave.
+    # purpose: Return conflict-active parallel leases, including expired rows
+    #          whose packet is still RUNNING or ACCEPTED.
     # inputs: db — active transaction; feature_id/wave_id — optional filters;
     #         now — optional UTC clock.
     # returns: Live ParallelLease ORM rows.
@@ -270,7 +277,26 @@ class ParallelLeaseService:
             query = query.filter(ParallelLease.feature_id == feature_id)
         if wave_id is not None:
             query = query.filter(ParallelLease.wave_id == wave_id)
-        return [lease for lease in query.all() if _utc(lease.expires_at) > current_time]
+        leases = query.all()
+        expired_packet_ids = {
+            lease.packet_id
+            for lease in leases
+            if _utc(lease.expires_at) <= current_time
+        }
+        protected_states: dict[str, str] = {}
+        if expired_packet_ids:
+            protected_states = {
+                packet.id: attrgetter("state")(packet)
+                for packet in db.query(Packet)
+                .filter(Packet.id.in_(expired_packet_ids))
+                .all()
+            }
+        return [
+            lease
+            for lease in leases
+            if _utc(lease.expires_at) > current_time
+            or protected_states.get(lease.packet_id) in _CONFLICT_ACTIVE_PACKET_STATES
+        ]
 
     # START_FUNCTION_CONTRACT
     # name: release_for_terminal_state
