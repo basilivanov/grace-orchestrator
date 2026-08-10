@@ -775,7 +775,15 @@ class AdminCrossProjectService:
             if not result.ok
         ]
         runtime = _safe_json(health.payload) if health.ok and health.payload else None
-        snapshot = _safe_json(_data_mapping(diagnostics.payload)) if diagnostics.ok else None
+        diagnostic_data = _data_mapping(diagnostics.payload) if diagnostics.ok else {}
+        diagnostics_available = bool(_DIAGNOSTIC_FIELDS.intersection(diagnostic_data))
+        if diagnostics.ok and not diagnostics_available:
+            errors.append(_malformed_error(
+                context,
+                "/api/diagnostics/state",
+                "diagnostics snapshot is missing canonical fields",
+            ))
+        snapshot = _safe_json(diagnostic_data) if diagnostics_available else None
         event_data = _data_mapping(events.payload) if events.ok else {}
         event_rows = event_data.get("events", [])
         latest_event = _event_row(context, event_rows[0]) if event_rows and isinstance(event_rows[0], Mapping) else None

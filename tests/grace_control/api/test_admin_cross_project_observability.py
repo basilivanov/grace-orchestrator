@@ -27,6 +27,7 @@
 #       - get_health
 #       - get_json
 #   - function: test_overview_aggregates_healthy_projects_and_attention
+#   - function: test_structurally_invalid_overview_diagnostics_are_partial
 #   - function: test_offline_project_is_partial_and_not_counted_as_zero
 #   - function: test_default_overview_includes_disabled_without_remote_fanout
 #   - function: test_health_only_diagnostics_are_partial_not_zero_aggregates
@@ -307,6 +308,36 @@ async def test_overview_aggregates_healthy_projects_and_attention(tmp_path):
     assert any(item["project_key"] == "alpha" and item["kind"] == "packet_state" for item in body["attention"])
     assert not any(item["project_key"] == "beta" and item["kind"] == "packet_state" for item in body["attention"])
     assert body["projects"][0]["latest_event"]["project_key"] in {"alpha", "beta"}
+
+
+# START_FUNCTION_CONTRACT
+# name: test_structurally_invalid_overview_diagnostics_are_partial
+# purpose: Prove a successful but non-Stage-02 diagnostics object is not treated
+#          as healthy zero-valued data in overview aggregates.
+# inputs: tmp_path — two independent fake project APIs.
+# returns: None.
+# side_effects: Replaces beta's diagnostics JSON with an unrelated object.
+# emitted_logs: None.
+# error_behavior: Fails if malformed diagnostics inflate aggregate coverage.
+# END_FUNCTION_CONTRACT
+@pytest.mark.asyncio
+async def test_structurally_invalid_overview_diagnostics_are_partial(tmp_path):
+    service, clients, _registry = _service(tmp_path)
+    clients["beta"].payloads["/api/diagnostics/state"] = {"data": {"unexpected": True}}
+    body = await service.get_projects_overview()
+    beta = next(row for row in body["projects"] if row["project_key"] == "beta")
+    assert beta["partial"] is True
+    assert beta["packets_by_state"] is None
+    assert body["coverage"]["projects_responded"] == 2
+    assert body["coverage"]["projects_failed"] == 0
+    assert body["coverage"]["projects_partial"] == 1
+    assert body["aggregate"]["projects_in_aggregate"] == 1
+    assert body["aggregate"]["packets_by_state"] == {"BLOCKED_FINAL": 1, "done": 2}
+    assert any(
+        error["project_key"] == "beta"
+        and error["error_class"] == "malformed_response"
+        for error in body["errors"]
+    )
 
 
 # START_FUNCTION_CONTRACT
