@@ -43,6 +43,7 @@ from grace_control.services.admin_control_center_helpers import (
     _card_sort_key,
     _effective_config,
     _feature_by_id,
+    _filter_timeline,
     _find_entity,
     _first_value,
     _has_card_attention,
@@ -55,6 +56,7 @@ from grace_control.services.admin_control_center_helpers import (
     _normalize_run,
     _normalize_stage,
     _normalize_stages,
+    _sum_states,
     _unwrap,
     _waits_from,
     _wave_by_id,
@@ -171,8 +173,8 @@ class AdminControlCenterService:
     # purpose: Build one project overview and optionally select its feature,
     #          wave or packet without crossing project boundaries.
     # inputs: project_key — explicit registry key; entity_type/id — optional
-    #          feature, wave or packet selection; tab/run_id/stage_id — packet
-    #          drill-down context.
+    #          feature, wave or packet selection; tab/run_id/stage_id and
+    #          timeline filters — packet drill-down context.
     # returns: Project-scoped view model with tree and selected entity data.
     # side_effects: Reads only the selected enabled project's Admin APIs.
     # emitted_logs: admin_control_center_read_error for isolated failures.
@@ -188,6 +190,11 @@ class AdminControlCenterService:
         tab: str = "overview",
         run_id: str | None = None,
         stage_id: str | None = None,
+        event: str | None = None,
+        component: str | None = None,
+        run_stage: str | None = None,
+        trace_id: str | None = None,
+        text: str | None = None,
     ) -> dict[str, Any]:
         context = self._context(project_key)
         dashboard = await self.dashboard()
@@ -208,6 +215,13 @@ class AdminControlCenterService:
             "tab": tab if tab in _PACKET_TABS else "overview",
             "run_id": run_id,
             "stage_id": stage_id,
+            "timeline_filters": {
+                "event": event or "",
+                "component": component or "",
+                "run_stage": run_stage or "",
+                "trace_id": trace_id or "",
+                "text": text or "",
+            },
             "feature": None,
             "wave": None,
             "packet": None,
@@ -238,6 +252,11 @@ class AdminControlCenterService:
                 tab=base["tab"],
                 run_id=run_id,
                 stage_id=stage_id,
+                event=event,
+                component=component,
+                run_stage=run_stage,
+                trace_id=trace_id,
+                text=text,
             )
             if base["packet_data"]:
                 base["packet"] = base["packet_data"].get("packet") or packet
@@ -402,7 +421,8 @@ class AdminControlCenterService:
     # name: _packet_page
     # purpose: Read packet detail, blocking decision and the selected tab's
     #          project-local data without losing explicit project identity.
-    # inputs: project_key, packet_id, optional tree packet, tab, run_id/stage_id.
+    # inputs: project_key, packet_id, optional tree packet, tab, run/stage
+    #         selectors and timeline filters.
     # returns: Packet drill-down view model.
     # side_effects: Reads selected project's canonical Admin endpoints.
     # emitted_logs: admin_control_center_read_error for isolated failures.
@@ -417,6 +437,11 @@ class AdminControlCenterService:
         tab: str,
         run_id: str | None,
         stage_id: str | None,
+        event: str | None,
+        component: str | None,
+        run_stage: str | None,
+        trace_id: str | None,
+        text: str | None,
     ) -> dict[str, Any]:
         detail_result, blocking_result = await asyncio.gather(
             self._read(project_key, f"/api/admin/packet/{packet_id}/detail", operation="packet_detail"),
@@ -431,7 +456,7 @@ class AdminControlCenterService:
         selected_run: dict[str, Any] | None = None
         selected_stage: dict[str, Any] | None = None
 
-        if tab in {"spec", "stages", "raw"}:
+        if tab in {"spec", "pipeline", "stages", "raw"}:
             raw_result = await self._read(
                 project_key,
                 f"/api/admin/packet/{packet_id}/raw",
@@ -446,7 +471,7 @@ class AdminControlCenterService:
             )
             timeline_payload = _unwrap(timeline_result.get("payload")) if timeline_result.get("ok") else {}
             timeline = [_normalize_event(row) for row in timeline_payload.get("events", [])]
-        if tab == "runs":
+        if tab == "runs" or run_id:
             runs_result = await self._read(
                 project_key,
                 f"/api/admin/packet/{packet_id}/runs",
@@ -455,7 +480,14 @@ class AdminControlCenterService:
             runs_payload = _unwrap(runs_result.get("payload")) if runs_result.get("ok") else {}
             runs = [_normalize_run(row) for row in runs_payload.get("runs", [])]
             if run_id:
-                selected_run = next((row for row in runs if str(row.get("id")) == str(run_id)), None)
+                selected_run = next(
+                    (
+                        row for row in runs
+                        if str(row.get("id")) == str(run_id)
+                        and (row.get("packet_id") in (None, packet_id))
+                    ),
+                    None,
+                )
                 if selected_run is None:
                     run_result = await self._read(
                         project_key,
@@ -463,10 +495,23 @@ class AdminControlCenterService:
                         operation="run_detail",
                     )
                     if run_result.get("ok"):
-                        selected_run = _normalize_run(_unwrap(run_result.get("payload")))
-        if tab == "stages":
-            stages = raw.get("stages", []) if isinstance(raw, Mapping) else []
-            if stage_id:
+                        candidate = _normalize_run(_unwrap(run_result.get("payload")))
+                        if (
+                            str(candidate.get("id")) == str(run_id)
+                            and candidate.get("packet_id") in (None, packet_id)
+                        ):
+                            selected_run = candidate
+        if tab in {"stages", "pipeline"} and stage_id:
+            stage_rows = raw.get("stages", []) if isinstance(raw, Mapping) else []
+            stage_rows = self._scope_rows_to_run(stage_rows, run_id)
+            stage_match = next(
+                (
+                    row for row in stage_rows
+                    if isinstance(row, Mapping) and str(row.get("id") or row.get("stage_run_id")) == str(stage_id)
+                ),
+                None,
+            )
+            if stage_match is not None:
                 stage_result = await self._read(
                     project_key,
                     f"/api/admin/stage/{stage_id}/raw",
@@ -502,19 +547,33 @@ class AdminControlCenterService:
                 "error": _capability_message(diagnostics_result),
             }
 
+        if tab == "timeline":
+            timeline = self._scope_rows_to_run(timeline, run_id)
+            timeline = _filter_timeline(
+                timeline,
+                event_filter=event,
+                component_filter=component,
+                run_stage_filter=run_stage,
+                trace_filter=trace_id,
+                text_filter=text,
+            )
+
         packet = _normalize_packet(
             detail,
             tree_packet,
             raw.get("packet") if isinstance(raw, Mapping) else None,
             runs,
-            selected_run,
+            selected_run if run_id else None,
         )
         blocking = _normalize_blocking(detail, blocking_result, packet)
+        detail_stages = detail.get("stages") if isinstance(detail, Mapping) else None
+        raw_stages = raw.get("stages") if isinstance(raw, Mapping) else None
         stages = _normalize_stages(
-            detail.get("stages") if isinstance(detail, Mapping) else None,
-            raw.get("stages") if isinstance(raw, Mapping) else None,
+            None if run_id and isinstance(raw_stages, list) else detail_stages,
+            raw_stages,
             detail.get("pipeline") if isinstance(detail, Mapping) else None,
         )
+        stages = self._scope_rows_to_run(stages, run_id)
         if selected_stage is not None:
             selected_stage = _normalize_stage(selected_stage)
         return {
@@ -534,7 +593,43 @@ class AdminControlCenterService:
             "tab": tab if tab in _PACKET_TABS else "overview",
             "run_id": run_id,
             "stage_id": stage_id,
+            "timeline_filters": {
+                "event": event or "",
+                "component": component or "",
+                "run_stage": run_stage or "",
+                "trace_id": trace_id or "",
+                "text": text or "",
+            },
         }
+
+    # START_FUNCTION_CONTRACT
+    # name: _scope_rows_to_run
+    # purpose: Keep packet rows associated with the explicit selected run while
+    #          retaining packet-wide rows that have no run association.
+    # inputs: raw/normalized row sequence and optional selected run ID.
+    # returns: Rows belonging to the selected run or packet-wide rows.
+    # side_effects: None; returned rows are shallow copies.
+    # emitted_logs: None.
+    # error_behavior: Skips malformed non-mapping rows.
+    # END_FUNCTION_CONTRACT
+    def _scope_rows_to_run(
+        self,
+        rows: Any,
+        run_id: str | None,
+    ) -> list[dict[str, Any]]:
+        if not isinstance(rows, list):
+            return []
+        scoped: list[dict[str, Any]] = []
+        for raw in rows:
+            if not isinstance(raw, Mapping):
+                continue
+            row = dict(raw)
+            payload = row.get("payload") if isinstance(row.get("payload"), Mapping) else {}
+            row_run_id = row.get("run_id") or payload.get("run_id")
+            if run_id and row_run_id is not None and str(row_run_id) != str(run_id):
+                continue
+            scoped.append(row)
+        return scoped
 
     # START_FUNCTION_CONTRACT
     # name: _project_card
@@ -632,6 +727,12 @@ class AdminControlCenterService:
             card["db_health"] = _first_value(card, runtime, "db_ok")
             card["active_parallel_lease_count"] = len(card.get("active_parallel_leases") or [])
             card["merge_owner"] = card.get("merge_lease")
+            card["blocked_count"] = _sum_states(
+                card.get("packets_by_state"),
+                "blocked",
+                "blocked_recoverable",
+                "blocked_final",
+            )
             card["waits"] = _waits_from(card)
             card["has_attention"] = _has_card_attention(card)
             cards.append(card)

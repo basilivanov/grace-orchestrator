@@ -11,6 +11,7 @@
       <span class="state-chip prominent state-{{ p.state|default('unknown')|lower }}">{{ p.state|default('unknown')|state_label }}</span>
       <span>attempt {{ p.attempt_count|default(0) }}/{{ p.max_attempts|default('—') }}</span>
       {% if p.wait_reason %}<strong class="wait-label">WAIT: {{ p.wait_reason }}</strong>{% endif %}
+      {% if packet_data.selected_run %}<span data-testid="selected-run">Run {{ packet_data.selected_run.id }} · {{ packet_data.selected_run.status|default('unknown') }}</span>{% elif run_id %}<span class="text-warning" data-testid="selected-run-missing">Run {{ run_id }} is not part of this packet</span>{% endif %}
     </div>
   </header>
 
@@ -42,7 +43,7 @@
 
   <nav class="cc-tabs" aria-label="Packet tabs">
     {% for tab_name in packet_data.tabs %}
-    <a class="{% if tab_name == packet_data.tab %}active{% endif %}" href="{{ cc_url(project.project_key, 'packet', p.id, tab=tab_name, run_id=run_id, stage_id=stage_id) }}">{{ tab_name|replace('_', ' ')|title }}</a>
+    <a class="{% if tab_name == packet_data.tab %}active{% endif %}" href="{{ cc_url(project.project_key, 'packet', p.id, tab=tab_name, run_id=run_id, stage_id=stage_id, event=packet_data.timeline_filters.event, component=packet_data.timeline_filters.component, run_stage=packet_data.timeline_filters.run_stage, trace_id=packet_data.timeline_filters.trace_id, text=packet_data.timeline_filters.text) }}">{{ tab_name|replace('_', ' ')|title }}</a>
     {% endfor %}
   </nav>
 
@@ -52,6 +53,17 @@
       <pre class="json-preview">{{ packet_data.detail|tojson(indent=2) }}</pre>
     {% elif packet_data.tab == 'timeline' %}
       <h3>Timeline <span class="muted">({{ packet_data.timeline_total }})</span></h3>
+      <form class="cc-inline-form cc-timeline-filters" method="get" action="{{ cc_url(project.project_key, 'packet', p.id) }}" data-testid="timeline-filters">
+        <input type="hidden" name="tab" value="timeline">
+        {% if run_id %}<input type="hidden" name="run_id" value="{{ run_id }}">{% endif %}
+        <label>Event <input name="event" value="{{ packet_data.timeline_filters.event }}" placeholder="event type"></label>
+        <label>Component <input name="component" value="{{ packet_data.timeline_filters.component }}" placeholder="component"></label>
+        <label>Run / stage <input name="run_stage" value="{{ packet_data.timeline_filters.run_stage }}" placeholder="run or stage"></label>
+        <label>Trace ID <input name="trace_id" value="{{ packet_data.timeline_filters.trace_id }}" placeholder="trace id"></label>
+        <label>Text <input name="text" value="{{ packet_data.timeline_filters.text }}" placeholder="reason or payload"></label>
+        <button type="submit">Filter</button>
+        {% if packet_data.timeline_filters.event or packet_data.timeline_filters.component or packet_data.timeline_filters.run_stage or packet_data.timeline_filters.trace_id or packet_data.timeline_filters.text %}<a href="{{ cc_url(project.project_key, 'packet', p.id, tab='timeline', run_id=run_id) }}">Clear</a>{% endif %}
+      </form>
       {% for event in packet_data.timeline %}
       <article class="timeline-row"><div class="timeline-head"><time>{{ event.timestamp or '—' }}</time><strong>{{ event.event_type }}</strong><span>{{ event.component or event.entity_type or 'unknown' }}</span><span class="mono">trace={{ event.trace_id or '—' }}</span></div><p>{{ event.reason or event.entity_id or '' }}</p><details><summary>payload</summary><pre>{{ event.payload|tojson(indent=2) }}</pre></details></article>
       {% else %}<div class="cc-empty">No timeline events returned.</div>{% endfor %}
@@ -62,9 +74,9 @@
     {% elif packet_data.tab == 'spec' %}
       <h3>Spec</h3><pre class="json-preview">{{ packet_data.raw.packet|default(packet_data.detail.packet|default(packet_data.detail))|tojson(indent=2) }}</pre>
     {% elif packet_data.tab == 'runs' %}
-      <h3>Runs</h3><table class="cc-table"><thead><tr><th>Run</th><th>Status</th><th>Worker / model</th><th>Time / duration</th><th>Base / integration</th></tr></thead><tbody>{% for run in packet_data.runs %}<tr class="{% if run.id == run_id %}selected{% endif %}"><td><a href="{{ cc_url(project.project_key, 'packet', p.id, tab='runs', run_id=run.id) }}">{{ run.run_number or run.id }}</a><br><span class="mono">{{ run.id }}</span></td><td>{{ run.status|default('unknown') }}</td><td>{{ run.worker_id or run.worker or '—' }} / {{ run.model or '—' }}</td><td>{{ run.started_at or '—' }} / {{ run.duration_ms or run.elapsed or '—' }}</td><td class="mono">{{ run.base_sha or '—' }} / {{ run.integration_base_sha or '—' }}</td></tr>{% else %}<tr><td colspan="5">No runs returned.</td></tr>{% endfor %}</tbody></table>{% if packet_data.selected_run %}<h4>Selected run {{ packet_data.selected_run.id }}</h4><pre class="json-preview">{{ packet_data.selected_run|tojson(indent=2) }}</pre>{% endif %}
+      <h3>Runs</h3><table class="cc-table"><thead><tr><th>Run</th><th>Status</th><th>Worker / model</th><th>Time / duration</th><th>Base / integration</th></tr></thead><tbody>{% for run in packet_data.runs %}<tr class="{% if run.id == run_id %}selected{% endif %}"><td><a href="{{ cc_url(project.project_key, 'packet', p.id, tab='runs', run_id=run.id, event=packet_data.timeline_filters.event, component=packet_data.timeline_filters.component, run_stage=packet_data.timeline_filters.run_stage, trace_id=packet_data.timeline_filters.trace_id, text=packet_data.timeline_filters.text) }}">{{ run.run_number or run.id }}</a><br><span class="mono">{{ run.id }}</span></td><td>{{ run.status|default('unknown') }}</td><td>{{ run.worker_id or run.worker or '—' }} / {{ run.model or '—' }}</td><td>{{ run.started_at or '—' }} / {{ run.duration_ms or run.elapsed or '—' }}</td><td class="mono">{{ run.base_sha or '—' }} / {{ run.integration_base_sha or '—' }}</td></tr>{% else %}<tr><td colspan="5">No runs returned.</td></tr>{% endfor %}</tbody></table>{% if packet_data.selected_run %}<h4>Selected run {{ packet_data.selected_run.id }}</h4><pre class="json-preview">{{ packet_data.selected_run|tojson(indent=2) }}</pre>{% endif %}
     {% elif packet_data.tab == 'stages' %}
-      <h3>Stages</h3><div class="stage-list">{% for stage in packet_data.stages %}<a class="stage-card" href="{{ cc_url(project.project_key, 'packet', p.id, tab='stages', stage_id=stage.id) }}"><header><strong>{{ stage.label or stage.stage_key }}</strong><span>{{ stage.status|default('unknown') }}</span></header><p class="mono">{{ stage.id or '—' }} · {{ stage.stage_key }}</p></a>{% else %}<div class="cc-empty">No stages returned.</div>{% endfor %}</div>{% if packet_data.selected_stage %}<pre class="json-preview">{{ packet_data.selected_stage|tojson(indent=2) }}</pre>{% endif %}
+      <h3>Stages</h3><div class="stage-list">{% for stage in packet_data.stages %}<a class="stage-card" href="{{ cc_url(project.project_key, 'packet', p.id, tab='stages', run_id=run_id, stage_id=stage.id, event=packet_data.timeline_filters.event, component=packet_data.timeline_filters.component, run_stage=packet_data.timeline_filters.run_stage, trace_id=packet_data.timeline_filters.trace_id, text=packet_data.timeline_filters.text) }}"><header><strong>{{ stage.label or stage.stage_key }}</strong><span>{{ stage.status|default('unknown') }}</span></header><p class="mono">{{ stage.id or '—' }} · {{ stage.stage_key }}{% if stage.run_id %} · {{ stage.run_id }}{% endif %}</p></a>{% else %}<div class="cc-empty">No stages returned.</div>{% endfor %}</div>{% if packet_data.selected_stage %}<pre class="json-preview">{{ packet_data.selected_stage|tojson(indent=2) }}</pre>{% endif %}
     {% elif packet_data.tab == 'sessions' %}
       <h3>Sessions</h3>{% if packet_data.sessions.available %}<pre class="json-preview">{{ packet_data.sessions|tojson(indent=2) }}</pre>{% else %}<div class="cc-banner info" data-testid="sessions-capability">Sessions unavailable: {{ packet_data.sessions.message }}</div>{% endif %}
     {% elif packet_data.tab == 'diagnostics' %}

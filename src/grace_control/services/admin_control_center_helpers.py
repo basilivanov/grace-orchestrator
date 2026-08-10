@@ -21,7 +21,9 @@
 #   - function: _normalize_packet
 #   - function: _normalize_blocking
 #   - function: _normalize_event
+#   - function: _filter_timeline
 #   - function: _normalize_stages
+#   - function: _sum_states
 #   - function: _mask_secrets
 # END_MODULE_MAP
 
@@ -105,6 +107,34 @@ def _count_state(states: Any, *names: str) -> int | None:
 
 
 # START_FUNCTION_CONTRACT
+# name: _sum_states
+# purpose: Sum all matching packet-state variants instead of treating the first
+#          present diagnostic key as authoritative.
+# inputs: packet state mapping and candidate state names.
+# returns: Integer sum, or None when no state mapping is available.
+# side_effects: None.
+# emitted_logs: None.
+# error_behavior: Never raises.
+# END_FUNCTION_CONTRACT
+def _sum_states(states: Any, *names: str) -> int | None:
+    if not isinstance(states, Mapping):
+        return None
+    folded = {str(key).casefold(): value for key, value in states.items()}
+    total = 0
+    found = False
+    for name in names:
+        key = name.casefold()
+        if key not in folded:
+            continue
+        found = True
+        try:
+            total += int(folded[key])
+        except (TypeError, ValueError):
+            continue
+    return total if found else 0
+
+
+# START_FUNCTION_CONTRACT
 # name: _matches_dashboard_filter
 # purpose: Apply deterministic server-side dashboard status semantics.
 # inputs: enriched project card and filter name.
@@ -117,7 +147,7 @@ def _matches_dashboard_filter(card: Mapping[str, Any], filter_name: str) -> bool
     status = str(card.get("status", "unknown")).casefold()
     states = card.get("packets_by_state")
     running = (_count_state(states, "running", "RUNNING", "claimed", "CLAIMED") or 0) > 0
-    blocked = (_count_state(states, "blocked", "BLOCKED", "blocked_recoverable", "BLOCKED_RECOVERABLE", "blocked_final", "BLOCKED_FINAL") or 0) > 0
+    blocked = (_sum_states(states, "blocked", "blocked_recoverable", "blocked_final") or 0) > 0
     if filter_name == "all":
         return True
     if filter_name == "running":
@@ -390,13 +420,28 @@ def _normalize_packet(
         if isinstance(source, Mapping):
             merged.update(source)
     spec = merged.get("spec_json") if isinstance(merged.get("spec_json"), Mapping) else {}
-    latest = selected_run or (runs[-1] if runs else {})
+    latest = selected_run if selected_run is not None else (runs[-1] if runs else {})
     for name in ("scope", "conflict_keys", "depends_on", "base_sha", "integration_base_sha", "wait_reason", "wait_type"):
         if merged.get(name) is None and spec.get(name) is not None:
             merged[name] = spec.get(name)
     for name in ("worker_id", "worker", "model", "base_sha", "integration_base_sha"):
         if merged.get(name) is None and isinstance(latest, Mapping):
             merged[name] = latest.get(name)
+    if selected_run is not None:
+        for name in (
+            "worker_id",
+            "worker",
+            "model",
+            "base_sha",
+            "integration_base_sha",
+            "started_at",
+            "finished_at",
+            "duration_ms",
+            "elapsed_seconds",
+            "status",
+        ):
+            if selected_run.get(name) is not None:
+                merged[name] = selected_run.get(name)
     merged.setdefault("id", merged.get("packet_id"))
     merged.setdefault("title", merged.get("slug") or merged.get("id"))
     merged.setdefault("state", "unknown")
@@ -485,6 +530,61 @@ def _normalize_event(event: Any) -> dict[str, Any]:
 
 
 # START_FUNCTION_CONTRACT
+# name: _filter_timeline
+# purpose: Apply packet-local timeline filters without dropping unknown event
+#          types or changing canonical timestamp, trace and payload fields.
+# inputs: normalized events and optional event/component/run-stage/trace/text
+#         filter values.
+# returns: Filtered normalized event list in source order.
+# side_effects: None.
+# emitted_logs: None.
+# error_behavior: Never raises for malformed event payloads.
+# END_FUNCTION_CONTRACT
+def _filter_timeline(
+    events: Sequence[Mapping[str, Any]],
+    *,
+    event_filter: str | None = None,
+    component_filter: str | None = None,
+    run_stage_filter: str | None = None,
+    trace_filter: str | None = None,
+    text_filter: str | None = None,
+) -> list[dict[str, Any]]:
+    def matches(value: Any, needle: str | None) -> bool:
+        return not needle or needle.casefold() in str(value or "").casefold()
+
+    filtered: list[dict[str, Any]] = []
+    for raw_event in events:
+        event = dict(raw_event)
+        payload = event.get("payload")
+        run_stage_values = (
+            event.get("run_id"),
+            event.get("run"),
+            event.get("stage_run_id"),
+            event.get("stage_id"),
+            event.get("stage_key"),
+            event.get("stage"),
+            _mapping_value(payload, "run_id"),
+            _mapping_value(payload, "run"),
+            _mapping_value(payload, "stage_run_id"),
+            _mapping_value(payload, "stage_id"),
+            _mapping_value(payload, "stage_key"),
+            _mapping_value(payload, "stage"),
+        )
+        if not matches(event.get("event_type"), event_filter):
+            continue
+        if not matches(event.get("component"), component_filter):
+            continue
+        if run_stage_filter and not any(matches(value, run_stage_filter) for value in run_stage_values):
+            continue
+        if not matches(event.get("trace_id"), trace_filter):
+            continue
+        if text_filter and text_filter.casefold() not in str(event).casefold():
+            continue
+        filtered.append(event)
+    return filtered
+
+
+# START_FUNCTION_CONTRACT
 # name: _normalize_run
 # purpose: Normalize run metadata for run selection and context propagation.
 # inputs: Raw run mapping.
@@ -496,8 +596,9 @@ def _normalize_event(event: Any) -> dict[str, Any]:
 def _normalize_run(run: Any) -> dict[str, Any]:
     if not isinstance(run, Mapping):
         return {"id": str(run), "status": "unknown"}
-    row = dict(run)
-    row.setdefault("id", row.get("run_id"))
+    nested = run.get("run") if isinstance(run.get("run"), Mapping) else {}
+    row = {**dict(run), **dict(nested)}
+    row["id"] = row.get("id") or row.get("run_id")
     row.setdefault("run_number", row.get("number"))
     row.setdefault("worker", row.get("worker_id"))
     row.setdefault("elapsed", row.get("duration_ms"))
@@ -529,6 +630,7 @@ def _normalize_stages(
         if not isinstance(raw, Mapping):
             continue
         row = dict(raw)
+        row.setdefault("id", row.get("stage_run_id"))
         key = str(row.get("stage_key") or row.get("key") or "unknown_stage")
         row["stage_key"] = key
         row["label"] = row.get("label") or key.replace("_", " ").title()

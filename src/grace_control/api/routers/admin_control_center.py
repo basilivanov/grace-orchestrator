@@ -146,7 +146,8 @@ def _cc_url(
 # START_FUNCTION_CONTRACT
 # name: _partial_url
 # purpose: Build an explicit project/entity/tab URL for HTMX polling.
-# inputs: project_key, entity type/id and optional tab/run/stage selectors.
+# inputs: project_key, entity type/id and optional tab/run/stage/timeline
+#         selectors.
 # returns: Absolute project partial URL.
 # side_effects: None.
 # emitted_logs: None.
@@ -159,6 +160,11 @@ def _partial_url(
     tab: str | None = None,
     run_id: str | None = None,
     stage_id: str | None = None,
+    event: str | None = None,
+    component: str | None = None,
+    run_stage: str | None = None,
+    trace_id: str | None = None,
+    text: str | None = None,
 ) -> str:
     path = f"/admin/p/{quote(str(project_key), safe='-_.~')}/_partial/content"
     params = {
@@ -167,6 +173,11 @@ def _partial_url(
         "tab": tab or "overview",
         "run_id": run_id,
         "stage_id": stage_id,
+        "event": event,
+        "component": component,
+        "run_stage": run_stage,
+        "trace_id": trace_id,
+        "text": text,
     }
     return f"{path}?{urlencode([(key, str(value)) for key, value in params.items() if value not in (None, '')])}"
 
@@ -355,7 +366,7 @@ async def project_wave(request: Request, project_key: str, wave_id: str) -> HTML
 # name: project_packet
 # purpose: Render the primary project-scoped Packet debugging page and retain
 #          tab/run/stage selections in canonical query parameters.
-# inputs: request, project_key/packet_id and tab/run_id/stage_id selectors.
+# inputs: request, project_key/packet_id and tab/run/stage/timeline selectors.
 # returns: HTMLResponse.
 # side_effects: Reads selected project Admin detail APIs only.
 # emitted_logs: Service-owned structured read logs.
@@ -369,6 +380,11 @@ async def project_packet(
     tab: str = Query("overview"),
     run_id: str | None = Query(None),
     stage_id: str | None = Query(None),
+    event: str | None = Query(None),
+    component: str | None = Query(None),
+    run_stage: str | None = Query(None),
+    trace_id: str | None = Query(None),
+    text: str | None = Query(None),
 ) -> HTMLResponse:
     try:
         model = await _service(request).project_page(
@@ -378,6 +394,11 @@ async def project_packet(
             tab=tab,
             run_id=run_id,
             stage_id=stage_id,
+            event=event,
+            component=component,
+            run_stage=run_stage,
+            trace_id=trace_id,
+            text=text,
         )
     except KeyError as exc:
         _raise_project_not_found(exc)
@@ -543,7 +564,7 @@ async def admin_search(
 # name: partial_project
 # purpose: Poll and replace only selected project content while preserving
 #          project/entity/tab values supplied in the request.
-# inputs: request, explicit project_key and optional entity/tab/run/stage.
+# inputs: request, explicit project_key and optional entity/tab/run/stage/timeline.
 # returns: HTMLResponse project content partial.
 # side_effects: Selected-project API reads only.
 # emitted_logs: Service-owned structured read logs.
@@ -558,6 +579,11 @@ async def partial_project(
     tab: str = Query("overview"),
     run_id: str | None = Query(None),
     stage_id: str | None = Query(None),
+    event: str | None = Query(None),
+    component: str | None = Query(None),
+    run_stage: str | None = Query(None),
+    trace_id: str | None = Query(None),
+    text: str | None = Query(None),
 ) -> HTMLResponse:
     try:
         model = await _service(request).project_page(
@@ -567,6 +593,11 @@ async def partial_project(
             tab=tab,
             run_id=run_id,
             stage_id=stage_id,
+            event=event,
+            component=component,
+            run_stage=run_stage,
+            trace_id=trace_id,
+            text=text,
         )
     except KeyError as exc:
         _raise_project_not_found(exc)
@@ -592,6 +623,11 @@ async def partial_project_query(
     tab: str = Query("overview"),
     run_id: str | None = Query(None),
     stage_id: str | None = Query(None),
+    event: str | None = Query(None),
+    component: str | None = Query(None),
+    run_stage: str | None = Query(None),
+    trace_id: str | None = Query(None),
+    text: str | None = Query(None),
 ) -> HTMLResponse:
     return await partial_project(
         request=request,
@@ -601,6 +637,11 @@ async def partial_project_query(
         tab=tab,
         run_id=run_id,
         stage_id=stage_id,
+        event=event,
+        component=component,
+        run_stage=run_stage,
+        trace_id=trace_id,
+        text=text,
     )
 
 

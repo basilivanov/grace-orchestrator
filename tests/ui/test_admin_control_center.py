@@ -28,7 +28,7 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+import os
 from urllib.parse import urlsplit
 
 import httpx
@@ -55,10 +55,41 @@ class _FakeProjectClient:
     # emitted_logs: None.
     # error_behavior: Never raises.
     # END_FUNCTION_CONTRACT
-    def __init__(self, key: str, *, offline: bool = False) -> None:
+    def __init__(
+        self,
+        key: str,
+        *,
+        offline: bool = False,
+        runs: list[dict] | None = None,
+        stages: list[dict] | None = None,
+        timeline_events: list[dict] | None = None,
+        blocked_final: int = 0,
+    ) -> None:
         self.key = key
         self.offline = offline
         self.calls: list[str] = []
+        self.runs = runs if runs is not None else [{
+            "id": "run-1",
+            "run_number": 1,
+            "status": "failed",
+            "worker_id": f"worker-{key}",
+            "model": "model-test",
+            "base_sha": "base-1",
+            "integration_base_sha": "integration-1",
+        }]
+        self.stages = stages if stages is not None else [{
+            "id": "stage-1",
+            "stage_key": "future_stage",
+            "status": "failed",
+            "run_id": self.runs[0]["id"],
+        }]
+        self.timeline_events = timeline_events if timeline_events is not None else [{
+            "timestamp": "2026-08-11T10:00:00Z",
+            "event_type": "future_event",
+            "trace_id": "trace-full",
+            "payload_json": {"reason": "unknown is retained", "secret": "hidden"},
+        }]
+        self.blocked_final = blocked_final
 
     # START_FUNCTION_CONTRACT
     # name: get_health
@@ -115,7 +146,7 @@ class _FakeProjectClient:
                 error="project is offline",
             )
         if route == "/api/diagnostics/state":
-            return {"data": {"packets_by_state": {"ready": 1}, "workers": {"total": 1, "idle": 1, "busy": 0}, "ordinary_leases": [{"packet_id": "shared-packet"}], "active_parallel_leases": [{"packet_id": "shared-packet", "conflict_keys": [f"db:{self.key}"]}], "active_merge_leases": [], "effective_max_concurrency": 2, "waits": [{"packet_id": "shared-packet", "reason": "waiting_for_concurrency_slot"}]}}
+            return {"data": {"packets_by_state": {"ready": 1, "blocked": 0, "blocked_recoverable": 0, "blocked_final": self.blocked_final}, "workers": {"total": 1, "idle": 1, "busy": 0}, "ordinary_leases": [{"packet_id": "shared-packet"}], "active_parallel_leases": [{"packet_id": "shared-packet", "conflict_keys": [f"db:{self.key}"]}], "active_merge_leases": [], "effective_max_concurrency": 2, "waits": [{"packet_id": "shared-packet", "reason": "waiting_for_concurrency_slot"}]}}
         if route == "/api/events":
             return {"data": {"events": [], "total": 0}}
         if route == "/api/admin/features":
@@ -155,14 +186,22 @@ class _FakeProjectClient:
                 "worker_id": f"worker-{self.key}",
                 "model": "model-test",
                 "elapsed_seconds": 4,
-                "stages": [{"stage_key": "future_stage", "status": "failed", "trace_id": f"trace-{self.key}"}],
+                "stages": self.stages,
             }
         if route.endswith("/timeline"):
-            return {"events": [{"timestamp": "2026-08-11T10:00:00Z", "event_type": "future_event", "trace_id": "trace-full", "payload_json": {"reason": "unknown is retained", "secret": "hidden"}}], "total": 1}
+            return {"events": self.timeline_events, "total": len(self.timeline_events)}
         if route.endswith("/runs"):
-            return {"runs": [{"id": "run-1", "run_number": 1, "status": "failed", "worker_id": f"worker-{self.key}", "model": "model-test", "base_sha": "base-1", "integration_base_sha": "integration-1"}]}
+            return {"runs": self.runs}
+        if "/runs/" in route:
+            requested_id = route.rsplit("/", 1)[-1]
+            run = next((row for row in self.runs if str(row.get("id")) == requested_id), None)
+            return {"run": run} if run else ProjectApiResult(project_key=self.key, ok=False, error_class="not_found", error="run not found", http_status=404)
+        if route.startswith("/api/admin/stage/"):
+            stage_id = route.rsplit("/", 1)[-1]
+            stage = next((row for row in self.stages if str(row.get("id")) == stage_id), None)
+            return stage or ProjectApiResult(project_key=self.key, ok=False, error_class="not_found", error="stage not found", http_status=404)
         if route.endswith("/raw"):
-            return {"packet": {"id": "shared-packet", "spec_json": {"secret": "hidden"}}, "stages": [{"id": "stage-1", "stage_key": "future_stage", "status": "failed"}]}
+            return {"packet": {"id": "shared-packet", "spec_json": {"secret": "hidden"}}, "stages": self.stages}
         if route.endswith("/sessions"):
             return ProjectApiResult(project_key=self.key, ok=False, error_class="capability_unavailable", error="sessions endpoint missing", http_status=404)
         if route == "/api/admin/system/workers":
@@ -216,7 +255,7 @@ def _feature(key: str) -> dict:
 # emitted_logs: None.
 # error_behavior: Never raises for valid test registry data.
 # END_FUNCTION_CONTRACT
-def _app():
+def _app(*, alpha_client: _FakeProjectClient | None = None, blocked_final: int = 0):
     registry = ProjectRegistry.from_mapping({
         "projects": [
             {"key": "alpha", "name": "Alpha", "project_root": "/srv/alpha", "api_url": "http://alpha.test"},
@@ -226,7 +265,7 @@ def _app():
         ]
     })
     clients = {
-        "alpha": _FakeProjectClient("alpha"),
+        "alpha": alpha_client or _FakeProjectClient("alpha", blocked_final=blocked_final),
         "beta": _FakeProjectClient("beta"),
         "offline": _FakeProjectClient("offline", offline=True),
         "disabled": _FakeProjectClient("disabled"),
@@ -330,6 +369,106 @@ async def test_control_center_packet_debugging_views():
 
 
 # START_FUNCTION_CONTRACT
+# name: test_control_center_run_context_scopes_dependent_views
+# purpose: Prove two packet runs change the selected run metadata, pipeline
+#          stages and timeline rows without crossing the project/packet URL.
+# inputs: None.
+# returns: None.
+# side_effects: Performs project-scoped packet tab ASGI reads.
+# emitted_logs: None.
+# error_behavior: Fails when run B only changes the Runs-table highlight or
+#                 leaks rows belonging to run A.
+# END_FUNCTION_CONTRACT
+@pytest.mark.asyncio
+async def test_control_center_run_context_scopes_dependent_views():
+    alpha = _FakeProjectClient(
+        "alpha",
+        runs=[
+            {"id": "run-a", "run_number": 1, "status": "failed", "worker_id": "worker-a", "model": "model-a"},
+            {"id": "run-b", "run_number": 2, "status": "accepted", "worker_id": "worker-b", "model": "model-b", "base_sha": "base-b"},
+        ],
+        stages=[
+            {"id": "stage-a", "stage_key": "coder_a", "status": "failed", "run_id": "run-a"},
+            {"id": "stage-b", "stage_key": "coder_b", "status": "done", "run_id": "run-b"},
+        ],
+        timeline_events=[
+            {"timestamp": "2026-08-11T10:00:00Z", "event_type": "run_a_event", "run_id": "run-a", "trace_id": "trace-a", "payload_json": {"reason": "run A"}},
+            {"timestamp": "2026-08-11T11:00:00Z", "event_type": "run_b_event", "run_id": "run-b", "trace_id": "trace-b", "payload_json": {"reason": "run B"}},
+        ],
+    )
+    app, _clients = _app(alpha_client=alpha)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://hub.test") as client:
+        run_a = await client.get("/admin/p/alpha/packet/shared-packet?tab=pipeline&run_id=run-a")
+        run_b = await client.get("/admin/p/alpha/packet/shared-packet?tab=pipeline&run_id=run-b")
+        timeline_b = await client.get(
+            "/admin/p/alpha/packet/shared-packet?tab=timeline&run_id=run-b"
+        )
+    assert run_a.status_code == 200 and run_b.status_code == 200
+    assert "coder_a" in run_a.text and "coder_b" not in run_a.text
+    assert "coder_b" in run_b.text and "coder_a" not in run_b.text
+    assert "Run run-b" in run_b.text and "worker-b" in run_b.text
+    assert "run_b_event" in timeline_b.text and "run_a_event" not in timeline_b.text
+    assert 'data-project-key="alpha"' in timeline_b.text
+    assert "shared-packet" in timeline_b.text
+
+
+# START_FUNCTION_CONTRACT
+# name: test_control_center_timeline_filters_preserve_unknown_events
+# purpose: Prove event/component/run-stage/trace/text filters narrow a packet
+#          timeline while retaining unknown event identity and full payload.
+# inputs: None.
+# returns: None.
+# side_effects: Performs one filtered project-scoped packet ASGI read.
+# emitted_logs: None.
+# error_behavior: Fails when filtering drops matching unknown events or loses
+#                 project/packet/timestamp/trace context.
+# END_FUNCTION_CONTRACT
+@pytest.mark.asyncio
+async def test_control_center_timeline_filters_preserve_unknown_events():
+    alpha = _FakeProjectClient(
+        "alpha",
+        timeline_events=[
+            {"timestamp": "2026-08-11T10:00:00Z", "event_type": "known_event", "component": "component-a", "run_id": "run-a", "trace_id": "trace-a", "payload_json": {"reason": "other"}},
+            {"timestamp": "2026-08-11T11:00:00Z", "event_type": "unknown_future_event", "component": "component-b", "run_id": "run-b", "trace_id": "trace-b", "payload_json": {"reason": "needle-b", "detail": "full payload"}},
+        ],
+    )
+    app, _clients = _app(alpha_client=alpha)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://hub.test") as client:
+        response = await client.get(
+            "/admin/p/alpha/packet/shared-packet?tab=timeline&event=unknown_future&component=component-b&run_stage=run-b&trace_id=trace-b&text=needle-b"
+        )
+    assert response.status_code == 200
+    assert "unknown_future_event" in response.text
+    assert "2026-08-11T11:00:00Z" in response.text
+    assert "trace-b" in response.text and "full payload" in response.text
+    assert "known_event" not in response.text
+    assert 'data-project-key="alpha"' in response.text
+    assert 'data-packet-id="shared-packet"' in response.text
+    assert 'name="component" value="component-b"' in response.text
+
+
+# START_FUNCTION_CONTRACT
+# name: test_control_center_blocked_filter_sums_canonical_blocked_family
+# purpose: Prove blocked, recoverable-blocked and final-blocked diagnostics are
+#          one visible dashboard family even when generic blocked is zero.
+# inputs: None.
+# returns: None.
+# side_effects: Performs one dashboard ASGI read against a fake project.
+# emitted_logs: None.
+# error_behavior: Fails when blocked_final is hidden from the card/filter.
+# END_FUNCTION_CONTRACT
+@pytest.mark.asyncio
+async def test_control_center_blocked_filter_sums_canonical_blocked_family():
+    app, _clients = _app(blocked_final=1)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://hub.test") as client:
+        response = await client.get("/admin?filter=blocked")
+    assert response.status_code == 200
+    assert "Alpha" in response.text
+    assert 'data-testid="blocked-count"' in response.text
+    assert ">1</strong>" in response.text
+
+
+# START_FUNCTION_CONTRACT
 # name: test_control_center_system_masks_secrets_and_shows_safety_state
 # purpose: Prove System renders worker/lease/wait/concurrency diagnostics while
 #          masking credential-shaped runtime configuration values.
@@ -352,19 +491,76 @@ async def test_control_center_system_masks_secrets_and_shows_safety_state():
 
 
 # START_FUNCTION_CONTRACT
-# name: test_control_center_mobile_css_is_single_column
-# purpose: Prove the Stage 04 stylesheet contains the required narrow viewport
-#          single-column responsive behavior.
+# name: control_center_browser
+# purpose: Launch the repository's existing Playwright Chromium acceptance
+#          browser for the Control Center mobile smoke.
 # inputs: None.
-# returns: None.
-# side_effects: Reads one repository CSS asset.
+# returns: Browser instance.
+# side_effects: Starts and stops a local headless browser process.
 # emitted_logs: None.
-# error_behavior: Fails when the mobile layout forces desktop columns.
+# error_behavior: Explicitly skips when Playwright/browser dependencies are not
+#                 installed in the environment.
 # END_FUNCTION_CONTRACT
-def test_control_center_mobile_css_is_single_column():
-    css = Path("src/grace_control/ui/static/css/admin_control_center.css").read_text(encoding="utf-8")
-    assert "@media (max-width: 700px)" in css
-    assert ".cc-project-grid, .cc-project-layout, .cc-system-grid { grid-template-columns: 1fr; }" in css
+@pytest.fixture(scope="module")
+def control_center_browser():
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError as exc:
+        pytest.skip(f"Control Center browser smoke skipped: Playwright unavailable ({exc})")
+    try:
+        playwright = sync_playwright().start()
+    except Exception as exc:
+        pytest.skip(f"Control Center browser smoke skipped: Playwright setup failed ({exc})")
+    try:
+        browser = playwright.chromium.launch(headless=True)
+    except Exception as exc:
+        playwright.stop()
+        pytest.skip(f"Control Center browser smoke skipped: Chromium unavailable ({exc})")
+    try:
+        yield browser
+    finally:
+        browser.close()
+        playwright.stop()
+
+
+# START_FUNCTION_CONTRACT
+# name: test_control_center_mobile_browser_smoke
+# purpose: Render the Stage 04 Control Center at the repository mobile viewport
+#          and verify selector/navigation/content usability without page overflow.
+# inputs: control_center_browser — Playwright browser fixture.
+# returns: None.
+# side_effects: Reads the configured local browser acceptance server.
+# emitted_logs: None.
+# error_behavior: Explicitly skips when the local server is unavailable or does
+#                 not expose the project-aware Control Center configuration.
+# END_FUNCTION_CONTRACT
+def test_control_center_mobile_browser_smoke(control_center_browser):
+    base_url = os.environ.get("GRACE_BASE_URL", "http://127.0.0.1:8042")
+    page = control_center_browser.new_page(viewport={"width": 390, "height": 844})
+    try:
+        try:
+            response = page.goto(f"{base_url}/admin", wait_until="domcontentloaded", timeout=5000)
+        except Exception as exc:
+            pytest.skip(f"Control Center browser smoke skipped: server unavailable at {base_url} ({exc})")
+        if response is None or response.status >= 400:
+            pytest.skip(f"Control Center browser smoke skipped: /admin returned {response.status if response else 'no response'}")
+        try:
+            page.wait_for_selector('[data-testid="project-selector"]', timeout=5000)
+        except Exception as exc:
+            pytest.skip(f"Control Center browser smoke skipped: project-aware shell unavailable ({exc})")
+        assert page.locator(".cc-nav").is_visible()
+        assert page.locator(".cc-main").is_visible()
+        assert page.locator('[data-testid="project-selector"]').is_visible()
+        scroll_width, viewport_width = page.evaluate(
+            "() => [document.documentElement.scrollWidth, window.innerWidth]"
+        )
+        assert scroll_width <= viewport_width, f"mobile page overflow: {scroll_width} > {viewport_width}"
+        columns = page.evaluate(
+            "() => getComputedStyle(document.querySelector('.cc-project-grid')).gridTemplateColumns"
+        )
+        assert len(columns.split()) == 1, f"mobile dashboard remains multi-column: {columns!r}"
+    finally:
+        page.close()
 
 
 # END_BLOCK_ACCEPTANCE

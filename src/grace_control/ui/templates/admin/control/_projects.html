@@ -22,7 +22,7 @@
     </dl>
     <div class="cc-state-grid">
       {% for state_name in ('READY', 'RUNNING', 'ACCEPTED', 'BLOCKED', 'FAILED') %}
-      <div><span>{{ state_name }}</span><strong>{{ card.packets_by_state[state_name]|default(card.packets_by_state[state_name|lower]|default('—')) if card.packets_by_state is mapping else '—' }}</strong></div>
+      <div{% if state_name == 'BLOCKED' %} data-testid="blocked-count"{% endif %}><span>{{ state_name }}</span><strong>{% if state_name == 'BLOCKED' %}{{ card.blocked_count if card.blocked_count is not none else '—' }}{% else %}{{ card.packets_by_state[state_name]|default(card.packets_by_state[state_name|lower]|default('—')) if card.packets_by_state is mapping else '—' }}{% endif %}</strong></div>
       {% endfor %}
     </div>
     <div class="cc-card-footer">

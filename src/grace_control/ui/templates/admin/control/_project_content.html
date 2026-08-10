@@ -1,10 +1,11 @@
+{% set timeline_filters = timeline_filters|default({}) %}
 <section id="cc-project-content"
          class="cc-project-content"
          data-project-key="{{ project.project_key }}"
          data-entity-type="{{ entity_type or '' }}"
          data-entity-id="{{ entity_id or '' }}"
          data-tab="{{ tab|default('overview') }}"
-         hx-get="{{ cc_partial_url(project.project_key, entity_type, entity_id, tab, run_id, stage_id) }}"
+         hx-get="{{ cc_partial_url(project.project_key, entity_type, entity_id, tab, run_id, stage_id, timeline_filters.event, timeline_filters.component, timeline_filters.run_stage, timeline_filters.trace_id, timeline_filters.text) }}"
          hx-trigger="every 5s"
          hx-target="#cc-project-content"
          hx-swap="outerHTML">
