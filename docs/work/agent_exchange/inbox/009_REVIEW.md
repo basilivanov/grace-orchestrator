@@ -2,84 +2,58 @@
 
 Status: CHANGES REQUIRED
 
-Implementation commit reviewed: `635da6421a6aff71ef577bfe99996aa24fd706a8`.
+Original implementation reviewed: `635da6421a6aff71ef577bfe99996aa24fd706a8`.
+Resubmission implementation reviewed: `7d4262ac4b6f18919f79ff62c5e1e955322a14f8`.
 
-The Stage 03 architecture is broadly aligned with the task: fan-out/merge logic lives in `AdminCrossProjectService`, project-local APIs are used through explicit project contexts, per-project errors are isolated, rows preserve project attribution and source timestamps, and the required Hub JSON routes are present. However several Stage 03 contract errors remain.
+The resubmission correctly closes the previous continuation, health-only aggregate, project-metadata search fallback, and disabled-overview issues. Two acceptance/protocol gaps remain.
 
 ## Required fixes
 
-### 1. Event/log continuation incorrectly treats a per-project cap as a global cap
+### 1. Structurally malformed diagnostics are still counted as zero-valued overview data
 
-The service documents and implements bounded prefixes per project:
+`get_diagnostics()` now detects whether the diagnostics payload contains known diagnostic fields and excludes health-only/unavailable snapshots from count aggregates. That fix is correct.
 
-- events: `_MAX_EVENTS_PER_PROJECT = 1000`;
-- logs: `_MAX_LOG_LINES_PER_PROJECT = 5000`.
+However `get_projects_overview()` still follows the old path through `_overview_for_context()`:
 
-But continuation stops using those constants as if they were global merged limits.
+```python
+snapshot = _safe_json(_data_mapping(diagnostics.payload)) if diagnostics.ok else None
+...
+snapshots = [row["diagnostics"] for row in rows if row["diagnostics"] is not None]
+aggregate = _aggregate_snapshots(snapshots)
+```
 
-For events, `bounded_total = min(known_total, _MAX_EVENTS_PER_PROJECT)` and the error-path `has_more` check also requires `page_offset + page_limit < _MAX_EVENTS_PER_PROJECT`.
+Therefore a project can return HTTP/transport success with a JSON object that is structurally malformed for diagnostics (for example `{"data": {"unexpected": true}}`). The project is treated as non-partial, the malformed mapping is added to the overview aggregate, and `_aggregate_snapshots()` silently contributes zero packet/worker/run/lease counts while increasing `projects_in_aggregate`.
 
-For logs, `next_offset` is only produced while `page_offset + page_limit < _MAX_LOG_LINES_PER_PROJECT`.
-
-With two healthy projects, each contributing its allowed prefix, the merged bounded domain can contain up to `2 * per_project_cap` rows (and generally `N * per_project_cap`). The current cursor can therefore terminate early and make valid rows from another project unreachable.
-
-Required:
-
-- make continuation math consistent with the documented **per-project** prefix strategy;
-- for events, compute the accessible bounded total from per-project totals/prefixes (for example `sum(min(project_total, cap))` when totals are known), not `min(sum(totals), cap)`;
-- for logs, do not impose one global 5000-row continuation ceiling when several projects each contribute a bounded tail;
-- retain deterministic merged ordering and filter/project-bound cursors;
-- add tests with at least two projects where the merged accessible domain exceeds one per-project cap, proving continuation does not stop early.
-
-Do not replace this with an unbounded fetch.
-
-### 2. Partial diagnostics can be counted as zero-valued data in aggregates
-
-In `get_diagnostics()`, a project is appended to `snapshots` when diagnostics fails but health succeeds, because `system_health` makes the snapshot non-empty. `_aggregate_snapshots()` then treats missing packet/worker/run/lease fields as zero and includes that project in `projects_in_aggregate`.
-
-That violates the Task 009/TZ03 requirement that aggregate counts are computed only when mathematically valid and that unavailable project data is not represented as healthy zeroes.
+This is the same mathematical-validity requirement from the previous review: unavailable **or malformed/incomplete** diagnostics must not become healthy zero-valued aggregate data.
 
 Required:
 
-- keep the per-project health-only partial response visible if useful;
-- exclude a project from count aggregates when its diagnostics payload is unavailable/malformed, or introduce field-specific validity/coverage that makes the aggregate mathematically correct;
-- `projects_in_aggregate` must represent projects whose diagnostic counters actually contributed;
-- add a test where project A diagnostics succeeds, project B diagnostics fails, but project B health succeeds. The aggregate must contain only A's diagnostic counts while coverage marks B partial rather than silently contributing zeros.
+- apply the same diagnostics-availability/schema-validity concept to overview normalization;
+- keep the project card/health visible, but mark the project partial and expose a per-project malformed/partial diagnostics error when the diagnostics response is structurally unusable;
+- exclude that diagnostics payload from overview count aggregates;
+- `projects_in_aggregate` must count only projects whose diagnostic counters actually contributed;
+- add an acceptance test where project A has valid diagnostics and project B returns a successful but structurally invalid diagnostics object while health remains healthy. Overview aggregate must include only A's counters and coverage must mark B partial.
 
-### 3. Project metadata search disappears when the project-local search endpoint fails
+Do not require every optional diagnostics field; validate only enough canonical Stage 02 diagnostic structure to distinguish a usable snapshot from an unrelated/malformed object.
 
-`search()` currently skips the whole project as soon as the remote `/api/admin/search` result is not `ok`, and only afterwards evaluates `_matches_project(q, context)`.
+### 2. `009_RESUBMISSION.md` is not present in the repository
 
-Project metadata is Hub/registry data and TZ03 explicitly requires search over **project-local canonical search plus project metadata**. A remote search failure should be reported in `errors`, but it should not prevent a matching project registry entry from being returned.
+The reviewer can fetch implementation commit `7d4262ac4b6f18919f79ff62c5e1e955322a14f8`, but on the repository default branch:
 
-Required:
+`docs/work/agent_exchange/outbox/009_RESUBMISSION.md`
 
-- evaluate/add matching project metadata independently of the project-local search success;
-- keep the remote project search failure in `errors`;
-- preserve the global result limit and canonical project-aware URL;
-- add a test where the query matches a project's key/name/tag while that project's `/api/admin/search` is unavailable/malformed, and the project result is still returned.
+returns 404, and repository code search finds no `009_RESUBMISSION` file.
 
-### 4. Default overview omits disabled configured projects entirely
-
-TZ03's project-card contract explicitly includes status `online/degraded/offline/disabled`. Stage 01 also established that disabled projects remain listable but are skipped by default remote fan-out.
-
-`get_projects_overview()` calls `_select_contexts(None)`, which returns only `enabled_projects()`. Therefore the existing `_overview_for_disabled()` branch is never used for the normal all-project overview, and configured disabled projects disappear instead of being shown as disabled cards.
-
-Required:
-
-- default `/api/admin-hub/overview` should include configured disabled projects as local registry-backed cards;
-- disabled projects must not receive remote requests;
-- coverage/aggregate semantics must distinguish disabled from failed/offline rather than counting disabled as a remote failure;
-- add an acceptance test with one enabled and one disabled project proving the disabled card is present and its client is never called.
+The coder report text supplied externally is not a substitute for the protocol artifact. Create and commit/push the required outbox file with the implementation/fix commit SHA and concise checks.
 
 ## Scope
 
-Do not start Task 010 / Stage 04. Fix only these Stage 03 aggregation/continuation/search/overview issues and any directly exposed regressions.
+Do not start Task 010 / Stage 04. Fix only the overview malformed-diagnostics aggregate/coverage issue and commit the required resubmission artifact.
 
-Re-run the focused Task 009 acceptance tests plus Task 007–008 regressions and the relevant Admin/Trace/Events/Diagnostics checks, then Ruff, `py_compile`, GRACE lint and `git diff --check`.
+Re-run the focused Task 009 acceptance tests plus the directly relevant Task 007–008/Admin diagnostics regressions and required Ruff / `py_compile` / GRACE lint / `git diff --check` checks.
 
 Then create/update:
 
 `docs/work/agent_exchange/outbox/009_RESUBMISSION.md`
 
-Include the fix commit SHA, the corrected continuation semantics, coverage/aggregate behavior and concise check results.
+Do not start Task 010 until reviewer returns `ACCEPT 009`.
