@@ -23,6 +23,7 @@
 #   - class: Worker
 #   - class: Lease
 #   - class: ParallelLease
+#   - class: MergeLease
 #   - class: Event
 #   - class: SelfEvolutionSession
 # END_MODULE_MAP
@@ -216,6 +217,24 @@ class ParallelLease(Base):
         Index("ix_parallel_leases_feature_wave", "feature_id", "wave_id"),
         Index("ix_parallel_leases_worker_id", "worker_id"),
         Index("ix_parallel_leases_expires_at", "expires_at"),
+    )
+
+
+class MergeLease(Base):
+    """Database-backed fencing lease for one logical target repository."""
+
+    __tablename__ = "merge_leases"
+
+    target_repo_key = Column(String, primary_key=True)
+    lease_token = Column(String, nullable=False)
+    packet_id = Column(String, nullable=False, index=True)
+    worker_id = Column(String, nullable=True, index=True)
+    acquired_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    expires_at = Column(DateTime, nullable=False)
+    heartbeat_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_merge_leases_expires_at", "expires_at"),
     )
 
 

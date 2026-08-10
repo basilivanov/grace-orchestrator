@@ -92,6 +92,8 @@ class GraceSettings(BaseSettings):
     # GRACE_MAX_CONCURRENCY=1 path remains the backward-compatible default.
     parallel_scope_guard_enabled: bool = True
     max_concurrency: int = 1
+    merge_serialization_enabled: bool = True
+    merge_lease_ttl_seconds: int = 300
 
     # ── Telegram (optional notification channel) ──
     telegram_token: str = ""

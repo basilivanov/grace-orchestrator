@@ -93,7 +93,7 @@ def test_empty_sqlite_gets_baseline_and_head(tmp_path):
     init_db(_db_url(db_path))
 
     assert set(Base.metadata.tables).issubset(set(inspect(__import__("grace_control.db", fromlist=["engine"]).engine).get_table_names()))
-    assert _version(db_path) == [("0002_safe_parallel_execution",)]
+    assert _version(db_path) == [("0003_serialized_merge",)]
 
 
 def test_empty_sqlite_can_be_created_by_alembic_cli(tmp_path):
@@ -121,8 +121,8 @@ def test_empty_sqlite_can_be_created_by_alembic_cli(tmp_path):
             )
         }
     assert tables - {"alembic_version"} == set(Base.metadata.tables)
-    assert len(tables - {"alembic_version"}) == 13
-    assert _version(db_path) == [("0002_safe_parallel_execution",)]
+    assert len(tables - {"alembic_version"}) == 14
+    assert _version(db_path) == [("0003_serialized_merge",)]
 
 
 def test_parallel_leases_table_has_required_indexes(tmp_path):
@@ -138,6 +138,14 @@ def test_parallel_leases_table_has_required_indexes(tmp_path):
     }.issubset(indexes)
 
 
+def test_merge_leases_table_has_expiry_index(tmp_path):
+    db_path = tmp_path / "merge-indexes.db"
+    init_db(_db_url(db_path))
+
+    indexes = _index_names(db_path, "merge_leases")
+    assert "ix_merge_leases_expires_at" in indexes
+
+
 def test_current_legacy_db_is_stamped_and_data_is_preserved(tmp_path):
     db_path = tmp_path / "legacy.db"
     _create_legacy_fixture(db_path)
@@ -146,7 +154,7 @@ def test_current_legacy_db_is_stamped_and_data_is_preserved(tmp_path):
 
     with sqlite3.connect(db_path) as connection:
         assert connection.execute("SELECT id FROM features").fetchall() == [("legacy-f",)]
-    assert _version(db_path) == [("0002_safe_parallel_execution",)]
+    assert _version(db_path) == [("0003_serialized_merge",)]
 
 
 def test_legacy_fixture_missing_additive_columns_is_normalized(tmp_path):
@@ -157,7 +165,7 @@ def test_legacy_fixture_missing_additive_columns_is_normalized(tmp_path):
 
     for table_name, column_name in _ADDITIVE_COLUMNS:
         assert column_name in _columns(db_path, table_name)
-    assert _version(db_path) == [("0002_safe_parallel_execution",)]
+    assert _version(db_path) == [("0003_serialized_merge",)]
 
 
 def test_legacy_stage_indexes_are_normalized_before_stamp(tmp_path):
@@ -172,7 +180,7 @@ def test_legacy_stage_indexes_are_normalized_before_stamp(tmp_path):
     stage_indexes = _index_names(db_path, "stage_runs")
     assert set(_CANONICAL_STAGE_INDEXES).issubset(stage_indexes)
     assert not stage_indexes & {name for name, _column in _LEGACY_STAGE_INDEXES}
-    assert _version(db_path) == [("0002_safe_parallel_execution",)]
+    assert _version(db_path) == [("0003_serialized_merge",)]
 
 
 def test_events_only_database_is_not_detected_as_legacy_grace(tmp_path):
@@ -204,7 +212,7 @@ def test_repeated_init_is_idempotent_and_skips_legacy_bridge(tmp_path, monkeypat
     init_db(_db_url(db_path))
 
     assert bridge_calls == []
-    assert _version(db_path) == [("0002_safe_parallel_execution",)]
+    assert _version(db_path) == [("0003_serialized_merge",)]
 
 
 def test_alembic_current_reports_head_after_startup(tmp_path):
@@ -224,4 +232,4 @@ def test_alembic_current_reports_head_after_startup(tmp_path):
         text=True,
     )
 
-    assert "0002_safe_parallel_execution (head)" in result.stdout
+    assert "0003_serialized_merge (head)" in result.stdout

@@ -110,12 +110,22 @@ class WorkerAPIClient:
     async def close(self):
         await self.client.aclose()
 
-    async def merge_packet(self, packet_id: str, *, target_repo_root: str = "", commit_sha: str = "", worktree_path: str = "", branch_name: str = "") -> dict:
+    # START_FUNCTION_CONTRACT
+    # name: merge_packet
+    # purpose: Request serialized merge of an accepted packet through the API.
+    # inputs: packet_id and target/branch/worker merge metadata.
+    # returns: API response dictionary.
+    # side_effects: HTTP POST to the packet merge endpoint.
+    # emitted_logs: None.
+    # error_behavior: Raises the HTTP client's request error for non-success.
+    # END_FUNCTION_CONTRACT
+    async def merge_packet(self, packet_id: str, *, target_repo_root: str = "", commit_sha: str = "", worktree_path: str = "", branch_name: str = "", worker_id: str = "") -> dict:
         r = await self.client.post(f"/api/packets/{packet_id}/merge", json={
             "target_repo_root": target_repo_root,
             "commit_sha": commit_sha,
             "worktree_path": worktree_path,
             "branch_name": branch_name,
+            "worker_id": worker_id,
         })
         r.raise_for_status()
         return r.json()

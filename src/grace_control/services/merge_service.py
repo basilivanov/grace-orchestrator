@@ -30,6 +30,12 @@ from grace_control.core.stage_instrumentation import stage
 from grace_control.core.structured_logger import GraceLogger
 from grace_control.db.schema import PacketState
 from grace_control.services.git_service import GitService
+from grace_control.services.merge_coordinator_service import (
+    MergeCoordinatorService,
+    MergeLeaseBusyError,
+    MergeLeaseFencedError,
+    MergeLeaseTakeoverError,
+)
 
 _log = GraceLogger("merge_service")
 
@@ -59,10 +65,28 @@ class MergeResult:
 class MergeService:
     """Merges accepted packet's branch into target repo's target branch."""
 
-    def __init__(self, git: GitService | None = None, packets=None):
+    def __init__(
+        self,
+        git: GitService | None = None,
+        packets=None,
+        coordinator: MergeCoordinatorService | None = None,
+    ):
         self._git = git or GitService()
         self._packets = packets  # lazy import to avoid cycle
+        self._coordinator = coordinator or MergeCoordinatorService(git=self._git)
 
+    # START_FUNCTION_CONTRACT
+    # name: merge_packet
+    # purpose: Serialize accepted packet checkout, merge, push, and MERGED
+    #          transition for one target repository.
+    # inputs: packet_id, target_repo_root, branch_name, target_branch, and
+    #         optional worker_id fencing identity.
+    # returns: MergeResult describing success or a typed-safe failure reason.
+    # side_effects: Guarded git mutations, packet transition, and lease release.
+    # emitted_logs: merge_packet_start, merge_packet_done, merge_packet_failed.
+    # error_behavior: Returns unsuccessful MergeResult and never raises for
+    #                 merge/coordinator failures.
+    # END_FUNCTION_CONTRACT
     @stage("merge")
     async def merge_packet(
         self,
@@ -70,11 +94,13 @@ class MergeService:
         target_repo_root: str,
         branch_name: str,
         target_branch: str,
+        worker_id: str | None = None,
     ) -> MergeResult:
         from grace_control.services.packet_service import PacketService
         svc = self._packets or PacketService()
         repo = Path(target_repo_root).resolve()
         info = self._git.validate_repo(repo)
+        holder = worker_id or f"merge:{packet_id}"
 
         _log.info("merge_packet_start",
             packet_id=packet_id, repo=str(repo), branch=branch_name, target_branch=target_branch)
@@ -89,53 +115,177 @@ class MergeService:
             return MergeResult(False, packet_id, "", str(repo), branch_name, target_branch,
                 error="branch_name is required")
 
-        checkout = self._git.checkout(repo, target_branch)
-        if not checkout.success:
-            return MergeResult(False, packet_id, "", str(repo), branch_name, target_branch,
-                error=f"checkout {target_branch} failed: {checkout.stderr}")
+        sanity = self._coordinator.check_repo_sanity(repo)
+        if not sanity.ok:
+            return MergeResult(
+                False,
+                packet_id,
+                "",
+                str(repo),
+                branch_name,
+                target_branch,
+                error=f"merge_repo_sanity_failed: {sanity.error}",
+            )
 
-        self._git.fetch(repo, "origin")  # best-effort: may fail for local repos
+        if not self._coordinator.can_merge_now(packet_id, target_repo_root=repo):
+            return MergeResult(
+                False,
+                packet_id,
+                "",
+                str(repo),
+                branch_name,
+                target_branch,
+                error="waiting_for_merge_slot: deterministic accepted merge order",
+            )
 
-        merge = self._git.merge(repo, branch_name, target_branch)
-        if not merge.success:
-            return MergeResult(False, packet_id, "", str(repo), branch_name, target_branch,
-                error=f"merge failed: {merge.stderr}")
-
-        push = self._git.push(repo, "origin", target_branch)
-        if not push.success:
-            # Push optional — local repos (tests, dev) may have no origin.
-            if "does not appear to be a git repository" not in push.stderr:
-                return MergeResult(False, packet_id, "", str(repo), branch_name, target_branch,
-                    error=f"push failed: {push.stderr}")
-
-        commit_sha = self._git.current_sha(repo)
+        commit_sha = ""
+        try:
+            lease = self._coordinator.acquire(
+                target_repo_root=repo,
+                packet_id=packet_id,
+                worker_id=holder,
+            )
+        except MergeLeaseBusyError as error:
+            return MergeResult(
+                False,
+                packet_id,
+                "",
+                str(repo),
+                branch_name,
+                target_branch,
+                error=f"waiting_for_merge_slot: {error}",
+            )
+        except MergeLeaseTakeoverError as error:
+            return MergeResult(
+                False,
+                packet_id,
+                "",
+                str(repo),
+                branch_name,
+                target_branch,
+                error=f"merge_takeover_blocked: {error}",
+            )
+        except Exception as error:
+            return MergeResult(
+                False,
+                packet_id,
+                "",
+                str(repo),
+                branch_name,
+                target_branch,
+                error=f"merge lease acquisition failed: {str(error)[:200]}",
+            )
 
         try:
+            checkout = self._coordinator.run_mutation(
+                target_repo_key=lease.target_repo_key,
+                lease_token=lease.lease_token,
+                packet_id=packet_id,
+                worker_id=holder,
+                step_name="checkout",
+                operation=lambda: self._git.checkout(repo, target_branch),
+            )
+            if not checkout.success:
+                return MergeResult(False, packet_id, "", str(repo), branch_name, target_branch,
+                    error=f"checkout {target_branch} failed: {checkout.stderr}")
+
+            self._coordinator.run_mutation(
+                target_repo_key=lease.target_repo_key,
+                lease_token=lease.lease_token,
+                packet_id=packet_id,
+                worker_id=holder,
+                step_name="fetch",
+                operation=lambda: self._git.fetch(repo, "origin"),
+            )  # best-effort: local repos may not have origin
+
+            merge = self._coordinator.run_mutation(
+                target_repo_key=lease.target_repo_key,
+                lease_token=lease.lease_token,
+                packet_id=packet_id,
+                worker_id=holder,
+                step_name="merge",
+                operation=lambda: self._git.merge(repo, branch_name, target_branch),
+            )
+            if not merge.success:
+                return MergeResult(False, packet_id, "", str(repo), branch_name, target_branch,
+                    error=f"merge failed: {merge.stderr}")
+
+            push = self._coordinator.run_mutation(
+                target_repo_key=lease.target_repo_key,
+                lease_token=lease.lease_token,
+                packet_id=packet_id,
+                worker_id=holder,
+                step_name="push",
+                operation=lambda: self._git.push(repo, "origin", target_branch),
+            )
+            if not push.success:
+                # Push optional — local repos (tests, dev) may have no origin.
+                if "does not appear to be a git repository" not in push.stderr:
+                    return MergeResult(False, packet_id, "", str(repo), branch_name, target_branch,
+                        error=f"push failed: {push.stderr}")
+
+            commit_sha = self._git.current_sha(repo)
+            self._coordinator.assert_current(
+                target_repo_key=lease.target_repo_key,
+                lease_token=lease.lease_token,
+                packet_id=packet_id,
+                worker_id=holder,
+            )
             await svc.transition(
                 packet_id, PacketState.MERGED, reason=f"merge_complete:{commit_sha[:8]}",
             )
-        except Exception as e:
+
+            # TZ_RETENTION_POLICY.md Phase 1: after successful merge, delete
+            # all attempt branches for this packet while still holding the
+            # serialized target-repository lease.
+            try:
+                self._coordinator.run_mutation(
+                    target_repo_key=lease.target_repo_key,
+                    lease_token=lease.lease_token,
+                    packet_id=packet_id,
+                    worker_id=holder,
+                    step_name="branch_cleanup",
+                    operation=lambda: self._cleanup_packet_branches(repo, packet_id),
+                )
+            except MergeLeaseFencedError:
+                _log.warn("merge_branch_cleanup_skipped_fenced", packet_id=packet_id)
+            except Exception as error:
+                _log.warn("merge_branch_cleanup_failed",
+                    packet_id=packet_id, error=str(error)[:200])
+
+            _log.info("merge_packet_done",
+                packet_id=packet_id, commit_sha=commit_sha[:12], branch=branch_name)
+            return MergeResult(True, packet_id, commit_sha, str(repo), branch_name, target_branch)
+        except MergeLeaseFencedError as error:
+            return MergeResult(
+                False,
+                packet_id,
+                commit_sha,
+                str(repo),
+                branch_name,
+                target_branch,
+                error=f"merge_lease_lost: {error}",
+            )
+        except Exception as error:
             _log.warn("merge_state_transition_failed",
-                packet_id=packet_id, error=str(e)[:200])
+                packet_id=packet_id, error=str(error)[:200])
             return MergeResult(
                 False, packet_id, commit_sha, str(repo), branch_name, target_branch,
-                error=f"state transition failed: {str(e)[:200]}",
+                error=f"state transition failed: {str(error)[:200]}",
             )
-
-        # TZ_RETENTION_POLICY.md Phase 1: after successful merge, delete ALL
-        # attempt-branches for this packet (not just the merged one). This
-        # keeps the target repo clean — typically a 3-attempt packet leaves
-        # 3 `agent/<id>-attempt-NNNN` refs otherwise.
-        try:
-            self._cleanup_packet_branches(repo, packet_id)
-        except Exception as e:
-            _log.warn("merge_branch_cleanup_failed",
-                packet_id=packet_id, error=str(e)[:200])
-
-        _log.info("merge_packet_done",
-            packet_id=packet_id, commit_sha=commit_sha[:12], branch=branch_name)
-
-        return MergeResult(True, packet_id, commit_sha, str(repo), branch_name, target_branch)
+        finally:
+            try:
+                self._coordinator.release(
+                    target_repo_key=lease.target_repo_key,
+                    lease_token=lease.lease_token,
+                    packet_id=packet_id,
+                    worker_id=holder,
+                )
+            except MergeLeaseFencedError:
+                _log.warn("merge_lease_release_skipped_fenced", packet_id=packet_id)
+            except Exception as error:
+                _log.warn("merge_lease_release_failed",
+                    packet_id=packet_id, error=str(error)[:200])
 
     async def cleanup_worktree(
         self,

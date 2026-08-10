@@ -476,7 +476,8 @@ class Worker:
                 target_repo_root=target_repo,
                 worktree_path=result.worktree_path,
                 branch_name=result.branch_name,
-                commit_sha=result.commit_sha)
+                commit_sha=result.commit_sha,
+                worker_id=self.worker_id)
             self.log.info("merged", packet_id=packet_id)
         except Exception as merge_exc:
             # W07: Merge failure — record explicit observable event

@@ -342,6 +342,7 @@ async def merge_packet(packet_id: str, request: dict) -> dict:
     worktree_path = request.get("worktree_path", "")
     branch_name = request.get("branch_name", "")
     target_branch = request.get("target_branch") or _settings.target_branch
+    worker_id = request.get("worker_id") or f"merge:{packet_id}"
     target_repo_root = (
         request.get("target_repo_root")
         or os.environ.get("GRACE_TARGET_REPO_ROOT")
@@ -370,6 +371,7 @@ async def merge_packet(packet_id: str, request: dict) -> dict:
         target_repo_root=target_repo_root,
         branch_name=branch_name,
         target_branch=target_branch,
+        worker_id=worker_id,
     )
 
     if not result.success:

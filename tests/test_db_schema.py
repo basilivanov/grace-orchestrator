@@ -33,9 +33,9 @@ def test_all_tables_exist(test_db):
     tables = sorted(Base.metadata.tables.keys())
     assert tables == [
         "agent_sessions", "events", "feature_planning_runs", "features",
-        "leases", "packet_runs", "packets", "parallel_leases",
+        "leases", "merge_leases", "packet_runs", "packets", "parallel_leases",
         "self_evolution_sessions", "stage_metrics", "stage_runs", "waves", "workers",
-    ], f"Expected 13 tables, got {tables}"
+    ], f"Expected 14 tables, got {tables}"
 
 
 def test_create_feature(test_db):
@@ -178,4 +178,4 @@ def test_event_log(test_db):
 def test_in_memory_db(test_db):
     from grace_control.db.schema import Base
     tables = Base.metadata.tables.keys()
-    assert len(tables) == 13
+    assert len(tables) == 14
