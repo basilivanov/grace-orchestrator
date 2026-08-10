@@ -180,10 +180,10 @@ class SupervisorCleanupService:
                         return True
         except RuntimeError:
             # DB not initialized — be conservative
-            return False
+            return True
         except Exception as e:
             _log.warn("worktree_active_check_failed", error=str(e)[:200])
-            return False
+            return True
         return False
 
     def _cleanup_worktrees(self, report: CleanupReport) -> None:

@@ -35,7 +35,7 @@ from grace_control.core.contracts import build_packet_contract
 from grace_control.core.stage_instrumentation import stage
 from grace_control.core.structured_logger import GraceLogger
 from grace_control.db import get_db
-from grace_control.db.schema import Event, Packet, PacketRun, PacketState
+from grace_control.db.schema import Event, Packet, PacketRun, PacketState, ParallelLease
 from grace_control.services.git_service import GitService
 from grace_control.services.integration_recheck_service import (
     IntegrationRecheckResult,
@@ -152,6 +152,28 @@ class MergeService:
                 branch_name,
                 target_branch,
                 error=safety_error,
+            )
+
+        parallel_fencing_error = self._parallel_merge_fencing_error(
+            packet_id=packet_id,
+            worker_id=holder,
+            parallel_lease_id=parallel_lease_id,
+            claimed_attempt=claimed_attempt,
+        )
+        if parallel_fencing_error:
+            _log.warn(
+                "merge_rejected_parallel_fencing",
+                packet_id=packet_id,
+                reason=parallel_fencing_error,
+            )
+            return MergeResult(
+                False,
+                packet_id,
+                "",
+                str(repo),
+                branch_name,
+                target_branch,
+                error=parallel_fencing_error,
             )
 
         _log.info("merge_packet_start",
@@ -743,6 +765,50 @@ class MergeService:
             )
 
     # START_FUNCTION_CONTRACT
+    # name: _parallel_merge_fencing_error
+    # purpose: Require and validate the retained TZ03 identity before a
+    #          multi-worker ACCEPTED packet can enter merge coordination.
+    # inputs: packet_id, worker_id, optional parallel_lease_id and claimed_attempt.
+    # returns: None for a compatible/current identity, otherwise a typed
+    #          parallel_lease_lost reason.
+    # side_effects: Read-only packet and parallel-lease queries.
+    # emitted_logs: None; caller emits the rejection log.
+    # error_behavior: Fails closed for ACCEPTED packets or any retained lease
+    #                 when effective concurrency is greater than one.
+    # END_FUNCTION_CONTRACT
+    def _parallel_merge_fencing_error(
+        self,
+        *,
+        packet_id: str,
+        worker_id: str,
+        parallel_lease_id: str | None,
+        claimed_attempt: int | None,
+    ) -> str | None:
+        config = get_parallel_runtime_config()
+        if int(config["max_concurrency"]) <= 1:
+            return None
+        with get_db() as db:
+            packet = db.query(Packet).filter_by(id=packet_id).first()
+            parallel_lease = db.query(ParallelLease).filter_by(packet_id=packet_id).first()
+            expected = parallel_lease is not None or (
+                packet is not None and packet.state == PacketState.ACCEPTED.value
+            )
+        if not expected:
+            return None
+        if not parallel_lease_id or claimed_attempt is None:
+            return "parallel_lease_lost: fencing identity is required"
+        try:
+            self._assert_parallel_lease_current(
+                packet_id=packet_id,
+                worker_id=worker_id,
+                parallel_lease_id=parallel_lease_id,
+                claimed_attempt=claimed_attempt,
+            )
+        except ParallelLeaseFencedError as error:
+            return f"parallel_lease_lost: {error}"
+        return None
+
+    # START_FUNCTION_CONTRACT
     # name: _guarded_parallel_mutation
     # purpose: Recheck parallel ownership immediately before a target mutation.
     # inputs: Optional parallel lease identity and a synchronous operation.
@@ -750,7 +816,8 @@ class MergeService:
     # side_effects: Read-only lease check followed by the provided mutation.
     # emitted_logs: parallel_lease_fenced.
     # error_behavior: Raises ParallelLeaseFencedError before mutation when the
-    #                 supplied identity is stale; legacy calls remain allowed.
+    #                 supplied identity is stale; concurrency=1 legacy calls
+    #                 remain allowed.
     # END_FUNCTION_CONTRACT
     def _guarded_parallel_mutation(
         self,

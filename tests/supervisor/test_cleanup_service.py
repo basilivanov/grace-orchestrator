@@ -110,7 +110,11 @@ class TestStateFileCleanup:
 
 
 class TestSafeFailure:
-    def test_keeps_worktree_when_packet_lookup_raises(self, tmp_path: Path) -> None:
+    def test_keeps_worktree_when_packet_lookup_raises(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         """If the DB check for active packets raises, we keep the worktree
         (conservative) and never propagate the exception."""
         from grace_control.services import supervisor_cleanup_service as mod
@@ -127,12 +131,122 @@ class TestSafeFailure:
 
         # Force `_is_worktree_registered` to return True so the condition
         # short-circuits past it and exercises `_worktree_for_active_packet`.
+        import grace_control.db as db_module
         original = mod.SupervisorCleanupService._is_worktree_registered
         mod.SupervisorCleanupService._is_worktree_registered = lambda self, slug: True
+        monkeypatch.setattr(
+            db_module,
+            "get_db",
+            lambda: (_ for _ in ()).throw(RuntimeError("DB not initialized")),
+        )
         try:
             svc = SupervisorCleanupService(target, source)
             # `_worktree_for_active_packet` will raise RuntimeError ("DB not
-            # initialized") and our service should swallow it and return False.
-            assert svc._worktree_for_active_packet("pkt_002-attempt-0001") is False
+            # initialized") and the conservative result must keep the tree.
+            assert svc._worktree_for_active_packet("pkt_002-attempt-0001") is True
         finally:
             mod.SupervisorCleanupService._is_worktree_registered = original
+
+    def test_registered_worktree_is_kept_when_db_is_unavailable(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Unknown DB ownership must issue no cleanup mutation."""
+        import grace_control.db as db_module
+        from grace_control.services import supervisor_cleanup_service as mod
+
+        target = tmp_path / "target"
+        source = tmp_path / "source"
+        target.mkdir()
+        source.mkdir()
+        worktree = target / ".grace" / "worktrees" / "live-unknown"
+        worktree.mkdir(parents=True)
+        (worktree / "live.txt").write_text("keep")
+
+        def unavailable_db():
+            raise RuntimeError("database unavailable")
+
+        monkeypatch.setattr(db_module, "get_db", unavailable_db)
+        monkeypatch.setattr(
+            SupervisorCleanupService,
+            "_is_worktree_registered",
+            lambda _self, _slug: True,
+        )
+
+        def unexpected_git_mutation(*_args, **_kwargs):
+            raise AssertionError("unknown registered worktree must not be mutated")
+
+        monkeypatch.setattr(mod.subprocess, "run", unexpected_git_mutation)
+        report = SupervisorCleanupService(target, source).run(
+            state_files=False,
+            stale_leases=False,
+        )
+
+        assert report.worktrees_removed == []
+        assert report.worktrees_kept == ["live-unknown"]
+        assert worktree.exists()
+
+    def test_registered_worktree_for_active_packet_is_kept(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """RUNNING packet evidence protects its registered worktree."""
+        from grace_control.db import get_db, init_db
+        from grace_control.db.schema import Feature, Packet, PacketState, Wave
+        from grace_control.services import supervisor_cleanup_service as mod
+
+        init_db(f"sqlite:///{tmp_path / 'cleanup.db'}")
+        target = tmp_path / "target"
+        source = tmp_path / "source"
+        target.mkdir()
+        source.mkdir()
+        worktree = target / ".grace" / "worktrees" / "live-packet-attempt-0001"
+        worktree.mkdir(parents=True)
+        with get_db() as db:
+            db.add(Feature(
+                id="cleanup-feature",
+                slug="cleanup-feature",
+                title="cleanup",
+                spec_json={},
+                status="active",
+            ))
+            db.add(Wave(
+                id="cleanup-wave",
+                feature_id="cleanup-feature",
+                slug="cleanup-wave",
+                title="cleanup",
+                order=1,
+                status="IN_PROGRESS",
+            ))
+            db.add(Packet(
+                id="live-packet",
+                feature_id="cleanup-feature",
+                wave_id="cleanup-wave",
+                slug="live-packet",
+                title="live",
+                spec_json={"scope": ["src/live.py"]},
+                state=PacketState.RUNNING.value,
+            ))
+
+        monkeypatch.setattr(
+            SupervisorCleanupService,
+            "_is_worktree_registered",
+            lambda _self, _slug: True,
+        )
+        monkeypatch.setattr(
+            mod.subprocess,
+            "run",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("active packet worktree must not be mutated")
+            ),
+        )
+        report = SupervisorCleanupService(target, source).run(
+            state_files=False,
+            stale_leases=False,
+        )
+
+        assert report.worktrees_removed == []
+        assert report.worktrees_kept == ["live-packet-attempt-0001"]
+        assert worktree.exists()
