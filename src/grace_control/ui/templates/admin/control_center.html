@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GRACE Control Center{% if current_project %} · {{ current_project.project_name or current_project.name }}{% endif %}</title>
+  <link rel="stylesheet" href="/static/css/admin_control_center.css">
+  <script src="https://unpkg.com/htmx.org@2.0.4" crossorigin="anonymous"></script>
+</head>
+<body>
+  <div class="cc-shell" data-project-key="{{ current_project.project_key if current_project else '' }}">
+    <header class="cc-header">
+      <a class="cc-brand" href="/admin/projects" aria-label="GRACE projects">GRACE <span>Control Center</span></a>
+      <div class="cc-project-selector">
+        <label for="project-selector">Project</label>
+        <select id="project-selector" data-testid="project-selector"
+                onchange="if (this.value) window.location.assign(this.value)">
+          <option value="/admin/projects"{% if not current_project %} selected{% endif %}>All projects</option>
+          {% for project_item in projects %}
+          <option value="{{ cc_url(project_item.project_key) }}"{% if current_project and project_item.project_key == current_project.project_key %} selected{% endif %}>
+            {{ cc_status_icon(project_item.status) }} · {{ project_item.project_name or project_item.name }} ({{ project_item.project_key }})
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+      {% if current_project %}
+      <div class="cc-current-status status-{{ current_project.status|default('unknown') }}">
+        <span aria-hidden="true">{{ cc_status_icon(current_project.status) }}</span>
+        <span>{{ current_project.project_name or current_project.name }} · {{ current_project.project_key }}</span>
+      </div>
+      {% endif %}
+      <form class="cc-search" action="/admin/search" method="get">
+        {% if current_project %}<input type="hidden" name="project" value="{{ current_project.project_key }}">{% endif %}
+        <label class="sr-only" for="global-search">Search</label>
+        <input id="global-search" name="q" value="{{ query|default('') }}" placeholder="Search projects, packets…">
+      </form>
+    </header>
+
+    <nav class="cc-nav" aria-label="Control Center navigation">
+      <a href="/admin/projects" class="{% if page == 'dashboard' %}active{% endif %}">Projects</a>
+      {% if current_project %}
+        <a href="{{ cc_url(current_project.project_key) }}" class="{% if page == 'project' %}active{% endif %}">Current Project</a>
+        <a href="{{ cc_url(current_project.project_key, 'events') }}" class="{% if page == 'events' %}active{% endif %}">Events</a>
+        <a href="{{ cc_url(current_project.project_key, 'logs') }}" class="{% if page == 'logs' %}active{% endif %}">Logs</a>
+        <a href="/admin/search?project={{ current_project.project_key }}" class="{% if page == 'search' %}active{% endif %}">Search</a>
+        <a href="{{ cc_url(current_project.project_key, 'system') }}" class="{% if page == 'system' %}active{% endif %}">System / Diagnostics</a>
+      {% else %}
+        <a href="/admin/events" class="{% if page == 'events' %}active{% endif %}">Events</a>
+        <a href="/admin/logs" class="{% if page == 'logs' %}active{% endif %}">Logs</a>
+        <a href="/admin/search" class="{% if page == 'search' %}active{% endif %}">Search</a>
+        <span class="cc-nav-muted">Select a project for System / Diagnostics</span>
+      {% endif %}
+    </nav>
+
+    <main class="cc-main">
+      {% if page == 'dashboard' %}
+        {% include "control/_dashboard.html" %}
+      {% elif page == 'project' %}
+        {% include "control/_project_content.html" %}
+      {% elif page == 'system' %}
+        {% include "control/_system.html" %}
+      {% elif page == 'events' %}
+        {% include "control/_events.html" %}
+      {% elif page == 'logs' %}
+        {% include "control/_logs.html" %}
+      {% elif page == 'search' %}
+        {% include "control/_search.html" %}
+      {% endif %}
+    </main>
+  </div>
+</body>
+</html>

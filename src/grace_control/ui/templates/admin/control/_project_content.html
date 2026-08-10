@@ -1,0 +1,87 @@
+<section id="cc-project-content"
+         class="cc-project-content"
+         data-project-key="{{ project.project_key }}"
+         data-entity-type="{{ entity_type or '' }}"
+         data-entity-id="{{ entity_id or '' }}"
+         data-tab="{{ tab|default('overview') }}"
+         hx-get="{{ cc_partial_url(project.project_key, entity_type, entity_id, tab, run_id, stage_id) }}"
+         hx-trigger="every 5s"
+         hx-target="#cc-project-content"
+         hx-swap="outerHTML">
+  <section class="cc-page-heading">
+    <div>
+      <p class="eyebrow">Current Project · {{ project.project_key }}</p>
+      <h1>{{ project.project_name or project.name }}</h1>
+      <p class="muted">{{ project.description or 'Project-scoped Feature → Wave → Packet tree' }}</p>
+    </div>
+    <span class="status-text status-{{ project.status|default('unknown') }}">{{ cc_status_icon(project.status) }}</span>
+  </section>
+
+  <div class="cc-project-meta">
+    <span><b>user</b> {{ project.unix_user or '—' }}</span>
+    <span><b>root</b> <span class="mono">{{ project.project_root or '—' }}</span></span>
+    <span><b>target</b> {{ project.target_branch or '—' }} / <span class="mono">{{ project.target_head or '—' }}</span></span>
+    <span><b>GRACE</b> {{ project.grace_version or '—' }} / <span class="mono">{{ project.grace_code_sha or '—' }}</span></span>
+  </div>
+
+  {% if tree_error %}<div class="cc-banner warning">{{ tree_error }}</div>{% endif %}
+  {% if entity_missing %}<div class="cc-banner warning">{{ entity_type|capitalize }} not found in project {{ project.project_key }}: <span class="mono">{{ entity_id }}</span></div>{% endif %}
+
+  <div class="cc-project-layout">
+    <aside class="cc-tree" aria-label="Project entity tree">
+      <div class="cc-section-heading"><h2>Features / Waves / Packets</h2><span>{{ features|length }} features</span></div>
+      {% for feature_row in features %}
+      <article class="cc-tree-feature {% if feature and feature.id == feature_row.id %}selected{% endif %}">
+        <div class="cc-tree-row">
+          <a href="{{ cc_url(project.project_key, 'feature', feature_row.id) }}"><strong>{{ feature_row.title or feature_row.slug or feature_row.id }}</strong></a>
+          <span class="state-chip state-{{ feature_row.status|default('unknown')|lower }}">{{ feature_row.status|default('unknown') }}</span>
+        </div>
+        <div class="cc-tree-meta"><span class="mono">{{ feature_row.id }}</span> · {{ feature_row.wave_count|default(feature_row.waves|length) }} waves · {{ feature_row.total_packets|default(0) }} packets · states {{ feature_row.packet_counts_by_state|default({})|tojson }}{% if feature_row.attention_count %} · <span class="text-warning">{{ feature_row.attention_count }} attention</span>{% endif %}{% if feature_row.total_duration_seconds is not none %} · {{ feature_row.total_duration_seconds }}s{% endif %}{% if feature_row.total_tokens is not none %} · {{ feature_row.total_tokens }} tokens{% endif %}{% if feature_row.total_cost_usd is not none %} · ${{ feature_row.total_cost_usd }}{% endif %}</div>
+        {% for wave_row in feature_row.waves|default([]) %}
+        <div class="cc-tree-wave {% if wave and wave.id == wave_row.id %}selected{% endif %}">
+          <div class="cc-tree-row">
+            <a href="{{ cc_url(project.project_key, 'wave', wave_row.id) }}"><span>W{{ wave_row.order|default('?') }} · {{ wave_row.title or wave_row.slug or wave_row.id }}</span></a>
+            <span class="state-chip state-{{ wave_row.status|default('unknown')|lower }}">{{ wave_row.status|default('unknown') }}</span>
+          </div>
+          <div class="cc-tree-meta"><span class="mono">{{ wave_row.id }}</span> · {{ wave_row.total_packets|default(wave_row.packets|length) }} packets · states {{ wave_row.packet_counts_by_state|default({})|tojson }}{% if wave_row.total_duration_seconds is not none %} · {{ wave_row.total_duration_seconds }}s{% endif %}</div>
+          {% for packet_row in wave_row.packets|default([]) %}
+          <a class="cc-packet-row {% if packet and packet.id == packet_row.id %}selected{% endif %}" href="{{ cc_url(project.project_key, 'packet', packet_row.id) }}">
+            <span class="state-dot state-{{ packet_row.state|default('unknown')|lower }}" aria-hidden="true"></span>
+            <span class="packet-row-main"><strong>{{ packet_row.title or packet_row.slug or packet_row.id }}</strong><span class="mono">{{ packet_row.id }}</span></span>
+            <span class="packet-row-state">{{ packet_row.state|default('unknown')|state_label }}</span>
+            {% if packet_row.wait_reason and packet_row.state|default('')|lower in ('ready', 'accepted') %}<span class="wait-label">WAIT: {{ packet_row.wait_reason }}</span>{% endif %}
+            <span class="packet-row-meta">{{ packet_row.attempt_count|default(0) }}/{{ packet_row.max_attempts|default('—') }} · worker {{ packet_row.worker or packet_row.worker_id or '—' }} · model {{ packet_row.model or '—' }} · elapsed {{ packet_row.elapsed or '—' }}</span>
+            <span class="packet-row-meta">scope {{ packet_row.scope_summary|default('—') }} · conflicts {{ packet_row.conflict_keys_summary|default('—') }} · deps {{ packet_row.depends_on_summary|default('—') }}</span>
+            <span class="packet-row-meta">base {{ packet_row.base_sha|default('—') }} · integration {{ packet_row.integration_base_sha|default('—') }} · recheck {{ packet_row.integration_recheck|default('—') }}</span>
+          </a>
+          {% endfor %}
+        </div>
+        {% endfor %}
+      {% else %}
+      <div class="cc-empty">No features returned by this project.</div>
+      {% endfor %}
+    </aside>
+
+    <section class="cc-entity-pane">
+      {% if packet_data %}
+        {% include "control/_packet.html" %}
+      {% elif wave %}
+        <div class="cc-entity-card">
+          <p class="eyebrow">Wave</p><h2>{{ wave.title or wave.slug or wave.id }}</h2>
+          <p class="mono">{{ wave.id }}</p>
+          <p class="muted">Order {{ wave.order|default('—') }} · {{ wave.status|default('unknown') }} · {{ wave.packets|length }} packets</p>
+          <p>Select a packet to open the primary debugging view.</p>
+        </div>
+      {% elif feature %}
+        <div class="cc-entity-card">
+          <p class="eyebrow">Feature</p><h2>{{ feature.title or feature.slug or feature.id }}</h2>
+          <p class="mono">{{ feature.id }}</p>
+          <p class="muted">{{ feature.status|default('unknown') }} · {{ feature.waves|length }} waves · {{ feature.total_packets|default(0) }} packets</p>
+          <p>Select a wave or packet from the project tree.</p>
+        </div>
+      {% else %}
+        <div class="cc-entity-card cc-entity-empty"><h2>Select an entity</h2><p>Choose a Feature, Wave or Packet from the selected project tree.</p></div>
+      {% endif %}
+    </section>
+  </div>
+</section>

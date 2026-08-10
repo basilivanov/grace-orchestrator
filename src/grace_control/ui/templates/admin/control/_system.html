@@ -1,0 +1,13 @@
+<section id="cc-system-content" class="cc-system-content"{% if project %} data-project-key="{{ project.project_key }}" hx-get="/admin/p/{{ project.project_key }}/_partial/system" hx-trigger="every 5s" hx-target="#cc-system-content" hx-swap="outerHTML"{% endif %}>
+  <section class="cc-page-heading">
+    <div><p class="eyebrow">System / Diagnostics{% if project %} · {{ project.project_key }}{% endif %}</p><h1>{{ project.project_name or project.name if project else 'System' }}</h1><p class="muted">Health, runtime configuration, workers, leases and waits.</p></div>
+    {% if project %}<span class="status-text status-{{ project.status|default('unknown') }}">{{ cc_status_icon(project.status) }}</span>{% endif %}
+  </section>
+  {% if error %}<div class="cc-banner warning">{{ error }}</div>{% endif %}
+  <div class="cc-system-grid">
+    <section class="cc-entity-card"><h2>Health</h2><pre class="json-preview">{{ health|tojson(indent=2) }}</pre></section>
+    <section class="cc-entity-card"><h2>Runtime configuration</h2><pre class="json-preview" data-testid="masked-config">{{ config|tojson(indent=2) }}</pre></section>
+    <section class="cc-entity-card"><h2>Workers</h2>{% if workers %}<table class="cc-table"><thead><tr><th>ID</th><th>Status</th><th>Packet</th><th>Heartbeat</th></tr></thead><tbody>{% for worker in workers %}<tr><td class="mono">{{ worker.id|default('—') }}</td><td>{{ worker.status|default('unknown') }}</td><td class="mono">{{ worker.current_packet_id|default('—') }}</td><td>{{ worker.last_heartbeat|default('—') }}</td></tr>{% endfor %}</tbody></table>{% else %}<p class="muted">No workers returned.</p>{% endif %}</section>
+    <section class="cc-entity-card"><h2>Counts / leases / waits</h2><pre class="json-preview">{{ {'packets_by_state': diagnostics.packets_by_state|default({}), 'features_by_status': diagnostics.features_by_status|default({}), 'ordinary_leases': diagnostics.ordinary_leases|default([]), 'active_parallel_leases': diagnostics.active_parallel_leases|default([]), 'active_merge_leases': diagnostics.active_merge_leases|default([]), 'waits': diagnostics.waits|default([]), 'effective_max_concurrency': diagnostics.effective_max_concurrency|default(None), 'stale_base_recheck': diagnostics.stale_base_recheck|default(None)}|tojson(indent=2) }}</pre></section>
+  </div>
+</section>

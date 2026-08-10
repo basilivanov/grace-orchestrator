@@ -1,0 +1,24 @@
+<section class="cc-page-heading">
+  <div>
+    <p class="eyebrow">Multi-project operations</p>
+    <h1>Projects</h1>
+    <p class="muted">Every card is isolated to its configured project runtime.</p>
+  </div>
+  {% if coverage %}<span class="coverage">{{ coverage.projects_responded|default(0) }}/{{ coverage.projects_total|default(0) }} responding</span>{% endif %}
+</section>
+
+<nav class="cc-filter-row" aria-label="Project filters">
+  {% for filter_name in filters %}
+    <a class="cc-filter {% if filter_name == filter %}active{% endif %}" href="/admin?filter={{ filter_name }}">
+      {{ filter_name|capitalize }}
+    </a>
+  {% endfor %}
+</nav>
+
+<div id="cc-project-grid" class="cc-project-grid"
+     hx-get="/admin/_partial/projects?filter={{ filter }}"
+     hx-trigger="every 5s"
+     hx-target="#cc-project-grid"
+     hx-swap="outerHTML">
+  {% include "control/_projects.html" %}
+</div>

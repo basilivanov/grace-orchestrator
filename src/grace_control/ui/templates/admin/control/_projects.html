@@ -1,0 +1,39 @@
+<div id="cc-project-grid" class="cc-project-grid"
+     data-filter="{{ filter }}"
+     data-project-count="{{ cards|length }}">
+  {% for card in cards %}
+  <article class="cc-project-card status-border-{{ card.status|default('unknown') }} {% if card.has_attention %}attention-first{% endif %}"
+           data-project-key="{{ card.project_key }}"
+           data-project-status="{{ card.status|default('unknown') }}">
+    <header class="cc-card-header">
+      <div>
+        <p class="eyebrow">{{ card.project_key }}</p>
+        <h2><a href="{{ cc_url(card.project_key) }}">{{ card.project_name or card.name }}</a></h2>
+      </div>
+      <span class="status-text status-{{ card.status|default('unknown') }}">{{ cc_status_icon(card.status) }}</span>
+    </header>
+    <dl class="cc-facts">
+      <div><dt>Unix user</dt><dd>{{ card.unix_user or '—' }}</dd></div>
+      <div><dt>Project root</dt><dd class="mono truncate" title="{{ card.project_root or '' }}">{{ card.project_root or '—' }}</dd></div>
+      <div><dt>Target</dt><dd>{{ card.target_branch or '—' }} · <span class="mono">{{ card.target_head or '—' }}</span></dd></div>
+      <div><dt>GRACE</dt><dd>{{ card.grace_version or '—' }} · <span class="mono">{{ card.grace_code_sha or '—' }}</span></dd></div>
+      <div><dt>Health</dt><dd>API {{ card.api_health or '—' }} · Supervisor {{ card.supervisor_health or '—' }} · DB {{ card.db_health if card.db_health is not none else '—' }}</dd></div>
+      <div><dt>Workers</dt><dd>{% if card.workers is mapping %}{{ card.workers.busy|default(0) }}/{{ card.workers.total|default(0) }} active{% else %}—{% endif %}</dd></div>
+    </dl>
+    <div class="cc-state-grid">
+      {% for state_name in ('READY', 'RUNNING', 'ACCEPTED', 'BLOCKED', 'FAILED') %}
+      <div><span>{{ state_name }}</span><strong>{{ card.packets_by_state[state_name]|default(card.packets_by_state[state_name|lower]|default('—')) if card.packets_by_state is mapping else '—' }}</strong></div>
+      {% endfor %}
+    </div>
+    <div class="cc-card-footer">
+      <span>Parallel leases: {{ card.active_parallel_lease_count|default('—') }}</span>
+      {% if card.latest_event %}<span>Last event: {{ card.latest_event.event_type|default('unknown') }}</span>{% endif %}
+      {% if card.error %}<span class="text-danger">Error: {{ card.error.reason|default(card.error.error|default('unavailable')) }}</span>{% elif card.latest_attention %}<span class="text-warning">Attention: {{ card.latest_attention.reason|default(card.latest_attention.title|default('review')) }}</span>{% else %}<span class="text-ok">No attention items</span>{% endif %}
+    </div>
+    {% if card.sizes %}<p class="muted small">Disk: {{ card.sizes|tojson }}</p>{% endif %}
+    <a class="cc-card-link" href="{{ cc_url(card.project_key) }}">Open project →</a>
+  </article>
+  {% else %}
+  <div class="cc-empty">No projects match the <strong>{{ filter }}</strong> filter.</div>
+  {% endfor %}
+</div>

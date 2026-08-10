@@ -32,6 +32,7 @@ from grace_control.api.auth import AuthMiddleware
 from grace_control.api.lifespan import lifespan
 from grace_control.api.routers import (
     admin,
+    admin_control_center,
     admin_filesystem,
     admin_git,
     admin_hub,
@@ -125,6 +126,7 @@ def create_app(
     app.include_router(capabilities.router, tags=["capabilities"])
     app.include_router(admin_hub.router, tags=["admin-hub"])
     app.include_router(admin_pipeline.router, tags=["admin-pipeline"])
+    app.include_router(admin_control_center.router, tags=["admin-control-center"])
     app.include_router(admin_ui.router, tags=["admin-ui"])
     app.include_router(health.router, tags=["health"])
     app.include_router(ws.router, tags=["ws"])

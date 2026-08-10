@@ -1,0 +1,78 @@
+<article class="cc-packet-detail" data-project-key="{{ project.project_key }}" data-packet-id="{{ packet_data.packet.id }}">
+  {% set p = packet_data.packet %}
+  <header class="cc-packet-header">
+    <div>
+      <p class="eyebrow">Packet · {{ project.project_key }}</p>
+      <h2>{{ p.title or p.slug or p.id }}</h2>
+      <p class="mono">{{ p.id }}</p>
+      <p class="muted">Feature <a href="{{ cc_url(project.project_key, 'feature', p.feature_id) }}">{{ p.feature_id or '—' }}</a> · Wave <a href="{{ cc_url(project.project_key, 'wave', p.wave_id) }}">{{ p.wave_id or '—' }}</a></p>
+    </div>
+    <div class="packet-header-state">
+      <span class="state-chip prominent state-{{ p.state|default('unknown')|lower }}">{{ p.state|default('unknown')|state_label }}</span>
+      <span>attempt {{ p.attempt_count|default(0) }}/{{ p.max_attempts|default('—') }}</span>
+      {% if p.wait_reason %}<strong class="wait-label">WAIT: {{ p.wait_reason }}</strong>{% endif %}
+    </div>
+  </header>
+
+  <dl class="cc-packet-facts">
+    <div><dt>Worker / executor</dt><dd>{{ p.worker_id or p.worker or '—' }} / {{ p.executor_id or '—' }}</dd></div>
+    <div><dt>Model</dt><dd>{{ p.model or '—' }}</dd></div>
+    <div><dt>Created / started / elapsed</dt><dd>{{ p.created_at or '—' }} / {{ p.started_at or '—' }} / {{ p.elapsed or '—' }}</dd></div>
+    <div><dt>Acceptance</dt><dd>{{ p.acceptance_profile or '—' }}</dd></div>
+    <div><dt>Base SHA</dt><dd class="mono">{{ p.base_sha or '—' }}</dd></div>
+    <div><dt>Integration base / recheck</dt><dd class="mono">{{ p.integration_base_sha or '—' }} / {{ p.integration_recheck or '—' }}</dd></div>
+    <div><dt>Scope</dt><dd>{{ p.scope_summary or '—' }}</dd></div>
+    <div><dt>Conflict keys</dt><dd>{{ p.conflict_keys_summary or '—' }}</dd></div>
+    <div><dt>Depends on</dt><dd>{{ p.depends_on_summary or '—' }}</dd></div>
+  </dl>
+
+  {% if packet_data.blocking.has_blocking %}
+  <section class="cc-blocking-panel" data-testid="blocking-panel" aria-live="polite">
+    <header><h3>Blocking</h3><span>{{ packet_data.blocking.decided_by or 'runtime' }}</span></header>
+    <dl class="cc-facts">
+      <div><dt>Reason</dt><dd>{{ packet_data.blocking.reason or '—' }}</dd></div>
+      <div><dt>Failure class / stage</dt><dd>{{ packet_data.blocking.failure_class or '—' }} / {{ packet_data.blocking.failure_stage or '—' }}</dd></div>
+      <div><dt>Exit code</dt><dd>{{ packet_data.blocking.exit_code if packet_data.blocking.exit_code is not none else '—' }}</dd></div>
+      <div><dt>Issues</dt><dd>{% for issue in packet_data.blocking.issues %}<span class="issue">{{ issue }}</span>{% else %}—{% endfor %}</dd></div>
+      <div class="wide"><dt>Last failed command</dt><dd><code>{{ packet_data.blocking.command|join(' ') or '—' }}</code></dd></div>
+      <div class="wide"><dt>stderr tail</dt><dd><pre>{{ packet_data.blocking.stderr_tail or '—' }}</pre></dd></div>
+    </dl>
+  </section>
+  {% endif %}
+
+  <nav class="cc-tabs" aria-label="Packet tabs">
+    {% for tab_name in packet_data.tabs %}
+    <a class="{% if tab_name == packet_data.tab %}active{% endif %}" href="{{ cc_url(project.project_key, 'packet', p.id, tab=tab_name, run_id=run_id, stage_id=stage_id) }}">{{ tab_name|replace('_', ' ')|title }}</a>
+    {% endfor %}
+  </nav>
+
+  <section class="cc-tab-content" data-testid="packet-tab-content">
+    {% if packet_data.tab == 'overview' %}
+      <h3>Overview</h3><p class="muted">Primary packet runtime and safety context is shown above. Use Timeline or Pipeline for execution history.</p>
+      <pre class="json-preview">{{ packet_data.detail|tojson(indent=2) }}</pre>
+    {% elif packet_data.tab == 'timeline' %}
+      <h3>Timeline <span class="muted">({{ packet_data.timeline_total }})</span></h3>
+      {% for event in packet_data.timeline %}
+      <article class="timeline-row"><div class="timeline-head"><time>{{ event.timestamp or '—' }}</time><strong>{{ event.event_type }}</strong><span>{{ event.component or event.entity_type or 'unknown' }}</span><span class="mono">trace={{ event.trace_id or '—' }}</span></div><p>{{ event.reason or event.entity_id or '' }}</p><details><summary>payload</summary><pre>{{ event.payload|tojson(indent=2) }}</pre></details></article>
+      {% else %}<div class="cc-empty">No timeline events returned.</div>{% endfor %}
+    {% elif packet_data.tab == 'pipeline' %}
+      <h3>Pipeline / StageRun</h3>
+      {% if packet_data.detail.recovery_chain %}<section class="cc-banner info"><strong>Recovery chain</strong>{% for recovery_item in packet_data.detail.recovery_chain %}<div>{{ recovery_item.from or '—' }} → {{ recovery_item.to or '—' }} · {{ recovery_item.reason or '—' }} · round {{ recovery_item.loop_round or '—' }}</div>{% endfor %}</section>{% endif %}
+      <div class="stage-list">{% for stage in packet_data.stages %}<article class="stage-card stage-{{ stage.status|default('unknown')|lower }}"><header><strong>{{ stage.label or stage.stage_key }}</strong><span class="state-chip">{{ stage.status|default('unknown') }}</span></header><p class="mono">{{ stage.stage_key }} · trace {{ stage.trace_id or '—' }}</p><dl class="cc-facts"><div><dt>Start / finish / duration</dt><dd>{{ stage.started_at or '—' }} / {{ stage.finished_at or '—' }} / {{ stage.duration_ms or '—' }}</dd></div><div><dt>Loop / attempt / parent</dt><dd>{{ stage.loop_round|default(1) }} / {{ stage.attempt_number|default('—') }} / {{ stage.parent_stage or '—' }}</dd></div><div><dt>Worker / executor / model</dt><dd>{{ stage.worker_id or '—' }} / {{ stage.executor_id or '—' }} / {{ stage.model or '—' }}</dd></div><div><dt>Tokens / cost</dt><dd>{{ stage.tokens_in or '—' }} → {{ stage.tokens_out or '—' }} / {{ stage.cost_usd or '—' }}</dd></div><div class="wide"><dt>Error / recovery</dt><dd>{{ stage.error or '—' }} / {{ stage.recovery_reason or '—' }}</dd></div><div class="wide"><dt>Logical outputs</dt><dd>stdout {{ stage.stdout_path or '—' }} · stderr {{ stage.stderr_path or '—' }} · result {{ stage.result_path or '—' }} · artifacts {{ stage.artifacts_dir or '—' }}</dd></div></dl></article>{% else %}<div class="cc-empty">No StageRun records returned.</div>{% endfor %}</div>
+    {% elif packet_data.tab == 'spec' %}
+      <h3>Spec</h3><pre class="json-preview">{{ packet_data.raw.packet|default(packet_data.detail.packet|default(packet_data.detail))|tojson(indent=2) }}</pre>
+    {% elif packet_data.tab == 'runs' %}
+      <h3>Runs</h3><table class="cc-table"><thead><tr><th>Run</th><th>Status</th><th>Worker / model</th><th>Time / duration</th><th>Base / integration</th></tr></thead><tbody>{% for run in packet_data.runs %}<tr class="{% if run.id == run_id %}selected{% endif %}"><td><a href="{{ cc_url(project.project_key, 'packet', p.id, tab='runs', run_id=run.id) }}">{{ run.run_number or run.id }}</a><br><span class="mono">{{ run.id }}</span></td><td>{{ run.status|default('unknown') }}</td><td>{{ run.worker_id or run.worker or '—' }} / {{ run.model or '—' }}</td><td>{{ run.started_at or '—' }} / {{ run.duration_ms or run.elapsed or '—' }}</td><td class="mono">{{ run.base_sha or '—' }} / {{ run.integration_base_sha or '—' }}</td></tr>{% else %}<tr><td colspan="5">No runs returned.</td></tr>{% endfor %}</tbody></table>{% if packet_data.selected_run %}<h4>Selected run {{ packet_data.selected_run.id }}</h4><pre class="json-preview">{{ packet_data.selected_run|tojson(indent=2) }}</pre>{% endif %}
+    {% elif packet_data.tab == 'stages' %}
+      <h3>Stages</h3><div class="stage-list">{% for stage in packet_data.stages %}<a class="stage-card" href="{{ cc_url(project.project_key, 'packet', p.id, tab='stages', stage_id=stage.id) }}"><header><strong>{{ stage.label or stage.stage_key }}</strong><span>{{ stage.status|default('unknown') }}</span></header><p class="mono">{{ stage.id or '—' }} · {{ stage.stage_key }}</p></a>{% else %}<div class="cc-empty">No stages returned.</div>{% endfor %}</div>{% if packet_data.selected_stage %}<pre class="json-preview">{{ packet_data.selected_stage|tojson(indent=2) }}</pre>{% endif %}
+    {% elif packet_data.tab == 'sessions' %}
+      <h3>Sessions</h3>{% if packet_data.sessions.available %}<pre class="json-preview">{{ packet_data.sessions|tojson(indent=2) }}</pre>{% else %}<div class="cc-banner info" data-testid="sessions-capability">Sessions unavailable: {{ packet_data.sessions.message }}</div>{% endif %}
+    {% elif packet_data.tab == 'diagnostics' %}
+      <h3>Diagnostics</h3><pre class="json-preview">{{ packet_data.diagnostics|tojson(indent=2) }}</pre>
+    {% elif packet_data.tab == 'raw' %}
+      <h3>Raw</h3><pre class="json-preview">{{ packet_data.raw|tojson(indent=2) }}</pre>
+    {% else %}
+      <h3>{{ packet_data.tab|replace('_', ' ')|title }}</h3><div class="cc-banner info">This explorer is capability-aware and will be expanded in Stage 05.</div>
+    {% endif %}
+  </section>
+</article>
