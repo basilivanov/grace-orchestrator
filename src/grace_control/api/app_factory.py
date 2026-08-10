@@ -62,6 +62,7 @@ from grace_control.config.runtime_identity import get_runtime_identity
 from grace_control.config.settings import GraceSettings
 from grace_control.config.settings import settings as _default_settings
 from grace_control.core.structured_logger import GraceLogger
+from grace_control.services.admin_cross_project_service import AdminCrossProjectService
 from grace_control.services.admin_git_read_service import AdminGitReadService
 from grace_control.services.admin_project_service import AdminProjectService
 from grace_control.services.safe_filesystem_service import SafeFilesystemService
@@ -146,6 +147,10 @@ def create_app(
 
     app_state = app.__dict__["state"]
     app_state.admin_project_service = AdminProjectService(registry, client_factory=project_client_factory)
+    app_state.admin_cross_project_service = AdminCrossProjectService(
+        registry,
+        client_factory=project_client_factory,
+    )
     identity = get_runtime_identity()
     app_state.project_filesystem_service = SafeFilesystemService.from_runtime(
         settings_obj=s,
