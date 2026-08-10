@@ -4,6 +4,8 @@ Status: CHANGES REQUIRED
 
 Implementation commit reviewed: `3f3645aef49f3f58cea9c229f8edc0e93ea24343`.
 
+Re-review note: the submitted `010_SUBMISSION.md` still references the same implementation commit `3f3645ae`; no resubmission/fix commit was supplied. The commit/diff is unchanged, so the four acceptance gaps below remain open.
+
 The Stage 04 direction is broadly correct: the Jinja2/HTMX shell is project-aware, project selection remains URL-scoped, the same packet ID is isolated by project, packet Blocking/WAIT/pipeline/sessions/system views are present, disabled/offline cards are isolated, and no Stage 05 explorer implementation was started. However four Stage 04 acceptance gaps remain.
 
 ## Required fixes
