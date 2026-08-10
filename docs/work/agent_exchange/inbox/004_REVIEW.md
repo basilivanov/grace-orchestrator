@@ -1,89 +1,98 @@
 # Review 004
 
 Status: CHANGES_REQUIRED
-Reviewed commit: `51acfe1b13a2d1f30cfe930b45ea056311a4899c`
+Reviewed commit: `82b138f22ca3d51b07648d01a383b059439c92d8`
 
-## Blocker 1 — merge-slot WAIT is treated as terminal/manual failure
+The two blockers from the previous review are substantially addressed: merge-slot contention now has a 202 WAIT path with worker retry, and target-repo worktree cleanup has been moved under the current merge lease. Two remaining concurrency blockers must be closed before TZ04 is accepted.
 
-The coordinator correctly returns a wait condition when an ACCEPTED packet is not first in deterministic order or when another holder owns the target merge lease.
+## Blocker 1 — repo sanity runs before merge-slot/order WAIT and can turn normal contention into a hard failure
 
-But the current runtime path does not actually wait/retry:
+`MergeService.merge_packet()` currently does target-repository validation and `check_repo_sanity()` before it checks deterministic accepted order and before it tries to acquire the merge lease.
 
-1. `MergeService.merge_packet()` returns `success=False` with `waiting_for_merge_slot: ...`.
-2. The packet merge API converts every unsuccessful result into HTTP 409.
-3. `Worker._phase_merge()` catches that request failure as a generic merge error, logs `merge_failed_action_required`, and then leaves the phase.
-4. The packet remains `ACCEPTED` and therefore keeps its TZ03 parallel lease, but there is no background merger or later automatic retry path that will call merge for this packet again.
+That is unsafe for the second worker while the first worker is actively mutating the same repo.
 
-With two parallel workers this can deadlock normal operation: packet A merges, packet B gets a temporary merge-slot wait once, then B remains ACCEPTED indefinitely and blocks conflicting future work.
+Concrete timing:
 
-### Required fix
+1. Packet A is the current deterministic merge candidate and owns the merge lease.
+2. A is inside real `git merge` / another transient target mutation.
+3. Packet B calls merge.
+4. B first runs `validate_repo()` / `check_repo_sanity()`.
+5. The repo may legitimately expose transient dirty state or `MERGE_HEAD` while A is alive and correctly owns the slot.
+6. B therefore gets `target_repo is dirty` / `merge_repo_sanity_failed` instead of `waiting_for_merge_slot`.
+7. API returns a real error; worker emits `merge_failed_action_required` and stops retrying B.
 
-Treat merge-slot/order contention as a non-failure WAIT state all the way through API/client/worker.
-
-A minimal implementation is acceptable:
-
-- distinguish `waiting_for_merge_slot` from real merge failure in the API response/client;
-- worker retries the same ACCEPTED packet with bounded sleep/backoff while the condition is only merge-slot/order contention;
-- do not emit `merge_failed_action_required` for an expected wait;
-- once the earlier holder releases / earlier ACCEPTED packet becomes MERGED, the waiting packet must automatically retry and merge;
-- real checkout/merge/push/sanity/fencing failures remain errors and must not be blindly retried as slot contention.
-
-Do not defer this to TZ06: TZ04's DONE condition says serialized merge must work for multiple workers, and "second waits" must lead to eventual progress.
-
-### Required regression test
-
-Exercise the actual worker/API merge lifecycle (or an equivalent integration path), not only direct coordinator calls:
-
-- two ACCEPTED packets for the same repo;
-- both workers attempt merge concurrently;
-- deterministic first packet gets the slot;
-- second gets a WAIT and performs zero target mutation while waiting;
-- after first releases the merge lease / becomes MERGED, second automatically retries;
-- both packets end MERGED without a manual-action merge failure.
-
-## Blocker 2 — target-repo git cleanup happens after the merge lease is released
-
-`MergeService.merge_packet()` releases the DB merge lease in its `finally` block. After it returns successfully, the API router calls `cleanup_worktree()`.
-
-That cleanup still performs git mutations against the same logical target repository:
-
-- `git worktree remove --force`;
-- `git worktree prune`;
-- `git branch -D`.
-
-Therefore packet B can acquire the merge lease and start checkout/merge while packet A is still mutating shared git metadata during cleanup. This breaks the serialized-target-repo invariant even though checkout/merge/push themselves are guarded.
+This recreates the original progress bug under real Git timing even though the new WAIT test passes. The current regression pauses A at `worktree_remove`, after A is already MERGED, where repo sanity stays clean; it does not cover B arriving while A is inside merge/index mutation.
 
 ### Required fix
 
-Keep all target-repository git cleanup that belongs to the completed packet inside the same merge-serialization boundary, or reacquire/hold an equivalent merge lease before those target-repo git mutations.
+An expected live-slot/order conflict must take precedence over repo-sanity failure.
 
-Preferred simple shape:
+A safe minimal ordering is:
 
-- pass the worktree path into the merge orchestration;
-- perform target-repo `worktree remove/prune` / branch cleanup while the current merge lease is still held;
-- only then release the merge lease;
-- pure filesystem `shutil.rmtree` that does not touch shared target-repo git state may remain outside if desired.
+1. DB-only deterministic order check; if packet is not first -> return `waiting_for_merge_slot` immediately.
+2. Attempt merge-lease acquisition; if a live holder owns the repo -> return `waiting_for_merge_slot` immediately, without inspecting transient target state.
+3. Once this packet owns the slot, run normal repo sanity before mutation.
+4. Expired-lease takeover must still perform the existing non-destructive sanity check before replacing the expired holder.
 
-Do not make cleanup failure incorrectly roll back an already successful git merge; it can remain best-effort, but it must not race another target mutation.
+Equivalent implementations are fine, but a live legitimate holder must never make the waiting worker classify the repo's transient state as a terminal/manual merge failure.
 
 ### Required regression test
 
-Instrument target mutation steps including cleanup:
+Use the real MergeService/worker seam:
 
-- first same-repo merge pauses during target git cleanup;
-- second packet attempts merge;
-- second must not begin checkout/merge/push until first cleanup's shared-repo git operations finish and the merge lease is released;
-- observed max concurrent shared-target git mutations must remain 1.
+- A owns the same-repo merge slot and is paused during `merge` (not post-merge cleanup);
+- expose `MERGE_HEAD` or transient dirty state while A is paused;
+- B attempts merge;
+- B must receive WAIT, perform zero target mutation, and must not emit `merge_failed_action_required`;
+- after A completes/releases, B retries automatically and reaches MERGED.
+
+## Blocker 2 — merge lease is never heartbeated/refreshed during active merge work
+
+`MergeCoordinatorService` has `renew()` and stores `heartbeat_at`, but the merge orchestration never uses it. `run_mutation()` only calls `assert_current()` before invoking the blocking git callback.
+
+The lease therefore has one fixed expiry from acquisition. A live holder can legitimately spend time in checkout/fetch/merge/push/branch/worktree cleanup, approach `expires_at`, start another mutation while still current, then have the lease expire during that mutation. Another worker can reclaim the expired lease if repo sanity happens to look clean (for example during fetch/ref/worktree metadata operations) and start its own mutation while the old callback is still running.
+
+That violates the core TZ04 invariant: one logical target repo must never have concurrent mutation, and an active holder must remain fenced for the duration of its mutation sequence.
+
+### Required fix
+
+Keep the merge lease alive while the holder is actively working.
+
+Acceptable approaches:
+
+- heartbeat/renew the lease during guarded mutation execution; or
+- refresh the lease immediately before every guarded mutation and guarantee that no single guarded callback can outlive the refreshed TTL. Multi-command callbacks such as packet branch cleanup must then be split into individually guarded/renewed target mutations (or heartbeat internally).
+
+Do not hold a long DB transaction around git/subprocess work.
+
+After lease/token loss, the stale holder still must fail closed before any subsequent mutation.
+
+### Required regression test
+
+Add a deterministic lease-expiry concurrency test, not only a stale-token-after-takeover test:
+
+- use a short merge lease TTL or force the lease near expiry;
+- A is a live holder and enters a guarded target mutation;
+- keep A active long enough that the original expiry would elapse;
+- B attempts same-repo takeover/mutation;
+- while A is alive, B must not begin target mutation and observed max same-repo mutation concurrency must stay 1;
+- after A really releases/stops heartbeating, normal expired takeover remains possible and receives a fresh fencing token.
 
 ## Notes
 
-The core TZ04 pieces are otherwise in good shape: Alembic/ORM lease schema, canonical repo key, `BEGIN IMMEDIATE`/row locking, takeover sanity checks, fencing before guarded steps, deterministic ACCEPTED ordering, and TZ03 parallel-lease release on MERGED are all directionally correct.
+Good in the resubmission:
+
+- API 202 WAIT is no longer a generic HTTP merge failure;
+- worker retries expected slot/order WAIT with bounded backoff delay;
+- expected WAIT no longer emits manual-action failure;
+- `worktree remove`, `worktree prune`, and worktree branch deletion now execute inside the merge-lease boundary;
+- the new concurrent cleanup test proves the second merge does not overlap that cleanup path.
 
 Keep TZ05 stale-base integration recheck out of this fix.
 
-Run TZ04 + TZ03 + migration/schema/lease/queue regressions, Ruff, `python3 -m py_compile`, applicable GRACE lint, and `git diff --check`.
+Run TZ04 + TZ03 + migration/schema/lease/queue/worker regressions, Ruff, `python3 -m py_compile`, applicable GRACE lint, and `git diff --check`.
 
-Commit and push the fix, then create:
+Commit and push the fix, then update/create:
 
 `docs/work/agent_exchange/outbox/004_RESUBMISSION.md`
 
