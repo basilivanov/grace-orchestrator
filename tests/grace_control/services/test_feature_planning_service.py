@@ -177,6 +177,74 @@ async def test_run_architect_persists_resolved_mini_swe_profile(db, monkeypatch)
         assert captured["session_dir"] == Path(run.stdout_path).parent
 
 
+# START_FUNCTION_CONTRACT
+# name: test_run_architect_retries_when_current_packet_contract_is_missing
+# purpose: Verify a fresh Architect response missing conflict_keys is rejected
+#          and retried before the plan is persisted.
+# inputs: db, monkeypatch, tmp_path pytest fixtures.
+# returns: None; asserts retry and current-contract persistence.
+# side_effects: Uses a temporary planning workspace and test database.
+# emitted_logs: None.
+# error_behavior: Fails when missing current metadata is silently accepted.
+# END_FUNCTION_CONTRACT
+@pytest.mark.asyncio
+async def test_run_architect_retries_when_current_packet_contract_is_missing(
+    db, monkeypatch, tmp_path
+):
+    from grace_control.config import settings as settings_module
+    from grace_control.core import executor_selector, llm_runner
+    from grace_control.db import get_db
+    from grace_control.services.feature_intake_service import FeatureIntakeService
+    from grace_control.services.feature_planning_service import FeaturePlanningService
+
+    monkeypatch.delenv("GRACE_CONTEXT_DISABLED", raising=False)
+    monkeypatch.setattr(
+        settings_module.settings,
+        "planning_logs_root",
+        str(tmp_path / "planning-logs"),
+    )
+    repo = tmp_path / "target"
+    repo.mkdir()
+    responses = iter([
+        '{"title":"Plan","waves":[{"title":"W1","packets":[{"title":"Missing key","role":"coder","scope":["src/missing.py"]}]}]}',
+        '{"title":"Plan","waves":[{"title":"W1","packets":[{"title":"Current packet","role":"coder","scope":["src/current.py"],"conflict_keys":[]}]}]}',
+    ])
+    calls = 0
+
+    async def _fake_run_llm(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return next(responses)
+
+    monkeypatch.setattr(llm_runner, "run_llm", _fake_run_llm)
+    monkeypatch.setattr(
+        executor_selector,
+        "resolve_model",
+        lambda role: {
+            "model": "openai/gpt-5.5",
+            "command": "python3",
+            "kind": "mini-swe",
+            "executor_id": "architect-mini-swe",
+        },
+    )
+
+    with get_db() as session:
+        result = FeatureIntakeService(session).create_feature(
+            title="Current contract retry",
+            mode="draft_plan",
+            target_repo_root=str(repo),
+        )
+        plan = await FeaturePlanningService(session).run_architect(
+            result["feature_id"],
+            {"summary": "empty repository", "files": [], "target_repo_root": str(repo)},
+            target_repo_root=str(repo),
+        )
+
+    assert calls == 2
+    assert plan["waves"][0]["packets"][0]["conflict_keys"] == []
+    assert "_legacy_packet_contract" not in plan
+
+
 @pytest.mark.asyncio
 async def test_run_architect_uses_disposable_standalone_clone(db, monkeypatch, tmp_path):
     from grace_control.core import executor_selector, llm_runner

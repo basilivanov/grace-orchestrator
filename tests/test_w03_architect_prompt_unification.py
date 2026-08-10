@@ -264,10 +264,11 @@ def test_conflict_keys_are_materialized_and_legacy_packets_default_to_empty():
             "scope": ["src/contract.py"],
             "conflict_keys": [" api:user-service ", "db-schema"],
         }]}],
-    })
+    }, require_current_contract=True)
     assert plan["waves"][0]["packets"][0]["conflict_keys"] == [
         "api:user-service", "db-schema"
     ]
+    assert "_legacy_packet_contract" not in plan
 
     legacy = normalize_architect_plan({
         "waves": [{"title": "Legacy wave", "packets": [{
@@ -278,6 +279,58 @@ def test_conflict_keys_are_materialized_and_legacy_packets_default_to_empty():
     })
     assert legacy["waves"][0]["packets"][0]["conflict_keys"] == []
     assert legacy["_legacy_packet_contract"] is True
+
+
+# START_FUNCTION_CONTRACT
+# name: test_current_architect_packet_without_conflict_keys_is_rejected
+# purpose: Ensure current Architect output cannot silently enter legacy mode.
+# inputs: None.
+# returns: None; asserts missing current-contract metadata is rejected.
+# side_effects: None.
+# emitted_logs: None.
+# error_behavior: Fails when missing conflict_keys is accepted in strict mode.
+# END_FUNCTION_CONTRACT
+def test_current_architect_packet_without_conflict_keys_is_rejected():
+    from grace_control.services.feature_planning_service import normalize_architect_plan
+
+    with pytest.raises(ValueError, match="requires conflict_keys"):
+        normalize_architect_plan({
+            "waves": [{"title": "Wave 1", "packets": [{
+                "title": "Current packet",
+                "role": "coder",
+                "scope": ["src/current.py"],
+            }]}],
+        }, require_current_contract=True)
+
+
+# START_FUNCTION_CONTRACT
+# name: test_current_architect_mixed_conflict_key_presence_is_rejected
+# purpose: Ensure every current coder packet supplies conflict_keys.
+# inputs: None.
+# returns: None; asserts mixed contract presence is rejected.
+# side_effects: None.
+# emitted_logs: None.
+# error_behavior: Fails when a missing packet is defaulted in strict mode.
+# END_FUNCTION_CONTRACT
+def test_current_architect_mixed_conflict_key_presence_is_rejected():
+    from grace_control.services.feature_planning_service import normalize_architect_plan
+
+    with pytest.raises(ValueError, match=r"waves\[0\].packets\[1\]"):
+        normalize_architect_plan({
+            "waves": [{"title": "Wave 1", "packets": [
+                {
+                    "title": "Complete packet",
+                    "role": "coder",
+                    "scope": ["src/complete.py"],
+                    "conflict_keys": [],
+                },
+                {
+                    "title": "Incomplete packet",
+                    "role": "coder",
+                    "scope": ["src/incomplete.py"],
+                },
+            ]}],
+        }, require_current_contract=True)
 
 
 @pytest.mark.parametrize("conflict_keys", ["api:user-service", [""], ["api", " api "]])

@@ -163,11 +163,30 @@ def _planning_workspace_mutation(
     }
 
 
-def normalize_architect_plan(plan: dict) -> dict:
+# START_FUNCTION_CONTRACT
+# name: normalize_architect_plan
+# purpose: Normalize Architect output and enforce the current packet contract
+#          when requested while preserving legacy-plan compatibility by default.
+# inputs: plan — raw Architect/manual plan; require_current_contract — reject
+#         coder packets missing conflict_keys when handling a fresh Architect output.
+# returns: Canonical plan dict, or raises ValueError for invalid current-contract data.
+# side_effects: Mutates the supplied plan dict; no external writes.
+# emitted_logs: None.
+# error_behavior: Raises ValueError when current coder packets omit conflict_keys
+#                 or when conflict_keys normalization rejects a packet.
+# END_FUNCTION_CONTRACT
+def normalize_architect_plan(
+    plan: dict,
+    *,
+    require_current_contract: bool = False,
+) -> dict:
     """Normalize a raw architect plan dict into canonical form.
 
     This is the shared normalization path used by run_architect() before
-    the plan is persisted or passed to the compiler.  It:
+    the plan is persisted or passed to the compiler.  Legacy/manual callers
+    keep compatibility defaults; ``require_current_contract=True`` is used
+    for a fresh Architect response and rejects coder packets that omit the
+    current packet contract before any legacy default is applied.  It:
 
     1. Unwraps nested ``plan.waves`` if the LLM wrapped its output.
     2. Wraps bare ``packets`` into a single wave.
@@ -200,6 +219,7 @@ def normalize_architect_plan(plan: dict) -> dict:
     _schema_warnings: list[str] = []
     has_packets = False
     has_explicit_conflict_keys = False
+    missing_current_contract: list[str] = []
 
     for wi, w in enumerate(plan.get("waves", [])):
         if "packets" not in w:
@@ -207,6 +227,12 @@ def normalize_architect_plan(plan: dict) -> dict:
         for pi, pkt in enumerate(w["packets"]):
             has_packets = True
             has_explicit_conflict_keys |= "conflict_keys" in pkt
+            if (
+                require_current_contract
+                and pkt.get("role", "coder") == "coder"
+                and "conflict_keys" not in pkt
+            ):
+                missing_current_contract.append(f"waves[{wi}].packets[{pi}]")
             # W02: Do NOT setdefault("scope", []) — empty
             # scope must be caught by the plan compiler as
             # E_CODER_EMPTY_SCOPE, not hidden by a default.
@@ -225,6 +251,13 @@ def normalize_architect_plan(plan: dict) -> dict:
                 _schema_warnings.append(
                     f"waves[{wi}].packets[{pi}]: {_w}"
                 )
+
+    if missing_current_contract:
+        locations = ", ".join(missing_current_contract)
+        raise ValueError(
+            "Current architect packet contract requires conflict_keys for every "
+            f"coder packet; missing at {locations}"
+        )
 
     if has_packets and not has_explicit_conflict_keys:
         plan["_legacy_packet_contract"] = True
@@ -661,7 +694,10 @@ class FeaturePlanningService:
                         plan = json.loads(raw)
 
                         # Normalize plan structure (including W03 canonicalization)
-                        plan = normalize_architect_plan(plan)
+                        plan = normalize_architect_plan(
+                            plan,
+                            require_current_contract=True,
+                        )
 
                         # Persist parsed plan
                         self._artifact_store.write_json(
@@ -681,7 +717,11 @@ class FeaturePlanningService:
                     except Exception as e:
                         if attempt == 1:
                             raise
-                        prompt += f"\n\n[Previous attempt failed with invalid JSON: {str(e)[:200]}. Ensure valid JSON output.]"
+                        prompt += (
+                            "\n\n[Previous architect attempt was rejected: "
+                            f"{str(e)[:200]}. Return one valid JSON object that "
+                            "matches the current architect packet contract.]"
+                        )
             finally:
                 _hb_task.cancel()
                 try:
