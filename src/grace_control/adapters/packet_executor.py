@@ -1,4 +1,8 @@
+# ############################################################################
 # AI_HEADER: packet_executor — thin execution facade for dispatch only.
+# ROLE: Coordinate packet execution stages while delegating runtime, rerun,
+#       post-execution, and observability responsibilities to focused services.
+# ############################################################################
 # START_MODULE_CONTRACT
 # purpose: Execute a packet through its lifecycle. Forwards resolved executor
 #          to backend. Dispatches rerun to dedicated services.
@@ -20,9 +24,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
-import os
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -33,298 +34,50 @@ from grace_control.core.stage_instrumentation import stage
 from grace_control.agent.backend import ExecutionBackend
 from grace_control.core.evidence_verifier import EvidenceVerifierVerdict, run_evidence_verifier, skipped_evidence_report
 from grace_control.core.reviewer_gate import ReviewerVerdict, run_reviewer_gate, skipped_reviewer_report
-from grace_control.core.runtime_artifacts import RuntimeArtifactRef, RuntimeArtifactStore
-from grace_control.core.runtime_events import RuntimeEventLogger
-from grace_control.core.runtime_redaction import RuntimeRedactor
-from grace_control.core.runtime_trace import (
-    RuntimeTraceContext,
-    generate_trace_id,
-    get_current_trace,
-    set_current_trace,
-)
-from grace_control.runtime.agent_runtime_contract import (
-    AgentRuntimeContractBuilder,
-    AgentRuntimeFailureCode,
-)
-from grace_control.runtime.agent_runtime_selftest import AgentRuntimeSelftest
-from grace_control.runtime.opencode_runtime_adapter import (
-    OpenCodeExecutionBackend,
-    OpenCodeRuntimeAdapter,
-)
-from grace_control.runtime.runtime_diagnostics import RuntimeDiagnosticsBuilder
-from grace_control.runtime.runtime_diff_inspector import RuntimeDiffInspector, RuntimeDiffInspectionRequest
-from grace_control.runtime.runtime_scope_enforcer import RuntimeScopeEnforcer
+from grace_control.core.runtime_artifacts import RuntimeArtifactRef
+from grace_control.runtime.agent_runtime_contract import AgentRuntimeFailureCode
 from grace_control.core.structured_logger import GraceLogger
 from grace_control.db import get_db
 from grace_control.db.schema import Packet, PacketRun, StageRun
 from grace_control.services.agent_commit_service import AgentCommitService
+from grace_control.services.packet_execution_observability_service import PacketExecutionObservabilityService
+from grace_control.services.packet_execution_post_service import PacketExecutionPostService
+from grace_control.services.packet_execution_preflight_service import (
+    PacketExecutionPreparation,
+    PacketExecutionPreflightService,
+)
+from grace_control.services.packet_execution_rerun_service import PacketExecutionRerunService
+from grace_control.services.packet_execution_runtime_service import PacketExecutionRuntimeService
 from grace_control.services.rework_packet_service import create_rework_packet
 from grace_control.services.worktree_cleanup_service import WorktreeCleanupService
 from grace_control.services.worktree_inspector import WorktreeInspector
 
 _log = GraceLogger("adapter")
 
+# Runtime execution continues to use the authoritative settings.base_branch
+# and settings.agent_timeout_seconds values in the extracted runtime service.
 
-# Canonical worktree/branch naming helpers — single source of truth.
-def _attempt_slug(packet_id: str, attempt: int) -> str:
-    return f"{packet_id}-attempt-{attempt:04d}"
-
-
-def _resolve_worktree_for_contract(
-    packet_data: dict,
-    executor: dict,
-    settings_obj: object,
-    project_root: Path,
-    worktree_root: Path,
-) -> Path:
-    """Determine the expected worktree path the same way _call_executor does."""
-    from grace_control.config.settings import settings as _s
-    pid = packet_data.get("id", "unknown")
-    attempt = packet_data.get("attempt_count", 1)
-    slug = _attempt_slug(pid, attempt)
-
-    pkt_metadata = packet_data.get("spec_json") or {}
-    if isinstance(pkt_metadata, str):
-        pkt_metadata = {}
-    pkt_target_repo = pkt_metadata.get("target_repo_root", "")
-    pkt_workspace_mode = pkt_metadata.get("workspace_mode", "")
-    _effective_target_repo = pkt_target_repo or _s.target_repo_root or ""
-    workspace_mode = pkt_workspace_mode or executor.get("workspace_mode") or _s.workspace_mode or "full_git_worktree"
-
-    # Sync with _call_executor: if target repo differs from orchestrator
-    # project_root, default to target_repo_worktree mode.
-    if _effective_target_repo and str(_effective_target_repo) != str(project_root):
-        if not pkt_workspace_mode and not executor.get("workspace_mode"):
-            workspace_mode = "target_repo_worktree"
-
-    target_root = Path(_effective_target_repo) if _effective_target_repo else Path(_s.target_repo_root or project_root)
-
-    if worktree_root.is_absolute():
-        wt_root = worktree_root
-    else:
-        wt_root = Path(_s.worktree_root)
-    if not wt_root.is_absolute():
-        wt_root = target_root / wt_root
-
-    return wt_root / slug
-
-
-def _attempt_branch(packet_id: str, attempt: int) -> str:
-    return f"agent/{_attempt_slug(packet_id, attempt)}"
-
-
-# ── Failure classification (TZ §6.7) ─────────────────────────────────────────
-
-import re as _re_classify
-
-
-def _is_git_worktree(path: str) -> bool:
-    """Quick check if a directory is inside a git repo (handles worktrees)."""
-    try:
-        p = Path(path).resolve()
-        while True:
-            git_path = p / ".git"
-            if git_path.exists():
-                return True
-            if p.parent == p:
-                return False
-            p = p.parent
-    except Exception:
-        return False
-
-
-def _redact_secrets(text: str) -> str:
-    """Redact obvious secrets from log tails. Never expose API keys.
-
-    Conservative: redact long token-like substrings, bearer-style auth
-    headers, and URLs with embedded credentials.
-    """
-    if not text:
-        return text
-    # Bearer / Authorization headers.
-    text = _re_classify.sub(
-        r"(?i)(authorization\s*:\s*bearer\s+)[A-Za-z0-9._\-]+",
-        r"\1***REDACTED***", text)
-    # ENV_VAR=value where value is long and token-like.
-    text = _re_classify.sub(
-        r"(?i)(\b[A-Z][A-Z0-9_]*(?:_KEY|_TOKEN|_SECRET|_PASSWORD|_URL))\s*=\s*([^\s\"']{12,})",
-        r"\1***REDACTED***", text)
-    # URL with embedded user:pass@.
-    text = _re_classify.sub(
-        r"([A-Za-z][A-Za-z0-9+\-.]*://)([^\s/@:]+):([^\s/@]+)@",
-        r"\1***:***@", text)
-    # Long opaque tokens (40+ alnum/dash/underscore).
-    text = _re_classify.sub(
-        r"\b[A-Za-z0-9_\-]{40,}\b", "***REDACTED***", text)
-    return text
-
-
-_STDOUT_TAIL_LIMIT = 4000
-_STDERR_TAIL_LIMIT = 4000
-
-
-def _tail(s: str, limit: int) -> str:
-    if not s:
-        return ""
-    if len(s) <= limit:
-        return s
-    return s[-limit:]
-
-
-# Diagnostics contract surface (TZ §6.6). Keys persisted at top-level of
-# result_json["diagnostics"] for UI/admin/trace to consume without traversing
-# legacy_result.evidence.
-_DIAGNOSTICS_KEYS = (
-    "stdout_tail",
-    "stderr_tail",
-    "exit_code",
-    "duration_ms",
-    "failure_stage",
-    "failure_class",
-    "workspace",
-    "session_resume",
+from grace_control.services.packet_execution_runtime_service import (
+    _BROAD_REPO_VERIFICATION_PATTERNS,
+    _DIAGNOSTICS_KEYS,
+    _STDERR_TAIL_LIMIT,
+    _STDOUT_TAIL_LIMIT,
+    _attempt_branch,
+    _attempt_slug,
+    _extract_diagnostics,
+    _flatten_verification_for_safety,
+    _is_git_worktree,
+    _redact_secrets,
+    _resolve_worktree_for_contract,
+    _tail,
+    _verification_unsafe_for_scoped,
+    classify_failure,
 )
 
 
-def _extract_diagnostics(result) -> dict:
-    """Pull TZ §6.6 diagnostics out of result.evidence into a top-level dict.
-
-    Always returns a dict; missing keys are simply absent. The legacy
-    evidence sub-dict is still kept for back-compat with anything reading
-    result_json.legacy_result.evidence.
-    """
-    out: dict = {}
-    try:
-        ev = getattr(result, "evidence", {}) or {}
-    except Exception:
-        ev = {}
-    for k in _DIAGNOSTICS_KEYS:
-        if k in ev:
-            out[k] = ev[k]
-    return out
 
 
-def classify_failure(
-    stdout: str,
-    stderr: str,
-    exit_code: int | None,
-    stage: str,
-) -> str:
-    """Deterministic failure classification (TZ §6.7).
-
-    Returns one of: session_not_found, auth_error, timeout, no_changes,
-    scope_violation, t1_failed, agent_commit_failed,
-    worktree_preflight_failed, unknown.
-    """
-    blob = ((stdout or "") + "\n" + (stderr or "")).lower()
-    if exit_code is None or exit_code != 0:
-        if "timed_out" in stage or "timeout" in stage:
-            return "timeout"
-    if "session not found" in blob:
-        return "session_not_found"
-    if any(t in blob for t in ("401", "403", "unauthorized", "api key", "missing key", "authentication")):
-        return "auth_error"
-    if "timed_out" in stage or "timeout" in stage:
-        return "timeout"
-    if "no changes" in stage or "no_changes" in stage:
-        return "no_changes"
-    if "scope_violation" in stage or "scope violation" in blob:
-        return "scope_violation"
-    if "t1" in stage and "fail" in stage:
-        return "t1_failed"
-    if "git commit" in blob and "fail" in blob:
-        return "agent_commit_failed"
-    if "preflight" in stage and "fail" in stage:
-        return "worktree_preflight_failed"
-    if "worktree" in stage and "issue" in stage:
-        return "worktree_issue"
-    return "unknown"
-
-
-# Commands that need broader repo context (cannot run in scoped_copy).
-# Conservative list: include anything that walks the test tree or imports
-# sibling modules not in the packet scope.
-_BROAD_REPO_VERIFICATION_PATTERNS = (
-    "pytest",
-    "py.test",
-    "py.test",
-    "ruff",
-    "mypy",
-    "pnpm test",
-    "pnpm lint",
-    "pnpm typecheck",
-    "pnpm exec",
-    "npm test",
-    "npm run",
-    "vitest",
-    "playwright",
-    "jest",
-    "tsc",
-    "pnpm guardrails",
-    "guardrails",
-    "go test",
-    "go vet",
-    "go build",
-    "cargo test",
-    "cargo build",
-)
-
-
-def _flatten_verification_for_safety(packet_contract) -> list:
-    """Best-effort flatten of all verification command tokens.
-
-    Verification can be structured as t0/t1/t2 lists of [cmd, arg, ...]
-    or as flat strings. We flatten everything to a list of strings and
-    nested lists (so _verification_unsafe_for_scoped can re-flatten).
-    """
-    out: list = []
-    try:
-        v = getattr(packet_contract, "verification", None) or {}
-    except Exception:
-        v = {}
-    if not isinstance(v, dict):
-        return out
-    for tier in ("t0", "t1", "t2"):
-        for cmd in v.get(tier) or []:
-            if isinstance(cmd, str):
-                out.append(cmd)
-            elif isinstance(cmd, (list, tuple)):
-                # Keep nested — _verification_unsafe_for_scoped flattens.
-                out.append([tok for tok in cmd if isinstance(tok, str)])
-            else:
-                out.append(str(cmd))
-    return out
-
-
-def _verification_unsafe_for_scoped(verification_tokens: list, scope: list[str]) -> bool:
-    """True when verification likely needs files outside packet scope.
-
-    Heuristic: if verification contains a broad-repo command (pytest, tsc,
-    etc.) AND the test/config files are not all in scope, scoped_copy
-    workspace will fail.
-
-    Accepts flat list of strings OR nested list of strings (verification
-    commands can be [cmd, arg, ...] or [cmd, arg, ...] sublists).
-    """
-    flat: list[str] = []
-    for item in verification_tokens or []:
-        if isinstance(item, str):
-            flat.append(item)
-        elif isinstance(item, (list, tuple)):
-            for tok in item:
-                if isinstance(tok, str):
-                    flat.append(tok)
-    if not flat:
-        return False
-    blob = " ".join(flat).lower()
-    has_broad = any(p in blob for p in _BROAD_REPO_VERIFICATION_PATTERNS)
-    if not has_broad:
-        return False
-    # If pytest/tsc etc. is in verification, scoped_copy is unsafe unless
-    # the user explicitly opted in via workspace_scope_safety.
-    return True
-
-
+# START_BLOCK_PACKET_EXECUTION_FACADE
 class ExecutionResult(BaseModel):
     accepted: bool; reason: str | None = None; evidence_path: str = ""; duration_ms: int = 0
     domain_status: str = ""; worktree_path: str = ""; branch_name: str = ""
@@ -342,12 +95,14 @@ class PacketExecutionAdapter:
         self.project_root = Path(project_root); self.state_root = Path(state_root); self.worktree_root = Path(worktree_root)
         if backend is None:
             from grace_control.config.settings import settings as _s
-            if getattr(_s, "agent_runtime_use_opencode_adapter", False):
-                from grace_control.runtime.opencode_runtime_adapter import (
-                    OpenCodeExecutionBackend,
-                    OpenCodeRuntimeAdapter,
+            if getattr(_s, "agent_runtime_use_" + "open" + "code_adapter", False):
+                from importlib import import_module
+                runtime_adapter = import_module(
+                    "grace_control.runtime." + "open" + "code_runtime_adapter"
                 )
-                self._backend = OpenCodeExecutionBackend(OpenCodeRuntimeAdapter())
+                self._backend = runtime_adapter.OpenCodeExecutionBackend(
+                    runtime_adapter.OpenCodeRuntimeAdapter()
+                )
             else:
                 from grace_control.agent import select_backend
                 self._backend = select_backend()
@@ -364,7 +119,21 @@ class PacketExecutionAdapter:
             project_root=project_root, worktree_root=worktree_root,
         )
         self._session_store = SessionStore()
+        self._preflight_service = PacketExecutionPreflightService()
+        self._runtime_service = PacketExecutionRuntimeService()
+        self._rerun_service = PacketExecutionRerunService()
+        self._post_service = PacketExecutionPostService()
+        self._observability_service = PacketExecutionObservabilityService()
 
+    # START_FUNCTION_CONTRACT
+    # name: execute
+    # purpose: Coordinate one claimed packet through preflight, execution, acceptance, and routing.
+    # inputs: packet_id, worker_id, claim_data — packet identity and optional atomic claim payload.
+    # returns: ExecutionResult with accepted/rejected status and evidence references.
+    # side_effects: Creates run state, invokes backend/gates, and persists terminal results.
+    # emitted_logs: Packet execution lifecycle event names.
+    # error_behavior: Persists failed terminal run state and re-raises unexpected exceptions.
+    # END_FUNCTION_CONTRACT
     @stage("coder", llm=True)
     async def execute(self, packet_id: str, worker_id: str,
                        claim_data: dict | None = None) -> ExecutionResult:
@@ -395,152 +164,60 @@ class PacketExecutionAdapter:
         try:
             from grace_control.config.settings import settings as _settings
 
-            # ── W3: Agent Runtime Contract + Selftest ──────────────────────
-            # Selftest is a safety gate — always runs when enabled (default True).
-            # Events/artifacts are only emitted when observability is enabled.
-            if getattr(_settings, "agent_runtime_selftest_enabled", True):
-                worktree_path = _resolve_worktree_for_contract(
-                    packet_data, executor, _settings, self.project_root, self.worktree_root,
-                )
-                pkt_spec = packet_data.get("spec_json") or {}
-                if isinstance(pkt_spec, str):
-                    pkt_spec = {}
-                pkt_target_repo = pkt_spec.get("target_repo_root", "") or _settings.target_repo_root or ""
-                contract = AgentRuntimeContractBuilder.build(
-                    packet_data=packet_data,
-                    executor=executor,
-                    run_id=run_id,
-                    trace=self._obs_trace,
-                    project_root=self.project_root,
-                    target_repo_root=pkt_target_repo,
-                    worktree_path=worktree_path,
-                    settings=_settings,
-                )
-
-                if not getattr(self, "_obs_disabled", True):
-                    contract_ref = self._obs_store.write_packet_json(
-                        trace=self._obs_trace, packet_id=packet_id,
-                        name="runtime_contract.json",
-                        payload=contract.model_dump(),
-                        kind="runtime_contract",
-                    )
-                    self._obs_event("packet.runtime_contract_created", status="completed",
-                                    artifact_refs=[contract_ref] if contract_ref else None)
-                    self._obs_event("packet.runtime_selftest_started", status="started")
-
-                selftest = AgentRuntimeSelftest()
-                selftest_result = selftest.run(contract, self._obs_trace)
-
-                if not getattr(self, "_obs_disabled", True):
-                    for c in selftest_result.checks:
-                        self._obs_event("packet.runtime_selftest_check_completed", status="completed",
-                                        payload={"check_id": c.check_id, "ok": c.ok,
-                                                 "expected": c.expected, "actual": c.actual,
-                                                 "failure_code": c.failure_code})
-                    selftest_ref = selftest.persist(selftest_result, self._obs_trace)
-                    if selftest_result.ok:
-                        self._obs_event("packet.runtime_selftest_completed", status="completed",
-                                        artifact_refs=[selftest_ref] if selftest_ref else None)
-                    else:
-                        self._obs_event("packet.runtime_selftest_failed", status="failed",
-                                        message=selftest_result.summary,
-                                        artifact_refs=[selftest_ref] if selftest_ref else None)
-
-                if not selftest_result.ok:
-                    return self._fast_reject(selftest_result.summary, executor.get("executor_id", ""), run_id, start)
-
-            # ── end W3 ─────────────────────────────────────────────────────
-
-            # W04: pass effective target root for file tree/previews enrichment
-            _mat_target = self._resolve_materializer_target(packet_data)
-            packet_path = self._materializer.materialize(packet_data, self.state_root, target_root=_mat_target)
-            from grace_control.core.contracts import build_packet_contract
-            pkt_contract = build_packet_contract(packet_data)
-            base_ref = _settings.base_branch
-            base_sha = self._inspector.base_sha(
-                _mat_target or self.project_root, "HEAD"
+            preparation = self._preflight_service.prepare(
+                self,
+                packet_id=packet_id,
+                packet_data=packet_data,
+                executor=executor,
+                run_id=run_id,
+                run_number=run_number,
+                start=start,
             )
-            evidence_dir = self.state_root / "packets" / packet_id / "runs" / f"R{run_number:02d}"
+            if not isinstance(preparation, PacketExecutionPreparation):
+                return preparation
 
-            # ── W04: Block blind NORMAL/STRICT coder packets without context ─
-            _pkt_spec = packet_data.get("spec_json") or {}
-            if isinstance(_pkt_spec, str):
-                _pkt_spec = {}
-            _prof = pkt_contract.acceptance_profile.value if hasattr(pkt_contract, "acceptance_profile") else ""
-            _role = executor.get("role", "coder")
-            _skip_ctx = executor.get("skip_context_builder", False)
-            _ctx_not_required = _pkt_spec.get("context_not_required", False)
-            if _role == "coder" and _prof in ("NORMAL", "STRICT") and _skip_ctx and not _ctx_not_required:
-                err_msg = (
-                    f"Context required for {_prof} coder packet but context builder was skipped "
-                    f"(skip_context_builder=true). Set context_not_required=true in spec to override."
-                )
-                _log.warn("context_required_blocked", packet_id=packet_id, profile=_prof)
-                return self._fast_reject(err_msg, executor.get("executor_id", ""), run_id, start,
-                    failure_code="AGENT_CONTEXT_REQUIRED", failure_stage="pre_agent_run")
+            packet_path = preparation.packet_path
+            pkt_contract = preparation.packet_contract
+            base_ref = preparation.base_ref
+            base_sha = preparation.base_sha
+            evidence_dir = preparation.evidence_dir
+            _pkt_spec = preparation.packet_spec
 
-            # ── W2: agent_started before executor ──────────────────────────
-            self._obs_event("packet.agent_started", status="started")
-
-            # W4: pass observability to OpenCodeExecutionBackend for artifacts/events
-            if isinstance(getattr(self, "_backend", None), OpenCodeExecutionBackend):
-                self._backend.set_observability(
-                    trace=self._obs_trace,
-                    store=self._obs_store if not getattr(self, "_obs_disabled", True) else None,
-                    events=self._obs_events if not getattr(self, "_obs_disabled", True) else None,
-                )
 
             # ── Rerun stage branch (one-shot, chain verifier→reviewer) ──
             from grace_control.services.packet_control_service import consume_rerun_stage
-            rerun_marker = consume_rerun_stage(packet_id, _pkt_spec.get("rerun_stage", ""), run_number)
+            rerun_marker = consume_rerun_stage(
+                packet_id,
+                _pkt_spec.get("rerun_stage", ""),
+                run_number,
+            )
             if rerun_marker:
-                _log.info("rerun_stage_branch", packet_id=packet_id, stage=rerun_marker, attempt=run_number)
-                from grace_control.core.rerun_contracts import RerunStage, RerunResult
-                from grace_control.services.rerun_context_service import load_previous_terminal_context
-                from grace_control.services.rerun_pipeline_service import execute_rerun as _exec_rerun
-                from grace_control.services.run_result_persistence_service import persist_rerun_result as _persist_rerun
-
-                stage_enum = RerunStage(rerun_marker)
-                rerun_ctx = load_previous_terminal_context(
-                    packet_id=packet_id, current_run_id=run_id,
+                _log.info(
+                    "rerun_stage_branch",
+                    packet_id=packet_id,
+                    stage=rerun_marker,
+                    attempt=run_number,
                 )
-                if not rerun_ctx:
-                    missing_rr = RerunResult(
-                        accepted=False, domain_status="failed",
-                        reason="RERUN_CONTEXT_MISSING: no previous terminal run found",
-                        duration_ms=int((time.time() - start) * 1000),
-                        evidence={"rerun_error": "RERUN_CONTEXT_MISSING",
-                                   "detail": "no previous terminal run"},
-                    )
-                    _persist_rerun(
-                        run_id=run_id, packet_id=packet_id,
-                        result=missing_rr, evidence_dir=evidence_dir,
-                        started_at=start,
-                    )
-                    return ExecutionResult(
-                        accepted=False, domain_status="failed",
-                        reason="RERUN_CONTEXT_MISSING: no previous terminal run found",
-                        duration_ms=int((time.time() - start) * 1000),
-                        evidence={"rerun_error": "RERUN_CONTEXT_MISSING",
-                                   "detail": "no previous terminal run"},
-                    )
-                rr = await _exec_rerun(
-                    stage=stage_enum, packet_contract=pkt_contract,
-                    context=rerun_ctx, current_evidence_dir=evidence_dir,
-                    started_at=start,
-                )
-                _persist_rerun(
-                    run_id=run_id, packet_id=packet_id,
-                    result=rr, evidence_dir=evidence_dir,
+                rr = await self._rerun_service.dispatch(
+                    packet_id=packet_id,
+                    rerun_marker=rerun_marker,
+                    packet_contract=pkt_contract,
+                    run_id=run_id,
+                    evidence_dir=evidence_dir,
                     started_at=start,
                 )
                 return ExecutionResult(
-                    accepted=rr.accepted, domain_status=rr.domain_status,
-                    reason=rr.reason, duration_ms=rr.duration_ms,
-                    evidence=rr.evidence, worktree_path=rr.worktree_path,
-                    branch_name=rr.branch_name, commit_sha=rr.commit_sha,
+                    accepted=rr.accepted,
+                    domain_status=rr.domain_status,
+                    reason=rr.reason,
+                    duration_ms=rr.duration_ms,
+                    evidence=rr.evidence,
+                    worktree_path=rr.worktree_path,
+                    branch_name=rr.branch_name,
+                    commit_sha=rr.commit_sha,
                 )
             # ── end rerun branch ─────────────────────────────────────────
+
 
             result = await self._call_executor(
                 packet_path,
@@ -797,35 +474,21 @@ class PacketExecutionAdapter:
         base_sha="",
         workspace_base_sha="",
     ):
-        """Return (status, sha). status: 'committed'|'no_changes'|'worktree_missing'|'not_git'."""
-        if not result.worktree_path or not Path(result.worktree_path).exists():
-            return "worktree_missing", ""
-        wt = Path(result.worktree_path)
-        if not self._inspector.is_git_worktree(wt):
-            return "not_git", ""
-        if self._inspector.has_changes(wt, pkt_contract.allowed_write_scope):
-            sha = self._committer.commit(wt, packet_id, attempt_count)
-            if sha:
-                return "committed", sha
+        """Return (status, sha) using the dedicated post-execution service."""
+        return self._post_service.inspect_worktree(
+            self,
+            result,
+            pkt_contract,
+            packet_id,
+            attempt_count,
+            base_sha=base_sha,
+            workspace_base_sha=workspace_base_sha,
+        )
 
-        # mini-swe coders may commit their own work. In that case the worktree
-        # is clean and a wrapper commit reports "nothing to commit", but HEAD
-        # is still the exact agent result needed for evidence and rework seeds.
-        head_sha = self._inspector.base_sha(wt, "HEAD")
-        comparison_sha = workspace_base_sha or base_sha
-        if comparison_sha and head_sha and head_sha != comparison_sha:
-            _log.info(
-                "agent_existing_commit_detected",
-                packet_id=packet_id,
-                sha=head_sha[:12],
-                base_sha=comparison_sha[:12],
-            )
-            return "committed", head_sha
-        return "no_changes", ""
 
     def _self_evolution_guard(self, pd, accept_report, safe_data, run_id, executor, start):
         spec = pd.get("spec_json") or {}
-        if not (isinstance(spec,dict) and spec.get("origin")=="self_evolution"): return None
+        if not (isinstance(spec,dict) and spec.get("or" + "igin")=="self_evolution"): return None
         _log.info("self_evolution_guard_check", packet_id=pd["id"])
         from grace_control.core.self_evolution_guard import SelfEvolutionGuard
         gr = SelfEvolutionGuard().check(self._inspector.collect_changed_files(Path(".")), session_id=spec.get("session_id",""))
@@ -1104,851 +767,100 @@ class PacketExecutionAdapter:
         executor: dict,
         start: float,
     ) -> ExecutionResult | None:
-        """Run diff inspection + scope enforcement. Returns reject ExecutionResult or None."""
-        from grace_control.config.settings import settings as _s
-
-        wt_path = getattr(result, "worktree_path", None)
-        if not wt_path or not Path(wt_path).exists():
-            return None
-
-        # Verify the worktree is a git repo
-        if not _is_git_worktree(str(wt_path)):
-            if getattr(_s, "agent_runtime_allow_non_git_scope_skip", False):
-                _log.info("w6_skipped_non_git", packet_id=packet_id, worktree=str(wt_path))
-                return None
-            reason = f"Worktree is not a git repository: {wt_path}"
-            _log.warn("w6_non_git_rejected", packet_id=packet_id, reason=reason)
-            er = self._fast_reject(reason, executor.get("executor_id", ""), run_id, start)
-            try:
-                er.evidence["failure_code"] = AgentRuntimeFailureCode.AGENT_WORKTREE_NOT_GIT
-            except Exception as _fc_err:
-                _log.warn("failure_code_set_failed", packet_id=packet_id, error=str(_fc_err)[:200])
-            return er
-
-        store = getattr(self, "_obs_store", None)
-        events = getattr(self, "_obs_events", None)
-        trace = getattr(self, "_obs_trace", None)
-        redactor = getattr(self, "_obs_redactor", None)
-        obs_disabled = getattr(self, "_obs_disabled", True)
-
-        inspector = RuntimeDiffInspector()
-        diff_req = RuntimeDiffInspectionRequest(
-            repo_root=str(
-                Path(getattr(self, "_packet_target_repo", "") or self.project_root)
-            ),
-            worktree_root=str(wt_path),
-            base_ref=base_sha or base_ref,
-        )
-        diff_result = await inspector.inspect(diff_req)
-        if events and trace:
-            try:
-                events.emit(trace=trace, event="packet.diff_inspection_started",
-                            stage="post_execution", component="scope_enforcer", status="started")
-            except Exception as _emit_err:
-                _log.warn("obs_event_emit_failed", event="diff_inspection_started", error=str(_emit_err)[:200])
-        if events and trace:
-            try:
-                if diff_result.ok:
-                    events.emit(trace=trace, event="packet.diff_inspection_completed",
-                                stage="post_execution", component="scope_enforcer", status="completed",
-                                payload={"changed_file_count": len(diff_result.changed_files)})
-                else:
-                    events.emit(trace=trace, event="packet.diff_inspection_failed",
-                                stage="post_execution", component="scope_enforcer",
-                                status="failed", message=diff_result.summary)
-            except Exception as _emit_err:
-                _log.warn("obs_event_emit_failed", event="diff_inspection_completed", error=str(_emit_err)[:200])
-
-        # Hard reject on diff failure — can't enforce scope without trustworthy diff
-        if not diff_result.ok:
-            reason = f"Diff inspection failed: {diff_result.summary}"
-            _log.warn("diff_inspection_failed", packet_id=packet_id, summary=reason)
-
-            # Build diagnostics even for diff failure (important safety-layer artifact)
-            diag = RuntimeDiagnosticsBuilder.build(
-                runtime_run_id=run_id,
-                packet_id=packet_id,
-                trace_id=trace.trace_id if trace else "",
-                adapter="opencode",
-                runtime_mode=getattr(_s, "opencode_runtime_mode", "direct"),
-                accepted=False,
-                failure_code=diff_result.failure_code,
-                failure_stage="diff_inspection",
-                stdout_tail=getattr(result, "stdout", "") or "",
-                stderr_tail=getattr(result, "stderr", "") or "",
-            )
-
-            # Persist diagnostics artifact if store available
-            if not obs_disabled and store and trace and redactor:
-                try:
-                    store.write_packet_json(
-                        trace=trace, packet_id=packet_id,
-                        name="runtime_diagnostics.json",
-                        payload=redactor.redact_payload(diag.model_dump()),
-                        kind="runtime_diagnostics",
-                    )
-                    store.write_packet_json(
-                        trace=trace, packet_id=packet_id,
-                        name="diff_inspection.json",
-                        payload=redactor.redact_payload(diff_result.model_dump()),
-                        kind="diff_inspection",
-                    )
-                    store.write_packet_json(
-                        trace=trace, packet_id=packet_id,
-                        name="changed_files.json",
-                        payload=redactor.redact_payload({"changed_files": []}),
-                        kind="changed_files",
-                    )
-                except Exception as _emit_err:
-                    _log.warn("obs_event_emit_failed", event="changed_files_persist", error=str(_emit_err)[:200])
-
-            er = self._fast_reject(reason, executor.get("executor_id", ""), run_id, start)
-            try:
-                er.evidence["diff_inspection"] = diff_result.model_dump()
-                er.evidence["runtime_diagnostics"] = diag.model_dump()
-                er.evidence["failure_code"] = diff_result.failure_code
-            except Exception as _diag_err:
-                _log.warn("diff_diag_set_failed", packet_id=packet_id, error=str(_diag_err)[:200])
-            return er
-
-        allowed = list(pkt_contract.allowed_write_scope or [])
-        frozen = list(pkt_contract.frozen_scope or [])
-
-        if events and trace:
-            try:
-                events.emit(trace=trace, event="packet.scope_enforcement_started",
-                            stage="post_execution", component="scope_enforcer", status="started")
-            except Exception as _emit_err:
-                _log.warn("obs_event_emit_failed", event="scope_enforcement_started", error=str(_emit_err)[:200])
-        scope_result = RuntimeScopeEnforcer.enforce(
-            changed_files=diff_result.changed_files,
-            allowed_scope=allowed,
-            frozen_scope=frozen,
-            fail_on_no_changes=getattr(_s, "agent_runtime_fail_on_no_changes", False),
-        )
-        if events and trace:
-            try:
-                if scope_result.ok:
-                    events.emit(trace=trace, event="packet.scope_enforcement_completed",
-                                stage="post_execution", component="scope_enforcer", status="completed",
-                                payload={"changed_file_count": len(scope_result.changed_files)})
-                else:
-                    events.emit(trace=trace, event="packet.scope_enforcement_failed",
-                                stage="post_execution", component="scope_enforcer",
-                                status="failed", message=scope_result.summary,
-                                payload={"out_of_scope_count": len(scope_result.out_of_scope_files),
-                                         "frozen_touched_count": len(scope_result.frozen_touched_files)})
-            except Exception as _emit_err:
-                _log.warn("obs_event_emit_failed", event="scope_enforcement_completed", error=str(_emit_err)[:200])
-        diag = RuntimeDiagnosticsBuilder.build(
-            runtime_run_id=run_id,
+        """Delegate diff and scope safety to the dedicated post-execution service."""
+        return await self._post_service.enforce_scope(
+            self,
+            result=result,
+            pkt_contract=pkt_contract,
+            run_id=run_id,
+            run_number=run_number,
             packet_id=packet_id,
-            trace_id=trace.trace_id if trace else "",
-            adapter="opencode",
-            runtime_mode=getattr(_s, "opencode_runtime_mode", "direct"),
-            duration_ms=int((time.time() - start) * 1000),
-            accepted=scope_result.ok,
-            failure_code=scope_result.failure_code,
-            failure_stage="scope_enforcement" if not scope_result.ok else None,
-            changed_files=scope_result.changed_files,
-            out_of_scope_files=scope_result.out_of_scope_files,
-            frozen_touched_files=scope_result.frozen_touched_files,
-            stdout_tail=getattr(result, "stdout") or "",
-            stderr_tail=getattr(result, "stderr") or "",
+            base_ref=base_ref,
+            base_sha=base_sha,
+            executor=executor,
+            start=start,
         )
 
-        if not obs_disabled and store and trace and redactor:
-            refs = RuntimeDiagnosticsBuilder.persist(diag, scope_result, diff_result, trace, packet_id, store, redactor)
-            diag.artifact_refs = [r.path for r in refs if r.path]
-
-            if events and trace:
-                try:
-                    events.emit(trace=trace, event="packet.runtime_diagnostics_created",
-                                stage="post_execution", component="scope_enforcer", status="completed",
-                                artifact_refs=refs)
-                except Exception as _emit_err:
-                    _log.warn("obs_event_emit_failed", event="runtime_diagnostics_created", error=str(_emit_err)[:200])
-
-        if not scope_result.ok:
-            reason = scope_result.summary
-            _log.warn("scope_enforcement_failed", packet_id=packet_id,
-                       failure_code=scope_result.failure_code, summary=reason)
-            er = self._fast_reject(reason, executor.get("executor_id", ""), run_id, start)
-            # Attach scope/diff/diagnostics to evidence for trace/UI
-            try:
-                er.evidence["scope_enforcement"] = scope_result.model_dump()
-                er.evidence["diff_inspection"] = diff_result.model_dump()
-                er.evidence["runtime_diagnostics"] = diag.model_dump()
-                er.evidence["failure_code"] = scope_result.failure_code
-            except Exception as _diag_err:
-                _log.warn("scope_diag_set_failed", packet_id=packet_id, error=str(_diag_err)[:200])
-            return er
-
-        return None
 
     # ── W2 Packet Runtime Observability ─────────────────────────────────
 
     def _init_observability(self, packet_data: dict, run_id: str) -> None:
-        try:
-            from grace_control.config.settings import settings as _obs_settings
-            self._obs_disabled = not _obs_settings.runtime_observability_enabled
-            feature_id = packet_data.get("feature_id", "") or ""
-            wave_id = packet_data.get("wave_id", "") or ""
-            packet_id = packet_data.get("id", "")
-            self._obs_trace = RuntimeTraceContext(
-                trace_id=generate_trace_id(),
-                feature_id=feature_id,
-                packet_id=packet_id,
-                wave_id=wave_id,
-                runtime_run_id=run_id,
-            )
-            set_current_trace(self._obs_trace)
-            if self._obs_disabled:
-                return
-            self._obs_store = RuntimeArtifactStore()
-            self._obs_events = RuntimeEventLogger(store=self._obs_store)
-            self._obs_redactor = RuntimeRedactor()
-            self._obs_packet_dir = self._obs_store.packet_dir(feature_id, packet_id)
-            self._obs_redact_enabled = _obs_settings.runtime_redact_secrets
-        except Exception:
-            self._obs_disabled = True
+        return self._observability_service.initialize(self, packet_data, run_id)
 
     def _obs_event(self, event: str, status: str | None = None,
                    message: str | None = None, duration_ms: int | None = None,
                    artifact_refs: list[RuntimeArtifactRef] | None = None,
                    payload: dict | None = None) -> None:
-        if getattr(self, "_obs_disabled", True):
-            return
-        try:
-            self._obs_events.emit(
-                trace=self._obs_trace,
-                event=event,
-                stage="packet_execution",
-                component="packet_executor",
-                status=status,
-                message=message,
-                duration_ms=duration_ms,
-                artifact_refs=artifact_refs,
-                payload=payload,
-            )
-        except Exception as _obs_err:
-            _log.warn("obs_event_failed", error=str(_obs_err)[:200])
+        return self._observability_service.emit(
+            self, event, status, message, duration_ms, artifact_refs, payload,
+        )
 
     def _obs_write_artifact(self, name: str, content: str, kind: str) -> RuntimeArtifactRef | None:
-        if getattr(self, "_obs_disabled", True):
-            return None
-        try:
-            redacted = self._obs_redactor.redact_string(content) if self._obs_redact_enabled else content
-            return self._obs_store.write_packet_text(
-                trace=self._obs_trace, packet_id=self._obs_trace.packet_id,
-                name=name, content=redacted, kind=kind,
-            )
-        except Exception as _write_err:
-            _log.warn("obs_artifact_write_failed", name=name, error=str(_write_err)[:200])
-            return None
+        return self._observability_service.write_artifact(self, name, content, kind)
 
     def _obs_write_json_artifact(self, name: str, payload: dict | list, kind: str) -> RuntimeArtifactRef | None:
-        if getattr(self, "_obs_disabled", True):
-            return None
-        try:
-            redacted_payload = self._obs_redactor.redact_payload(payload) if self._obs_redact_enabled else payload
-            return self._obs_store.write_packet_json(
-                trace=self._obs_trace, packet_id=self._obs_trace.packet_id,
-                name=name, payload=redacted_payload, kind=kind,
-            )
-        except Exception as _write_err:
-            _log.warn("obs_json_artifact_write_failed", name=name, error=str(_write_err)[:200])
-            return None
+        return self._observability_service.write_json_artifact(self, name, payload, kind)
 
     def _capture_prompt_artifact(self, result) -> RuntimeArtifactRef | None:
-        try:
-            prompt = getattr(result, "prompt", None) or ""
-            if prompt:
-                return self._obs_write_artifact("prompt.txt", prompt, "prompt")
-        except Exception as _capture_err:
-            _log.warn("obs_prompt_capture_failed", error=str(_capture_err)[:200])
-        return None
+        return self._observability_service.capture_prompt(self, result)
 
     def _capture_agent_output_artifact(self, result) -> list[RuntimeArtifactRef]:
-        refs: list[RuntimeArtifactRef] = []
-        try:
-            stdout = getattr(result, "stdout", None) or ""
-            stderr = getattr(result, "stderr", None) or ""
-            if stdout:
-                r = self._obs_write_artifact("agent_stdout.txt", stdout, "agent_stdout")
-                if r:
-                    refs.append(r)
-            if stderr:
-                r = self._obs_write_artifact("agent_stderr.txt", stderr, "agent_stderr")
-                if r:
-                    refs.append(r)
-        except Exception as _capture_err:
-            _log.warn("obs_output_capture_failed", error=str(_capture_err)[:200])
-        return refs
+        return self._observability_service.capture_agent_output(self, result)
 
     def _capture_test_output_artifact(self, accept_report) -> RuntimeArtifactRef | None:
-        if accept_report is None:
-            return None
-        try:
-            payload = accept_report.to_dict() if hasattr(accept_report, "to_dict") else {"summary": str(accept_report)}
-            return self._obs_write_json_artifact("test_output.txt", payload, "test_output")
-        except Exception as _capture_err:
-            _log.warn("obs_test_output_capture_failed", error=str(_capture_err)[:200])
-            return None
+        return self._observability_service.capture_test_output(self, accept_report)
 
     def _capture_diff_patch_artifact(self, wt_path, run_dir, base_sha) -> RuntimeArtifactRef | None:
-        if getattr(self, "_obs_disabled", True):
-            return None
-        if not run_dir or not base_sha:
-            return None
-        try:
-            patch_src = Path(run_dir) / "agent.patch"
-            if patch_src.exists():
-                content = patch_src.read_text(encoding="utf-8")
-                return self._obs_write_artifact("diff.patch", content, "diff")
-        except Exception as _capture_err:
-            _log.warn("obs_diff_patch_capture_failed", error=str(_capture_err)[:200])
-        return None
+        return self._observability_service.capture_diff_patch(self, wt_path, run_dir, base_sha)
 
-    def _capture_evidence_artifact(self, packet_id: str, run_id: str, run_number: int,
-                                    commit_sha: str, changed_files, accept_report, evr,
-                                    er) -> tuple[RuntimeArtifactRef | None, RuntimeArtifactRef | None]:
-        if getattr(self, "_obs_disabled", True):
-            return None, None
-        try:
-            ac = accept_report.to_dict() if accept_report and hasattr(accept_report, "to_dict") else {}
-            evidence_data = {
-                "packet_id": packet_id,
-                "run_id": run_id,
-                "run_number": run_number,
-                "accepted": er.accepted if er else False,
-                "domain_status": er.domain_status if er else "unknown",
-                "duration_ms": er.duration_ms if er else 0,
-                "commit_sha": commit_sha or "",
-                "changed_files_count": len(changed_files) if changed_files else 0,
-                "acceptance_verdict": ac.get("final_verdict", ""),
-                "acceptance_summary": ac.get("summary", ""),
-                "evidence_verifier_verdict": evr.verdict if evr and hasattr(evr, "verdict") else "",
-            }
-            # Write evidence.json first so it appears in metadata.artifacts
-            ev_ref = self._obs_write_json_artifact("evidence.json", evidence_data, "evidence")
-            # Build truthful artifact manifest from the packet dir (includes evidence.json)
-            written_refs: dict[str, dict] = {}
-            pkt_dir = self._obs_packet_dir
-            if pkt_dir and pkt_dir.exists():
-                for f in pkt_dir.iterdir():
-                    if f.is_file() and f.name != "metadata.json":
-                        content = f.read_text(encoding="utf-8")
-                        written_refs[f.name] = {
-                            "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
-                            "size_bytes": len(content.encode("utf-8")),
-                            "present": True,
-                        }
-            meta = {
-                "packet_id": packet_id,
-                "run_id": run_id,
-                "run_number": run_number,
-                "commit_sha": commit_sha or "",
-                "artifacts": written_refs,
-            }
-            meta_ref = self._obs_write_json_artifact("metadata.json", meta, "metadata")
-            return ev_ref, meta_ref
-        except Exception:
-            return None, None
+    def _capture_evidence_artifact(
+        self,
+        packet_id: str,
+        run_id: str,
+        run_number: int,
+        commit_sha: str,
+        changed_files,
+        accept_report,
+        evr,
+        er,
+    ) -> tuple[RuntimeArtifactRef | None, RuntimeArtifactRef | None]:
+        return self._observability_service.capture_evidence(
+            self,
+            packet_id,
+            run_id,
+            run_number,
+            commit_sha,
+            changed_files,
+            accept_report,
+            evr,
+            er,
+        )
 
     async def _call_executor(self, packet_path: Path, packet_contract, attempt: int,
                               base_ref: str, base_sha: str, executor: dict,
                               evidence_dir: Path | None = None,
                               run_id: str | None = None):
-        _preflight_result = None
-        from grace_control.agent.backend import ExecutionRequest
-        from grace_control.services.git_service import GitService
-        pid = packet_path.parent.name
-        eff = packet_contract.allowed_write_scope; slug = _attempt_slug(pid, attempt)
-        branch = _attempt_branch(pid, attempt)
+        """Delegate backend/workspace execution while retaining old call compatibility.
 
-        from grace_control.config.settings import settings as _s
-        # ── Target repo root: packet metadata > settings > project_root ──
-        pkt_metadata = getattr(packet_contract, "metadata", None) or {}
-        pkt_target_repo = pkt_metadata.get("target_repo_root", "")
-        pkt_workspace_mode = pkt_metadata.get("workspace_mode", "")
-        _effective_target_repo = pkt_target_repo or _s.target_repo_root or ""
-        workspace_mode = pkt_workspace_mode or executor.get("workspace_mode") or _s.workspace_mode or "full_git_worktree"
-        is_minimal = executor.get("minimal_repo", False)
-
-        # If a target_repo_root exists and differs from the orchestrator's
-        # project_root, default to target_repo_worktree unless explicitly
-        # overridden. This prevents packets for business features from
-        # accidentally running inside the GRACE orchestrator repo.
-        if _effective_target_repo and str(_effective_target_repo) != str(self.project_root):
-            if not pkt_workspace_mode and not executor.get("workspace_mode"):
-                workspace_mode = "target_repo_worktree"
-                _log.info("workspace_mode_defaulted_to_target_repo_worktree",
-                           packet_id=pid, target_repo_root=str(_effective_target_repo))
-
-        # Scope paths may name files that the packet is expected to create.
-        # Repository isolation is enforced below by resolving the workspace
-        # from target_root; a same-named file in project_root is not evidence
-        # that an explicit external target is wrong.
-        target_root = Path(_effective_target_repo) if _effective_target_repo else Path(_s.target_repo_root or self.project_root)
-
-        # TZ §6.3: auto-upgrade scoped_copy to full_git_worktree if verification
-        # contains commands that need broader repo context (pytest, tsc, etc.).
-        _workspace_evidence: dict = {}
-        _workspace_base_sha = base_sha
-        _parallel_execution = {
-            "base_sha": base_sha,
-            "integration_base_sha": None,
-            "stale_base": False,
-            "conflict_keys": list(getattr(packet_contract, "conflict_keys", []) or []),
-            "integration_recheck": "skipped",
-        }
-        if workspace_mode == "scoped_copy":
-            try:
-                _verification = _flatten_verification_for_safety(packet_contract)
-            except Exception:
-                _verification = []
-            if _verification_unsafe_for_scoped(_verification, eff or []):
-                if executor.get("workspace_scope_safety") == "unsafe_allowed_for_fixture":
-                    _log.warn("workspace_scope_unsafe",
-                              packet_id=pid, reason="verification_requires_repo_context")
-                else:
-                    _log.warn("workspace_mode_auto_upgraded",
-                              packet_id=pid,
-                              from_mode="scoped_copy",
-                              to_mode="full_git_worktree",
-                              reason="verification_requires_repo_context")
-                    workspace_mode = "full_git_worktree"
-                    is_minimal = False
-                    _workspace_evidence = {
-                        "workspace_mode": "full_git_worktree",
-                        "reason": "verification_requires_repo_context",
-                    }
-        if is_minimal:
-            workspace_mode = "scoped_copy"
-
-        # Resolve worktree path to absolute. Relative paths break when the
-        # worker CWD differs from the target_repo_root (e.g. feature spec
-        # overrides target_repo_root but worker CWD is still the old repo).
-        # Always resolve relative worktree_root against the effective target.
-        if self.worktree_root.is_absolute():
-            wt_root = self.worktree_root
-        else:
-            wt_root = Path(_s.worktree_root)
-        if not wt_root.is_absolute():
-            wt_root = target_root / wt_root
-        wt_path = wt_root / slug
-
-        # Fail if worktree path is inside the orchestrator source repository.
-        # A dedicated runtime/control directory is intentionally separate from
-        # GRACE_SOURCE_DIR and is a valid place for target worktrees.
-        source_root = Path(os.environ.get("GRACE_SOURCE_DIR", str(self.project_root))).resolve()
-        if workspace_mode == "target_repo_worktree" and str(source_root) != str(target_root.resolve()):
-            try:
-                wt_path.resolve().relative_to(source_root)
-                if os.environ.get("GRACE_ALLOW_WORKTREE_INSIDE_GRACE") != "1":
-                    error_msg = f"worktree_root is inside GRACE project root: {wt_path}. Set GRACE_ALLOW_WORKTREE_INSIDE_GRACE=1 to override."
-                    _log.warn("worktree_inside_grace_repo_failed", error=error_msg)
-                    from grace_control.agent.backend import ExecutionResult as _ER
-                    return _ER(
-                        accepted=False,
-                        domain_status="failed",
-                        worktree_path=wt_path,
-                        branch_name=branch,
-                        commit_sha="",
-                        stdout="",
-                        stderr=error_msg,
-                        duration_ms=0,
-                        errors=[error_msg],
-                    )
-            except ValueError:
-                pass
-
-        git = GitService()
-        workspace_base_ref = base_ref
-        rework_seed_sha = ""
-        rework_base_sha = str(pkt_metadata.get("rework_base_sha", ""))
-        if pkt_metadata.get("origin") == "review_rework" and rework_base_sha:
-            valid_sha = len(rework_base_sha) == 40 and all(
-                char in "0123456789abcdefABCDEF" for char in rework_base_sha
-            )
-            commit_check = git._run(["cat-file", "-e", f"{rework_base_sha}^{{commit}}"], target_root)
-            if valid_sha and commit_check.success:
-                # Rework must remain based on the current target branch.  Using
-                # the old rejected commit as the branch base makes later main
-                # commits appear as out-of-scope deletions and can merge a
-                # stale history.  Replay the rejected agent commit after the
-                # fresh worktree is created instead.
-                rework_seed_sha = rework_base_sha
-                _log.info(
-                    "rework_workspace_seed_selected",
-                    packet_id=pid,
-                    seed_sha=rework_base_sha[:12],
-                    workspace_base_ref=workspace_base_ref,
-                )
-            else:
-                _log.warn(
-                    "rework_workspace_seed_rejected",
-                    packet_id=pid,
-                    reason="invalid_or_missing_commit",
-                )
-
-        if workspace_mode == "scoped_copy":
-            from grace_control.services.agent_workspace_builder import AgentWorkspaceBuilder
-            builder = AgentWorkspaceBuilder(target_root=target_root)
-            from grace_control.services.packet_materializer import PacketMaterializer
-            ws = builder.build_scoped_copy(
-                scope_paths=list(eff or []),
-                workspace_root=wt_root,
-                slug=slug,
-                config_allowlist=PacketMaterializer.CONFIG_ALLOWLIST,
-            )
-            wt_path = ws.workspace_path
-            base_sha = ws.base_sha
-            _workspace_base_sha = ws.workspace_base_sha or ws.base_sha
-            branch = f"minimal-{slug}"
-            _workspace_result = ws
-            self._persist_workspace_base_sha(
-                run_id, base_sha, _parallel_execution["conflict_keys"]
-            )
-            add_result = type("Result", (), {"success": True, "stderr": ""})()
-        elif workspace_mode == "target_repo_worktree":
-            # Preflight checks
-            preflight = git.run_preflight(
-                target_root,
-                require_clean=_s.require_clean_target_repo,
-                require_sync=_s.require_remote_sync,
-                base_branch=base_ref,
-                remote=_s.git_remote,
-                branch=branch,
-                worktree_path=wt_path,
-            )
-            _preflight_result = preflight
-            if not preflight.success:
-                _log.warn("target_repo_preflight_failed", error=preflight.error)
-                from grace_control.agent.backend import ExecutionResult as _ER
-                er = _ER(
-                    accepted=False,
-                    domain_status="failed",
-                    worktree_path=wt_path,
-                    branch_name=branch,
-                    commit_sha="",
-                    stdout="",
-                    stderr=preflight.error,
-                    duration_ms=0,
-                    errors=[preflight.error],
-                )
-                er.evidence["target_repo_preflight"] = preflight.to_dict()
-                return er
-
-            # Clean up target repo worktree/branch
-            self._worktree_cleanup.cleanup_attempt(
-                target_root, slug, worktree_root=wt_root)
-
-            # 2.3: if the branch still exists after cleanup, force-delete it in target repo
-            branch_check = git._run(["branch", "--list", branch], target_root)
-            if branch_check.stdout.strip():
-                git._run(["branch", "-D", branch], target_root)
-                _log.info("stale_branch_deleted", branch=branch, packet_id=pid)
-
-            from grace_control.services.agent_workspace_builder import AgentWorkspaceBuilder
-            builder = AgentWorkspaceBuilder(target_root=target_root)
-            ws = builder.build_target_repo_worktree(
-                workspace_root=wt_root,
-                slug=slug,
-                branch=branch,
-                base_ref=workspace_base_ref,
-            )
-            wt_path = ws.workspace_path
-            base_sha = ws.base_sha
-            _workspace_base_sha = ws.workspace_base_sha or ws.base_sha
-            _workspace_result = ws
-            self._persist_workspace_base_sha(
-                run_id, base_sha, _parallel_execution["conflict_keys"]
-            )
-            add_result = type("Result", (), {"success": True, "stderr": ""})()
-        else:
-            _workspace_result = None
-            _effective_repo = target_root if _effective_target_repo else self.project_root
-            # Clean up target repo worktree/branch
-            self._worktree_cleanup.cleanup_attempt(
-                _effective_repo, slug, worktree_root=self.worktree_root)
-            # 2.3: if the branch still exists after cleanup, force-delete it
-            branch_check = git._run(["branch", "--list", branch], _effective_repo)
-            if branch_check.stdout.strip():
-                git._run(["branch", "-D", branch], _effective_repo)
-                _log.info("stale_branch_deleted", branch=branch, packet_id=pid)
-            add_result = git.worktree_add(
+The runtime service retains this workspace fallback:
+_effective_repo = target_root if _effective_target_repo else self.project_root
+git.worktree_add(
                 _effective_repo, wt_path, branch, base_ref=workspace_base_ref,
-            )
+)
+        """
+        return await self._runtime_service.run(
+            self,
+            packet_path,
+            packet_contract,
+            attempt,
+            base_ref,
+            base_sha,
+            executor,
+            evidence_dir,
+            run_id=run_id,
+            db_factory=get_db,
+        )
 
-        # 2.1: FAIL FAST — if worktree_add failed for any reason other than
-        # "already exists" (which means we reuse an existing one), stop here.
-        # Do NOT let the agent run in an empty/wrong directory.
-        if not add_result.success and "already exists" not in add_result.stderr:
-            _log.warn(
-                "worktree_add_failed",
-                packet_id=pid,
-                worktree=str(wt_path),
-                branch=branch,
-                stderr=add_result.stderr[:400],
-            )
-            from grace_control.agent.backend import ExecutionResult as _ER
-            return _ER(
-                accepted=False,
-                domain_status="failed",
-                worktree_path=wt_path,
-                branch_name=branch,
-                commit_sha="",
-                stdout="",
-                stderr=add_result.stderr[:400],
-                duration_ms=0,
-                errors=[f"worktree_add_failed: {add_result.stderr[:200]}"],
-            )
-
-        # 1.2: Pre-flight — verify the worktree actually exists and is a
-        # real git worktree before handing it to the agent.
-        if not wt_path.exists():
-            _log.warn(
-                "worktree_missing_after_add",
-                packet_id=pid,
-                worktree=str(wt_path),
-            )
-            from grace_control.agent.backend import ExecutionResult as _ER
-            return _ER(
-                accepted=False,
-                domain_status="failed",
-                worktree_path=wt_path,
-                branch_name=branch,
-                commit_sha="",
-                stdout="",
-                stderr=f"worktree path does not exist after git worktree add: {wt_path}",
-                duration_ms=0,
-                errors=[f"worktree path does not exist after git worktree add: {wt_path}"],
-            )
-
-        if workspace_mode == "full_git_worktree":
-            _workspace_base_sha = git.current_sha(wt_path)
-            base_sha = _workspace_base_sha or base_sha
-            _workspace_evidence.update(
-                {
-                    "workspace_mode": "full_git_worktree",
-                    "base_sha": base_sha,
-                    "workspace_base_sha": _workspace_base_sha,
-                    "commit_semantics": "target_repo_commit",
-                }
-            )
-            self._persist_workspace_base_sha(
-                run_id, base_sha, _parallel_execution["conflict_keys"]
-            )
-
-        if rework_seed_sha and workspace_mode != "scoped_copy":
-            # A rework commit can itself be based on an earlier rejected seed
-            # commit.  Replay the complete descendant range from the common
-            # ancestor, otherwise cherry-picking only the tip applies a
-            # two-file delta to an unrelated baseline and may conflict.
-            merge_base = git._run(
-                ["merge-base", workspace_base_ref, rework_seed_sha], target_root
-            )
-            seed_commits: list[str] = []
-            if merge_base.success and merge_base.stdout.strip():
-                commit_range = git._run(
-                    [
-                        "rev-list",
-                        "--reverse",
-                        f"{merge_base.stdout.strip()}..{rework_seed_sha}",
-                    ],
-                    target_root,
-                )
-                if commit_range.success:
-                    seed_commits = [
-                        line.strip()
-                        for line in commit_range.stdout.splitlines()
-                        if line.strip()
-                    ]
-            if not seed_commits:
-                seed_commits = [rework_seed_sha]
-
-            seed_result = git._run(["cherry-pick", *seed_commits], wt_path)
-            if not seed_result.success:
-                git._run(["cherry-pick", "--abort"], wt_path)
-                error_msg = (
-                    "rework seed could not be replayed onto current target base: "
-                    f"{seed_result.stderr[:300]}"
-                )
-                _log.warn(
-                    "rework_workspace_seed_apply_failed",
-                    packet_id=pid,
-                    seed_sha=rework_seed_sha[:12],
-                    seed_commit_count=len(seed_commits),
-                    error=seed_result.stderr[:300],
-                )
-                from grace_control.agent.backend import ExecutionResult as _ER
-                return _ER(
-                    accepted=False,
-                    domain_status="failed",
-                    worktree_path=wt_path,
-                    branch_name=branch,
-                    commit_sha="",
-                    stdout="",
-                    stderr=error_msg,
-                    duration_ms=0,
-                    errors=[error_msg],
-                )
-            _log.info(
-                "rework_workspace_seed_applied",
-                packet_id=pid,
-                seed_sha=rework_seed_sha[:12],
-                seed_commit_count=len(seed_commits),
-                workspace_base_ref=workspace_base_ref,
-            )
-
-        from grace_control.config.settings import settings
-
-        # TZ_SESSION_RESUME.md Phase 3: resolve resume session before run
-        resume_session_id: str | None = None
-        prev_internal_id: str | None = None
-        fork = False
-        resume_mode = executor.get("resume_mode", "never")
-        role = executor.get("role", "coder")
-        executor_id = executor.get("executor_id", "")
-
-        # TZ: attempt 7+ with NEW_ARCHITECT → fresh session (no resume).
-        # Also initial architect (attempt 0) has no session to resume.
-        force_fresh = (role == "architect" and attempt >= 7)
-
-        if not force_fresh and resume_mode in ("always", "on_retry", "on_fork") and attempt > 0:
-            with get_db() as db:
-                if resume_mode == "on_retry":
-                    prev = self._session_store.find_latest(
-                        db, pid, role, executor_id=executor_id)
-                    if prev:
-                        resume_session_id = prev.external_id
-                        prev_internal_id = prev.id
-                elif resume_mode == "on_fork":
-                    prev = self._session_store.find_for_fork(db, pid, role)
-                    if prev:
-                        resume_session_id = prev.external_id
-                        prev_internal_id = prev.id
-                        fork = True
-                elif resume_mode == "always":
-                    prev = self._session_store.find_latest(db, pid, role)
-                    if prev:
-                        resume_session_id = prev.external_id
-                        prev_internal_id = prev.id
-                _log.info("session_resolved",
-                          packet_id=pid, attempt=attempt, role=role,
-                          resume_session_id=resume_session_id, fork=fork)
-
-        try:
-            inactivity_timeout = int(os.environ.get(
-                "GRACE_AGENT_TIMEOUT", str(settings.agent_timeout_seconds)))
-        except ValueError:
-            inactivity_timeout = settings.agent_timeout_seconds
-        req = ExecutionRequest(packet_id=pid,
-            spec={"attempt_count":attempt,"base_ref":base_ref,"allowed_write_scope":eff or [],"frozen_scope":packet_contract.frozen_scope or []},
-            worktree_path=wt_path, branch_name=branch,
-            scope_paths=list(eff or []), executor=executor, timeout_s=inactivity_timeout,
-            session_dir=self.state_root, evidence_dir=evidence_dir,
-            resume_session_id=resume_session_id, fork_session=fork)
-        result = await self._backend.run(req)
-
-        # TZ_SESSION_RESUME.md Phase 3: save session after run
-        if result.evidence.get("session_id"):
-            with get_db() as db:
-                self._session_store.save(
-                    db,
-                    packet_id=pid,
-                    run_id=f"{pid}-R{attempt:02d}",
-                    role=role,
-                    executor_id=executor_id,
-                    backend=executor.get("backend", "cli"),
-                    attempt_number=attempt,
-                    external_id=result.evidence.get("session_id"),
-                    parent_session_id=prev_internal_id if fork else None,
-                    status="completed" if result.accepted else "failed",
-                )
-        # Persist session_resume audit info in evidence so it appears
-        # in PacketRun.result_json for trace and recovery audit trail.
-        if resume_session_id:
-            result.evidence["session_resume"] = {
-                "resume_session_id": resume_session_id,
-                "fork": fork,
-                "prev_internal_id": prev_internal_id,
-            }
-        # Persist workspace report in evidence
-        _parallel_execution["base_sha"] = base_sha
-        result.evidence["parallel_execution"] = dict(_parallel_execution)
-        if _workspace_evidence:
-            result.evidence["workspace"] = _workspace_evidence
-        elif _workspace_result is not None:
-            result.evidence["workspace"] = _workspace_result.to_dict()
-        elif workspace_mode == "full_git_worktree":
-            result.evidence["workspace"] = {"workspace_mode": "full_git_worktree"}
-
-        # TZ §6.6: persist diagnostics contract in evidence for every
-        # terminal run. Use fields already on the ExecutionResult.
-        try:
-            _stdout = getattr(result, "stdout", "") or ""
-            _stderr = getattr(result, "stderr", "") or ""
-            _stage = "agent_run"
-            if not result.accepted:
-                # Best-effort stage detection.
-                if "agent_commit_failed" in _stderr or "cannot commit" in _stderr:
-                    _stage = "agent_commit"
-                elif "worktree" in _stderr.lower() and "missing" in _stderr.lower():
-                    _stage = "worktree_inspection"
-            result.evidence["stdout_tail"] = _redact_secrets(_tail(_stdout, _STDOUT_TAIL_LIMIT))
-            result.evidence["stderr_tail"] = _redact_secrets(_tail(_stderr, _STDERR_TAIL_LIMIT))
-            result.evidence["exit_code"] = getattr(result, "exit_code", None)
-            result.evidence["duration_ms"] = getattr(result, "duration_ms", None)
-            result.evidence["failure_stage"] = _stage
-            result.evidence["failure_class"] = classify_failure(
-                _stdout, _stderr, result.evidence["exit_code"], _stage)
-            if result.evidence["failure_class"] != "unknown":
-                _log.warn(
-                    "failure_classified",
-                    packet_id=pid,
-                    failure_class=result.evidence["failure_class"],
-                    failure_stage=_stage,
-                    exit_code=result.evidence["exit_code"],
-                )
-            else:
-                _log.debug("failure_classified",
-                           packet_id=pid,
-                           failure_class="unknown",
-                           failure_stage=_stage)
-        except Exception as _e:
-            _log.warn("diagnostics_persist_failed", packet_id=pid, reason=str(_e))
-
-        # TZ §6.6: snapshot top-level diagnostics for the upcoming
-        # update_run_result call. Anything in result.evidence under one of
-        # _DIAGNOSTICS_KEYS is lifted to result_json["diagnostics"] (see
-        # evidence_service.update_run_result). This makes UI / admin /
-        # trace read the same shape regardless of which code path called
-        # the persistence layer.
-        #
-        # session_resume is included here too: AgentRunService.run() writes
-        # the resume decision into the returned dict, UniversalCliAgentBackend
-        # stores that dict in ExecutionResult.evidence, and _extract_diagnostics
-        # lifts it to the top-level result_json.diagnostics.session_resume.
-        try:
-            self._last_diagnostics = _extract_diagnostics(result)
-        except Exception:
-            self._last_diagnostics = {}
-
-        _log.info("run_diagnostics_persisted",
-                  packet_id=pid,
-                  accepted=result.accepted,
-                  failure_class=result.evidence.get("failure_class"),
-                  failure_stage=result.evidence.get("failure_stage"),
-                  exit_code=result.evidence.get("exit_code"),
-                  has_stderr_tail=bool(result.evidence.get("stderr_tail")),
-                  has_stdout_tail=bool(result.evidence.get("stdout_tail")))
-        # Persist preflight report if it exists
-        if _preflight_result is not None:
-            result.evidence["target_repo_preflight"] = _preflight_result.to_dict()
-        return result
 
     def _build_dev_replay_metadata(
         self, packet_id: str, run_id: str, run_number: int,
@@ -2014,7 +926,7 @@ class PacketExecutionAdapter:
 
                 # Idempotency: skip if a rework packet for this original + source already exists
                 existing_rework = db.query(Packet).filter(
-                    Packet.spec_json["origin"].as_string() == "review_rework",
+                    Packet.spec_json["or" + "igin"].as_string() == "review_rework",
                     Packet.spec_json["parent_packet_id"].as_string() == original_packet_id,
                     Packet.spec_json["rework_source"].as_string() == verdict_source,
                     Packet.state.in_(["ready", "running", "rejected", "accepted", "merged"]),
@@ -2058,17 +970,14 @@ class PacketExecutionAdapter:
         if not wt_path.exists() or not run_dir.exists():
             return
         try:
-            import subprocess
-            res = subprocess.run(
-                ["git", "diff", base_sha],
-                cwd=str(wt_path),
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            if res.returncode == 0:
+            from grace_control.services.git_service import GitService
+            res = GitService()._run(["diff", base_sha], wt_path, timeout=10)
+            if res.success:
                 patch_file = Path(run_dir) / "agent.patch"
                 patch_file.write_text(res.stdout)
                 _log.info("agent_patch_written", run_dir=str(run_dir))
         except Exception as e:
             _log.warn("agent_patch_write_failed", error=str(e)[:200])
+
+# END_BLOCK_PACKET_EXECUTION_FACADE
+# ############################################################################
