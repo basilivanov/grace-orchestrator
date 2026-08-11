@@ -161,6 +161,21 @@ class RuntimeWorkspacePreparation:
     preflight_result: object | None
 
 
+@dataclass
+class WorkspaceLayout:
+    slug: str
+    branch_name: str
+    packet_metadata: dict
+    effective_target_repo: str
+    workspace_mode: str
+    target_root: Path
+    worktree_root: Path
+    worktree_path: Path
+    workspace_evidence: dict
+    parallel_execution: dict
+    settings: object
+
+
 # START_BLOCK_WORKSPACE_PREPARATION
 class PacketExecutionWorkspaceService:
 
@@ -186,114 +201,32 @@ class PacketExecutionWorkspaceService:
         executor: dict,
         run_id: str | None,
     ):
-        _preflight_result = None
         from grace_control.services.git_service import GitService
 
-        slug = _attempt_slug(pid, attempt)
-        branch = _attempt_branch(pid, attempt)
-        from grace_control.config.settings import settings as _s
-
-        pkt_metadata = getattr(packet_contract, "metadata", None) or {}
-        pkt_target_repo = pkt_metadata.get("target_repo_root", "")
-        pkt_workspace_mode = pkt_metadata.get("workspace_mode", "")
-        _effective_target_repo = pkt_target_repo or _s.target_repo_root or ""
-        workspace_mode = (
-            pkt_workspace_mode
-            or executor.get("workspace_mode")
-            or _s.workspace_mode
-            or "full_git_worktree"
+        layout = self._resolve_workspace_layout(
+            adapter,
+            pid=pid,
+            eff=eff,
+            packet_contract=packet_contract,
+            attempt=attempt,
+            base_sha=base_sha,
+            executor=executor,
         )
-        is_minimal = executor.get("minimal_repo", False)
-
-        # An external target defaults to an isolated target-repository worktree
-        # unless the packet or executor explicitly selected another mode.
-        if _effective_target_repo and str(_effective_target_repo) != str(adapter.project_root):
-            if not pkt_workspace_mode and not executor.get("workspace_mode"):
-                workspace_mode = "target_repo_worktree"
-                _log.info(
-                    "workspace_mode_defaulted_to_target_repo_worktree",
-                    packet_id=pid,
-                    target_repo_root=str(_effective_target_repo),
-                )
-
-        target_root = Path(_effective_target_repo) if _effective_target_repo else Path(
-            _s.target_repo_root or adapter.project_root
-        )
-
-        # Scope paths may name files that the packet is expected to create.
-        # Isolation is enforced by resolving the workspace from target_root.
-        _workspace_evidence: dict = {}
+        if not isinstance(layout, WorkspaceLayout):
+            return layout
+        slug = layout.slug
+        branch = layout.branch_name
+        pkt_metadata = layout.packet_metadata
+        _effective_target_repo = layout.effective_target_repo
+        workspace_mode = layout.workspace_mode
+        target_root = layout.target_root
+        wt_root = layout.worktree_root
+        wt_path = layout.worktree_path
+        _workspace_evidence = layout.workspace_evidence
+        _parallel_execution = layout.parallel_execution
+        _s = layout.settings
         _workspace_base_sha = base_sha
-        _parallel_execution = {
-            "base_sha": base_sha,
-            "integration_base_sha": None,
-            "stale_base": False,
-            "conflict_keys": list(getattr(packet_contract, "conflict_keys", []) or []),
-            "integration_recheck": "skipped",
-        }
-        if workspace_mode == "scoped_copy":
-            try:
-                verification = _flatten_verification_for_safety(packet_contract)
-            except Exception:
-                verification = []
-            if _verification_unsafe_for_scoped(verification, eff or []):
-                if executor.get("workspace_scope_safety") == "unsafe_allowed_for_fixture":
-                    _log.warn(
-                        "workspace_scope_unsafe",
-                        packet_id=pid,
-                        reason="verification_requires_repo_context",
-                    )
-                else:
-                    _log.warn(
-                        "workspace_mode_auto_upgraded",
-                        packet_id=pid,
-                        from_mode="scoped_copy",
-                        to_mode="full_git_worktree",
-                        reason="verification_requires_repo_context",
-                    )
-                    workspace_mode = "full_git_worktree"
-                    is_minimal = False
-                    _workspace_evidence = {
-                        "workspace_mode": "full_git_worktree",
-                        "reason": "verification_requires_repo_context",
-                    }
-        if is_minimal:
-            workspace_mode = "scoped_copy"
-
-        if adapter.worktree_root.is_absolute():
-            wt_root = adapter.worktree_root
-        else:
-            wt_root = Path(_s.worktree_root)
-        if not wt_root.is_absolute():
-            wt_root = target_root / wt_root
-        wt_path = wt_root / slug
-
-        source_root = Path(os.getenv("GRACE_SOURCE_DIR", str(adapter.project_root))).resolve()
-        if workspace_mode == "target_repo_worktree" and str(source_root) != str(target_root.resolve()):
-            try:
-                wt_path.resolve().relative_to(source_root)
-                if os.getenv("GRACE_ALLOW_WORKTREE_INSIDE_GRACE") != "1":
-                    error_msg = (
-                        f"worktree_root is inside GRACE project root: {wt_path}. "
-                        "Set GRACE_ALLOW_WORKTREE_INSIDE_GRACE=1 to override."
-                    )
-                    _log.warn("worktree_inside_grace_repo_failed", error=error_msg)
-                    from grace_control.agent.backend import ExecutionResult as _ER
-
-                    return _ER(
-                        accepted=False,
-                        domain_status="failed",
-                        worktree_path=wt_path,
-                        branch_name=branch,
-                        commit_sha="",
-                        stdout="",
-                        stderr=error_msg,
-                        duration_ms=0,
-                        errors=[error_msg],
-                    )
-            except ValueError:
-                pass
-
+        _preflight_result = None
         git = GitService()
         workspace_base_ref = base_ref
         rework_seed_sha = ""
@@ -485,6 +418,138 @@ class PacketExecutionWorkspaceService:
             parallel_execution=_parallel_execution,
             workspace_result=_workspace_result,
             preflight_result=_preflight_result,
+        )
+
+    # START_FUNCTION_CONTRACT
+    # name: _resolve_workspace_layout
+    # purpose: Resolve packet target, workspace mode, evidence defaults, and safe workspace paths.
+    # inputs: adapter, pid, scope, packet contract, attempt, base SHA, and executor settings.
+    # returns: WorkspaceLayout or a controlled backend failure result.
+    # side_effects: Reads settings/environment and may emit workspace-mode diagnostics.
+    # emitted_logs: Workspace mode upgrade/default and inside-GRACE rejection events.
+    # error_behavior: Returns a failed backend result when the target workspace path is unsafe.
+    # END_FUNCTION_CONTRACT
+    def _resolve_workspace_layout(
+        self,
+        adapter,
+        *,
+        pid: str,
+        eff,
+        packet_contract,
+        attempt: int,
+        base_sha: str,
+        executor: dict,
+    ):
+        from grace_control.config.settings import settings as _s
+
+        slug = _attempt_slug(pid, attempt)
+        branch = _attempt_branch(pid, attempt)
+        pkt_metadata = getattr(packet_contract, "metadata", None) or {}
+        pkt_target_repo = pkt_metadata.get("target_repo_root", "")
+        pkt_workspace_mode = pkt_metadata.get("workspace_mode", "")
+        effective_target_repo = pkt_target_repo or _s.target_repo_root or ""
+        workspace_mode = (
+            pkt_workspace_mode
+            or executor.get("workspace_mode")
+            or _s.workspace_mode
+            or "full_git_worktree"
+        )
+        is_minimal = executor.get("minimal_repo", False)
+
+        if effective_target_repo and str(effective_target_repo) != str(adapter.project_root):
+            if not pkt_workspace_mode and not executor.get("workspace_mode"):
+                workspace_mode = "target_repo_worktree"
+                _log.info(
+                    "workspace_mode_defaulted_to_target_repo_worktree",
+                    packet_id=pid,
+                    target_repo_root=str(effective_target_repo),
+                )
+
+        target_root = Path(effective_target_repo) if effective_target_repo else Path(
+            _s.target_repo_root or adapter.project_root
+        )
+        workspace_evidence: dict = {}
+        parallel_execution = {
+            "base_sha": base_sha,
+            "integration_base_sha": None,
+            "stale_base": False,
+            "conflict_keys": list(getattr(packet_contract, "conflict_keys", []) or []),
+            "integration_recheck": "skipped",
+        }
+        if workspace_mode == "scoped_copy":
+            try:
+                verification = _flatten_verification_for_safety(packet_contract)
+            except Exception:
+                verification = []
+            if _verification_unsafe_for_scoped(verification, eff or []):
+                if executor.get("workspace_scope_safety") == "unsafe_allowed_for_fixture":
+                    _log.warn(
+                        "workspace_scope_unsafe",
+                        packet_id=pid,
+                        reason="verification_requires_repo_context",
+                    )
+                else:
+                    _log.warn(
+                        "workspace_mode_auto_upgraded",
+                        packet_id=pid,
+                        from_mode="scoped_copy",
+                        to_mode="full_git_worktree",
+                        reason="verification_requires_repo_context",
+                    )
+                    workspace_mode = "full_git_worktree"
+                    is_minimal = False
+                    workspace_evidence = {
+                        "workspace_mode": "full_git_worktree",
+                        "reason": "verification_requires_repo_context",
+                    }
+        if is_minimal:
+            workspace_mode = "scoped_copy"
+
+        worktree_root = adapter.worktree_root if adapter.worktree_root.is_absolute() else Path(
+            _s.worktree_root
+        )
+        if not worktree_root.is_absolute():
+            worktree_root = target_root / worktree_root
+        worktree_path = worktree_root / slug
+
+        source_root = Path(os.getenv("GRACE_SOURCE_DIR", str(adapter.project_root))).resolve()
+        if workspace_mode == "target_repo_worktree" and str(source_root) != str(target_root.resolve()):
+            try:
+                worktree_path.resolve().relative_to(source_root)
+                if os.getenv("GRACE_ALLOW_WORKTREE_INSIDE_GRACE") != "1":
+                    error_msg = (
+                        f"worktree_root is inside GRACE project root: {worktree_path}. "
+                        "Set GRACE_ALLOW_WORKTREE_INSIDE_GRACE=1 to override."
+                    )
+                    _log.warn("worktree_inside_grace_repo_failed", error=error_msg)
+                    from grace_control.agent.backend import ExecutionResult as _ER
+
+                    return _ER(
+                        accepted=False,
+                        domain_status="failed",
+                        worktree_path=worktree_path,
+                        branch_name=branch,
+                        commit_sha="",
+                        stdout="",
+                        stderr=error_msg,
+                        duration_ms=0,
+                        errors=[error_msg],
+                    )
+            except ValueError:
+                pass
+
+        return WorkspaceLayout(
+            slug=slug,
+            branch_name=branch,
+            packet_metadata=pkt_metadata,
+            effective_target_repo=effective_target_repo,
+            workspace_mode=workspace_mode,
+            target_root=target_root,
+            worktree_root=worktree_root,
+            worktree_path=worktree_path,
+            workspace_evidence=workspace_evidence,
+            parallel_execution=parallel_execution,
+            settings=_s,
         )
 
     # START_FUNCTION_CONTRACT
