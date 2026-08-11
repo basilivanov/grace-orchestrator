@@ -1,6 +1,26 @@
 # GraceLint allowlist — entries expire at the listed wave.
 # Each entry must specify rule, path (substring match), reason, and expires_wave.
 rules:
+  - rule: GRC101
+    path: src/grace_control/tools/grace_lint/checker.py
+    reason: checker implements the textual subprocess rule and contains its own rule signatures
+    expires_wave: never
+  - rule: GRC102
+    path: src/grace_control/tools/grace_lint/checker.py
+    reason: checker implements the textual prefect_grace rule and contains its own rule signatures
+    expires_wave: never
+  - rule: GRC103
+    path: src/grace_control/tools/grace_lint/checker.py
+    reason: checker implements the textual Packet.state rule and contains its own rule signatures
+    expires_wave: never
+  - rule: GRC105
+    path: src/grace_control/tools/grace_lint/checker.py
+    reason: checker implements the textual hardcoded-path rule and contains its own rule signatures
+    expires_wave: never
+  - rule: GRC109
+    path: src/grace_control/tools/grace_lint/checker.py
+    reason: checker defines the CLI-agent vocabulary used by its own rule
+    expires_wave: never
   - rule: GRC100
     path: src/grace_control/config/settings.py
     reason: settings owns env reading by design
@@ -28,10 +48,6 @@ rules:
   - rule: GRC103
     path: src/grace_control/core/acceptance_pipeline.py
     reason: acceptance pipeline sets run status
-    expires_wave: never
-  - rule: GRC108
-    path: src/grace_control/adapters/packet_executor.py
-    reason: 232 lines, below 300 limit; well-structured with helpers
     expires_wave: never
   - rule: GRC108
     path: src/grace_control/services/evidence_service.py

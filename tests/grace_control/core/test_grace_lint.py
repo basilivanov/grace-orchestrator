@@ -10,10 +10,8 @@ from fastapi.testclient import TestClient
 from grace_control.api.main import app
 from grace_control.db import init_db
 from grace_control.tools.grace_lint.checker import (
-    lint_text,
-    lint_file,
-    load_allowlist,
     Violation,
+    lint_text,
 )
 
 
@@ -115,12 +113,44 @@ def test_grc010_private_function_skipped():
     assert not any(v.code == "GRC010" for v in _v(src))
 
 
+def test_private_function_without_contract_has_no_contract_violations():
+    src = "def _helper(): pass\n"
+    assert not any(v.code in {"GRC010", "GRC011"} for v in _v(src))
+
+
 # ── GRC012 ──────────────────────────────────────────────────────────────
 
 
 def test_grc012_function_too_large():
     body = "\n".join(f"    x = {i}" for i in range(10000))
     src = f"def huge():\n{body}\n"
+    assert any(v.code == "GRC012" for v in _v(src))
+
+
+def _sized_function(name: str, estimated_tokens: int, *, is_async: bool = False) -> str:
+    prefix = f"{'async ' if is_async else ''}def {name}():\n    value = "
+    value = "x" * (estimated_tokens * 4 - len(prefix) - 2)
+    source = prefix + repr(value) + "\n"
+    assert len(source.rstrip("\n")) // 4 == estimated_tokens
+    return source
+
+
+def test_grc012_private_oversized_helper_is_reported():
+    src = _sized_function("_huge_helper", 4001)
+    codes = {v.code for v in _v(src)}
+    assert "GRC012" in codes
+    assert "GRC010" not in codes
+    assert "GRC011" not in codes
+
+
+@pytest.mark.parametrize(("estimated_tokens", "reports"), ((4000, False), (4001, True)))
+def test_grc012_hard_boundary_uses_len_source_div_four(estimated_tokens, reports):
+    src = _sized_function("_boundary_helper", estimated_tokens)
+    assert any(v.code == "GRC012" for v in _v(src)) is reports
+
+
+def test_grc012_private_async_function_is_reported():
+    src = _sized_function("_async_huge_helper", 4001, is_async=True)
     assert any(v.code == "GRC012" for v in _v(src))
 
 

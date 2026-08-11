@@ -68,6 +68,15 @@ def _physical_lines(content: str) -> int:
     return len([line for line in content.split("\n") if line.strip()])
 
 
+# START_FUNCTION_CONTRACT
+# name: load_allowlist
+# purpose: Load the configured GraceLint rule exemptions.
+# inputs: path — optional allowlist path; defaults to .grace/lint_allowlist.yaml.
+# returns: Parsed allowlist mapping with a rules list.
+# side_effects: Reads the allowlist file when it exists.
+# emitted_logs: None.
+# error_behavior: Missing or malformed files return an empty allowlist.
+# END_FUNCTION_CONTRACT
 def load_allowlist(path: Path | None = None) -> dict[str, list[dict]]:
     """Load the lint allowlist from .grace/lint_allowlist.yaml (or path)."""
     cfg = path or Path(".grace/lint_allowlist.yaml")
@@ -175,8 +184,10 @@ def lint_text(
             violations.append(v)
 
     # GRC010/GRC011/GRC012
-    if not skip_function_contracts:
-        violations += _check_functions(content, lines, tree, path, al, rules_enabled)
+    violations += _check_functions(
+        content, lines, tree, path, al, rules_enabled,
+        skip_function_contracts=skip_function_contracts,
+    )
 
     # GRC100
     if _rule_enabled("GRC100", rules_enabled):
@@ -257,13 +268,21 @@ def _rule_enabled(rule: str, rules_enabled: list[str] | None) -> bool:
 
 
 # START_BLOCK_FUNCTION_CHECKS
-def _check_functions(content, lines, tree, path, al, rules_enabled):
+def _check_functions(
+    content, lines, tree, path, al, rules_enabled, *, skip_function_contracts=False,
+):
     violations = []
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            if node.name.startswith("_"):
-                continue
             func_line = node.lineno
+            func_lines = lines[node.lineno - 1:node.end_lineno] if node.end_lineno else []
+            est_tokens = len("\n".join(func_lines)) // 4
+            if est_tokens > 4000:
+                v = Violation("GRC012", f"function '{node.name}' too large: ~{est_tokens} tokens (max 4000)", path, func_line)
+                if not _is_allowed(v.code, path, al):
+                    violations.append(v)
+            if skip_function_contracts or node.name.startswith("_"):
+                continue
             before = "\n".join(lines[:func_line])
             has_contract = bool(re.search(r'# START_FUNCTION_CONTRACT\s*\n', before))
             last_end = before.rfind("# END_FUNCTION_CONTRACT")
@@ -282,12 +301,6 @@ def _check_functions(content, lines, tree, path, al, rules_enabled):
                         v = Violation("GRC011", f"function '{node.name}' contract missing: {', '.join(missing)}", path, func_line)
                         if not _is_allowed(v.code, path, al):
                             violations.append(v)
-            func_lines = lines[node.lineno - 1:node.end_lineno] if node.end_lineno else []
-            est_tokens = len("\n".join(func_lines)) // 4
-            if est_tokens > 4000:
-                v = Violation("GRC012", f"function '{node.name}' too large: ~{est_tokens} tokens (max 4000)", path, func_line)
-                if not _is_allowed(v.code, path, al):
-                    violations.append(v)
     return violations
 # END_BLOCK_FUNCTION_CHECKS
 
