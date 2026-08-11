@@ -90,7 +90,7 @@ def _is_running(
 
 
 def _packet_state(packet: Any) -> str:
-    return str(getattr(packet, "state", ""))
+    return str(packet.state)
 
 
 # END_BLOCK_HELPERS
@@ -125,8 +125,8 @@ class AdminOverviewReadService:
     def get_overview(self, db: Session) -> dict[str, Any]:
         try:
             state_counts: dict[str, int] = dict.fromkeys(_PACKET_STATES, 0)
-            for row in db.query(Packet.__dict__["state"], Packet.id).all():
-                state = row[0] or "draft"
+            for row in db.query(Packet.state, Packet.id).all():
+                state = row.state or "draft"
                 state_counts[state] = state_counts.get(state, 0) + 1
 
             total_features = db.query(Feature).count()
@@ -152,7 +152,7 @@ class AdminOverviewReadService:
             ]
             blocked_rows = (
                 db.query(Packet)
-                .filter(Packet.__dict__["state"].in_(["blocked", "blocked_recoverable", "blocked_final"]))
+                .filter(Packet.state.in_(["blocked", "blocked_recoverable", "blocked_final"]))
                 .limit(50)
                 .all()
             )
