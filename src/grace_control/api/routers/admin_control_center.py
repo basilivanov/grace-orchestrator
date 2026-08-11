@@ -497,6 +497,24 @@ async def project_system(request: Request, project_key: str) -> HTMLResponse:
 
 
 # START_FUNCTION_CONTRACT
+# name: project_maintenance
+# purpose: Render the selected project's dry-run/snapshot maintenance view.
+# inputs: request and explicit project_key.
+# returns: HTMLResponse.
+# side_effects: Selected-project maintenance snapshot read only.
+# emitted_logs: Service-owned project read logs.
+# error_behavior: 404 for unknown project; unavailable data remains visible.
+# END_FUNCTION_CONTRACT
+@router.get("/admin/p/{project_key}/maintenance", response_class=HTMLResponse)
+async def project_maintenance(request: Request, project_key: str) -> HTMLResponse:
+    try:
+        model = await _service(request).maintenance_page(project_key)
+    except KeyError as exc:
+        _raise_project_not_found(exc)
+    return _render(request, "maintenance", model)
+
+
+# START_FUNCTION_CONTRACT
 # name: project_git
 # purpose: Render the selected project's bounded repository, worktree and diff
 #          explorer using only Stage 02 read APIs.
@@ -572,6 +590,10 @@ async def project_api(
     path: str | None = Query(None),
     execute: bool = Query(False),
     params: str | None = Query(None),
+    method: str = Query("GET"),
+    control_mode: bool = Query(False),
+    body: str | None = Query(None),
+    confirmation: str | None = Query(None),
 ) -> HTMLResponse:
     try:
         model = await _service(request).api_page(
@@ -579,6 +601,11 @@ async def project_api(
             path=path,
             execute=execute,
             params_json=params,
+            method=method,
+            control_mode=control_mode,
+            body_json=body,
+            confirmation_json=confirmation,
+            actor=request.headers.get("x-grace-actor", "operator"),
         )
     except KeyError as exc:
         _raise_project_not_found(exc)

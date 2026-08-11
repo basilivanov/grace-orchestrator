@@ -1,17 +1,19 @@
 # ############################################################################
 # AI_HEADER: admin_control_center — project-aware Jinja2/HTMX control center
-# ROLE: Builds the read-only project-scoped view models used by the Stage 04
-#       Admin Control Center. Every remote read is routed through the accepted
-#       Admin Hub service with an explicit registry project key.
+# ROLE: Builds project-scoped read view models and binds the explicit Stage 06
+#       OpenAPI control-mode result. Every remote read/mutation is routed through
+#       the accepted Hub boundary with an explicit registry project key.
 # ############################################################################
 
 # START_MODULE_CONTRACT
 # purpose: Provide project-aware dashboard, entity drill-down, timeline,
-#          pipeline, system and cross-project read models for the Jinja2 UI.
+#          pipeline, system and explorer models, plus a bounded discovered
+#          OpenAPI mutation view when server control mode is enabled.
 # inputs: AdminCrossProjectService and explicit project/entity/tab selectors.
 # returns: JSON-safe view-model dictionaries for server-rendered templates.
-# side_effects: Bounded reads through project-local Admin APIs only; never
-#                changes process-global settings or opens another project's DB.
+# side_effects: Bounded reads and one delegated project-local mutation through
+#               AdminMutationService; never changes process-global settings or
+#               opens another project's DB.
 # emitted_logs: admin_control_center_read_error.
 # error_behavior: Unknown projects raise KeyError; unavailable project APIs are
 #                 isolated into view-model error/capability fields.
@@ -25,6 +27,7 @@
 #       - dashboard
 #       - project_page
 #       - system_page
+#       - maintenance_page
 #       - events_page
 #       - logs_page
 #       - files_page
@@ -36,6 +39,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 from urllib.parse import quote
@@ -78,6 +82,7 @@ from grace_control.services.admin_control_center_helpers import (
     _wave_by_id,
 )
 from grace_control.services.admin_cross_project_service import AdminCrossProjectService
+from grace_control.services.admin_mutation_service import AdminMutationService
 
 _log = GraceLogger("admin_control_center")
 
@@ -140,6 +145,48 @@ _LOG_SOURCES = (
     "stdout",
     "stderr",
 )
+
+
+# START_FUNCTION_CONTRACT
+# name: _json_body
+# purpose: Parse a bounded OpenAPI mutation body object for the Control Center.
+# inputs: value — optional JSON object string.
+# returns: (mapping, error) pair.
+# side_effects: None.
+# error_behavior: Arrays, nested oversized values and malformed JSON reject.
+# END_FUNCTION_CONTRACT
+def _json_body(value: str | None) -> tuple[dict[str, Any], str | None]:
+    if not value:
+        return {}, None
+    try:
+        parsed = json.loads(value)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}, "API_BODY_INVALID"
+    if not isinstance(parsed, Mapping) or len(parsed) > 32 or len(value) > 64 * 1024:
+        return {}, "API_BODY_INVALID"
+    return dict(parsed), None
+
+
+# START_FUNCTION_CONTRACT
+# name: _json_confirmation
+# purpose: Parse explicit server-enforced Control Center confirmation JSON.
+# inputs: value — optional JSON object/string.
+# returns: confirmation mapping/string or error.
+# side_effects: None.
+# error_behavior: Missing/malformed values reject before a remote mutation.
+# END_FUNCTION_CONTRACT
+def _json_confirmation(value: str | None) -> tuple[dict[str, Any] | str, str | None]:
+    if not value:
+        return {}, "CONFIRMATION_REQUIRED"
+    try:
+        parsed = json.loads(value)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}, "CONFIRMATION_INVALID"
+    if isinstance(parsed, Mapping):
+        return dict(parsed), None
+    if isinstance(parsed, str):
+        return parsed, None
+    return {}, "CONFIRMATION_INVALID"
 _LOG_TAILS = (100, 500, 2000)
 
 
@@ -346,17 +393,19 @@ class AdminControlCenterService:
             "diagnostics": {},
             "config": {},
             "capabilities": {},
+            "supervisor": {},
             "leases": {"ordinary": [], "parallel": [], "merge": []},
             "error": None,
         }
         if not context.enabled:
             model["error"] = "Project is disabled; no remote read was attempted."
             return model
-        health_result, workers_result, diagnostics_result, capabilities_result = await asyncio.gather(
+        health_result, workers_result, diagnostics_result, capabilities_result, supervisor_result = await asyncio.gather(
             self._read(project_key, "/api/admin/system/health", operation="health"),
             self._read(project_key, "/api/admin/system/workers", operation="workers"),
             self._read(project_key, "/api/diagnostics/state", operation="diagnostics"),
             self._read(project_key, "/api/admin/capabilities", operation="capabilities"),
+            self._read(project_key, "/api/admin/lifecycle/status", operation="supervisor_status"),
         )
         health = _unwrap(health_result.get("payload")) if health_result.get("ok") else {}
         workers = _unwrap(workers_result.get("payload")) if workers_result.get("ok") else {}
@@ -367,14 +416,40 @@ class AdminControlCenterService:
         model["diagnostics"] = _mask_secrets(diagnostics)
         model["config"] = _mask_secrets(_effective_config(health, diagnostics))
         model["capabilities"] = _mask_secrets(capabilities)
+        model["supervisor"] = _mask_secrets(_unwrap(supervisor_result.get("payload"))) if supervisor_result.get("ok") else {}
         model["leases"] = _lease_views(diagnostics)
         failures = [
             result.get("error")
-            for result in (health_result, workers_result, diagnostics_result, capabilities_result)
+            for result in (health_result, workers_result, diagnostics_result, capabilities_result, supervisor_result)
             if not result.get("ok") and result.get("error")
         ]
         model["error"] = failures[0] if failures else None
         return model
+
+    # START_FUNCTION_CONTRACT
+    # name: maintenance_page
+    # purpose: Build a selected-project dry-run/snapshot maintenance page from
+    #          the narrow local maintenance API.
+    # inputs: project_key — explicit immutable registry key.
+    # returns: Maintenance view model with snapshot/plan/error fields.
+    # side_effects: One selected-project bounded GET plus dashboard context.
+    # emitted_logs: Hub-owned project read logs.
+    # error_behavior: Unknown project raises KeyError; remote gaps stay visible.
+    # END_FUNCTION_CONTRACT
+    async def maintenance_page(self, project_key: str) -> dict[str, Any]:
+        shell = await self._explorer_shell(project_key)
+        result = await self._read(
+            project_key,
+            "/api/admin/maintenance/snapshot",
+            operation="maintenance_snapshot",
+        )
+        payload = _unwrap(result.get("payload")) if result.get("ok") else {}
+        data = payload.get("data") if isinstance(payload, Mapping) else {}
+        return {
+            **shell,
+            "maintenance": data if isinstance(data, Mapping) else {},
+            "error": None if result.get("ok") else result.get("error") or "Maintenance unavailable.",
+        }
 
     # START_FUNCTION_CONTRACT
     # name: events_page
@@ -757,13 +832,15 @@ class AdminControlCenterService:
 
     # START_FUNCTION_CONTRACT
     # name: api_page
-    # purpose: Discover a selected project's OpenAPI operations and execute only
-    #          an exact discovered GET path when explicitly requested.
-    # inputs: project_key; path — exact discovered path; execute — GET-only
-    #          execution flag; params_json — bounded JSON query parameters.
+    # purpose: Discover a selected project's OpenAPI operations and execute an
+    #          exact GET or authorized mutation only when explicitly requested.
+    # inputs: project_key; path — exact discovered path; execute — execution
+    #          flag; params_json/body_json/confirmation_json — bounded JSON;
+    #          control_mode — explicit mutation gate; allow_mutation — true
+    #          only for an authorized POST UI route.
     # returns: API documentation plus optional bounded response/error DTO.
-    # side_effects: Reads selected project /openapi.json and, only for exact
-    #                 discovered GET paths, one selected project GET endpoint.
+    # side_effects: Reads selected project /openapi.json and, for an explicitly
+    #                 authorized POST UI call, one exact discovered mutation.
     # emitted_logs: Hub-owned project read logs.
     # error_behavior: Mutation execution and arbitrary/non-discovered paths are
     #                 rejected without a project request.
@@ -775,6 +852,12 @@ class AdminControlCenterService:
         path: str | None = None,
         execute: bool = False,
         params_json: str | None = None,
+        method: str = "GET",
+        control_mode: bool = False,
+        body_json: str | None = None,
+        confirmation_json: str | None = None,
+        actor: str = "operator",
+        allow_mutation: bool = False,
     ) -> dict[str, Any]:
         shell = await self._explorer_shell(project_key)
         model: dict[str, Any] = {
@@ -784,11 +867,17 @@ class AdminControlCenterService:
             "selected_path": path or "",
             "request_path": "",
             "request_params": {},
+            "params_display": "",
+            "body_display": "",
+            "confirmation_display": "",
             "response": None,
             "response_status": None,
             "response_headers": {},
             "response_error": None,
-            "mutation_execution_disabled": True,
+            "mutation_execution_disabled": not control_mode,
+            "control_mode": bool(control_mode),
+            "selected_method": str(method or "GET").upper(),
+            "mutation_response": None,
             "execution_requested": bool(execute),
             "source": "API",
         }
@@ -804,21 +893,17 @@ class AdminControlCenterService:
         document = _unwrap(openapi_result.get("payload"))
         operations, get_paths = _openapi_operations(document)
         model["document"] = _mask_secrets(document)
-        model["operations"] = operations
+        model["operations"] = _mask_secrets(operations)
         if not execute:
             return model
         selected_path = str(path or "")
-        if selected_path not in get_paths:
-            model["response_error"] = "API_PATH_NOT_DISCOVERED"
-            return model
+        selected_method = str(method or "GET").upper()
         operation = next(
-            (
-                row
-                for row in operations
-                if row.get("method") == "GET" and row.get("path") == selected_path
-            ),
+            (row for row in operations if row.get("method") == selected_method and row.get("path") == selected_path),
             None,
         )
+        if selected_method == "GET" and selected_path not in get_paths:
+            operation = None
         if operation is None:
             model["response_error"] = "API_PATH_NOT_DISCOVERED"
             return model
@@ -826,6 +911,9 @@ class AdminControlCenterService:
         if params_error:
             model["response_error"] = params_error
             return model
+        model["params_display"] = json.dumps(
+            _mask_secrets(params), ensure_ascii=False, sort_keys=True,
+        )
         request_path, query_params, request_error = _openapi_request(
             selected_path,
             operation,
@@ -835,7 +923,51 @@ class AdminControlCenterService:
             model["response_error"] = request_error
             return model
         model["request_path"] = request_path
-        model["request_params"] = query_params
+        model["request_params"] = _mask_secrets(query_params)
+        if selected_method != "GET":
+            if not control_mode:
+                model["response_error"] = "API_CONTROL_MODE_REQUIRED"
+                return model
+            if not allow_mutation:
+                model["response_error"] = None
+                return model
+            body, body_error = _json_body(body_json)
+            if body_error:
+                model["response_error"] = body_error
+                return model
+            model["body_display"] = json.dumps(
+                _mask_secrets(body), ensure_ascii=False, sort_keys=True,
+            )
+            confirmation, confirmation_error = _json_confirmation(confirmation_json)
+            if confirmation_error:
+                model["response_error"] = confirmation_error
+                return model
+            model["confirmation_display"] = json.dumps(
+                _mask_secrets(confirmation), ensure_ascii=False, sort_keys=True,
+            )
+            mutation = await AdminMutationService(self._hub).execute_openapi(
+                project_key,
+                path=selected_path,
+                method=selected_method,
+                confirmation=confirmation,
+                parameters={**query_params},
+                body=body,
+                actor=actor,
+            )
+            model["mutation_response"] = mutation
+            model["response_status"] = mutation.get("status")
+            if mutation.get("ok"):
+                model["response"] = {
+                    "body": mutation.get("response") or {},
+                    "headers": {},
+                    "request_path": request_path,
+                    "request_params": _mask_secrets(query_params),
+                    "source": "API",
+                    "mutation": True,
+                }
+            else:
+                model["response_error"] = mutation.get("display_message") or mutation.get("error") or mutation.get("error_code")
+            return model
         result = await self._read(
             project_key,
             request_path,
@@ -849,7 +981,7 @@ class AdminControlCenterService:
                 "body": _mask_secrets(_unwrap(result.get("payload"))),
                 "headers": result.get("headers") or {},
                 "request_path": request_path,
-                "request_params": query_params,
+                "request_params": _mask_secrets(query_params),
                 "source": "API",
                 "truncated": False,
             }
@@ -1199,6 +1331,20 @@ class AdminControlCenterService:
             runs,
             selected_run if run_id else None,
         )
+        control_actions: dict[str, bool] = {}
+        try:
+            control_catalog = await AdminMutationService(self._hub).available_controls(
+                project_key,
+                entity_type="packet",
+                entity_id=packet_id,
+                state_hint=str(packet.get("state") or "unknown"),
+            )
+            control_actions = {
+                str(action): bool(available)
+                for action, available in (control_catalog.get("control_actions") or {}).items()
+            }
+        except (KeyError, ValueError):
+            control_actions = {}
         blocking = _normalize_blocking(detail, blocking_result, packet)
         detail_stages = detail.get("stages") if isinstance(detail, Mapping) else None
         raw_stages = raw.get("stages") if isinstance(raw, Mapping) else None
@@ -1223,6 +1369,7 @@ class AdminControlCenterService:
             packet_diagnostics = {}
         return {
             "packet": packet,
+            "control_actions": control_actions,
             "detail": detail,
             "blocking": blocking,
             "timeline": timeline,

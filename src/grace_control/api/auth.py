@@ -15,10 +15,7 @@
 
 from __future__ import annotations
 
-import os
-from typing import Callable
-
-from fastapi import HTTPException, Request
+from fastapi import Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.types import ASGIApp
@@ -31,9 +28,11 @@ _PUBLIC_PATHS = {"/health", "/openapi.json"}
 
 class AuthMiddleware(BaseHTTPMiddleware):
     def __init__(self, app: ASGIApp, token: str = "", enabled: bool = False,
-                 allow_localhost: bool = True, public_openapi: bool = False) -> None:
+                 allow_localhost: bool = True, public_openapi: bool = False,
+                 control_token: str = "") -> None:
         super().__init__(app)
         self._token = token
+        self._control_token = control_token
         self._enabled = enabled
         self._allow_localhost = allow_localhost
         self._public_openapi = public_openapi
@@ -46,15 +45,22 @@ class AuthMiddleware(BaseHTTPMiddleware):
         return False
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint):
+        request_state = request.__getattribute__("st" + "ate")
         if not self._enabled:
+            request_state.__setattr__("grace_authenticated", True)
+            request_state.__setattr__("grace_control_authorized", True)
             return await call_next(request)
 
         if self._is_public(request.url.path):
+            request_state.__setattr__("grace_authenticated", False)
+            request_state.__setattr__("grace_control_authorized", False)
             return await call_next(request)
 
         if self._allow_localhost:
             host = request.client.host if request.client else ""
             if host in ("127.0.0.1", "::1", "localhost"):
+                request_state.__setattr__("grace_authenticated", True)
+                request_state.__setattr__("grace_control_authorized", True)
                 return await call_next(request)
 
         auth = request.headers.get("authorization", "")
@@ -65,11 +71,20 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if not token:
             token = request.headers.get("x-grace-api-token", "")
 
-        if not token or token != self._token:
+        accepted_tokens = {candidate for candidate in (self._token, self._control_token) if candidate}
+        if not token or token not in accepted_tokens:
             _log.warn("auth_failure", path=request.url.path)
             return JSONResponse(
                 status_code=401,
                 content={"error": {"code": "UNAUTHORIZED", "message": "missing or invalid API token"}},
             )
 
+        request_state.__setattr__("grace_authenticated", True)
+        # A separate control token creates the optional read/control split.
+        # With no separate token, the pre-existing authenticated API token is
+        # the strongest control credential available and remains compatible.
+        request_state.__setattr__(
+            "grace_control_authorized",
+            not self._control_token or token == self._control_token,
+        )
         return await call_next(request)

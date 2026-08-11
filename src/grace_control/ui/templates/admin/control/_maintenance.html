@@ -1,0 +1,28 @@
+<section class="cc-page-heading">
+  <div>
+    <p class="eyebrow">Maintenance · {{ project.project_key }}</p>
+    <h1>Safe cleanup workflow</h1>
+    <p class="muted">Review the project-local dry-run snapshot before any confirmed cleanup. Live or uncertain ownership remains protected.</p>
+  </div>
+  <span class="source-badge">PROJECT API</span>
+</section>
+
+{% if error %}<div class="cc-banner warning">{{ error }}</div>{% endif %}
+{% if control_result %}<div class="cc-banner {% if control_result.ok %}info{% else %}warning{% endif %}" data-testid="maintenance-control-result" aria-live="polite"><strong>{{ control_result.result|default('failed')|replace('_', ' ')|title }}</strong><span>{{ control_result.display_message or control_result.error or control_result.reason or 'Operator action completed.' }}</span>{% if control_result.request_id %}<span class="mono">request={{ control_result.request_id }}</span>{% endif %}</div>{% endif %}
+<section class="cc-system-grid">
+  <article class="cc-entity-card">
+    <h2>Dry-run / snapshot</h2>
+    <pre class="json-preview" data-testid="maintenance-snapshot">{{ maintenance|tojson(indent=2) }}</pre>
+  </article>
+  <article class="cc-entity-card">
+    <h2>Operator review</h2>
+    <p>Only the fixed project maintenance service may select stale resources. There is no arbitrary path or delete control in this view.</p>
+    <dl class="cc-facts">
+      <div><dt>Would remove</dt><dd>{{ maintenance.plan.would_remove_worktrees|default([])|length }}</dd></div>
+      <div><dt>Protected</dt><dd>{{ maintenance.cleanup_protected|default([])|length }}</dd></div>
+      <div><dt>Dry run</dt><dd>{{ maintenance.dry_run|default(true) }}</dd></div>
+    </dl>
+    <p class="small muted">Execute requires authenticated Control Center access, explicit confirmation and a separate POST control request.</p>
+    <form class="cc-inline-form" method="post" action="/admin/p/{{ project.project_key }}/maintenance/cleanup"><input type="hidden" name="confirmation_intent" value="confirm"><label>Type project key to execute cleanup <input name="confirmation_value" required pattern="{{ project.project_key }}" autocomplete="off"></label><button type="submit">Execute confirmed cleanup</button></form>
+  </article>
+</section>

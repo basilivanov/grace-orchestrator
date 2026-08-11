@@ -60,7 +60,11 @@ class CapabilityService:
             "api_explorer": True,
             "events": "events" in tables,
             "diagnostics": "packets" in tables,
-            "controls": ["archive", "cleanup"],
+            "controls": [
+                "retry", "resume", "cancel", "stop", "archive", "unarchive",
+                "merge", "cleanup", "maintenance_snapshot", "restart_api",
+                "restart_workers", "restart_all", "reload", "openapi_mutation",
+            ],
         }
         unavailable = [
             name for name, enabled in capabilities.items()

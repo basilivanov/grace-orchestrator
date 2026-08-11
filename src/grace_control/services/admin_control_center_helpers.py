@@ -33,6 +33,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from grace_control.core.structured_logger import GraceLogger
+from grace_control.services.admin_control_security import mask_operator_data
 
 _log = GraceLogger("admin_control_center_helpers")
 
@@ -743,21 +744,7 @@ def _effective_config(health: Mapping[str, Any], diagnostics: Mapping[str, Any])
 # error_behavior: Never raises for ordinary JSON-like values.
 # END_FUNCTION_CONTRACT
 def _mask_secrets(value: Any) -> Any:
-    if isinstance(value, Mapping):
-        masked: dict[str, Any] = {}
-        for key, item in value.items():
-            key_text = str(key)
-            lowered = key_text.casefold()
-            secret = lowered in _SECRET_KEYS or any(
-                lowered.endswith(f"_{marker}") for marker in _SECRET_KEYS
-            )
-            masked[key_text] = "••••••" if secret and item not in (None, "") else _mask_secrets(item)
-        return masked
-    if isinstance(value, list):
-        return [_mask_secrets(item) for item in value]
-    if isinstance(value, tuple):
-        return [_mask_secrets(item) for item in value]
-    return value
+    return mask_operator_data(value)
 
 
 # START_FUNCTION_CONTRACT

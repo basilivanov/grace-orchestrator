@@ -125,6 +125,7 @@ class GraceSettings(BaseSettings):
     # ── API auth (W14.2) ──
     api_auth_enabled: bool = False
     api_auth_token: str = ""
+    api_auth_control_token: str = ""
     api_auth_allow_unauthenticated_localhost: bool = True
     api_auth_public_openapi: bool = False
 

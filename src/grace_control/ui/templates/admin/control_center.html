@@ -45,6 +45,7 @@
         <a href="{{ cc_url(current_project.project_key, 'files') }}" class="{% if page == 'files' %}active{% endif %}">Files</a>
         <a href="{{ cc_url(current_project.project_key, 'git') }}" class="{% if page == 'git' %}active{% endif %}">Git</a>
         <a href="{{ cc_url(current_project.project_key, 'api') }}" class="{% if page == 'api' %}active{% endif %}">API</a>
+        <a href="{{ cc_url(current_project.project_key, 'maintenance') }}" class="{% if page == 'maintenance' %}active{% endif %}">Maintenance</a>
         <a href="/admin/search?project={{ current_project.project_key }}" class="{% if page == 'search' %}active{% endif %}">Search</a>
         <a href="{{ cc_url(current_project.project_key, 'system') }}" class="{% if page == 'system' %}active{% endif %}">System / Diagnostics</a>
       {% else %}
@@ -72,6 +73,8 @@
         {% include "control/_git.html" %}
       {% elif page == 'api' %}
         {% include "control/_api.html" %}
+      {% elif page == 'maintenance' %}
+        {% include "control/_maintenance.html" %}
       {% elif page == 'search' %}
         {% include "control/_search.html" %}
       {% endif %}

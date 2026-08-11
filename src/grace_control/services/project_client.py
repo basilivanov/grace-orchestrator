@@ -21,6 +21,7 @@
 #   - class: ProjectClient
 #     methods:
 #       - request_json
+#       - mutate_json
 #       - get_json
 #       - get_health
 #       - health
@@ -100,6 +101,8 @@ class ProjectClient:
         *,
         method: str = "GET",
         payload: Mapping[str, Any] | None = None,
+        request_id: str | None = None,
+        extra_headers: Mapping[str, str] | None = None,
     ) -> ProjectApiResult:
         if not path or not path.startswith("/") or path.startswith("//") or "\\" in path or "#" in path:
             raise ValueError("project API path must be an absolute path component")
@@ -117,7 +120,7 @@ class ProjectClient:
             method=normalized_method,
             path=path,
         )
-        client_kwargs = self._client_kwargs()
+        client_kwargs = self._client_kwargs(request_id=request_id, extra_headers=extra_headers)
         try:
             async with self._client_factory(**client_kwargs) as client:
                 response = await client.request(normalized_method, path, json=payload)
@@ -149,11 +152,14 @@ class ProjectClient:
                 if isinstance(typed_error, Mapping):
                     error_class = str(typed_error.get("code") or error_class)[:80]
                     error_message = _safe_error(typed_error.get("message") or error_message)
+                elif error_payload.get("detail") is not None:
+                    error_message = _safe_error(error_payload.get("detail"))
             return self._error_result(
                 error_class,
                 error_message,
                 attempted_at,
                 http_status=response.status_code,
+                payload=dict(error_payload) if isinstance(error_payload, Mapping) else None,
             )
         try:
             decoded = response.json()
@@ -174,6 +180,36 @@ class ProjectClient:
             http_status=response.status_code,
             last_attempt_at=attempted_at,
             headers=_safe_headers(response.headers),
+        )
+
+    # START_FUNCTION_CONTRACT
+    # name: mutate_json
+    # purpose: Perform one explicit non-GET project mutation with a propagated
+    #          admin request ID and no automatic retry.
+    # inputs: path, method, payload, request_id and optional display-safe actor.
+    # returns: ProjectApiResult with the single remote response normalized.
+    # side_effects: Performs one project-local state-changing request.
+    # emitted_logs: project_api_request, project_api_error.
+    # error_behavior: Timeout/connection results are returned once to the caller.
+    # END_FUNCTION_CONTRACT
+    async def mutate_json(
+        self,
+        path: str,
+        *,
+        method: str,
+        payload: Mapping[str, Any] | None,
+        request_id: str,
+        actor: str = "operator",
+    ) -> ProjectApiResult:
+        return await self.request_json(
+            path,
+            method=method,
+            payload=payload,
+            request_id=request_id,
+            extra_headers={
+                "x-grace-admin-request-id": request_id,
+                "x-grace-admin-actor": actor[:120],
+            },
         )
 
     # START_FUNCTION_CONTRACT
@@ -265,7 +301,12 @@ class ProjectClient:
     async def close(self) -> None:
         return None
 
-    def _client_kwargs(self) -> dict[str, Any]:
+    def _client_kwargs(
+        self,
+        *,
+        request_id: str | None = None,
+        extra_headers: Mapping[str, str] | None = None,
+    ) -> dict[str, Any]:
         timeout = httpx.Timeout(
             connect=self.connect_timeout,
             read=self.read_timeout,
@@ -277,6 +318,10 @@ class ProjectClient:
             headers["x-grace-api-token"] = self.context.api_token
         if self.context.api_password and not self.context.api_token:
             headers["x-grace-api-password"] = self.context.api_password
+        if request_id:
+            headers["x-grace-admin-request-id"] = request_id
+        if extra_headers:
+            headers.update({str(key): str(value)[:240] for key, value in extra_headers.items()})
         kwargs: dict[str, Any] = {"timeout": timeout, "headers": headers}
         if self.context.api_socket is not None:
             kwargs["transport"] = self._transport or httpx.AsyncHTTPTransport(
@@ -295,6 +340,7 @@ class ProjectClient:
         attempted_at: str,
         *,
         http_status: int | None = None,
+        payload: dict[str, Any] | None = None,
     ) -> ProjectApiResult:
         _log.error(
             "project_api_error",
@@ -304,6 +350,7 @@ class ProjectClient:
         return ProjectApiResult(
             project_key=self.context.key,
             ok=False,
+            payload=payload,
             error_class=error_class,
             error=error,
             http_status=http_status,

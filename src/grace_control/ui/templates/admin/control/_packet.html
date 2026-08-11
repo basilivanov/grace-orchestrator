@@ -27,6 +27,37 @@
     <div><dt>Depends on</dt><dd>{{ p.depends_on_summary or '—' }}</dd></div>
   </dl>
 
+  {% if control_result %}
+  <section class="cc-banner {% if control_result.ok %}info{% else %}warning{% endif %}" data-testid="control-result" aria-live="polite">
+    <strong>{{ 'WAIT' if control_result.wait else control_result.result|default('failed')|replace('_', ' ')|title }}</strong>
+    <span>{{ control_result.display_message or control_result.error or control_result.reason or 'Operator action completed.' }}</span>
+    {% if control_result.request_id %}<span class="mono">request={{ control_result.request_id }}</span>{% endif %}
+  </section>
+  {% endif %}
+
+  {% set packet_state = p.state|default('unknown')|lower %}
+  {% if packet_data.control_actions|default({}) and (packet_state in ('rejected', 'blocked_recoverable', 'blocked') or packet_state not in ('merged', 'failed', 'cancelled', 'blocked_final')) %}
+  <section class="cc-entity-card cc-control-panel" data-testid="packet-controls">
+    <h3>Project-local controls</h3>
+    <p class="small muted">Actions are capability/state checked server-side. Every request requires confirmation and is audited in this project.</p>
+    {% if packet_data.control_actions.retry|default(false) and packet_state in ('rejected', 'blocked_recoverable', 'blocked') %}
+    <form class="cc-inline-form" method="post" action="/admin/p/{{ project.project_key }}/control">
+      <input type="hidden" name="action" value="retry"><input type="hidden" name="entity_type" value="packet"><input type="hidden" name="entity_id" value="{{ p.id }}"><input type="hidden" name="confirmation_intent" value="confirm"><input type="hidden" name="confirmation_value" value="confirm"><button type="submit">Retry packet</button>
+    </form>
+    {% endif %}
+    {% if packet_data.control_actions.cancel|default(false) and packet_state not in ('accepted', 'merged', 'failed', 'cancelled', 'blocked_final') %}
+    <form class="cc-inline-form" method="post" action="/admin/p/{{ project.project_key }}/control">
+      <input type="hidden" name="action" value="cancel"><input type="hidden" name="entity_type" value="packet"><input type="hidden" name="entity_id" value="{{ p.id }}"><input type="hidden" name="confirmation_intent" value="confirm"><label>Type packet ID to cancel <input name="confirmation_value" required pattern="{{ p.id }}" autocomplete="off"></label><button type="submit">Stop / cancel</button>
+    </form>
+    {% endif %}
+    {% if packet_data.control_actions.merge|default(false) and packet_state == 'accepted' %}
+    <form class="cc-inline-form" method="post" action="/admin/p/{{ project.project_key }}/control">
+      <input type="hidden" name="action" value="merge"><input type="hidden" name="entity_type" value="packet"><input type="hidden" name="entity_id" value="{{ p.id }}"><input type="hidden" name="confirmation_intent" value="confirm"><label>Type packet ID to merge <input name="confirmation_value" required pattern="{{ p.id }}" autocomplete="off"></label><label>Worktree <input name="worktree_path" required></label><label>Branch <input name="branch_name" required></label><label>Commit SHA <input name="commit_sha"></label><button type="submit">Merge accepted packet</button>
+    </form>
+    {% endif %}
+  </section>
+  {% endif %}
+
   {% if packet_data.blocking.has_blocking %}
   <section class="cc-blocking-panel" data-testid="blocking-panel" aria-live="polite">
     <header><h3>Blocking</h3><span>{{ packet_data.blocking.decided_by or 'runtime' }}</span></header>

@@ -2,22 +2,30 @@
   <div>
     <p class="eyebrow">API · {{ project.project_key }}</p>
     <h1>OpenAPI explorer</h1>
-    <p class="muted">Discovered dynamically from the selected project. Only exact discovered GET paths can execute; mutations are documentation-only in Stage 05.</p>
+    <p class="muted">Discovered dynamically from the selected project. GET is read-only by default; mutation execution requires the explicit server-enforced control mode and confirmation.</p>
   </div>
   <span class="source-badge">API</span>
 </section>
 
 {% if response_error %}<div class="cc-banner warning" data-testid="api-explorer-error">{{ response_error }}</div>{% endif %}
-{% if mutation_execution_disabled %}<div class="cc-banner info">Mutation execution disabled until Stage 06.</div>{% endif %}
+<form class="cc-inline-form" method="get" data-testid="api-control-mode">
+  <input type="hidden" name="path" value="{{ selected_path }}">
+  <input type="hidden" name="method" value="{{ selected_method|default('GET') }}">
+  <input type="hidden" name="execute" value="true">
+  <label class="cc-check"><input type="checkbox" name="control_mode" value="true"{% if control_mode %} checked{% endif %}> Enable control actions</label>
+  <button type="submit">Apply mode</button>
+</form>
+{% if mutation_execution_disabled %}<div class="cc-banner info">Mutation execution disabled until Stage 06. Enable control actions to execute a discovered mutation.</div>{% endif %}
 
 <div class="cc-api-list">
 {% for operation in operations %}
   <article class="cc-entity-card cc-api-operation" data-method="{{ operation.method }}" data-path="{{ operation.path }}">
-    <header class="cc-api-header"><div><span class="api-method method-{{ operation.method|lower }}">{{ operation.method }}</span> <code>{{ operation.path }}</code><p class="muted">{{ operation.summary or operation.description or 'No description' }}</p></div>{% if operation.can_execute %}<a class="button-link" href="{{ cc_url(project.project_key, 'api', '', path=operation.path) }}">Select GET</a>{% else %}<span class="state-chip">execution disabled</span>{% endif %}</header>
+    <header class="cc-api-header"><div><span class="api-method method-{{ operation.method|lower }}">{{ operation.method }}</span> <code>{{ operation.path }}</code><p class="muted">{{ operation.summary or operation.description or 'No description' }}</p></div>{% if operation.can_execute %}<a class="button-link" href="{{ cc_url(project.project_key, 'api', '', path=operation.path, method='GET') }}">Select GET</a>{% elif operation.mutation and control_mode %}<a class="button-link" href="{{ cc_url(project.project_key, 'api', '', path=operation.path, method=operation.method, execute='true', control_mode='true') }}">Select mutation</a>{% else %}<span class="state-chip">mutation unavailable · execution disabled</span>{% endif %}</header>
     <details><summary>Parameters / schemas</summary><pre class="json-preview">{{ {'parameters': operation.parameters, 'parameter_definitions': operation.parameter_definitions, 'request_schema': operation.request_schema, 'response_schema': operation.response_schema}|tojson(indent=2) }}</pre></details>
-    {% if operation.path == selected_path and operation.can_execute %}<form class="cc-inline-form" method="get"><input type="hidden" name="path" value="{{ operation.path }}"><input type="hidden" name="execute" value="true"><label>GET path/query params JSON<input name="params" value="{{ request.query_params.get('params', '') }}" placeholder='{"item_id":"abc","limit":"10"}'></label><button type="submit">Execute GET</button></form>{% endif %}
+    {% if operation.path == selected_path and operation.can_execute %}<form class="cc-inline-form" method="get"><input type="hidden" name="path" value="{{ operation.path }}"><input type="hidden" name="execute" value="true"><label>GET path/query params JSON<input name="params" value="{{ params_display|default('') }}" placeholder='{"item_id":"abc","limit":"10"}'></label><button type="submit">Execute GET</button></form>{% endif %}
+    {% if operation.path == selected_path and operation.mutation and control_mode and operation.method == selected_method %}<form class="cc-inline-form" method="post" action="/admin/p/{{ project.project_key }}/api/control"><input type="hidden" name="path" value="{{ operation.path }}"><input type="hidden" name="method" value="{{ operation.method }}"><input type="hidden" name="execute" value="true"><input type="hidden" name="control_mode" value="true"><label>Parameters JSON<input name="params" value="{{ params_display|default('') }}" placeholder='{"item_id":"abc"}'></label><label>Body JSON<input name="body" value="{{ body_display|default('') }}" placeholder='{"enabled":true}'></label><label>Confirmation JSON<input name="confirmation" value="{{ confirmation_display|default('') }}" placeholder='{"intent":"confirm","value":"{{ project.project_key }}"}'></label><button type="submit">Execute mutation</button></form>{% endif %}
   </article>
 {% else %}<div class="cc-empty">No OpenAPI operations discovered.</div>{% endfor %}
 </div>
 
-{% if response %}<section class="cc-entity-card" data-testid="api-response"><div class="cc-viewer-toolbar"><h2>Response{% if response_status %} · HTTP {{ response_status }}{% endif %}</h2><span class="source-badge">API</span><button type="button" data-toggle-json="api-response-json">Compact/pretty</button><button type="button" data-copy-json="api-response-json">Copy JSON</button><button type="button" data-download-json="api-response-json">Download JSON</button></div><p class="small muted">GET route: <span class="mono">{{ response.request_path|default(request_path) }}</span>{% if response.request_params %} · query={{ response.request_params|tojson }}{% endif %}</p><details open><summary>Headers</summary><pre class="json-preview">{{ response.headers|default({})|tojson(indent=2) }}</pre></details><pre id="api-response-json" class="json-preview">{{ response.body|tojson(indent=2) }}</pre></section>{% endif %}
+{% if response %}<section class="cc-entity-card" data-testid="api-response"><div class="cc-viewer-toolbar"><h2>Response{% if response_status %} · HTTP {{ response_status }}{% endif %}</h2><span class="source-badge">API</span><button type="button" data-toggle-json="api-response-json">Compact/pretty</button><button type="button" data-copy-json="api-response-json">Copy JSON</button><button type="button" data-download-json="api-response-json">Download JSON</button></div><p class="small muted">{{ 'Mutation' if response.mutation else 'GET' }} route: <span class="mono">{{ response.request_path|default(request_path) }}</span>{% if response.request_params %} · query={{ response.request_params|tojson }}{% endif %}</p><details open><summary>Headers</summary><pre class="json-preview">{{ response.headers|default({})|tojson(indent=2) }}</pre></details><pre id="api-response-json" class="json-preview">{{ response.body|tojson(indent=2) }}</pre></section>{% endif %}

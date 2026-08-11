@@ -33,6 +33,8 @@ from grace_control.api.lifespan import lifespan
 from grace_control.api.routers import (
     admin,
     admin_control_center,
+    admin_control_ui_controls,
+    admin_controls,
     admin_filesystem,
     admin_git,
     admin_hub,
@@ -106,6 +108,7 @@ def create_app(
         enabled=s.api_auth_enabled,
         allow_localhost=s.api_auth_allow_unauthenticated_localhost,
         public_openapi=s.api_auth_public_openapi,
+        control_token=s.api_auth_control_token,
     )
 
     @app.exception_handler(Exception)
@@ -127,6 +130,8 @@ def create_app(
     app.include_router(admin_hub.router, tags=["admin-hub"])
     app.include_router(admin_pipeline.router, tags=["admin-pipeline"])
     app.include_router(admin_control_center.router, tags=["admin-control-center"])
+    app.include_router(admin_control_ui_controls.router, tags=["admin-control-ui-controls"])
+    app.include_router(admin_controls.router, tags=["admin-controls"])
     app.include_router(admin_ui.router, tags=["admin-ui"])
     app.include_router(health.router, tags=["health"])
     app.include_router(ws.router, tags=["ws"])
