@@ -5,6 +5,10 @@ rules:
     path: src/grace_control/tools/grace_lint/checker.py
     reason: checker implements the textual subprocess rule and contains its own rule signatures
     expires_wave: never
+  - rule: GRC101
+    path: src/grace_control/services/planning_workspace_service.py
+    reason: planning workspace is the isolated git clone/copy subprocess boundary for planning agents
+    expires_wave: never
   - rule: GRC102
     path: src/grace_control/tools/grace_lint/checker.py
     reason: checker implements the textual prefect_grace rule and contains its own rule signatures
@@ -28,6 +32,10 @@ rules:
   - rule: GRC100
     path: src/grace_control/config/project_config.py
     reason: project_config env reads by design
+    expires_wave: never
+  - rule: GRC100
+    path: src/grace_control/services/planning_run_support.py
+    reason: planning run support owns the explicit target-root and context-disabled environment adapters
     expires_wave: never
   - rule: GRC100
     path: src/grace_control/runtime/mini_swe_runner.py
@@ -60,6 +68,10 @@ rules:
   - rule: GRC109
     path: src/grace_control/adapters/packet_executor.py
     reason: canonical OpenCode adapter flag and import path are required runtime compatibility identifiers
+    expires_wave: never
+  - rule: GRC109
+    path: src/grace_control/services/context_builder_stage.py
+    reason: context collector compatibility retains the canonical OpenCode fallback command
     expires_wave: never
   - rule: GRC109
     path: src/grace_control/services/packet_execution_post_service.py

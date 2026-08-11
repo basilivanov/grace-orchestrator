@@ -3,16 +3,32 @@
 # ROLE: Feature planning orchestration — context builder, architect, approval
 # ############################################################################
 
+# START_MODULE_CONTRACT
+# purpose: Stable facade for feature planning, approval, repair, and lifecycle state.
+# inputs: Database/session collaborators, feature identifiers, planning context, and plan data.
+# returns: Planning state, context, Architect plans, approval results, and repair results.
+# side_effects: Persists planning runs, plans, packets, artifacts, events, and runtime logs.
+# emitted_logs: Feature planning, heartbeat, compiler, materializer, and repair lifecycle messages.
+# error_behavior: Raises validation/compiler errors from explicit public operations; stage failures persist safe fallback state.
+# END_MODULE_CONTRACT
+
+# START_MODULE_MAP
+# mapping:
+#   - function: normalize_architect_plan
+#   - class: FeaturePlanningService
+#     methods:
+#       - get_planning_state
+#       - run_context_builder
+#       - run_architect
+#       - approve_plan
+#       - try_approve_or_repair_plan
+#       - regenerate_plan
+# END_MODULE_MAP
+
 from __future__ import annotations
 
 import asyncio
-import json
-import os
-import shutil
-import subprocess
-import uuid
 from datetime import UTC, datetime
-from pathlib import Path
 
 from grace_control.core.execution_environment import ExecutionEnvironment
 from grace_control.core.structured_logger import GraceLogger
@@ -24,144 +40,23 @@ from grace_control.db import get_db
 from grace_control.db.schema import Feature, FeaturePlanningRun, Wave, Packet, Event
 from grace_control.db.schema import PacketState
 from grace_control.core.stage_instrumentation import stage
-
-_CONTENT_PREVIEW_CHARS = 2500
-_MAX_RELEVANT_FILES = 15
-
-
-def _format_environment_facts(environment: ExecutionEnvironment) -> str:
-    """Render deterministic repository facts without adding semantic guesses."""
-    lines = [
-        "DETERMINISTIC ENVIRONMENT FACTS",
-        "Python: " + (
-            ", ".join(environment.python_candidates)
-            if environment.python_candidates
-            else "none detected"
-        ),
-        f"Shell: {environment.shell}",
-    ]
-    for label, values in (
-        ("Executable scripts", environment.executable_scripts),
-        ("Verification entrypoints", environment.verification_entrypoints),
-        ("Compose services", environment.compose_services),
-        ("Ignored patterns", environment.ignored_patterns),
-        ("Config sources", environment.config_sources),
-    ):
-        lines.append(f"{label}:")
-        lines.extend(f"- {value}" for value in values)
-        if not values:
-            lines.append("- none detected")
-    return "\n".join(lines)
-
-
-class CONTEXT_BUILDER_MUTATED_TARGET_REPO(Exception):
-    """Raised when context-builder mutates files in the target repo."""
-
-
-def _git_snapshot(repo_root: Path) -> dict | None:
-    """Return a snapshot of HEAD SHA and changed files for a git repo.
-
-    Returns None if repo_root is not a git repo.
-    """
-    try:
-        head = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=str(repo_root), capture_output=True, text=True, timeout=10,
-        )
-        if head.returncode != 0:
-            return None
-        status = subprocess.run(
-            ["git", "status", "--short"],
-            cwd=str(repo_root), capture_output=True, text=True, timeout=10,
-        )
-        branch = subprocess.run(
-            ["git", "symbolic-ref", "--quiet", "--short", "HEAD"],
-            cwd=str(repo_root), capture_output=True, text=True, timeout=10,
-        )
-        return {
-            "head": head.stdout.strip(),
-            "branch": branch.stdout.strip() if branch.returncode == 0 else "",
-            "status_short": status.stdout.strip(),
-            "is_clean": status.stdout.strip() == "",
-        }
-    except Exception:
-        return None
-
-
-def _remove_planning_workspace(workspace: Path | None) -> None:
-    """Remove a disposable planning workspace without touching its source repo."""
-    if workspace is None or not workspace.exists():
-        return
-    shutil.rmtree(workspace, ignore_errors=True)
-
-
-def _prepare_planning_workspace(repo_root: Path, log_dir: Path, role: str) -> Path:
-    """Create an independent clone/copy for a read-only planning agent.
-
-    A linked worktree is intentionally not used: exploratory planning commands
-    must not share git worktree administration with live coder worktrees.
-    """
-    source = repo_root.resolve()
-    workspace = (log_dir / f"{role}-repository").resolve()
-    _remove_planning_workspace(workspace)
-
-    snapshot = _git_snapshot(source)
-    if snapshot is not None:
-        cloned = subprocess.run(
-            ["git", "clone", "--quiet", "--no-hardlinks", str(source), str(workspace)],
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-        if cloned.returncode != 0:
-            raise RuntimeError(
-                f"planning workspace clone failed: {cloned.stderr.strip()[:300]}"
-            )
-        detached = subprocess.run(
-            ["git", "checkout", "--quiet", "--detach", snapshot["head"]],
-            cwd=str(workspace),
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        if detached.returncode != 0:
-            _remove_planning_workspace(workspace)
-            raise RuntimeError(
-                f"planning workspace checkout failed: {detached.stderr.strip()[:300]}"
-            )
-        return workspace
-
-    shutil.copytree(
-        source,
-        workspace,
-        ignore=shutil.ignore_patterns(
-            ".git", ".grace", ".venv", "node_modules", "__pycache__", ".pytest_cache"
-        ),
-    )
-    return workspace
-
-
-def _planning_workspace_mutation(
-    before: dict | None,
-    after: dict | None,
-) -> dict | None:
-    """Describe a planning workspace mutation, including branch-only changes."""
-    if before is None or after is None:
-        return None
-    if (
-        before.get("head") == after.get("head")
-        and before.get("branch") == after.get("branch")
-        and after.get("is_clean")
-    ):
-        return None
-    return {
-        "pre_head": before.get("head", ""),
-        "post_head": after.get("head", ""),
-        "pre_branch": before.get("branch", ""),
-        "post_branch": after.get("branch", ""),
-        "status_short": after.get("status_short", "")[:2000],
-    }
-
+from grace_control.services.architect_stage import (
+    ArchitectStage,
+    build_architect_prompt,
+    fallback_plan,
+    finalize_plan,
+)
+from grace_control.services.context_builder_stage import (
+    CONTEXT_BUILDER_MUTATED_TARGET_REPO,
+    ContextBuilderStage,
+)
+from grace_control.services.planning_run_support import resolve_plan_target_root
+from grace_control.services.planning_workspace_service import (
+    _git_snapshot,
+    _planning_workspace_mutation,
+    _prepare_planning_workspace,
+    _remove_planning_workspace,
+)
 
 # START_FUNCTION_CONTRACT
 # name: normalize_architect_plan
@@ -275,6 +170,7 @@ def normalize_architect_plan(
     return plan
 
 
+# START_BLOCK_SERVICE
 class FeaturePlanningService:
     """Orchestrate feature planning stages."""
 
@@ -287,6 +183,15 @@ class FeaturePlanningService:
         self._artifact_store = RuntimeArtifactStore()
         self._event_logger = RuntimeEventLogger(store=self._artifact_store)
 
+    # START_FUNCTION_CONTRACT
+    # name: get_planning_state
+    # purpose: Return current feature planning status and persisted run metadata.
+    # inputs: feature_id — feature identifier.
+    # returns: Planning state dictionary with plan and run lifecycle details.
+    # side_effects: Reads planning records from the database.
+    # emitted_logs: None.
+    # error_behavior: Raises ValueError when the feature does not exist.
+    # END_FUNCTION_CONTRACT
     def get_planning_state(self, feature_id: str) -> dict:
         feature = self.db.query(Feature).filter_by(id=feature_id).first()
         if not feature:
@@ -330,420 +235,55 @@ class FeaturePlanningService:
             ],
         }
 
+    # START_FUNCTION_CONTRACT
+    # name: run_context_builder
+    # purpose: Run Context Builder through the isolated planning stage.
+    # inputs: feature_id — feature identifier; target_repo_root — optional target repository root.
+    # returns: Context dictionary with summary, complexity, and selected files.
+    # side_effects: Persists planning lifecycle state, artifacts, events, and disposable workspace data.
+    # emitted_logs: Context Builder lifecycle and mutation-guard messages.
+    # error_behavior: Returns fallback context for ordinary failures; re-raises mutation-guard failures.
+    # END_FUNCTION_CONTRACT
     @stage("context_builder")
     async def run_context_builder(self, feature_id: str, target_repo_root: str | None = None) -> dict:
-        cb_run = self.db.query(FeaturePlanningRun).filter_by(
-            feature_id=feature_id, stage="context_builder"
-        ).order_by(FeaturePlanningRun.created_at.desc()).first()
-
-        now = datetime.now(UTC)
-        run_id = cb_run.id if cb_run else generate_unique_id(self.db, FeaturePlanningRun, new_run_uid)
-        if not cb_run:
-            cb_run = FeaturePlanningRun(id=run_id, feature_id=feature_id, stage="context_builder", status="pending")
-            self.db.add(cb_run)
-
-        cb_run.status = "running"
-        cb_run.started_at = now
-        cb_run.executor_id = "context_collector"
-
-        # Set up live log paths
-        from grace_control.config.settings import settings as _ctx_settings
-        _log_root = Path(_ctx_settings.planning_logs_root)
-        log_dir = _log_root / feature_id / run_id
-        log_dir.mkdir(parents=True, exist_ok=True)
-        stdout_path = str(log_dir / "stdout.log")
-        stderr_path = str(log_dir / "stderr.log")
-        cb_run.stdout_path = stdout_path
-        cb_run.stderr_path = stderr_path
-        self.db.commit()
-
-        feature = self.db.query(Feature).filter_by(id=feature_id).first()
-        task_desc = (feature.description or feature.title or "") if feature else ""
-
-        # ── Runtime observability: trace + events ──
-        self._trace_ctx.feature_id = feature_id
-        self._trace_ctx.runtime_run_id = run_id
-        self._trace_ctx.stage = "feature"
-        self._event_logger.emit(
-            trace=self._trace_ctx, event="feature.trace_started", stage="feature",
-            component="FeaturePlanningService", status="started",
-            payload={"feature_id": feature_id},
-        )
-        self._event_logger.emit(
-            trace=self._trace_ctx, event="feature.input_captured", stage="feature",
-            component="FeaturePlanningService", status="completed",
-            payload={"task_desc": task_desc[:200]},
-        )
-        self._event_logger.emit(
-            trace=self._trace_ctx, event="feature.target_repo_resolved", stage="feature",
-            component="FeaturePlanningService", status="completed",
-            payload={"target_repo_root": target_repo_root},
-        )
-
-        # ── Mutation guard: pre-snapshot target repo ──
-        worktree_root = target_repo_root or _ctx_settings.target_repo_root or "."
-        root = Path(worktree_root).resolve()
-        pre_snapshot = _git_snapshot(root)
-        if pre_snapshot and not pre_snapshot["is_clean"]:
-            _log.warn("context_builder_pre_snapshot_dirty",
-                       feature_id=feature_id, status=pre_snapshot["status_short"][:200])
-
-        self._event_logger.emit(
-            trace=self._trace_ctx, event="context_builder.started", stage="context_builder",
-            component="FeaturePlanningService", status="running",
-        )
-
-        agent_root: Path | None = None
-        try:
-            agent_root = _prepare_planning_workspace(root, log_dir, "context-builder")
-            agent_pre_snapshot = _git_snapshot(agent_root)
-            # Determine scope from feature spec_json
-            spec = feature.spec_json or {} if feature else {}
-            scope = spec.get("scope") if isinstance(spec, dict) else None
-
-            self._event_logger.emit(
-                trace=self._trace_ctx, event="context_builder.input_captured", stage="context_builder",
-                component="FeaturePlanningService", status="completed",
-                payload={"target_repo_root": str(root), "scope": scope, "model": "", "executor_id": "context_collector"},
-            )
-            # Persist feature_input.json
-            feature_input = {"task_desc": task_desc[:500], "scope": scope, "target_repo_root": str(root)}
-            self._artifact_store.write_json(
-                trace=self._trace_ctx, stage="feature", name="feature_input.json",
-                payload=feature_input, kind="feature_input",
-            )
-
-            from grace_control.core.context_collector import ContextCollector
-            from grace_control.core.executor_selector import resolve_model
-
-            ctx_model = resolve_model("context_collector")
-            collector = ContextCollector(
-                project_root=agent_root,
-                model=ctx_model.get("model"),
-                cli=ctx_model.get("command", "opencode"),
-                executor_id=ctx_model.get("executor_id"),
-                stdout_log_path=stdout_path,
-                stderr_log_path=stderr_path,
-            )
-            _hb_task = asyncio.create_task(self._heartbeat_worker(run_id, interval_s=5.0))
-            try:
-                code_ctx = await collector.collect(
-                    task_description=task_desc,
-                    target_scope=scope,
-                    project_root=agent_root,
-                )
-            finally:
-                _hb_task.cancel()
-                try:
-                    await _hb_task
-                except (asyncio.CancelledError, Exception):
-                    pass
-
-            context = {
-                "summary": code_ctx.summary,
-                "estimated_scope": code_ctx.estimated_scope,
-                "complexity_score": code_ctx.complexity_score,
-                "file_count": len(code_ctx.files),
-                "files": [
-                    {
-                        "path": f.path,
-                        "size_lines": f.size_lines,
-                        "exports": f.exports[:8],
-                        "content_preview": f.content_preview[:_CONTENT_PREVIEW_CHARS] if f.content_preview else "",
-                        "relevant": f.relevant,
-                    }
-                    for f in code_ctx.files[:_MAX_RELEVANT_FILES]
-                ],
-                "target_repo_root": str(root.resolve()),
-            }
-            cb_run.status = "done"
-            cb_run.model = ctx_model.get("model", "")
-
-            # ── Runtime observability: context_builder artifacts + events ──
-            self._artifact_store.write_json(
-                trace=self._trace_ctx, stage="context_builder", name="input.json",
-                payload={"target_repo_root": str(root), "scope": scope, "executor_id": "context_collector"},
-                kind="context_input",
-            )
-            self._artifact_store.write_json(
-                trace=self._trace_ctx, stage="context_builder", name="output.json",
-                payload=context, kind="context_output",
-            )
-            files_artifact = {
-                "file_count": len(code_ctx.files),
-                "selected_files": [f.path for f in code_ctx.files[:_MAX_RELEVANT_FILES] if f.relevant],
-                "summary": code_ctx.summary,
-                "complexity_score": code_ctx.complexity_score,
-            }
-            self._artifact_store.write_json(
-                trace=self._trace_ctx, stage="context_builder", name="files.json",
-                payload=files_artifact, kind="context_files",
-            )
-            self._event_logger.emit(
-                trace=self._trace_ctx, event="context_builder.output_captured", stage="context_builder",
-                component="FeaturePlanningService", status="completed",
-                payload={"file_count": len(code_ctx.files), "complexity_score": code_ctx.complexity_score},
-            )
-            self._event_logger.emit(
-                trace=self._trace_ctx, event="context_builder.completed", stage="context_builder",
-                component="FeaturePlanningService", status="completed",
-            )
-
-            # ── Mutation guard: post-run check in disposable clone ──
-            mutation_evidence = _planning_workspace_mutation(
-                agent_pre_snapshot,
-                _git_snapshot(agent_root),
-            )
-            if mutation_evidence is not None:
-                evidence_dir = Path(log_dir)
-                evidence_dir.mkdir(parents=True, exist_ok=True)
-                (evidence_dir / "context-builder-status.txt").write_text(
-                    mutation_evidence.get("status_short", "")
-                )
-                _log.error(
-                    "CONTEXT_BUILDER_MUTATED_TARGET_REPO",
-                    feature_id=feature_id,
-                    mutation_evidence=mutation_evidence,
-                )
-                cb_run.status = "failed"
-                cb_run.error = "CONTEXT_BUILDER_MUTATED_TARGET_REPO"
-                raise CONTEXT_BUILDER_MUTATED_TARGET_REPO(
-                    "context-builder mutated its isolated planning workspace; "
-                    f"target repo remained untouched at {root}. "
-                    f"Evidence saved in {evidence_dir}"
-                )
-        except Exception as e:
-            if isinstance(e, CONTEXT_BUILDER_MUTATED_TARGET_REPO):
-                # Mutation guard: re-raise; the disposable clone is removed in finally.
-                cb_run.finished_at = datetime.now(UTC)
-                cb_run.duration_ms = int((cb_run.finished_at - cb_run.started_at).total_seconds() * 1000)
-                cb_run.result_json = {"summary": str(e)[:200], "file_count": 0, "files": [], "error": "CONTEXT_BUILDER_MUTATED_TARGET_REPO"}
-                self._event_logger.emit(
-                    trace=self._trace_ctx, event="context_builder.failed", stage="context_builder",
-                    component="FeaturePlanningService", status="failed",
-                    payload={"reason": "CONTEXT_BUILDER_MUTATED_TARGET_REPO"},
-                )
-                self._emit_event(feature_id, "context_builder_failed", {
-                    "run_id": run_id, "duration_ms": cb_run.duration_ms, "status": "failed",
-                    "reason": "CONTEXT_BUILDER_MUTATED_TARGET_REPO",
-                })
-                self.db.commit()
-                raise
-            context = {
-                "summary": f"Fallback: {task_desc[:200]}",
-                "file_count": 0,
-                "files": [],
-                "error": str(e)[:200],
-            }
-            cb_run.status = "failed"
-            cb_run.error = str(e)[:500]
-        finally:
-            _remove_planning_workspace(agent_root)
-
-        cb_run.finished_at = datetime.now(UTC)
-        cb_run.duration_ms = int((cb_run.finished_at - cb_run.started_at).total_seconds() * 1000)
-        cb_run.result_json = context
-
-        if cb_run.status == "failed":
-            self._event_logger.emit(
-                trace=self._trace_ctx, event="context_builder.failed", stage="context_builder",
-                component="FeaturePlanningService", status="failed",
-                payload={"error": cb_run.error[:200]},
-            )
-
-        self._emit_event(feature_id, "context_builder_completed" if cb_run.status == "done" else "context_builder_failed", {
-            "run_id": run_id, "duration_ms": cb_run.duration_ms, "status": cb_run.status,
-        })
-
-        self.db.commit()
-        return context
-
+        return await ContextBuilderStage(
+            db=self.db,
+            trace_ctx=self._trace_ctx,
+            artifact_store=self._artifact_store,
+            event_logger=self._event_logger,
+            heartbeat_worker=self._heartbeat_worker,
+            emit_event=self._emit_event,
+            git_snapshot=_git_snapshot,
+            prepare_workspace=_prepare_planning_workspace,
+            workspace_mutation=_planning_workspace_mutation,
+            remove_workspace=_remove_planning_workspace,
+        ).run(feature_id, target_repo_root)
+    # START_FUNCTION_CONTRACT
+    # name: run_architect
+    # purpose: Run Architect through the isolated planning stage with strict current-contract normalization.
+    # inputs: feature_id — feature identifier; context — Context Builder result; target_repo_root — optional target root.
+    # returns: Normalized Architect plan dictionary.
+    # side_effects: Persists planning lifecycle state, artifacts, events, and disposable workspace data.
+    # emitted_logs: Architect lifecycle and mutation-guard messages.
+    # error_behavior: Retries one rejected response and persists a safe failed fallback when execution fails.
+    # END_FUNCTION_CONTRACT
     @stage("architect", llm=True)
     async def run_architect(self, feature_id: str, context: dict, target_repo_root: str | None = None) -> dict:
-        arch_run = self.db.query(FeaturePlanningRun).filter_by(
-            feature_id=feature_id, stage="architect"
-        ).order_by(FeaturePlanningRun.created_at.desc()).first()
-
-        now = datetime.now(UTC)
-        run_id = arch_run.id if arch_run else generate_unique_id(self.db, FeaturePlanningRun, new_run_uid)
-        if not arch_run:
-            arch_run = FeaturePlanningRun(id=run_id, feature_id=feature_id, stage="architect", status="pending")
-            self.db.add(arch_run)
-
-        feature = self.db.query(Feature).filter_by(id=feature_id).first()
-        task_desc = (feature.description or feature.title or "") if feature else ""
-
-        arch_run.status = "running"
-        arch_run.started_at = now
-        arch_run.executor_id = "deepseek-v4-pro"
-        arch_run.prompt = task_desc[:2000]
-
-        # Set up live log paths
-        from grace_control.config.settings import settings as _arch_settings
-        _log_root = Path(_arch_settings.planning_logs_root)
-        log_dir = _log_root / feature_id / run_id
-        log_dir.mkdir(parents=True, exist_ok=True)
-        stdout_path = str(log_dir / "stdout.log")
-        stderr_path = str(log_dir / "stderr.log")
-        arch_run.stdout_path = stdout_path
-        arch_run.stderr_path = stderr_path
-        self.db.commit()
-
-        # ── Runtime observability: architect ──
-        self._trace_ctx.feature_id = feature_id
-        self._trace_ctx.stage = "architect"
-        self._event_logger.emit(
-            trace=self._trace_ctx, event="architect.started", stage="architect",
-            component="FeaturePlanningService", status="running",
-        )
-
-        try:
-            if os.environ.get("GRACE_CONTEXT_DISABLED", "").lower() in {"1", "true", "yes", "on"}:
-                plan = self._fallback_plan(feature_id, task_desc)
-                arch_run.status = "done"
-                arch_run.executor_id = "architect-disabled"
-                arch_run.model = "disabled"
-                arch_run.result_json = plan
-                _log.info("architect_context_disabled", feature_id=feature_id)
-                self._finalize_plan(feature_id, plan, arch_run, run_id)
-                return plan
-
-            # Build prompt — reuses the same prompt structure as _call_architect_llm
-            self._event_logger.emit(
-                trace=self._trace_ctx, event="architect.prompt_build_started", stage="architect",
-                component="FeaturePlanningService", status="running",
-            )
-            worktree_root = (
-                target_repo_root
-                or context.get("target_repo_root")
-                or _arch_settings.target_repo_root
-                or "."
-            )
-            from grace_control.core.execution_environment import probe_execution_environment
-            execution_environment = probe_execution_environment(
-                target_repo_root=Path(worktree_root),
-            )
-            prompt = self._build_architect_prompt(
-                task_desc,
-                context,
-                execution_environment,
-            )
-            # Persist prompt artifact
-            prompt_ref = self._artifact_store.write_text(
-                trace=self._trace_ctx, stage="architect", name="prompt.txt",
-                content=prompt, kind="prompt",
-            )
-            self._event_logger.emit(
-                trace=self._trace_ctx, event="architect.prompt_built", stage="architect",
-                component="FeaturePlanningService", status="completed",
-                artifact_refs=[prompt_ref],
-            )
-
-            architect_root: Path | None = None
-
-            _hb_task = asyncio.create_task(self._heartbeat_worker(run_id, interval_s=5.0))
-            try:
-                if worktree_root:
-                    architect_root = _prepare_planning_workspace(
-                        Path(worktree_root),
-                        log_dir,
-                        "architect",
-                    )
-                architect_pre_snapshot = (
-                    _git_snapshot(architect_root) if architect_root else None
-                )
-                for attempt in range(2):
-                    try:
-                        from grace_control.core.llm_runner import run_llm
-                        from grace_control.core.executor_selector import resolve_model
-
-                        executor = resolve_model("architect")
-                        raw = await run_llm(
-                            prompt, role="architect",
-                            model=executor["model"],
-                            cli=executor["executor_id"],
-                            cwd=architect_root,
-                            session_dir=Path(log_dir),
-                            stdout_log_path=arch_run.stdout_path,
-                            stderr_log_path=arch_run.stderr_path,
-                        )
-                        mutation_evidence = _planning_workspace_mutation(
-                            architect_pre_snapshot,
-                            _git_snapshot(architect_root) if architect_root else None,
-                        )
-                        if mutation_evidence is not None:
-                            _log.error(
-                                "architect_mutated_planning_workspace",
-                                feature_id=feature_id,
-                                mutation_evidence=mutation_evidence,
-                            )
-                            raise RuntimeError(
-                                "architect mutated isolated planning workspace"
-                            )
-                        # Persist raw response
-                        raw_ref = self._artifact_store.write_text(
-                            trace=self._trace_ctx, stage="architect", name="raw_response.txt",
-                            content=raw, kind="raw_response",
-                        )
-                        self._event_logger.emit(
-                            trace=self._trace_ctx, event="architect.raw_response_captured", stage="architect",
-                            component="FeaturePlanningService", status="completed",
-                            artifact_refs=[raw_ref],
-                        )
-
-                        plan = json.loads(raw)
-
-                        # Normalize plan structure (including W03 canonicalization)
-                        plan = normalize_architect_plan(
-                            plan,
-                            require_current_contract=True,
-                        )
-
-                        # Persist parsed plan
-                        self._artifact_store.write_json(
-                            trace=self._trace_ctx, stage="architect", name="parsed_plan.json",
-                            payload=plan, kind="parsed_plan",
-                        )
-                        self._event_logger.emit(
-                            trace=self._trace_ctx, event="architect.parsed_plan_captured", stage="architect",
-                            component="FeaturePlanningService", status="completed",
-                        )
-
-                        arch_run.status = "done"
-                        arch_run.executor_id = executor["executor_id"]
-                        arch_run.model = executor["model"]
-                        arch_run.result_json = plan
-                        break
-                    except Exception as e:
-                        if attempt == 1:
-                            raise
-                        prompt += (
-                            "\n\n[Previous architect attempt was rejected: "
-                            f"{str(e)[:200]}. Return one valid JSON object that "
-                            "matches the current architect packet contract.]"
-                        )
-            finally:
-                _hb_task.cancel()
-                try:
-                    await _hb_task
-                except (asyncio.CancelledError, Exception):
-                    pass
-                _remove_planning_workspace(architect_root)
-
-        except Exception as e:
-            plan = self._fallback_plan(feature_id, task_desc)
-            arch_run.status = "failed"
-            arch_run.error = str(e)[:500]
-            arch_run.result_json = plan
-            self._event_logger.emit(
-                trace=self._trace_ctx, event="architect.failed", stage="architect",
-                component="FeaturePlanningService", status="failed",
-                payload={"error": str(e)[:200]},
-            )
-
-        self._finalize_plan(feature_id, plan, arch_run, run_id)
-        return plan
-
+        return await ArchitectStage(
+            db=self.db,
+            trace_ctx=self._trace_ctx,
+            artifact_store=self._artifact_store,
+            event_logger=self._event_logger,
+            heartbeat_worker=self._heartbeat_worker,
+            normalize_plan=normalize_architect_plan,
+            build_prompt=self._build_architect_prompt,
+            fallback_plan_builder=self._fallback_plan,
+            finalize_plan_callback=self._finalize_plan,
+            git_snapshot=_git_snapshot,
+            prepare_workspace=_prepare_planning_workspace,
+            workspace_mutation=_planning_workspace_mutation,
+            remove_workspace=_remove_planning_workspace,
+        ).run(feature_id, context, target_repo_root)
     async def _heartbeat_worker(self, run_id: str, interval_s: float = 5.0) -> None:
         """Update run.last_heartbeat every `interval_s` while planning LLM runs.
 
@@ -771,28 +311,14 @@ class FeaturePlanningService:
             pass
 
     def _finalize_plan(self, feature_id: str, plan: dict, arch_run: FeaturePlanningRun, run_id: str) -> None:
-        arch_run.finished_at = datetime.now(UTC)
-        if arch_run.started_at:
-            arch_run.duration_ms = int((arch_run.finished_at - arch_run.started_at).total_seconds() * 1000)
-        else:
-            arch_run.duration_ms = 0
-
-        feature = self.db.query(Feature).filter_by(id=feature_id).first()
-        if feature:
-            spec = dict(feature.spec_json) if feature.spec_json else {}
-            spec["plan_json"] = plan
-            feature.spec_json = spec
-            feature.status = "PLAN_READY" if arch_run.status == "done" else "PLAN_FAILED"
-
-        self._emit_event(feature_id, "architect_completed" if arch_run.status == "done" else "architect_failed", {
-            "run_id": run_id, "duration_ms": arch_run.duration_ms, "waves_count": len(plan.get("waves", [])),
-        })
-        if arch_run.status == "done":
-            self._emit_event(feature_id, "plan_ready", {
-                "waves_count": len(plan.get("waves", [])),
-            })
-
-        self.db.commit()
+        finalize_plan(
+            self.db,
+            feature_id,
+            plan,
+            arch_run,
+            run_id,
+            emit_event=self._emit_event,
+        )
 
     def _build_architect_prompt(
         self,
@@ -800,103 +326,27 @@ class FeaturePlanningService:
         context: dict,
         execution_environment: ExecutionEnvironment,
     ) -> str:
-        """W03: Thin renderer around the canonical architect prompt.
-
-        Loads the canonical prompt from architect_prompt.md and prepends
-        runtime context (business requirement, codebase context, file listing,
-        knowledge graph). The canonical prompt body is the single source of
-        truth for schema, rules, and output format — not duplicated here.
-        """
-        from grace_control.core.prompts import load_architect_prompt
-
-        all_files = context.get("files", [])
-        all_paths = "\n".join(f.get("path", "?") for f in all_files[:60])
-
-        relevant_blocks = []
-        other_files = []
-        for f in all_files:
-            if f.get("relevant") and f.get("content_preview"):
-                relevant_blocks.append(
-                    f"### {f['path']} ({f.get('size_lines', '?')}L)\n"
-                    f"{f['content_preview'][:2500]}\n"
-                )
-            else:
-                exports = ", ".join(f.get("exports", [])[:6])
-                other_files.append(f"  {f['path']} ({f.get('size_lines', '?')}L) exports=[{exports}]")
-
-        relevants = "\n".join(relevant_blocks[:12])
-        others = "\n".join(other_files[:40])
-
-        # ── Runtime context header (prepended before canonical prompt) ──
-        prompt = f"""PRIMARY SOURCE OF TRUTH: the business requirement below. Codebase context is for reference only — do not generate packets unrelated to the requirement.
-
-Business requirement: {task}
-
-Codebase context:
-- Summary: {context.get('summary', 'Unknown')}
-- Complexity: {context.get('complexity_score', '?')}/300
-
-{_format_environment_facts(execution_environment)}
-"""
-
-        if relevant_blocks:
-            prompt += f"""
-RELEVANT FILE CONTENT (study this code before planning):
-{relevants}
-"""
-        if other_files:
-            prompt += f"""
-Other files (paths only):
-{others}
-"""
-
-        # ── GRACE CANON — Knowledge Graph Extract ────────────────
-        target_root = context.get("target_repo_root")
-        if target_root:
-            from grace_control.services.grace_knowledge_graph_service import GraceKnowledgeGraphService
-            from pathlib import Path
-            kg_svc = GraceKnowledgeGraphService(
-                trace=self._trace_ctx, event_logger=self._event_logger, artifact_store=self._artifact_store,
-            )
-            kg = kg_svc.load(Path(target_root))
-            if kg:
-                extract = kg_svc.extract_relevant_modules(
-                    kg,
-                    feature_text=task,
-                    context_paths=[f.get("path", "") for f in all_files],
-                )
-                kg_block = kg_svc.build_kg_prompt_block(
-                    extract, task,
-                    context_paths=[f.get("path", "") for f in all_files],
-                )
-                prompt += kg_block + "\n"
-
-        prompt += f"""Full file listing for scope reference:
-{all_paths}
-
-"""
-
-        # ── W03: Append canonical prompt body (single source of truth) ──
-        prompt += load_architect_prompt()
-
-        return prompt
+        return build_architect_prompt(
+            task,
+            context,
+            execution_environment,
+            trace_ctx=self._trace_ctx,
+            event_logger=self._event_logger,
+            artifact_store=self._artifact_store,
+        )
 
     def _fallback_plan(self, feature_id: str, task_desc: str) -> dict:
-        """W02: Architect fallback does NOT create executable coder packets.
+        return fallback_plan(feature_id, task_desc)
 
-        When the architect LLM fails, we set PLAN_FAILED instead of creating
-        a coder packet with empty scope. The fallback plan is non-executable —
-        it records that planning failed but does not enqueue unsafe work.
-        """
-        return {
-            "waves": [],
-            "summary": f"PLAN_FAILED: architect LLM unavailable for feature {feature_id}",
-            "constraints": {"frozen_scope": []},
-            "verification": {"t0": [], "t1": [], "t2": []},
-            "_fallback": True,
-            "_fallback_reason": "architect_llm_unavailable",
-        }
-
+    # START_FUNCTION_CONTRACT
+    # name: approve_plan
+    # purpose: Validate a ready plan with the public compiler and materialize waves and packets.
+    # inputs: feature_id — feature whose PLAN_READY plan should be approved.
+    # returns: Queued materialization result with wave and packet identifiers.
+    # side_effects: Writes compiler/materializer runs, artifacts, events, waves, and packets.
+    # emitted_logs: Compiler and packet materializer lifecycle messages.
+    # error_behavior: Raises ValueError for missing/invalid status or compiler rejection.
+    # END_FUNCTION_CONTRACT
     def approve_plan(self, feature_id: str) -> dict:
         feature = self.db.query(Feature).filter_by(id=feature_id).first()
         if not feature:
@@ -913,14 +363,7 @@ Other files (paths only):
             from grace_control.core.plan_compiler import PlanCompiler
             from grace_control.core.execution_environment import probe_execution_environment
             from grace_control.config.settings import settings as _settings
-            import os as _os
-            target_root_str = (
-                spec.get("target_repo_root")
-                or _settings.target_repo_root
-                or _os.environ.get("GRACE_TARGET_REPO_ROOT")
-                or "."
-            )
-            target_root = Path(target_root_str) if isinstance(target_root_str, str) else Path(".")
+            target_root = resolve_plan_target_root(spec, _settings)
             env = probe_execution_environment(target_repo_root=target_root)
             feature_desc = (
                 (getattr(feature, "description", None) or "")
@@ -1192,6 +635,15 @@ Other files (paths only):
         self.db.commit()
         return {"status": "queued", "waves_count": len(waves), "packets_count": len(packet_ids), "packet_ids": packet_ids}
 
+    # START_FUNCTION_CONTRACT
+    # name: try_approve_or_repair_plan
+    # purpose: Approve a plan and run bounded compiler repair when errors are repairable.
+    # inputs: feature_id — feature identifier; max_repair_attempts — repair-loop limit.
+    # returns: Approval result or PLAN_FAILED result with compiler errors; does not raise for exhausted repair.
+    # side_effects: Writes compiler, autofix, repair artifacts/events and updates feature/spec state.
+    # emitted_logs: Compiler rejection, autofix, repair attempt, and repair terminal messages.
+    # error_behavior: Converts compiler ValueError to a bounded repair result; preserves non-repairable failure.
+    # END_FUNCTION_CONTRACT
     async def try_approve_or_repair_plan(
         self,
         feature_id: str,
@@ -1272,14 +724,7 @@ Other files (paths only):
         feature_desc = getattr(feature, "description", "") or spec.get("description", "")
 
         from grace_control.config.settings import settings as _settings
-        import os as _os
-        target_root_str = (
-            spec.get("target_repo_root")
-            or _settings.target_repo_root
-            or _os.environ.get("GRACE_TARGET_REPO_ROOT")
-            or "."
-        )
-        target_root = Path(target_root_str) if isinstance(target_root_str, str) else Path(".")
+        target_root = resolve_plan_target_root(spec, _settings)
 
         from grace_control.core.execution_environment import probe_execution_environment
         env = probe_execution_environment(target_repo_root=target_root)
@@ -1496,6 +941,15 @@ Other files (paths only):
         )
         return {"status": "PLAN_FAILED", "compiler_errors": compiler_errors}
 
+    # START_FUNCTION_CONTRACT
+    # name: regenerate_plan
+    # purpose: Reset a failed/ready feature to planning and schedule a fresh Context Builder run.
+    # inputs: feature_id — feature identifier.
+    # returns: Current planning state after regeneration is scheduled.
+    # side_effects: Updates feature status/spec and inserts a pending planning run.
+    # emitted_logs: None.
+    # error_behavior: Raises ValueError when the feature is missing or not regenerable.
+    # END_FUNCTION_CONTRACT
     def regenerate_plan(self, feature_id: str) -> dict:
         feature = self.db.query(Feature).filter_by(id=feature_id).first()
         if not feature:
@@ -1530,3 +984,4 @@ Other files (paths only):
             trace_id=trace_id or "",
         )
         self.db.add(event)
+# END_BLOCK_SERVICE
