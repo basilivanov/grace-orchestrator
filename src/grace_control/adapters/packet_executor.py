@@ -32,8 +32,16 @@ from pydantic import BaseModel
 from grace_control.core.stage_instrumentation import stage
 
 from grace_control.agent.backend import ExecutionBackend
-from grace_control.core.evidence_verifier import EvidenceVerifierVerdict, run_evidence_verifier, skipped_evidence_report
-from grace_control.core.reviewer_gate import ReviewerVerdict, run_reviewer_gate, skipped_reviewer_report
+from grace_control.core.evidence_verifier import (
+    EvidenceVerifierVerdict,
+    run_evidence_verifier,
+    skipped_evidence_report,
+)
+from grace_control.core.reviewer_gate import (
+    ReviewerVerdict,
+    run_reviewer_gate,
+    skipped_reviewer_report,
+)
 from grace_control.core.runtime_artifacts import RuntimeArtifactRef
 from grace_control.runtime.agent_runtime_contract import AgentRuntimeFailureCode
 from grace_control.core.structured_logger import GraceLogger
@@ -41,6 +49,7 @@ from grace_control.db import get_db
 from grace_control.db.schema import Packet, PacketRun, StageRun
 from grace_control.services.agent_commit_service import AgentCommitService
 from grace_control.services.packet_execution_observability_service import PacketExecutionObservabilityService
+from grace_control.services.packet_execution_completion_service import PacketExecutionCompletionService
 from grace_control.services.packet_execution_post_service import PacketExecutionPostService
 from grace_control.services.packet_execution_preflight_service import (
     PacketExecutionPreparation,
@@ -95,10 +104,10 @@ class PacketExecutionAdapter:
         self.project_root = Path(project_root); self.state_root = Path(state_root); self.worktree_root = Path(worktree_root)
         if backend is None:
             from grace_control.config.settings import settings as _s
-            if getattr(_s, "agent_runtime_use_" + "open" + "code_adapter", False):
+            if getattr(_s, "agent_runtime_use_opencode_adapter", False):
                 from importlib import import_module
                 runtime_adapter = import_module(
-                    "grace_control.runtime." + "open" + "code_runtime_adapter"
+                    "grace_control.runtime.opencode_runtime_adapter"
                 )
                 self._backend = runtime_adapter.OpenCodeExecutionBackend(
                     runtime_adapter.OpenCodeRuntimeAdapter()
@@ -124,6 +133,7 @@ class PacketExecutionAdapter:
         self._rerun_service = PacketExecutionRerunService()
         self._post_service = PacketExecutionPostService()
         self._observability_service = PacketExecutionObservabilityService()
+        self._completion_service = PacketExecutionCompletionService()
 
     # START_FUNCTION_CONTRACT
     # name: execute
@@ -488,7 +498,7 @@ class PacketExecutionAdapter:
 
     def _self_evolution_guard(self, pd, accept_report, safe_data, run_id, executor, start):
         spec = pd.get("spec_json") or {}
-        if not (isinstance(spec,dict) and spec.get("or" + "igin")=="self_evolution"): return None
+        if not (isinstance(spec,dict) and spec.get("origin")=="self_evolution"): return None
         _log.info("self_evolution_guard_check", packet_id=pd["id"])
         from grace_control.core.self_evolution_guard import SelfEvolutionGuard
         gr = SelfEvolutionGuard().check(self._inspector.collect_changed_files(Path(".")), session_id=spec.get("session_id",""))
@@ -524,233 +534,63 @@ class PacketExecutionAdapter:
     async def _route_after(self, start, run_id, packet_id, result, executor, rn,
                            pkt_contract, accept_report, ar_path, sd, changed_files, sha, wt_path, run_dir,
                            base_ref=None, base_sha=None):
-        from grace_control.core.contracts import AcceptanceProfile
-        prof = pkt_contract.acceptance_profile; ev = self._evidence; ex_id = executor.get("executor_id","")
-        art = [str(p.relative_to(run_dir)) for p in run_dir.rglob("*") if p.is_file()] if run_dir.exists() else []
-        ep = ev.evidence_path(packet_id, rn, self.state_root)
-        def _mk(accepted, ds, r=None, e=ep, c=sha):
-            return ExecutionResult(accepted=accepted, reason=r, domain_status=ds,
-                worktree_path=str(result.worktree_path) if result.worktree_path else "",
-                branch_name=result.branch_name or "",
-                acceptance_report_path=ar_path, acceptance_verdict=accept_report.final_verdict.value,
-                acceptance_summary=accept_report.summary, duration_ms=int((time.time()-start)*1000), commit_sha=c, evidence_path=e)
-        def _acc(er, evr, rvr):
-            dev_rep = self._build_dev_replay_metadata(
-                packet_id=packet_id, run_id=run_id, run_number=rn,
-                wt_path=wt_path, branch_name=result.branch_name or "",
-                base_ref=base_ref, base_sha=base_sha, agent_commit_sha=sha,
-                changed_files=changed_files, run_dir=run_dir, ar_path=ar_path,
-                acceptance_report=accept_report, evr=evr, rvr=rvr
-            )
-            self._write_agent_patch(wt_path, run_dir, base_sha)
-            diff_ref = self._capture_diff_patch_artifact(wt_path, run_dir, base_sha)
-            ev_ref, meta_ref = self._capture_evidence_artifact(packet_id, run_id, rn, sha, changed_files, accept_report, evr, er)
-            evidence_refs = [r for r in (diff_ref, ev_ref, meta_ref) if r is not None]
-            self._obs_event("packet.evidence_captured", status="completed", artifact_refs=evidence_refs if evidence_refs else None)
-            self._obs_event("packet.execution_completed", status="accepted", duration_ms=er.duration_ms)
-            ev.save_agent_log(packet_id, rn, result, self.state_root)
-            self._evidence.update_run_result(run_id=run_id, status="accepted", legacy_result=sd,
-                acceptance_report=accept_report, evidence_verifier_report=evr, reviewer_report=rvr,
-                evidence_path=ep, duration_ms=er.duration_ms, executor_id=ex_id, commit_sha=sha,
-                model=getattr(result, "model", "") or executor.get("model",""),
-                command_preview=getattr(result, "command_preview", None),
-                prompt=getattr(result, "prompt", ""), dev_replay=dev_rep,
-                diagnostics=getattr(self, "_last_diagnostics", None),
-                base_sha=base_sha,
-                parallel_execution=(getattr(result, "evidence", {}) or {}).get("parallel_execution"),
-                tokens_in=getattr(result, "tokens_in", None),
-                tokens_out=getattr(result, "tokens_out", None),
-                cost_usd=getattr(result, "cost_usd", None))
-            _log.info("adapter_execute_done", packet_id=packet_id, accepted=True, duration_ms=er.duration_ms); return er
-        def _rej(domain, reason, evr, rvr):
-            dev_rep = self._build_dev_replay_metadata(
-                packet_id=packet_id, run_id=run_id, run_number=rn,
-                wt_path=wt_path, branch_name=result.branch_name or "",
-                base_ref=base_ref, base_sha=base_sha, agent_commit_sha=sha,
-                changed_files=changed_files, run_dir=run_dir, ar_path=ar_path,
-                acceptance_report=accept_report, evr=evr, rvr=rvr
-            )
-            self._write_agent_patch(wt_path, run_dir, base_sha)
-            er = _mk(False, domain, r=reason, e="")
-            diff_ref = self._capture_diff_patch_artifact(wt_path, run_dir, base_sha)
-            ev_ref, meta_ref = self._capture_evidence_artifact(packet_id, run_id, rn, sha, changed_files, accept_report, evr, er)
-            evidence_refs = [r for r in (diff_ref, ev_ref, meta_ref) if r is not None]
-            self._obs_event("packet.evidence_captured", status="completed", artifact_refs=evidence_refs if evidence_refs else None)
-            self._obs_event("packet.execution_completed", status=domain, duration_ms=er.duration_ms)
-            self._evidence.update_run_result(run_id=run_id, status=domain, legacy_result=sd,
-                acceptance_report=accept_report, evidence_verifier_report=evr, reviewer_report=rvr,
-                evidence_path="", duration_ms=er.duration_ms, executor_id=ex_id,
-                model=getattr(result, "model", "") or executor.get("model",""),
-                command_preview=getattr(result, "command_preview", None),
-                prompt=getattr(result, "prompt", ""), commit_sha=sha, dev_replay=dev_rep,
-                diagnostics=getattr(self, "_last_diagnostics", None),
-                base_sha=base_sha,
-                parallel_execution=(getattr(result, "evidence", {}) or {}).get("parallel_execution"),
-                tokens_in=getattr(result, "tokens_in", None),
-                tokens_out=getattr(result, "tokens_out", None),
-                cost_usd=getattr(result, "cost_usd", None))
-            # TZ_RETENTION_POLICY Phase 1: on REJECTED / BLOCKED, clean up
-            # worktree + all attempt-branches for this packet. Run artifacts
-            # in .grace/state/.../runs/R0X/ are NOT touched.
-            from grace_control.config.settings import settings
-            if not settings.dev_keep_failed_worktrees:
-                try:
-                    effective_target_root = self._effective_cleanup_root(executor)
-                    self._terminal_cleanup.run(packet_id=packet_id, attempt=rn, project_root=effective_target_root)
-                except Exception as e:
-                    _log.warn("terminal_cleanup_exception",
-                        packet_id=packet_id, state=domain, error=str(e)[:200])
-            _log.info("adapter_execute_done", packet_id=packet_id, accepted=False, duration_ms=er.duration_ms); return er
-
-        if prof == AcceptanceProfile.FAST:
-            return _acc(_mk(True, "accepted"), skipped_evidence_report("FAST"), skipped_reviewer_report("FAST"))
-        evr = await run_evidence_verifier(packet=pkt_contract, acceptance_report=accept_report,
-            worktree_path=wt_path, run_dir=run_dir, changed_files=changed_files, artifacts=art)
-        if evr.verdict in (EvidenceVerifierVerdict.REWORK_TO_CODER, EvidenceVerifierVerdict.RETURN_TO_ARCHITECT):
-            if evr.verdict == EvidenceVerifierVerdict.REWORK_TO_CODER:
-                self._maybe_create_rework_packet(
-                    packet_id,
-                    verdict_source="evidence_verifier",
-                    summary=evr.summary,
-                    blocking_issues=evr.failed_checks,
-                    coder_instructions=evr.coder_instructions,
-                    rework_base_sha=sha,
-                )
-            return _rej("rejected" if evr.verdict==EvidenceVerifierVerdict.REWORK_TO_CODER else "blocked", evr.summary, evr, skipped_reviewer_report("ev reject"))
-        rvr = await run_reviewer_gate(packet=pkt_contract, acceptance_report=accept_report,
-            evidence_verifier_report=evr, worktree_path=wt_path, run_dir=run_dir, changed_files=changed_files, artifacts=art)
-        if rvr.verdict == ReviewerVerdict.PASS: return _acc(_mk(True, "accepted"), evr, rvr)
-        if rvr.verdict in (ReviewerVerdict.REWORK_TO_CODER, ReviewerVerdict.RETURN_TO_ARCHITECT):
-            if rvr.verdict == ReviewerVerdict.REWORK_TO_CODER:
-                self._maybe_create_rework_packet(
-                    packet_id,
-                    verdict_source="reviewer",
-                    summary=rvr.summary,
-                    blocking_issues=rvr.required_changes,
-                    coder_instructions=rvr.risks,
-                    rework_base_sha=sha,
-                )
-            return _rej("rejected" if rvr.verdict==ReviewerVerdict.REWORK_TO_CODER else "blocked", rvr.summary, evr, rvr)
-        _log.error("unexpected_reviewer_verdict", packet_id=packet_id, verdict=rvr.verdict.value)
-        raise RuntimeError(f"Unexpected reviewer verdict: {rvr.verdict.value}")
+        return await self._completion_service.route_after(
+            self,
+            start,
+            run_id,
+            packet_id,
+            result,
+            executor,
+            rn,
+            pkt_contract,
+            accept_report,
+            ar_path,
+            sd,
+            changed_files,
+            sha,
+            wt_path,
+            run_dir,
+            base_ref=base_ref,
+            base_sha=base_sha,
+        )
 
     def _persist_run(self, status, run_id, executor, safe_data, accept_report, evr, rvr, dur, ar_path, packet_id, start, *, commit_sha="", wt_path=None, run_dir=None, changed_files=None, base_ref=None, base_sha=None):
-        er = ExecutionResult(accepted=(status=="accepted"), domain_status=accept_report.final_verdict.value if accept_report else "rejected",
-            reason=accept_report.summary if accept_report else "", worktree_path="", branch_name="",
-            acceptance_report_path=ar_path, acceptance_verdict=accept_report.final_verdict.value if accept_report else "rejected",
-            acceptance_summary=accept_report.summary if accept_report else "", duration_ms=dur, commit_sha=commit_sha)
-        rn = None
-        if run_id and run_id.rfind("-R") != -1:
-            try:
-                rn = int(run_id.rsplit("-R", 1)[-1])
-            except ValueError:
-                rn = 1
-        else:
-            rn = 1
-        dev_rep = self._build_dev_replay_metadata(
-            packet_id=packet_id, run_id=run_id, run_number=rn,
-            wt_path=wt_path, branch_name=safe_data.get("branch_name", ""),
-            base_ref=base_ref, base_sha=base_sha, agent_commit_sha=commit_sha,
-            changed_files=changed_files, run_dir=run_dir, ar_path=ar_path,
-            acceptance_report=accept_report, evr=evr, rvr=rvr
-        )
-        self._write_agent_patch(wt_path, run_dir, base_sha)
-        diff_ref = self._capture_diff_patch_artifact(wt_path, run_dir, base_sha)
-        ev_ref, meta_ref = self._capture_evidence_artifact(packet_id, run_id, rn, commit_sha, changed_files, accept_report, evr, er)
-        evidence_refs = [r for r in (diff_ref, ev_ref, meta_ref) if r is not None]
-        self._obs_event("packet.evidence_captured", status="completed", artifact_refs=evidence_refs if evidence_refs else None)
-        self._obs_event("packet.execution_completed", status=status, duration_ms=dur)
-        safe_parallel_execution = (
-            (safe_data or {}).get("evidence", {}).get("parallel_execution")
-            if isinstance((safe_data or {}).get("evidence", {}), dict)
-            else None
-        )
-        self._evidence.update_run_result(run_id=run_id, status=status, legacy_result=safe_data,
-            acceptance_report=accept_report, evidence_verifier_report=evr, reviewer_report=rvr,
-            evidence_path=er.evidence_path, duration_ms=er.duration_ms, executor_id=executor.get("executor_id",""),
-            commit_sha=commit_sha, dev_replay=dev_rep,
-            diagnostics=getattr(self, "_last_diagnostics", None),
+        return self._completion_service.persist_run(
+            self,
+            status,
+            run_id,
+            executor,
+            safe_data,
+            accept_report,
+            evr,
+            rvr,
+            dur,
+            ar_path,
+            packet_id,
+            start,
+            commit_sha=commit_sha,
+            wt_path=wt_path,
+            run_dir=run_dir,
+            changed_files=changed_files,
+            base_ref=base_ref,
             base_sha=base_sha,
-            parallel_execution=safe_parallel_execution,
-            tokens_in=(safe_data or {}).get("tokens_in"),
-            tokens_out=(safe_data or {}).get("tokens_out"),
-            cost_usd=(safe_data or {}).get("cost_usd"))
-        # TZ_RETENTION_POLICY Phase 1: on REJECTED (acceptance failure), clean
-        # up worktree + all attempt-branches for this packet. Run artifacts
-        # in .grace/state/ are NOT touched.
-        from grace_control.config.settings import settings
-        if status in ("rejected", "failed", "blocked", "blocked_recoverable", "blocked_final") and not settings.dev_keep_failed_worktrees:
-            try:
-                # The attempt number is encoded in run_id (e.g. pkt_xxx-R03).
-                rn = None
-                if run_id and run_id.rfind("-R") != -1:
-                    try:
-                        rn = int(run_id.rsplit("-R", 1)[-1])
-                    except ValueError:
-                        rn = None
-
-                effective_target_root = self._effective_cleanup_root(executor)
-                self._terminal_cleanup.run(packet_id=packet_id, attempt=rn, project_root=effective_target_root)
-            except Exception as e:
-                _log.warn("terminal_cleanup_exception",
-                    packet_id=packet_id, state=status, error=str(e)[:200])
-        _log.info("adapter_execute_done", packet_id=packet_id, accepted=(status=="accepted"), duration_ms=dur)
-        return er
+        )
 
     def _effective_cleanup_root(self, executor: dict) -> Path:
-        from grace_control.config.settings import settings
-        # Check packet-level target_repo_root first (feature spec override)
-        pkt_repo = getattr(self, "_packet_target_repo", None) or settings.target_repo_root
-        workspace_mode = executor.get("workspace_mode") or settings.workspace_mode or "full_git_worktree"
-        if executor.get("minimal_repo"):
-            workspace_mode = "scoped_copy"
-        if workspace_mode == "target_repo_worktree":
-            return Path(pkt_repo or self.project_root)
-        if pkt_repo and str(pkt_repo) != str(self.project_root):
-            return Path(pkt_repo)
-        return self.project_root
+        return self._completion_service.effective_cleanup_root(self, executor)
 
     def _fast_reject(self, reason, executor_id, run_id, start,
                      failure_code: str | None = None,
                      failure_stage: str | None = None):
-        er = ExecutionResult(accepted=False, domain_status="rejected", reason=reason, evidence_path="", duration_ms=int((time.time()-start)*1000))
-        # Synthesize a minimal diagnostics surface so result_json["diagnostics"]
-        # has the same shape as terminal runs (failure_class, failure_stage,
-        # stderr_tail). Redact secrets defensively.
-        try:
-            _diag = {
-                "failure_stage": failure_stage or "pre_acceptance",
-                "failure_class": classify_failure("", reason, None, failure_stage or "pre_acceptance"),
-                "stderr_tail": _redact_secrets(_tail(reason or "", _STDERR_TAIL_LIMIT)),
-                "exit_code": None,
-                "duration_ms": er.duration_ms,
-            }
-            if failure_code:
-                _diag["failure_code"] = failure_code
-        except Exception:
-            _diag = {"failure_stage": failure_stage or "pre_acceptance", "failure_class": "unknown"}
-        try: self._evidence.update_run_result(run_id=run_id, status="rejected", legacy_result={"error":"pre-acceptance failure","reason":reason},
-            acceptance_report=None, evidence_verifier_report=skipped_evidence_report(reason), reviewer_report=skipped_reviewer_report(reason),
-            evidence_path="", duration_ms=er.duration_ms, executor_id=executor_id, diagnostics=_diag)
-        except Exception as _evidence_err:
-            _log.warn("pre_acceptance_evidence_update_failed", run_id=run_id, error=str(_evidence_err)[:500])
-        # Clean up worktree + agent/* branches for terminal rejection.
-        # Extract packet_id and run_number from run_id (e.g. "pkt_xxx-R01").
-        from grace_control.config.settings import settings
-        if not settings.dev_keep_failed_worktrees:
-            try:
-                parts = run_id.rsplit("-R", 1)
-                if len(parts) == 2:
-                    pkt, rn = parts[0], int(parts[1])
-                    from grace_control.config.agent_profiles import get_agent_profile
-                    prof = get_agent_profile(executor_id)
-                    executor_dict = prof.to_dict() if prof else {}
-                    effective_target_root = self._effective_cleanup_root(executor_dict)
-                    self._terminal_cleanup.run(pkt, attempt=rn, project_root=effective_target_root)
-            except Exception as _cleanup_err:
-                _log.warn("terminal_cleanup_failed", run_id=run_id, error=str(_cleanup_err)[:500])
-        self._obs_event("packet.execution_failed", status="rejected", message=reason[:200])
-        return er
+        return self._completion_service.fast_reject(
+            self,
+            reason,
+            executor_id,
+            run_id,
+            start,
+            failure_code=failure_code,
+            failure_stage=failure_stage,
+        )
 
     # ── W6: Post-run Scope Enforcement + Diagnostics ─────────────────────
 
@@ -863,45 +703,39 @@ git.worktree_add(
 
 
     def _build_dev_replay_metadata(
-        self, packet_id: str, run_id: str, run_number: int,
-        wt_path: Path | None, branch_name: str | None,
-        base_ref: str | None, base_sha: str | None,
-        agent_commit_sha: str | None, changed_files: list[str] | None,
-        run_dir: Path | None, ar_path: str | None,
-        acceptance_report, evr, rvr,
+        self,
+        packet_id: str,
+        run_id: str,
+        run_number: int,
+        wt_path: Path | None,
+        branch_name: str | None,
+        base_ref: str | None,
+        base_sha: str | None,
+        agent_commit_sha: str | None,
+        changed_files: list[str] | None,
+        run_dir: Path | None,
+        ar_path: str | None,
+        acceptance_report,
+        evr,
+        rvr,
     ) -> dict:
-        failed_stage = None
-        if acceptance_report and not acceptance_report.is_accepted:
-            for stage in acceptance_report.stages:
-                if stage.status.value == "failed":
-                    failed_stage = stage.name.value
-                    break
-            if not failed_stage:
-                failed_stage = "ACCEPTANCE"
-        elif evr and hasattr(evr, "verdict") and evr.verdict in ("REWORK_TO_CODER", "RETURN_TO_ARCHITECT", "rework_required"):
-            failed_stage = "EVIDENCE_VERIFIER"
-        elif rvr and hasattr(rvr, "verdict") and rvr.verdict in ("REWORK_TO_CODER", "RETURN_TO_ARCHITECT", "rework_required"):
-            failed_stage = "REVIEWER"
-
-        metadata = {
-            "version": 1,
-            "replayable": True,
-            "packet_id": packet_id,
-            "run_id": run_id,
-            "run_number": run_number,
-            "worktree_path": str(wt_path) if wt_path else "",
-            "branch_name": branch_name or "",
-            "base_ref": base_ref or "",
-            "base_sha": base_sha or "",
-            "agent_commit_sha": agent_commit_sha or "",
-            "changed_files": list(changed_files) if changed_files else [],
-            "run_dir": str(run_dir) if run_dir else "",
-            "acceptance_report_path": ar_path or "",
-            "evidence_path": str(run_dir) if run_dir else "",
-            "failed_stage": failed_stage,
-            "created_at": datetime.now(UTC).isoformat() + "Z",
-        }
-        return metadata
+        return self._completion_service.build_dev_replay_metadata(
+            self,
+            packet_id,
+            run_id,
+            run_number,
+            wt_path,
+            branch_name,
+            base_ref,
+            base_sha,
+            agent_commit_sha,
+            changed_files,
+            run_dir,
+            ar_path,
+            acceptance_report,
+            evr,
+            rvr,
+        )
 
     def _maybe_create_rework_packet(
         self,
@@ -913,71 +747,18 @@ git.worktree_add(
         coder_instructions: list[str] | None = None,
         rework_base_sha: str = "",
     ) -> None:
-        from grace_control.config.settings import settings as _s
-        if not getattr(_s, "agent_runtime_rework_packets_enabled", True):
-            _log.info("rework_packets_disabled", original_packet_id=original_packet_id)
-            return
-        try:
-            with get_db() as db:
-                orig = db.query(Packet).filter_by(id=original_packet_id).first()
-                if not orig:
-                    _log.warn("rework_original_not_found", original_packet_id=original_packet_id)
-                    return
-
-                # Idempotency: skip if a rework packet for this original + source already exists
-                existing_rework = db.query(Packet).filter(
-                    Packet.spec_json["or" + "igin"].as_string() == "review_rework",
-                    Packet.spec_json["parent_packet_id"].as_string() == original_packet_id,
-                    Packet.spec_json["rework_source"].as_string() == verdict_source,
-                    Packet.state.in_(["ready", "running", "rejected", "accepted", "merged"]),
-                ).first()
-                if existing_rework is not None:
-                    _log.info("rework_packet_already_exists",
-                              original_packet_id=original_packet_id,
-                              existing_rework_id=existing_rework.id,
-                              verdict_source=verdict_source)
-                    return
-
-                create_rework_packet(
-                    db,
-                    original_packet_id=original_packet_id,
-                    feature_id=orig.feature_id,
-                    wave_id=orig.wave_id,
-                    original_spec=orig.spec_json or {},
-                    acceptance_profile=orig.acceptance_profile or "NORMAL",
-                    title=orig.title or "",
-                    slug=orig.slug or "",
-                    max_attempts=orig.max_attempts or 3,
-                    verdict_source=verdict_source,
-                    summary=summary,
-                    blocking_issues=blocking_issues or [],
-                    coder_instructions=coder_instructions,
-                    rework_base_sha=rework_base_sha,
-                    parent_attempt_count=orig.attempt_count or 1,
-                )
-                db.commit()
-                _log.info("rework_packet_committed",
-                          original_packet_id=original_packet_id,
-                          verdict_source=verdict_source)
-        except Exception as e:
-            _log.error("rework_packet_creation_failed",
-                       original_packet_id=original_packet_id,
-                       error=str(e)[:300])
+        return self._completion_service.maybe_create_rework_packet(
+            self,
+            original_packet_id,
+            verdict_source=verdict_source,
+            summary=summary,
+            blocking_issues=blocking_issues,
+            coder_instructions=coder_instructions,
+            rework_base_sha=rework_base_sha,
+        )
 
     def _write_agent_patch(self, wt_path: Path | None, run_dir: Path | None, base_sha: str | None) -> None:
-        if not wt_path or not run_dir or not base_sha:
-            return
-        if not wt_path.exists() or not run_dir.exists():
-            return
-        try:
-            from grace_control.services.git_service import GitService
-            res = GitService()._run(["diff", base_sha], wt_path, timeout=10)
-            if res.success:
-                patch_file = Path(run_dir) / "agent.patch"
-                patch_file.write_text(res.stdout)
-                _log.info("agent_patch_written", run_dir=str(run_dir))
-        except Exception as e:
-            _log.warn("agent_patch_write_failed", error=str(e)[:200])
+        return self._completion_service.write_agent_patch(self, wt_path, run_dir, base_sha)
 
 # END_BLOCK_PACKET_EXECUTION_FACADE
 # ############################################################################

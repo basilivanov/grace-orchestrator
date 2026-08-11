@@ -127,7 +127,7 @@ class PacketExecutionPreflightService:
 
         # W04: pass effective target root for file tree/previews enrichment
         _mat_target = adapter._resolve_materializer_target(packet_data)
-        state_root = getattr(adapter, "state" + "_root")
+        state_root = getattr(adapter, "state_root")
         packet_path = adapter._materializer.materialize(packet_data, state_root, target_root=_mat_target)
         from grace_control.core.contracts import build_packet_contract
         pkt_contract = build_packet_contract(packet_data)

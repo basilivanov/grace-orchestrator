@@ -42,6 +42,30 @@ rules:
     reason: adapter wires PacketRun.status ("running", "failed") by design
     expires_wave: never
   - rule: GRC103
+    path: src/grace_control/services/packet_execution_completion_service.py
+    reason: completion service owns terminal state/query compatibility and uses state-shaped log context; checker is textual and flags non-mutation lines
+    expires_wave: never
+  - rule: GRC106
+    path: src/grace_control/adapters/packet_executor.py
+    reason: packet metadata origin key is a JSON contract field, not a Git remote or branch
+    expires_wave: never
+  - rule: GRC106
+    path: src/grace_control/services/packet_execution_workspace_service.py
+    reason: rework packet origin metadata key is a JSON contract field, not a Git remote or branch
+    expires_wave: never
+  - rule: GRC106
+    path: src/grace_control/services/packet_execution_completion_service.py
+    reason: rework packet origin metadata key is a JSON contract field, not a Git remote or branch
+    expires_wave: never
+  - rule: GRC109
+    path: src/grace_control/adapters/packet_executor.py
+    reason: canonical OpenCode adapter flag and import path are required runtime compatibility identifiers
+    expires_wave: never
+  - rule: GRC109
+    path: src/grace_control/services/packet_execution_post_service.py
+    reason: runtime diagnostics must retain the canonical OpenCode adapter and mode identifiers
+    expires_wave: never
+  - rule: GRC103
     path: src/grace_control/core/wave_gate.py
     reason: wave_gate owns wave/packet state transitions
     expires_wave: never
