@@ -143,6 +143,14 @@ def test_grc012_private_oversized_helper_is_reported():
     assert "GRC011" not in codes
 
 
+def test_grc012_private_oversized_helper_respects_rule_filter():
+    src = _sized_function("_filtered_huge_helper", 4001)
+    without_size_rule = lint_text(src, rules_enabled=["GRC100"])
+    with_size_rule = lint_text(src, rules_enabled=["GRC012"])
+    assert not any(v.code == "GRC012" for v in without_size_rule)
+    assert any(v.code == "GRC012" for v in with_size_rule)
+
+
 @pytest.mark.parametrize(("estimated_tokens", "reports"), ((4000, False), (4001, True)))
 def test_grc012_hard_boundary_uses_len_source_div_four(estimated_tokens, reports):
     src = _sized_function("_boundary_helper", estimated_tokens)

@@ -277,7 +277,7 @@ def _check_functions(
             func_line = node.lineno
             func_lines = lines[node.lineno - 1:node.end_lineno] if node.end_lineno else []
             est_tokens = len("\n".join(func_lines)) // 4
-            if est_tokens > 4000:
+            if _rule_enabled("GRC012", rules_enabled) and est_tokens > 4000:
                 v = Violation("GRC012", f"function '{node.name}' too large: ~{est_tokens} tokens (max 4000)", path, func_line)
                 if not _is_allowed(v.code, path, al):
                     violations.append(v)
