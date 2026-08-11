@@ -126,21 +126,25 @@ class AdminMaintenanceControlService:
     # returns: Copy of packet states safe for fail-closed cleanup planning.
     # side_effects: None.
     # emitted_logs: None.
-    # error_behavior: Malformed lease rows are treated as protected.
+    # error_behavior: Malformed/partial lease rows protect all cleanup candidates.
     # END_FUNCTION_CONTRACT
     def safe_cleanup_packet_states(
         self,
         packet_states: dict[str, str],
         leases: dict[str, list[dict[str, Any]]],
     ) -> dict[str, str]:
+        if not isinstance(packet_states, dict) or not isinstance(leases, dict):
+            return {}
         protected: set[str] = set()
         for rows in leases.values():
+            if not isinstance(rows, list):
+                return {}
             for row in rows:
                 if not isinstance(row, dict):
-                    return dict(packet_states)
+                    return {}
                 packet_id = row.get("packet_id")
-                if packet_id is None:
-                    return dict(packet_states)
+                if packet_id is None or not str(packet_id).strip():
+                    return {}
                 if not bool(row.get("stale_candidate")):
                     protected.add(str(packet_id))
         return {

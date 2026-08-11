@@ -39,7 +39,10 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from grace_control.core.structured_logger import GraceLogger
-from grace_control.services.admin_control_center_explorer_helpers import _openapi_operations
+from grace_control.services.admin_control_center_explorer_helpers import (
+    _openapi_operations,
+    _openapi_request,
+)
 from grace_control.services.admin_control_security import mask_operator_data
 from grace_control.services.admin_cross_project_service import AdminCrossProjectService
 from grace_control.services.project_client import ProjectApiResult
@@ -318,6 +321,15 @@ class AdminMutationService:
         if discovered is None:
             return {**base, "ok": False, "result": "failed", "status": 400,
                     "error_code": "API_PATH_OR_METHOD_REJECTED", "retry_allowed": False}
+        bounded_parameters = _bounded_mapping(parameters)
+        _request_path, _query_parameters, parameter_error = _openapi_request(
+            path,
+            discovered,
+            bounded_parameters,
+        )
+        if parameter_error:
+            return {**base, "ok": False, "result": "failed", "status": 400,
+                    "error_code": parameter_error, "retry_allowed": False}
         try:
             _validate_confirmation("openapi", key, "api_operation", path, confirmation)
         except ValueError as exc:
@@ -329,7 +341,7 @@ class AdminMutationService:
             "action": "openapi",
             "entity_type": "api_operation",
             "entity_id": path,
-            "parameters": _bounded_mapping(parameters),
+            "parameters": bounded_parameters,
             "body": _bounded_mapping(body),
             "confirmation": confirmation,
             "method": normalized_method,
@@ -400,6 +412,29 @@ class AdminMutationService:
         context = self._hub._registry.get(project_key)
         if not context.enabled:
             raise RuntimeError("project is disabled")
+        identity = await self._hub._request(
+            context,
+            "/api/admin/system/health",
+            operation="health",
+        )
+        identity_known = _runtime_identity_present(identity.payload)
+        if not identity.ok or not identity_known:
+            mismatch = identity.error_class == "identity_mismatch"
+            error_code = "PROJECT_IDENTITY_MISMATCH" if mismatch else "PROJECT_IDENTITY_UNAVAILABLE"
+            status = 409 if mismatch else 503
+            _log.warn(
+                "admin_mutation_identity_rejected",
+                project_key=project_key,
+                reason="identity_mismatch" if mismatch else "identity_unavailable",
+            )
+            return ProjectApiResult(
+                project_key=project_key,
+                ok=False,
+                payload={"error_code": error_code},
+                error_class=error_code,
+                error="selected runtime identity could not be verified",
+                http_status=status,
+            )
         client = self._hub._client_factory(context)
         mutate = getattr(client, "mutate_json", None)
         if callable(mutate):
@@ -469,6 +504,25 @@ def normalize_mutation_result(raw: Any, base: Mapping[str, Any]) -> dict[str, An
     payload = dict(payload)
     if isinstance(error, Mapping):
         error = error.get("message") or error.get("detail") or str(error)
+    identity_code = str(payload.get("error_code") or error_class).upper()
+    if identity_code == "IDENTITY_MISMATCH":
+        identity_code = "PROJECT_IDENTITY_MISMATCH"
+    elif identity_code == "IDENTITY_UNAVAILABLE":
+        identity_code = "PROJECT_IDENTITY_UNAVAILABLE"
+    if identity_code in {"PROJECT_IDENTITY_MISMATCH", "PROJECT_IDENTITY_UNAVAILABLE"}:
+        status = status or (409 if identity_code.endswith("MISMATCH") else 503)
+        return {
+            **dict(base),
+            "ok": False,
+            "result": "failed",
+            "status": status,
+            "error_code": identity_code,
+            "error": "selected runtime identity could not be verified",
+            "reason": "selected project runtime identity verification failed",
+            "response": mask_operator_data(payload),
+            "retry_allowed": False,
+            "attention": True,
+        }
     ambiguous = not ok and status is None and _is_ambiguous(error_class, error)
     if ambiguous:
         return {
@@ -818,6 +872,31 @@ def _safe_openapi_path(path: str) -> bool:
     except ValueError:
         return False
     return not parsed.scheme and not parsed.netloc and not parsed.fragment
+
+
+# START_FUNCTION_CONTRACT
+# name: _runtime_identity_present
+# purpose: Require a non-empty runtime identity field before a mutation may be
+#          sent through a registry-selected client.
+# inputs: payload — normalized project health mapping.
+# returns: True when a top-level or nested identity field is present.
+# side_effects: None.
+# emitted_logs: None.
+# error_behavior: Malformed/non-mapping payloads return False.
+# END_FUNCTION_CONTRACT
+def _runtime_identity_present(payload: Mapping[str, Any] | None) -> bool:
+    if not isinstance(payload, Mapping):
+        return False
+    candidates: list[Mapping[str, Any]] = [payload]
+    for key in ("identity", "project", "runtime", "data"):
+        nested = payload.get(key)
+        if isinstance(nested, Mapping):
+            candidates.append(nested)
+    return any(
+        candidate.get(key) not in (None, "")
+        for candidate in candidates
+        for key in ("project_key", "project_name", "project_root", "target_repo_root")
+    )
 
 
 # START_FUNCTION_CONTRACT

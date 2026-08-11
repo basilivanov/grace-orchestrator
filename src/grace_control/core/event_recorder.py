@@ -9,7 +9,8 @@
 # returns: None.
 # side_effects: DB insert into events table.
 # emitted_logs: None.
-# error_behavior: Catches and ignores errors — audit must never block operations.
+# error_behavior: Catches errors by default; raise_on_error exposes persistence
+#                 failure to strict audit callers.
 # END_MODULE_CONTRACT
 
 # START_MODULE_MAP
@@ -19,7 +20,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from grace_control.db import get_db
 from grace_control.db.schema import Event
@@ -48,6 +49,17 @@ RECOVERY_EVENT_TYPES = frozenset([
 ])
 
 
+# START_FUNCTION_CONTRACT
+# name: record_event
+# purpose: Persist one structured local lifecycle/audit event.
+# inputs: event_type, entity_type, entity_id, optional payload/trace/db and
+#         raise_on_error strictness flag.
+# returns: None.
+# side_effects: Inserts one Event row into the selected DB session.
+# emitted_logs: None.
+# error_behavior: Default mode contains persistence errors for legacy callers;
+#                 strict mode re-raises so canonical audit callers can fail closed.
+# END_FUNCTION_CONTRACT
 def record_event(
     event_type: str,
     entity_type: str,
@@ -55,11 +67,12 @@ def record_event(
     payload: dict | None = None,
     trace_id: str | None = None,
     db=None,
+    raise_on_error: bool = False,
 ) -> None:
     try:
         if db is not None:
             db.add(Event(
-                timestamp=datetime.now(timezone.utc),
+                timestamp=datetime.now(UTC),
                 event_type=event_type,
                 entity_type=entity_type,
                 entity_id=entity_id,
@@ -69,7 +82,7 @@ def record_event(
         else:
             with get_db() as db2:
                 db2.add(Event(
-                    timestamp=datetime.now(timezone.utc),
+                    timestamp=datetime.now(UTC),
                     event_type=event_type,
                     entity_type=entity_type,
                     entity_id=entity_id,
@@ -77,4 +90,5 @@ def record_event(
                     trace_id=trace_id,
                 ))
     except Exception:
-        pass
+        if raise_on_error:
+            raise

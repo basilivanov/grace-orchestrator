@@ -36,6 +36,7 @@
 #   - function: test_supervisor_failure_stays_failed
 #   - function: test_merge_wait_requires_state_verification
 #   - function: test_maintenance_lease_safety_fails_closed
+#   - function: test_control_center_form_preserves_openapi_path_parameters
 #   - function: test_control_catalog_is_capability_and_state_aware
 # END_MODULE_MAP
 
@@ -116,6 +117,15 @@ class _MutationClient:
                 "paths": {
                     "/api/synthetic-mutation": {
                         "post": {"responses": {"200": {"description": "ok"}}},
+                    },
+                    "/api/items/{item_id}": {
+                        "post": {
+                            "parameters": [
+                                {"name": "item_id", "in": "path", "required": True, "schema": {"type": "string"}},
+                                {"name": "mode", "in": "query", "required": True, "schema": {"type": "string"}},
+                            ],
+                            "responses": {"200": {"description": "ok"}},
+                        },
                     },
                 },
             }
@@ -210,6 +220,24 @@ def _client_app(*, timeout_key: str | None = None):
 
 
 # END_BLOCK_FIXTURES
+
+
+# START_FUNCTION_CONTRACT
+# name: _set_runtime_identity
+# purpose: Bind a deterministic local runtime identity to an app used by direct
+#          project-local endpoint tests.
+# inputs: app and project key.
+# returns: None.
+# side_effects: Updates only the in-memory FastAPI app state.
+# emitted_logs: None.
+# error_behavior: Valid test keys are stored as supplied.
+# END_FUNCTION_CONTRACT
+def _set_runtime_identity(app: Any, key: str = "alpha") -> None:
+    app.__dict__["state"].runtime_identity = {
+        "project_key": key,
+        "project_name": key.title(),
+        "project_root": f"/srv/{key}",
+    }
 
 
 # START_BLOCK_ACCEPTANCE
@@ -334,11 +362,91 @@ async def test_openapi_mutation_requires_discovery_and_control_mode():
             headers=headers,
             json={"control_mode": True, "path": "/api/synthetic-mutation", "method": "POST", "confirmation": {"intent": "confirm", "value": "/api/synthetic-mutation"}},
         )
+        parameterized = await client.post(
+            "/api/admin-hub/projects/alpha/openapi-control",
+            headers=headers,
+            json={
+                "control_mode": True,
+                "path": "/api/items/{item_id}",
+                "method": "POST",
+                "parameters": {"item_id": "item-7", "mode": "safe"},
+                "confirmation": {"intent": "confirm", "value": "/api/items/{item_id}"},
+            },
+        )
+        missing = await client.post(
+            "/api/admin-hub/projects/alpha/openapi-control",
+            headers=headers,
+            json={
+                "control_mode": True,
+                "path": "/api/items/{item_id}",
+                "method": "POST",
+                "parameters": {"mode": "safe"},
+                "confirmation": {"intent": "confirm", "value": "/api/items/{item_id}"},
+            },
+        )
+        undeclared = await client.post(
+            "/api/admin-hub/projects/alpha/openapi-control",
+            headers=headers,
+            json={
+                "control_mode": True,
+                "path": "/api/items/{item_id}",
+                "method": "POST",
+                "parameters": {"item_id": "item-7", "mode": "safe", "evil": "x"},
+                "confirmation": {"intent": "confirm", "value": "/api/items/{item_id}"},
+            },
+        )
     assert arbitrary.status_code == 400
     assert disabled.status_code == 400
     assert disabled.json()["error_code"] == "API_CONTROL_MODE_REQUIRED"
     assert known.status_code == 200
+    assert parameterized.status_code == 200
+    assert missing.status_code == 400
+    assert missing.json()["error_code"] == "API_PATH_PARAM_REQUIRED"
+    assert undeclared.status_code == 400
+    assert undeclared.json()["error_code"] == "API_PARAMS_UNDECLARED"
+    parameterized_calls = [
+        call for call in clients["alpha"].calls
+        if call.get("path") == "/api/admin/control/openapi"
+        and call.get("payload", {}).get("path") == "/api/items/{item_id}"
+    ]
+    assert parameterized_calls[-1]["payload"]["parameters"] == {"item_id": "item-7", "mode": "safe"}
     assert any(call.get("path") == "/openapi.json" for call in clients["alpha"].calls)
+
+
+# START_FUNCTION_CONTRACT
+# name: test_control_center_form_preserves_openapi_path_parameters
+# purpose: Prove the Control Center mutation branch forwards both declared
+#          path and query values into the selected-project mutation payload.
+# inputs: None.
+# returns: None.
+# side_effects: In-memory authenticated form request and fake mutation ledger.
+# emitted_logs: Mutation service logs.
+# error_behavior: Fails if the UI drops the path placeholder before dispatch.
+# END_FUNCTION_CONTRACT
+@pytest.mark.asyncio
+async def test_control_center_form_preserves_openapi_path_parameters():
+    app, clients = _client_app()
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver") as client:
+        response = await client.post(
+            "/admin/p/alpha/api/control",
+            headers={"x-grace-api-token": "control-token"},
+            data={
+                "path": "/api/items/{item_id}",
+                "execute": "true",
+                "params": '{"item_id":"item-7","mode":"safe"}',
+                "method": "POST",
+                "control_mode": "true",
+                "body": "{}",
+                "confirmation": '{"intent":"confirm","value":"/api/items/{item_id}"}',
+            },
+        )
+    assert response.status_code == 200
+    calls = [
+        call for call in clients["alpha"].calls
+        if call.get("path") == "/api/admin/control/openapi"
+    ]
+    assert calls[-1]["payload"]["parameters"] == {"item_id": "item-7", "mode": "safe"}
+    assert "/api/items/item-7" in response.text
 
 
 # START_FUNCTION_CONTRACT
@@ -424,6 +532,7 @@ async def test_local_control_requires_confirmation_and_audits(db):
         project_registry=_registry(),
         project_client_factory=lambda _context: _MutationClient("alpha"),
     )
+    _set_runtime_identity(app)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver") as client:
         rejected = await client.post(
             "/api/admin/control/action",
@@ -484,6 +593,7 @@ async def test_maintenance_dry_run_keeps_live_worktrees(db, tmp_path: Path):
             project_registry=_registry(),
             project_client_factory=lambda _context: _MutationClient("alpha"),
         )
+        _set_runtime_identity(app)
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver") as client:
             response = await client.post(
                 "/api/admin/maintenance/cleanup",
@@ -615,6 +725,7 @@ async def test_supervisor_failure_stays_failed(monkeypatch):
         project_registry=_registry(),
         project_client_factory=lambda _context: _MutationClient("alpha"),
     )
+    _set_runtime_identity(app)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver") as client:
         response = await client.post(
             "/api/admin/control/action",
@@ -656,6 +767,7 @@ async def test_merge_wait_requires_state_verification(monkeypatch):
         project_registry=_registry(),
         project_client_factory=lambda _context: _MutationClient("alpha"),
     )
+    _set_runtime_identity(app)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver") as client:
         response = await client.post(
             "/api/admin/control/action",
@@ -695,7 +807,7 @@ def test_maintenance_lease_safety_fails_closed():
     }
     assert service.safe_cleanup_packet_states(states, leases) == {"pkt-stale": "FAILED"}
     malformed = {"ordinary": [{"packet_id": None}], "parallel": [], "merge": []}
-    assert service.safe_cleanup_packet_states(states, malformed) == states
+    assert service.safe_cleanup_packet_states(states, malformed) == {}
 
 
 # START_FUNCTION_CONTRACT

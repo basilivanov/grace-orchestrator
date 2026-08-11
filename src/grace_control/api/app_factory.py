@@ -159,6 +159,7 @@ def create_app(
         client_factory=project_client_factory,
     )
     identity = get_runtime_identity()
+    app_state.runtime_identity = identity
     app_state.project_filesystem_service = SafeFilesystemService.from_runtime(
         settings_obj=s,
         project_root=identity["project_root"],

@@ -33,11 +33,8 @@
 
 from __future__ import annotations
 
-import re
-import uuid
 from collections.abc import Mapping
 from typing import Any
-from urllib.parse import quote
 
 import httpx
 from fastapi import APIRouter, Body, HTTPException, Request
@@ -45,6 +42,17 @@ from fastapi.responses import JSONResponse
 
 from grace_control.core.event_recorder import record_event
 from grace_control.core.structured_logger import GraceLogger
+from grace_control.services.admin_control_local_helpers import (
+    _audit_failure_response as _build_audit_failure_response,
+)
+from grace_control.services.admin_control_local_helpers import (
+    _audit_identity,
+    _materialize_openapi_request,
+    _optional_text,
+)
+from grace_control.services.admin_control_local_helpers import (
+    _record_admin_event as _persist_admin_event,
+)
 from grace_control.services.admin_control_security import mask_operator_data, require_control_request
 from grace_control.services.admin_cross_project_service import AdminCrossProjectService
 from grace_control.services.admin_maintenance_control_service import AdminMaintenanceControlService
@@ -222,14 +230,17 @@ async def local_control_action(
     body: dict[str, Any] = Body(default_factory=dict),
 ) -> JSONResponse:
     require_control_request(request)
-    identity = _local_identity(body)
     audit = _audit_identity(body, request)
+    identity = str(audit["project_key"])
     action = str(body.get("action") or "").casefold()
     action = {"resume": "retry", "stop": "cancel"}.get(action, action)
     entity_type = str(body.get("entity_type") or "project")
     entity_id = _optional_text(body.get("entity_id"))
     params = body.get("parameters") if isinstance(body.get("parameters"), Mapping) else {}
-    _record_admin_event("admin_action_requested", audit, reason="operator requested action")
+    if failure := _audit_or_failure(
+        "admin_action_requested", audit, reason="operator requested action", phase="before mutation",
+    ):
+        return failure
     if not _confirmation_allowed(action, identity, entity_type, entity_id, body.get("confirmation")):
         result = {
             **audit,
@@ -239,11 +250,17 @@ async def local_control_action(
             "reason": "server-side confirmation was missing or invalid",
             "retry_allowed": False,
         }
-        _record_admin_event("admin_action_failed", audit, reason=result["reason"], result="failed")
+        if failure := _audit_or_failure(
+            "admin_action_failed", audit, reason=result["reason"], phase="failure outcome",
+        ):
+            return failure
         return JSONResponse(status_code=400, content=result)
     if action not in _LOCAL_ACTIONS:
         result = _unavailable_result(audit, action)
-        _record_admin_event("admin_action_failed", audit, reason=result["reason"], result="failed")
+        if failure := _audit_or_failure(
+            "admin_action_failed", audit, reason=result["reason"], phase="failure outcome",
+        ):
+            return failure
         return JSONResponse(status_code=501, content=result)
     try:
         response = await _dispatch_local_action(
@@ -263,7 +280,10 @@ async def local_control_action(
             "reason": "project domain rejected action",
             "retry_allowed": False,
         }
-        _record_admin_event("admin_action_failed", audit, reason=result["reason"], result="failed")
+        if failure := _audit_or_failure(
+            "admin_action_failed", audit, reason=result["reason"], phase="failure outcome",
+        ):
+            return failure
         return JSONResponse(status_code=exc.status_code, content=result)
     except Exception as exc:
         _log.warn("admin_action_dispatch_failed", action=action, reason="exception")
@@ -275,7 +295,10 @@ async def local_control_action(
             "reason": "project domain raised an error",
             "retry_allowed": False,
         }
-        _record_admin_event("admin_action_failed", audit, reason=result["reason"], result="failed")
+        if failure := _audit_or_failure(
+            "admin_action_failed", audit, reason=result["reason"], phase="failure outcome",
+        ):
+            return failure
         return JSONResponse(status_code=502, content=result)
     if isinstance(response, Mapping) and response.get("wait"):
         result = {
@@ -289,7 +312,10 @@ async def local_control_action(
             "retry_allowed": False,
             "attention": True,
         }
-        _record_admin_event("admin_action_failed", audit, reason=result["reason"], result="failed")
+        if failure := _audit_or_failure(
+            "admin_action_failed", audit, reason=result["reason"], phase="failure outcome", outcome=result,
+        ):
+            return failure
         return JSONResponse(status_code=202, content=result)
     result = {
         **audit,
@@ -299,7 +325,10 @@ async def local_control_action(
         "reason": "project domain completed action",
         "retry_allowed": False,
     }
-    _record_admin_event("admin_action_completed", audit, reason=result["reason"], result="success")
+    if failure := _audit_or_failure(
+        "admin_action_completed", audit, reason=result["reason"], phase="after mutation", outcome=result,
+    ):
+        return failure
     return JSONResponse(status_code=200, content=result)
 # START_FUNCTION_CONTRACT
 # name: local_maintenance_snapshot
@@ -368,7 +397,10 @@ async def local_maintenance_cleanup(
 ) -> JSONResponse:
     require_control_request(request)
     audit = _audit_identity(body, request, action="cleanup", entity_type="project")
-    _record_admin_event("admin_action_requested", audit, reason="maintenance cleanup requested")
+    if failure := _audit_or_failure(
+        "admin_action_requested", audit, reason="maintenance cleanup requested", phase="before mutation",
+    ):
+        return failure
     if not _confirmation_allowed("cleanup", audit["project_key"], "project", None, body.get("confirmation")):
         failure = {
             **audit, "ok": False, "result": "failed",
@@ -376,7 +408,10 @@ async def local_maintenance_cleanup(
             "reason": "server-side confirmation was missing or invalid",
             "retry_allowed": False,
         }
-        _record_admin_event("admin_action_failed", audit, reason=failure["reason"], result="failed")
+        if audit_failure := _audit_or_failure(
+            "admin_action_failed", audit, reason=failure["reason"], phase="failure outcome",
+        ):
+            return audit_failure
         return JSONResponse(status_code=400, content=failure)
     dry_run = bool(body.get("dry_run", False))
     packet_states, leases = _maintenance_state()
@@ -399,7 +434,10 @@ async def local_maintenance_cleanup(
             "error": mask_operator_data(str(exc)[:240]),
             "reason": "maintenance failed closed", "retry_allowed": False,
         }
-        _record_admin_event("admin_action_failed", audit, reason=failure["reason"], result="failed")
+        if audit_failure := _audit_or_failure(
+            "admin_action_failed", audit, reason=failure["reason"], phase="failure outcome",
+        ):
+            return audit_failure
         return JSONResponse(status_code=502, content=failure)
     response = {
         **audit,
@@ -416,12 +454,15 @@ async def local_maintenance_cleanup(
         "reason": "maintenance dry run completed" if dry_run else "maintenance cleanup completed",
         "retry_allowed": False,
     }
-    _record_admin_event(
+    if audit_failure := _audit_or_failure(
         "admin_action_completed" if response["ok"] else "admin_action_failed",
         audit,
         reason=response["reason"],
         result=response["result"],
-    )
+        phase="after mutation",
+        outcome=response,
+    ):
+        return audit_failure
     return JSONResponse(status_code=200 if response["ok"] else 502, content=response)
 # END_BLOCK_LOCAL_CONTROL
 
@@ -447,14 +488,23 @@ async def local_openapi_control(
     audit = _audit_identity(body, request, action="openapi", entity_type="api_operation")
     path = str(body.get("path") or "")
     method = str(body.get("method") or "").upper()
-    _record_admin_event("admin_action_requested", audit, reason="OpenAPI mutation requested")
+    if failure := _audit_or_failure(
+        "admin_action_requested", audit, reason="OpenAPI mutation requested", phase="before mutation",
+    ):
+        return failure
     if not _confirmation_allowed("openapi", audit["project_key"], "api_operation", path, body.get("confirmation")):
         failure = {**audit, "ok": False, "result": "failed", "error_code": "CONFIRMATION_REQUIRED", "retry_allowed": False}
-        _record_admin_event("admin_action_failed", audit, reason="OpenAPI confirmation was missing or invalid", result="failed")
+        if audit_failure := _audit_or_failure(
+            "admin_action_failed", audit, reason="OpenAPI confirmation was missing or invalid", phase="failure outcome",
+        ):
+            return audit_failure
         return JSONResponse(status_code=400, content=failure)
     if not _openapi_operation_allowed(request, path, method):
         failure = {**audit, "ok": False, "result": "failed", "error_code": "API_PATH_OR_METHOD_REJECTED", "retry_allowed": False}
-        _record_admin_event("admin_action_failed", audit, reason="OpenAPI operation rejected", result="failed")
+        if audit_failure := _audit_or_failure(
+            "admin_action_failed", audit, reason="OpenAPI operation rejected", phase="failure outcome",
+        ):
+            return audit_failure
         return JSONResponse(status_code=400, content=failure)
     headers: dict[str, str] = {"x-grace-admin-request-id": audit["request_id"]}
     for name in ("authorization", "x-grace-api-token"):
@@ -463,10 +513,13 @@ async def local_openapi_control(
             headers[name] = value
     params = body.get("parameters") if isinstance(body.get("parameters"), Mapping) else {}
     content_body = body.get("body") if isinstance(body.get("body"), Mapping) else None
-    materialized_path, query_params = _materialize_openapi_request(request.app, path, params)
+    materialized_path, query_params = _materialize_openapi_request(request.app, path, method, params)
     if not materialized_path:
         failure = {**audit, "ok": False, "result": "failed", "error_code": "API_PATH_PARAM_REQUIRED", "retry_allowed": False}
-        _record_admin_event("admin_action_failed", audit, reason="OpenAPI path parameters rejected", result="failed")
+        if audit_failure := _audit_or_failure(
+            "admin_action_failed", audit, reason="OpenAPI path parameters rejected", phase="failure outcome",
+        ):
+            return audit_failure
         return JSONResponse(status_code=400, content=failure)
     try:
         transport = httpx.ASGITransport(app=request.app)
@@ -481,11 +534,17 @@ async def local_openapi_control(
         downstream = _decode_response(response)
     except (httpx.TimeoutException, httpx.NetworkError):
         failure = {**audit, "ok": False, "result": "unknown_after_timeout", "error": UNKNOWN_OUTCOME_MESSAGE, "retry_allowed": False}
-        _record_admin_event("admin_action_failed", audit, reason=UNKNOWN_OUTCOME_MESSAGE, result="unknown_after_timeout")
+        if audit_failure := _audit_or_failure(
+            "admin_action_failed", audit, reason=UNKNOWN_OUTCOME_MESSAGE, phase="failure outcome", outcome=failure,
+        ):
+            return audit_failure
         return JSONResponse(status_code=504, content=failure)
     except Exception as exc:
         failure = {**audit, "ok": False, "result": "failed", "error": mask_operator_data(str(exc)[:240]), "retry_allowed": False}
-        _record_admin_event("admin_action_failed", audit, reason="OpenAPI downstream failure", result="failed")
+        if audit_failure := _audit_or_failure(
+            "admin_action_failed", audit, reason="OpenAPI downstream failure", phase="failure outcome", outcome=failure,
+        ):
+            return audit_failure
         return JSONResponse(status_code=502, content=failure)
     success = 200 <= response.status_code < 300
     result = {
@@ -496,12 +555,15 @@ async def local_openapi_control(
         "response": downstream,
         "retry_allowed": False,
     }
-    _record_admin_event(
+    if audit_failure := _audit_or_failure(
         "admin_action_completed" if success else "admin_action_failed",
         audit,
         reason="OpenAPI downstream completed" if success else "OpenAPI downstream failed",
         result=result["result"],
-    )
+        phase="after mutation",
+        outcome=result,
+    ):
+        return audit_failure
     return JSONResponse(status_code=response.status_code if not success else 200, content=result)
 # END_BLOCK_LOCAL_OPENAPI
 
@@ -576,6 +638,62 @@ def _mutation_response(result: Mapping[str, Any]) -> JSONResponse:
 # END_FUNCTION_CONTRACT
 def _actor(request: Request) -> str:
     return str(request.headers.get("x-grace-actor") or request.headers.get("x-admin-actor") or "operator")[:120]
+
+
+# START_FUNCTION_CONTRACT
+# name: _record_admin_event
+# purpose: Keep the router's recorder seam while delegating strict canonical
+#          audit persistence to the local helper service.
+# inputs: Event type, audit identity, reason and result.
+# returns: True when persisted; False on persistence failure.
+# side_effects: Inserts one local Event row.
+# emitted_logs: admin_audit_persist_failed on failure.
+# error_behavior: Never raises persistence errors.
+# END_FUNCTION_CONTRACT
+def _record_admin_event(
+    event_type: str,
+    audit: Mapping[str, Any],
+    *,
+    reason: str,
+    result: str = "success",
+) -> bool:
+    return _persist_admin_event(
+        event_type,
+        audit,
+        reason=reason,
+        result=result,
+        recorder=record_event,
+    )
+
+
+# START_FUNCTION_CONTRACT
+# name: _audit_or_failure
+# purpose: Gate action progress on requested/completed/failed audit persistence.
+# inputs: Event/audit fields, failure phase and optional mutation outcome.
+# returns: None when persisted, otherwise an audit-integrity JSONResponse.
+# side_effects: Writes one canonical local Event row.
+# emitted_logs: admin_audit_persist_failed on failure.
+# error_behavior: Never permits an unaudited ordinary action response.
+# END_FUNCTION_CONTRACT
+def _audit_or_failure(
+    event_type: str,
+    audit: Mapping[str, Any],
+    *,
+    reason: str,
+    phase: str,
+    result: str = "success",
+    outcome: Mapping[str, Any] | None = None,
+) -> JSONResponse | None:
+    if _record_admin_event(
+        event_type,
+        audit,
+        reason=reason,
+        result=result,
+    ):
+        return None
+    return _build_audit_failure_response(audit, phase=phase, outcome=outcome)
+
+
 # START_FUNCTION_CONTRACT
 # name: _confirmation_allowed
 # purpose: Recheck Hub confirmation at the project-local endpoint so a direct
@@ -619,96 +737,6 @@ def _confirmation_allowed(
         return True
     expected = str(entity_id or project_key)
     return value in {expected, project_key}
-# START_FUNCTION_CONTRACT
-# name: _optional_text
-# purpose: Normalize optional scalar JSON text fields.
-# inputs: arbitrary value.
-# returns: text or None.
-# side_effects: None.
-# error_behavior: Lists/maps become None.
-# END_FUNCTION_CONTRACT
-def _optional_text(value: Any) -> str | None:
-    if value is None or isinstance(value, (Mapping, list, tuple)):
-        return None
-    text = str(value).strip()
-    return text[:240] if text else None
-# START_FUNCTION_CONTRACT
-# name: _local_identity
-# purpose: Preserve the immutable request project key for the canonical audit
-#          record without using it to select another local database.
-# inputs: body.
-# returns: Safe project key.
-# side_effects: None.
-# error_behavior: Missing/unsafe values use the runtime-local marker.
-# END_FUNCTION_CONTRACT
-def _local_identity(body: Mapping[str, Any]) -> str:
-    value = _optional_text(body.get("project_key")) or "local-project"
-    if "/" in value or "\\" in value:
-        return "local-project"
-    return value
-
-
-# START_FUNCTION_CONTRACT
-# name: _audit_identity
-# purpose: Build safe fields required by every project-local admin audit event.
-# inputs: body/request and optional action/entity overrides.
-# returns: audit identity mapping.
-# side_effects: None.
-# error_behavior: Always returns bounded fields.
-# END_FUNCTION_CONTRACT
-def _audit_identity(
-    body: Mapping[str, Any],
-    request: Request,
-    *,
-    action: str | None = None,
-    entity_type: str | None = None,
-) -> dict[str, Any]:
-    request_id = _optional_text(body.get("request_id"))
-    if not request_id or not re.fullmatch(r"[A-Za-z0-9_.:-]{8,120}", request_id):
-        request_id = f"admin-{uuid.uuid4().hex}"
-    return {
-        "project_key": _local_identity(body),
-        "action": action or str(body.get("action") or "unknown")[:120],
-        "entity_type": entity_type or str(body.get("entity_type") or "project")[:80],
-        "entity_id": _optional_text(body.get("entity_id")),
-        "actor": mask_operator_data(_actor(request)),
-        "request_id": request_id,
-    }
-
-
-# START_FUNCTION_CONTRACT
-# name: _record_admin_event
-# purpose: Persist one canonical project-local admin audit event with only
-#          display-safe identity/result fields.
-# inputs: event type, audit identity, reason and result.
-# returns: None.
-# side_effects: Inserts Event row into the local project database.
-# emitted_logs: None.
-# error_behavior: Audit failure never blocks the domain action.
-# END_FUNCTION_CONTRACT
-def _record_admin_event(
-    event_type: str,
-    audit: Mapping[str, Any],
-    *,
-    reason: str,
-    result: str = "success",
-) -> None:
-    payload = mask_operator_data({
-        **dict(audit),
-        "result": result if result in {"success", "failed", "unknown_after_timeout"} else "failed",
-        "reason": reason[:240],
-    })
-    try:
-        record_event(
-            event_type,
-            str(audit.get("entity_type") or "project"),
-            str(audit.get("entity_id") or audit.get("project_key") or "project"),
-            payload,
-        )
-    except Exception:
-        return None
-
-
 # START_FUNCTION_CONTRACT
 # name: _unavailable_result
 # purpose: Build the explicit planned/501 unavailable response required by the
@@ -913,63 +941,6 @@ def _openapi_operation_allowed(request: Request, path: str, method: str) -> bool
     document = request.app.openapi()
     operations = document.get("paths", {}).get(path_only)
     return isinstance(operations, Mapping) and method.casefold() in operations and method.casefold() not in {"get", "head", "options"}
-
-
-# START_FUNCTION_CONTRACT
-# name: _materialize_openapi_request
-# purpose: Substitute only declared path placeholders and keep remaining
-#          scalar parameters bounded as query values for the same app.
-# inputs: app, exact discovered OpenAPI path and parameter mapping.
-# returns: materialized path and bounded query mapping, or empty path on error.
-# side_effects: Reads the app OpenAPI document only.
-# error_behavior: Missing path parameters or unsafe values fail closed.
-# END_FUNCTION_CONTRACT
-def _materialize_openapi_request(
-    app: Any,
-    path: str,
-    parameters: Mapping[str, Any],
-) -> tuple[str, dict[str, str]]:
-    document = app.openapi()
-    paths = document.get("paths", {}) if isinstance(document, Mapping) else {}
-    if not isinstance(paths, Mapping) or path not in paths:
-        return "", {}
-    materialized = path
-    placeholders = re.findall(r"\{([^{}]+)\}", path)
-    for name in placeholders:
-        value = parameters.get(name)
-        if value is None or isinstance(value, (Mapping, list, tuple)):
-            return "", {}
-        text = str(value)
-        if not text or len(text) > 500 or "/" in text or "\\" in text or ".." in text:
-            return "", {}
-        materialized = materialized.replace("{" + name + "}", quote(text, safe="-_.~"))
-    if "{" in materialized or "}" in materialized:
-        return "", {}
-    query = {
-        str(key)[:100]: str(value)[:500]
-        for key, value in parameters.items()
-        if key not in placeholders and not isinstance(value, (Mapping, list, tuple))
-    }
-    return materialized, _bounded_params(query)
-
-
-# START_FUNCTION_CONTRACT
-# name: _bounded_params
-# purpose: Bound OpenAPI query parameters before same-app dispatch.
-# inputs: mapping from parameter names to scalar values.
-# returns: bounded scalar mapping.
-# side_effects: None.
-# error_behavior: Invalid/oversized values become an empty mapping.
-# END_FUNCTION_CONTRACT
-def _bounded_params(value: Mapping[str, Any]) -> dict[str, str]:
-    if len(value) > 20:
-        return {}
-    result: dict[str, str] = {}
-    for key, item in value.items():
-        if isinstance(item, (Mapping, list, tuple)):
-            continue
-        result[str(key)[:100]] = str(item)[:500]
-    return result
 
 
 # START_FUNCTION_CONTRACT

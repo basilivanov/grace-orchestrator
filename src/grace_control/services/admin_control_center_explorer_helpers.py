@@ -556,6 +556,8 @@ def _openapi_request(
             if required or location == "path":
                 return path, {}, "API_PATH_PARAM_REQUIRED" if location == "path" else "API_QUERY_PARAM_REQUIRED"
             continue
+        if isinstance(params[name], (Mapping, list, tuple)):
+            return path, {}, "API_PARAM_INVALID"
         value = str(params[name])
         if not value and (required or location == "path"):
             return path, {}, "API_PATH_PARAM_REQUIRED" if location == "path" else "API_QUERY_PARAM_REQUIRED"

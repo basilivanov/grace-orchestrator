@@ -950,7 +950,7 @@ class AdminControlCenterService:
                 path=selected_path,
                 method=selected_method,
                 confirmation=confirmation,
-                parameters={**query_params},
+                parameters={**params},
                 body=body,
                 actor=actor,
             )
