@@ -1,6 +1,10 @@
 # GraceLint allowlist — entries expire at the listed wave.
 # Each entry must specify rule, path (substring match), reason, and expires_wave.
 rules:
+  - rule: GRC100
+    path: src/grace_control/core/acceptance_pipeline.py
+    reason: acceptance compatibility entry point preserves GRACE_BASE_REF/GRACE_BASE_SHA process-environment semantics
+    expires_wave: never
   - rule: GRC101
     path: src/grace_control/tools/grace_lint/checker.py
     reason: checker implements the textual subprocess rule and contains its own rule signatures
