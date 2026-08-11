@@ -1,41 +1,53 @@
 # Minimal Agent Exchange Protocol
 
-Работа идёт строго по одному заданию за раз.
+Новые работы используют имя файла ТЗ как идентификатор. Generic
+`NNN_TASK.md` разрешён только для старой числовой истории.
 
-## Каталоги
+## Named TZ
 
-- `inbox/NNN_TASK.md` — новое задание агенту.
-- `inbox/NNN_REVIEW.md` — замечания reviewer, если submission не принят.
-- `outbox/NNN_SUBMISSION.md` — отчёт агента после выполнения TASK.
-- `outbox/NNN_RESUBMISSION.md` — отчёт агента после исправления REVIEW.
+Для `01_LINT_GUARDRAILS` файловый цикл выглядит так:
 
-## Цикл
-
-1. Агент читает только указанный `NNN_TASK.md` или `NNN_REVIEW.md`.
-2. Выполняет работу, запускает проверки, делает commit и push.
-3. Пишет короткий `outbox/NNN_SUBMISSION.md` или `NNN_RESUBMISSION.md`.
-4. Reviewer читает отчёт и проверяет фактический diff/код.
-5. Reviewer выдаёт один из двух результатов:
-   - `ACCEPT NNN` — разрешён следующий TASK;
-   - `REVIEW NNN` — reviewer создаёт `inbox/NNN_REVIEW.md`, следующий TASK не начинается.
-6. Агент никогда не начинает следующий номер самостоятельно.
-
-## Формат submission
-
-```md
-# Submission NNN
-
-Status: DONE
-Commit: <sha>
-
-Что сделано:
-- ...
-
-Проверки:
-- ...
-
-Замечания:
-- none
+```text
+inbox/01_LINT_GUARDRAILS.md
+inbox/01_LINT_GUARDRAILS_REVIEW.md       # только при REVIEW
+outbox/01_LINT_GUARDRAILS_SUBMISSION.md
+outbox/01_LINT_GUARDRAILS_RESUBMISSION.md
 ```
 
-Не писать длинный отчёт: commit, изменения, проверки, важные оговорки.
+Coder читает только путь, который ему передал orchestrator. После работы
+создаёт отчёт с точными строками:
+
+```text
+WEB_ORCH_REPORT: SUBMISSION 01_LINT_GUARDRAILS
+WEB_ORCH_STATUS: DONE
+WEB_ORCH_COMMIT: <commit-sha>
+WEB_ORCH_CHECKS: PASS
+```
+
+После `REVIEW` используется `RESUBMISSION` с тем же именем TZ. Architect
+завершает review отдельной последней строкой:
+
+```text
+WEB_ORCH_DECISION: ACCEPT 01_LINT_GUARDRAILS
+```
+
+или:
+
+```text
+WEB_ORCH_DECISION: REVIEW 01_LINT_GUARDRAILS
+```
+
+Только `ACCEPT` разрешает переход. Следующий packet Architect называет
+полным путём:
+
+```text
+WEB_ORCH_NEXT_TASK: docs/work/agent_exchange/inbox/02_PACKET_EXECUTION.md
+```
+
+Если продолжения нет:
+
+```text
+WEB_ORCH_NEXT_TASK: STOP
+```
+
+Никаких state-файлов, manifests, lock-файлов и самовольного следующего TZ.
