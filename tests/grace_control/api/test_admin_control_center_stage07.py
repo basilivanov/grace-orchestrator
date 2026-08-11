@@ -62,6 +62,7 @@ from grace_control.db.schema import (
     Wave,
     Worker,
 )
+from grace_control.services.admin_cross_project_service import AdminCrossProjectService
 from grace_control.services.project_client import ProjectApiResult, ProjectClient
 
 _log = GraceLogger("test_admin_control_center_stage07")
@@ -897,3 +898,56 @@ async def test_stage07_complete_read_surface_and_operator_journeys(stage07_topol
 
 
 # END_BLOCK_ACCEPTANCE
+
+
+# START_FUNCTION_CONTRACT
+# name: test_stage07_global_logs_use_bounded_row_cursors
+# purpose: Prove a real named-root log file whose byte size exceeds its row
+#          count produces complete, duplicate-free Global Logs continuation.
+# inputs: stage07_topology — independent project APIs with real log roots.
+# returns: None.
+# side_effects: Rewrites only fixture-owned service logs and performs bounded
+#               cross-project API reads through AdminCrossProjectService.
+# emitted_logs: Project and Hub structured read logs.
+# error_behavior: Fails on byte-count totals, skipped/duplicate rows, or an
+#                 opaque cursor that leads to an empty page.
+# END_FUNCTION_CONTRACT
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_stage07_global_logs_use_bounded_row_cursors(stage07_topology):
+    expected: set[str] = set()
+    for fixture in stage07_topology["fixtures"]:
+        key = str(fixture["key"])
+        rows = [f"{key}-row-{index}-" + ("x" * 96) for index in range(20)]
+        expected.update(rows)
+        logs_path = Path(fixture["root"]) / ".grace" / "logs" / "service.log"
+        logs_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+    registry = stage07_topology["registry"]
+    for fixture in stage07_topology["fixtures"]:
+        raw = await _remote_get(
+            registry.get(str(fixture["key"])),
+            "/api/admin/system/logs?tail=10",
+        )
+        assert raw.ok
+        assert raw.payload["total"] == 10
+        assert raw.payload["total_bytes"] > raw.payload["total"]
+
+    service = AdminCrossProjectService(registry)
+    page = await service.query_logs(project=["alpha", "beta"], tail=10)
+    seen: list[str] = []
+    page_count = 0
+    while True:
+        page_count += 1
+        assert page["logs"] or not page["next_cursor"]
+        seen.extend(str(row["message"]) for row in page["logs"])
+        cursor = page["next_cursor"]
+        if not cursor:
+            break
+        assert page_count < 8
+        page = await service.query_logs(project=["alpha", "beta"], tail=10, cursor=cursor)
+
+    assert page_count == 4
+    assert len(seen) == len(expected) == 40
+    assert len(set(seen)) == len(seen)
+    assert set(seen) == expected

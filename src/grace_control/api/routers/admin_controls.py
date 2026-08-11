@@ -29,6 +29,7 @@
 #       - POST /api/admin/control/action
 #       - POST /api/admin/control/openapi
 #       - POST /api/admin/maintenance/cleanup
+#   - function: legacy_admin_action
 # END_MODULE_MAP
 
 from __future__ import annotations
@@ -330,6 +331,35 @@ async def local_control_action(
     ):
         return failure
     return JSONResponse(status_code=200, content=result)
+
+# START_FUNCTION_CONTRACT
+# name: legacy_admin_action
+# purpose: Adapt a legacy project-local Admin POST to the canonical dispatcher.
+# inputs: Authenticated request, action/entity identity, legacy body aliases and parameters.
+# returns: Canonical local-control JSONResponse, including audited failures.
+# side_effects: Delegates at most one local action and writes canonical audit events.
+# emitted_logs: admin_action_requested, admin_action_completed/failed.
+# error_behavior: Shared control/confirmation gate rejects unsafe requests;
+#                 unsupported actions return explicit 501.
+# END_FUNCTION_CONTRACT
+async def legacy_admin_action(
+    request: Request, *, action: str, entity_type: str, entity_id: str | None,
+    body: Mapping[str, Any] | None = None, parameters: Mapping[str, Any] | None = None) -> JSONResponse:
+    source = dict(body or {})
+    supplied_parameters = source.get("parameters")
+    merged_parameters = dict(supplied_parameters) if isinstance(supplied_parameters, Mapping) else {}
+    if isinstance(parameters, Mapping):
+        merged_parameters.update(parameters)
+    legacy_value = source.get("confirm", source.get("confirmation_value", source.get("typed_value", "")))
+    confirmation = source.get("confirmation", {
+        "intent": "confirm" if "confirm" in source else source.get("confirmation_intent") or "",
+        "value": legacy_value,
+    })
+    payload: dict[str, Any] = {"action": action, "entity_type": entity_type, "entity_id": entity_id,
+                               "parameters": merged_parameters, "confirmation": confirmation}
+    payload.update({key: source[key] for key in ("project_key", "request_id") if key in source})
+    return await local_control_action(request, payload)
+
 # START_FUNCTION_CONTRACT
 # name: local_maintenance_snapshot
 # purpose: Build a project-local dry-run/snapshot model including protected
@@ -730,7 +760,7 @@ def _confirmation_allowed(
     if intent not in {"confirm", "confirmed", "yes", "true", "1"}:
         return False
     strong = {
-        "cancel", "cleanup", "stop", "restart_all", "restart_api",
+        "cancel", "cleanup", "delete", "lifecycle_cleanup", "shutdown", "stop", "restart_all", "restart_api",
         "restart_workers", "reload", "merge", "openapi", "recovery",
     }
     if action.casefold() not in strong:
@@ -837,8 +867,8 @@ async def _dispatch_local_action(
         return merge_response
     if action.startswith("restart_"):
         target = {"restart_api": "api", "restart_workers": "workers", "restart_all": "all"}[action]
-        from grace_control.api.routers.lifecycle import restart_endpoint
-        result = await restart_endpoint(target)
+        from grace_control.api.routers.lifecycle import _restart_local
+        result = await _restart_local(target)
         if isinstance(result, Mapping) and (
             result.get("ok") is False
             or result.get("success") is False
@@ -847,8 +877,8 @@ async def _dispatch_local_action(
             raise HTTPException(status_code=502, detail=result.get("error") or "supervisor restart failed")
         return result
     if action == "reload":
-        from grace_control.api.routers.lifecycle import reload_endpoint
-        result = await reload_endpoint()
+        from grace_control.api.routers.lifecycle import _reload_local
+        result = await _reload_local()
         if isinstance(result, Mapping) and (
             result.get("ok") is False
             or result.get("success") is False

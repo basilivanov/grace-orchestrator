@@ -267,6 +267,126 @@ async def test_read_token_cannot_mutate():
 
 
 # START_FUNCTION_CONTRACT
+# name: test_read_token_cannot_reach_legacy_admin_mutations
+# purpose: Inventory every live project-local /api/admin mutation and prove a
+#          read-only credential is rejected before any legacy route can change
+#          packet, feature, worker or audit state.
+# inputs: db — isolated project database.
+# returns: None.
+# side_effects: In-memory authenticated ASGI POSTs, followed by one confirmed
+#               canonical legacy retry and feature archive.
+# emitted_logs: Auth/control and canonical admin audit logs.
+# error_behavior: Fails if an alternate legacy URL accepts read access or if a
+#                 confirmed legacy-compatible route bypasses canonical audit.
+# END_FUNCTION_CONTRACT
+@pytest.mark.asyncio
+async def test_read_token_cannot_reach_legacy_admin_mutations(db):
+    with get_db() as session:
+        session.add(Feature(
+            id="feat-legacy", slug="feat-legacy", title="legacy",
+            spec_json={}, status="NOT_STARTED",
+        ))
+        session.add(Wave(
+            id="wave-legacy", feature_id="feat-legacy", slug="wave-legacy",
+            title="legacy", order=1,
+        ))
+        session.add(Packet(
+            id="pkt-legacy", feature_id="feat-legacy", wave_id="wave-legacy",
+            slug="pkt-legacy", title="legacy", spec_json={},
+            state=PacketState.BLOCKED_RECOVERABLE.value,
+            attempt_count=0, max_attempts=3,
+        ))
+        session.commit()
+
+    app, _clients = _client_app()
+    _set_runtime_identity(app)
+    mutating_paths = sorted(
+        path
+        for path, operations in app.openapi()["paths"].items()
+        if path.startswith("/api/admin/")
+        and any(method in operations for method in ("post", "put", "patch", "delete"))
+    )
+    expected_paths = {
+        "/api/admin/feature/{feature_id}/archive",
+        "/api/admin/feature/{feature_id}/unarchive",
+        "/api/admin/packet/{packet_id}/resume",
+        "/api/admin/packet/{packet_id}/delete",
+        "/api/admin/packet/{packet_id}/stop",
+        "/api/admin/packet/{packet_id}/retry",
+        "/api/admin/packet/{packet_id}/cancel",
+        "/api/admin/packet/{packet_id}/stages/{stage_key}/rerun",
+        "/api/admin/workers/{worker_id}/stop",
+        "/api/admin/packet/{packet_id}/dev-replay",
+        "/api/admin/stages/metrics/recompute",
+        "/api/admin/control/action",
+        "/api/admin/control/openapi",
+        "/api/admin/maintenance/cleanup",
+    }
+    assert expected_paths <= set(mutating_paths)
+
+    before = {
+        "packet": PacketState.BLOCKED_RECOVERABLE.value,
+        "feature": "NOT_STARTED",
+    }
+    with get_db() as session:
+        assert session.query(Packet).filter_by(id="pkt-legacy").one().state == before["packet"]
+        assert session.query(Feature).filter_by(id="feat-legacy").one().status == before["feature"]
+        before_event_count = session.query(Event).count()
+
+    replacements = {
+        "{feature_id}": "feat-legacy",
+        "{packet_id}": "pkt-legacy",
+        "{stage_key}": "verifier",
+        "{worker_id}": "worker-legacy",
+        "{target}": "api",
+    }
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver",
+    ) as client:
+        for template in mutating_paths:
+            path = template
+            for placeholder, value in replacements.items():
+                path = path.replace(placeholder, value)
+            assert "{" not in path and "}" not in path
+            response = await client.post(
+                path,
+                headers={"x-grace-api-token": "read-token"},
+                json={},
+            )
+            assert response.status_code == 403, path
+
+    with get_db() as session:
+        assert session.query(Packet).filter_by(id="pkt-legacy").one().state == before["packet"]
+        assert session.query(Feature).filter_by(id="feat-legacy").one().status == before["feature"]
+        assert session.query(Event).count() == before_event_count
+
+    headers = {"x-grace-api-token": "control-token"}
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver",
+    ) as client:
+        retry = await client.post(
+            "/api/admin/packet/pkt-legacy/resume",
+            headers=headers,
+            json={"confirmation": {"intent": "confirm"}},
+        )
+        archive = await client.post(
+            "/api/admin/feature/feat-legacy/archive",
+            headers=headers,
+            json={"confirmation": {"intent": "confirm"}},
+        )
+    assert retry.status_code == 200 and retry.json()["ok"] is True
+    assert archive.status_code == 200 and archive.json()["ok"] is True
+    with get_db() as session:
+        assert session.query(Packet).filter_by(id="pkt-legacy").one().state == PacketState.READY.value
+        assert session.query(Feature).filter_by(id="feat-legacy").one().status == "ARCHIVED"
+        audit_types = {
+            row.event_type
+            for row in session.query(Event).filter(Event.event_type.like("admin_action_%"))
+        }
+    assert {"admin_action_requested", "admin_action_completed"} <= audit_types
+
+
+# START_FUNCTION_CONTRACT
 # name: test_control_token_is_project_scoped_and_confirmed
 # purpose: Prove confirmation, request identity and selected-project isolation.
 # inputs: None.
@@ -719,7 +839,7 @@ async def test_supervisor_failure_stays_failed(monkeypatch):
         return {"ok": False, "status": "failed", "error": "worker did not restart"}
 
     from grace_control.api.routers import lifecycle
-    monkeypatch.setattr(lifecycle, "restart_endpoint", failed_restart)
+    monkeypatch.setattr(lifecycle, "_restart_local", failed_restart)
     app = create_app(
         GraceSettings(api_auth_enabled=False),
         project_registry=_registry(),

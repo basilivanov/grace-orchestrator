@@ -473,13 +473,16 @@ class AdminCrossProjectService:
             bounded_totals.append(min(source_total, _MAX_LOG_LINES_PER_PROJECT))
             if bool(data.get("truncated")) or source_total > fetch_tail:
                 partial = True
-            for line in lines[:fetch_tail]:
+            for line_index, line in enumerate(lines[:fetch_tail]):
                 row = _log_row(result.context, line, data.get("source"))
+                row["_line_index"] = line_index
                 if _log_matches(row, source, worker, packet, run, stage, level, trace_id,
                                 contains, expression, since, until):
                     rows.append(row)
         rows.sort(key=_log_sort_key, reverse=True)
         page = rows[page_offset:page_offset + page_limit]
+        for row in page:
+            row.pop("_line_index", None)
         if errors:
             partial = True
         next_offset = None

@@ -452,10 +452,11 @@ def _event_sort_key(row: Mapping[str, Any]) -> tuple[float, str, str]:
     )
 
 
-def _log_sort_key(row: Mapping[str, Any]) -> tuple[float, str, str]:
+def _log_sort_key(row: Mapping[str, Any]) -> tuple[float, str, int, str]:
     return (
         _timestamp_value(row.get("timestamp")),
         str(row.get("project_key") or ""),
+        int(row.get("_line_index") or 0),
         str(row.get("raw") or ""),
     )
 

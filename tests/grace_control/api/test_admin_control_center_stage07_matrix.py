@@ -331,10 +331,12 @@ async def test_stage07_performance_fanout_and_bounded_explorer(tmp_path):
 # START_FUNCTION_CONTRACT
 # name: test_stage07_browser_desktop_mobile_smoke
 # purpose: Exercise real Hub desktop/mobile UI, accessibility labels, deep
-#          links, browser history, polling context and an offline card.
+#          links, browser history, real HTMX polling/follow behavior, a
+#          confirmed control and an offline card.
 # inputs: stage07_hub_url — real loopback Hub process.
 # returns: None.
-# side_effects: Starts headless Chromium and performs bounded HTTP reads.
+# side_effects: Starts headless Chromium and performs bounded HTTP reads,
+#               production HTMX swaps and one confirmed beta mutation.
 # emitted_logs: Browser console output is not emitted by the application test.
 # error_behavior: Skips only when Playwright or Chromium is absent.
 # END_FUNCTION_CONTRACT
@@ -374,14 +376,97 @@ def test_stage07_browser_desktop_mobile_smoke(stage07_hub_url):
             assert "/admin/p/alpha" in desktop.url
             desktop.go_forward(wait_until="domcontentloaded")
             assert "tab=raw" in desktop.url
-            control_response = desktop.goto(f"{stage07_hub_url}/admin/p/alpha/packet/{_CONTROL_PACKET_ID}", wait_until="domcontentloaded", timeout=10000)
+            control_response = desktop.goto(f"{stage07_hub_url}/admin/p/beta/packet/{_CONTROL_PACKET_ID}", wait_until="domcontentloaded", timeout=10000)
             assert control_response is not None and control_response.status == 200
-            assert desktop.locator("input[name='confirmation_value']").count() >= 1
-            assert desktop.locator("button").filter(has_text="Retry packet").count() >= 1 or desktop.locator("button", has_text="Stop / cancel").count() >= 1
-            logs_response = desktop.goto(f"{stage07_hub_url}/admin/p/alpha/logs?follow=true", wait_until="domcontentloaded", timeout=10000)
+            cancel_form = desktop.locator("form[action$='/control']").filter(has_text="Stop / cancel")
+            cancel_input = cancel_form.locator("input[name='confirmation_value']")
+            cancel_button = cancel_form.locator("button", has_text="Stop / cancel")
+            assert cancel_input.count() == 1 and cancel_button.count() == 1
+            cancel_input.fill(_CONTROL_PACKET_ID)
+            with desktop.expect_navigation(wait_until="domcontentloaded", timeout=10000):
+                cancel_button.click()
+            assert desktop.locator("[data-testid='control-result']").count() == 1
+            assert "success" in desktop.locator("[data-testid='control-result']").inner_text().casefold()
+            assert "cancelled" in desktop.locator(".state-chip.prominent").inner_text().casefold()
+            timeline = desktop.goto(
+                f"{stage07_hub_url}/admin/p/beta/packet/{_CONTROL_PACKET_ID}?tab=timeline",
+                wait_until="domcontentloaded", timeout=10000,
+            )
+            assert timeline is not None and timeline.status == 200
+            timeline_text = desktop.locator("body").inner_text()
+            assert "admin_action_requested" in timeline_text
+            assert "admin_action_completed" in timeline_text
+
+            logs_response = desktop.goto(f"{stage07_hub_url}/admin/p/alpha/logs?follow=true&tail=100", wait_until="domcontentloaded", timeout=10000)
             assert logs_response is not None and logs_response.status == 200
+            desktop.wait_for_function("() => Boolean(window.htmx)", timeout=5000)
+            poll_path = "/admin/p/alpha/logs"
+
+            def is_log_poll(response):
+                headers = {key.casefold(): value for key, value in response.request.headers.items()}
+                return (
+                    poll_path in response.url
+                    and headers.get("hx-request", "").casefold() == "true"
+                )
+
             log_viewer = desktop.locator("[data-testid='bounded-log-viewer']")
-            assert log_viewer.get_attribute("hx-trigger") == "every 5s" and "/admin/p/alpha/logs" in (log_viewer.get_attribute("hx-get") or "")
+            assert log_viewer.count() == 1
+            assert log_viewer.get_attribute("hx-trigger") == "every 5s" and poll_path in (log_viewer.get_attribute("hx-get") or "")
+            logs_url = desktop.url
+            with desktop.expect_response(is_log_poll, timeout=8000) as first_poll:
+                desktop.wait_for_timeout(5500)
+            assert first_poll.value.status == 200
+            assert desktop.url == logs_url
+            assert desktop.locator(".cc-shell[data-project-key='alpha']").count() == 1
+            assert desktop.locator("#project-selector").input_value() == "/admin/p/alpha"
+            assert desktop.locator("[data-testid='log-filters']").count() == 1
+            assert desktop.locator("[data-testid='bounded-log-viewer']").count() == 1
+            assert desktop.locator("[data-testid='bounded-log-viewer'] .log-row").count() > 0
+            assert "log-alpha" in desktop.locator("[data-testid='bounded-log-viewer']").inner_text()
+
+            scroll_before = desktop.locator("[data-testid='bounded-log-viewer'] .cc-log-list").evaluate(
+                """el => {
+                    const max = el.scrollHeight - el.clientHeight;
+                    el.scrollTop = Math.floor(max / 2);
+                    return {max, top: el.scrollTop};
+                }""",
+            )
+            assert scroll_before["max"] > 0
+            with desktop.expect_response(is_log_poll, timeout=8000):
+                desktop.wait_for_timeout(5500)
+            scroll_after = desktop.locator("[data-testid='bounded-log-viewer'] .cc-log-list").evaluate(
+                "el => ({max: el.scrollHeight - el.clientHeight, top: el.scrollTop})",
+            )
+            assert scroll_after["top"] < scroll_after["max"] - 4
+            assert abs(scroll_after["top"] - scroll_before["top"]) <= 2
+
+            off_response = desktop.goto(f"{stage07_hub_url}/admin/p/alpha/logs?tail=100", wait_until="domcontentloaded", timeout=10000)
+            assert off_response is not None and off_response.status == 200
+            off_viewer = desktop.locator("[data-testid='bounded-log-viewer']")
+            assert off_viewer.count() == 1 and off_viewer.get_attribute("hx-trigger") is None
+            off_scroll = off_viewer.locator(".cc-log-list").evaluate(
+                """el => {
+                    const max = el.scrollHeight - el.clientHeight;
+                    el.scrollTop = Math.floor(max / 2);
+                    return {max, top: el.scrollTop};
+                }""",
+            )
+            assert off_scroll["max"] > 0
+            off_polls: list[str] = []
+
+            def capture_off_poll(request):
+                headers = {key.casefold(): value for key, value in request.headers.items()}
+                if headers.get("hx-request", "").casefold() == "true" and poll_path in request.url:
+                    off_polls.append(request.url)
+
+            desktop.on("request", capture_off_poll)
+            desktop.wait_for_timeout(5500)
+            desktop.remove_listener("request", capture_off_poll)
+            off_scroll_after = off_viewer.locator(".cc-log-list").evaluate(
+                "el => ({max: el.scrollHeight - el.clientHeight, top: el.scrollTop})",
+            )
+            assert off_polls == []
+            assert abs(off_scroll_after["top"] - off_scroll["top"]) <= 2
             mobile = browser.new_page(viewport={"width": 390, "height": 844})
             try:
                 mobile_response = mobile.goto(f"{stage07_hub_url}/admin/projects", wait_until="domcontentloaded", timeout=10000)

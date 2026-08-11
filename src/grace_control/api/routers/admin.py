@@ -12,7 +12,9 @@
 #          and TZ_FRONTEND_ACCEPTANCE (graceful when tables/stages are absent).
 # inputs: HTTP GET (read) / POST (packet control) with path and query params.
 # returns: Plain dicts (no `data` envelope) for direct SPA consumption.
-# side_effects: None.
+# side_effects: Read endpoints are side-effect free; confirmed legacy mutation
+#               aliases delegate to the canonical project-local control/audit
+#               service, while destructive unsupported aliases stay unavailable.
 # emitted_logs: None.
 # error_behavior: 404 on missing entities; 400 on invalid controls; 403 on
 #                 path-traversal.
@@ -48,23 +50,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Body, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response
 
+from grace_control.api.routers.admin_controls import legacy_admin_action
 from grace_control.config.settings import settings
 from grace_control.core.structured_logger import GraceLogger
 from grace_control.db import get_db
-from grace_control.db.schema import Feature
 from grace_control.services.admin_aggregation_service import AdminAggregationService
-from grace_control.services.packet_control_service import (
-    cancel_packet as _cancel,
-)
-from grace_control.services.packet_control_service import (
-    delete_packet as _delete,
-)
-from grace_control.services.packet_control_service import (
-    retry_packet as _retry,
-)
 from grace_control.services.safe_filesystem_service import FilesystemReadError, SafeFilesystemService
 
 router = APIRouter()
@@ -394,7 +387,8 @@ def system_health() -> dict:
 # purpose: Return a bounded tail from the current project's configured logs
 #          root without reading a process-global temporary directory.
 # inputs: tail — requested line count, bounded to 10..5000.
-# returns: JSON lines, total byte count, source-relative path and truncation.
+# returns: JSON lines, bounded row count, source-relative path, byte count and
+#          truncation metadata.
 # side_effects: Reads only the server-resolved project logs root.
 # emitted_logs: filesystem_read_rejected, filesystem_read_done.
 # error_behavior: Missing/unavailable project logs become an empty safe result.
@@ -410,9 +404,11 @@ def system_logs(tail: int = Query(100, ge=10, le=5000)) -> dict:
             return {"lines": [], "total": 0, "source": "", "truncated": False}
         selected = max(files, key=lambda entry: float(entry.get("mtime") or 0))
         payload = reader.tail_file("logs", str(selected["relative_path"]), lines=tail)
+        lines = str(payload.get("content") or "").splitlines()
         return {
-            "lines": str(payload.get("content") or "").splitlines(),
-            "total": int(payload.get("size") or 0),
+            "lines": lines,
+            "total": len(lines),
+            "total_bytes": int(payload.get("size") or 0),
             "source": str(selected["relative_path"]),
             "truncated": bool(payload.get("truncated")),
         }
@@ -439,42 +435,52 @@ def system_workers() -> dict:
 # name: archive_feature
 # purpose: Mark a feature as ARCHIVED.
 # inputs: feature_id (str) — path parameter.
-# returns: dict with ok, feature_id, status.
-# side_effects: DB update on Feature row.
+# returns: Canonical control JSON response with project-local audit identity.
+# side_effects: Delegates the selected feature mutation through the canonical
+#               project-local control service and audit gate.
 # emitted_logs: None.
-# error_behavior: 404 if feature not found.
+# error_behavior: 401/403 for unsafe credentials/origin; 400/404 for domain or
+#                 confirmation failures.
 # END_FUNCTION_CONTRACT
 @router.post("/api/admin/feature/{feature_id}/archive")
-def archive_feature(feature_id: str) -> dict:
-    """Mark a feature as ARCHIVED."""
-    with get_db() as db:
-        feat = db.query(Feature).filter_by(id=feature_id).first()
-        if not feat:
-            raise HTTPException(status_code=404, detail="feature not found")
-        feat.status = "ARCHIVED"
-        db.commit()
-        return {"ok": True, "feature_id": feature_id, "status": "ARCHIVED"}
+async def archive_feature(
+    request: Request,
+    feature_id: str,
+    body: dict[str, Any] = Body(default_factory=dict),
+) -> JSONResponse:
+    return await legacy_admin_action(
+        request,
+        action="archive",
+        entity_type="feature",
+        entity_id=feature_id,
+        body=body,
+    )
 
 
 # START_FUNCTION_CONTRACT
 # name: unarchive_feature
 # purpose: Restore an archived feature to NOT_STARTED.
 # inputs: feature_id (str) — path parameter.
-# returns: dict with ok, feature_id, status.
-# side_effects: DB update on Feature row.
+# returns: Canonical control JSON response with project-local audit identity.
+# side_effects: Delegates the selected feature mutation through the canonical
+#               project-local control service and audit gate.
 # emitted_logs: None.
-# error_behavior: 404 if feature not found.
+# error_behavior: 401/403 for unsafe credentials/origin; 400/404 for domain or
+#                 confirmation failures.
 # END_FUNCTION_CONTRACT
 @router.post("/api/admin/feature/{feature_id}/unarchive")
-def unarchive_feature(feature_id: str) -> dict:
-    """Restore an archived feature."""
-    with get_db() as db:
-        feat = db.query(Feature).filter_by(id=feature_id).first()
-        if not feat:
-            raise HTTPException(status_code=404, detail="feature not found")
-        feat.status = "NOT_STARTED"
-        db.commit()
-        return {"ok": True, "feature_id": feature_id, "status": "NOT_STARTED"}
+async def unarchive_feature(
+    request: Request,
+    feature_id: str,
+    body: dict[str, Any] = Body(default_factory=dict),
+) -> JSONResponse:
+    return await legacy_admin_action(
+        request,
+        action="unarchive",
+        entity_type="feature",
+        entity_id=feature_id,
+        body=body,
+    )
 
 # END_BLOCK_FEATURE_SEARCH_SYSTEM
 
@@ -482,30 +488,52 @@ def unarchive_feature(feature_id: str) -> dict:
 
 
 @router.post("/api/admin/packet/{packet_id}/resume")
-def packet_resume(packet_id: str) -> dict:
-    """Retry a BLOCKED_RECOVERABLE or REJECTED packet."""
-    try:
-        return _retry(packet_id, actor="admin_ui", reason="manual_retry")
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+async def packet_resume(
+    request: Request,
+    packet_id: str,
+    body: dict[str, Any] = Body(default_factory=dict),
+) -> JSONResponse:
+    """Legacy alias for the canonical confirmed packet retry action."""
+    return await legacy_admin_action(
+        request,
+        action="retry",
+        entity_type="packet",
+        entity_id=packet_id,
+        body=body,
+        parameters={"reason": "manual_retry"},
+    )
 
 
 @router.post("/api/admin/packet/{packet_id}/delete")
-def packet_delete(packet_id: str, body: dict[str, Any] | None = None) -> dict:
-    """Delete a packet and its runs."""
-    confirm = (body or {}).get("confirm", "")
-    try:
-        return _delete(packet_id, confirm=confirm, actor="admin_ui")
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+async def packet_delete(
+    request: Request,
+    packet_id: str,
+    body: dict[str, Any] = Body(default_factory=dict),
+) -> JSONResponse:
+    """Keep the destructive legacy alias unavailable behind the audit gate."""
+    return await legacy_admin_action(
+        request,
+        action="delete",
+        entity_type="packet",
+        entity_id=packet_id,
+        body=body,
+    )
 
 
 @router.post("/api/admin/packet/{packet_id}/stop")
-def packet_stop(packet_id: str) -> dict:
-    """Cancel a running packet."""
-    try:
-        return _cancel(packet_id, actor="admin_ui", reason="manual_cancel")
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+async def packet_stop(
+    request: Request,
+    packet_id: str,
+    body: dict[str, Any] = Body(default_factory=dict),
+) -> JSONResponse:
+    """Legacy alias for the canonical confirmed packet cancel action."""
+    return await legacy_admin_action(
+        request,
+        action="cancel",
+        entity_type="packet",
+        entity_id=packet_id,
+        body=body,
+        parameters={"reason": "manual_cancel"},
+    )
 
 # END_BLOCK_PACKET_CONTROLS

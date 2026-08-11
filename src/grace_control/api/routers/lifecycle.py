@@ -1,24 +1,18 @@
 # AI_HEADER: lifecycle router — public HTTP surface for supervisor state
 # START_MODULE_CONTRACT
-# purpose: Expose supervisor state AND control operations through the public
-#          API so any client (curl, monitoring, scripts) can drive the
-#          runtime without needing direct access to the supervisor unix
-#          socket. GET endpoints are read-only; POST endpoints are thin
-#          proxies that forward to the supervisor's private control socket
-#          (see supervisor.py). Authorization is delegated to the existing
-#          AuthMiddleware — non-localhost callers must present a valid
-#          Bearer token when GRACE_API_AUTH_ENABLED=true.
+# purpose: Expose supervisor state and control operations through the public
+#          API. Mutations pass the canonical project-local control and audit
+#          boundary before any supervisor socket operation.
 # inputs: HTTP requests; reads $WT/supervisor.json + DB Worker table.
 # returns: structured JSON describing the runtime or the result of a
 #          proxied supervisor action.
-# side_effects: POST /restart and POST /cleanup trigger supervisor-level
-#               state changes (kill+respawn subprocesses, delete files).
-#               Idempotency: POST /cleanup is safe to repeat; POST /restart
-#               is not — repeated restarts respawn every time.
+# side_effects: Confirmed restart/reload operations may proxy to the
+#               supervisor; legacy cleanup/shutdown aliases are audited and
+#               unavailable.
 # emitted_logs: lifecycle_proxy_failed (when supervisor is unreachable).
-# error_behavior: 503 if supervisor state file is missing; 502 if
-#                 supervisor socket is unreachable; 401 from AuthMiddleware
-#                 when auth fails.
+# error_behavior: 401/403 for control/origin failures; 400/501 for invalid or
+#                 unavailable legacy operations; 503 if state is missing; 502
+#                 if the supervisor socket is unreachable.
 # END_MODULE_CONTRACT
 # START_MODULE_MAP
 # mapping:
@@ -33,14 +27,14 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, HTTPException, Query
-from sqlalchemy import text
+from fastapi import APIRouter, Body, HTTPException, Query, Request
 
+from grace_control.api.routers.admin_controls import legacy_admin_action
 from grace_control.config.settings import settings
 from grace_control.core.structured_logger import GraceLogger
 from grace_control.db import get_db
@@ -152,10 +146,10 @@ async def _proxy_supervisor(
             return r.json()
     except httpx.HTTPStatusError as e:
         # Surface the supervisor's own error verbatim
-        raise HTTPException(e.response.status_code, e.response.text)
+        raise HTTPException(e.response.status_code, e.response.text) from e
     except Exception as e:
         _log.warn("lifecycle_proxy_failed", method=method, path=path, error=str(e)[:200])
-        raise HTTPException(502, f"supervisor proxy failed: {e!s}")
+        raise HTTPException(502, f"supervisor proxy failed: {e!s}") from e
 
 
 @router.get("/status")
@@ -172,7 +166,7 @@ async def status() -> dict[str, Any]:
         "supervisor_state": state,
         "db_workers": get_db_workers(),
         "code_sha": get_git_sha(),
-        "fetched_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "fetched_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
     }
 
 
@@ -231,7 +225,7 @@ async def health_full() -> dict[str, Any]:
         "workers_alive": len(state.get("workers", [])) if state else 0,
         "db_workers": len(db_workers),
         "code_sha": get_git_sha(),
-        "fetched_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "fetched_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
     }
 
 
@@ -242,39 +236,55 @@ async def health_full() -> dict[str, Any]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-@router.post("/restart/{target}")
-async def restart_endpoint(
-    target: str,
-) -> dict[str, Any]:
-    """Restart API, workers, or both. Proxies to supervisor.sock.
-
-    Args:
-        target: one of `api`, `workers`, `all`.
-
-    Returns:
-        supervisor's `{"ok": true, "target": target}` on success.
-    """
+async def _restart_local(target: str) -> dict[str, Any]:
     if target not in {"api", "workers", "all"}:
         raise HTTPException(400, f"target must be api|workers|all, got {target!r}")
     return await _proxy_supervisor("POST", f"/control/restart/{target}")
 
 
+@router.post("/restart/{target}")
+async def restart_endpoint(
+    request: Request,
+    target: str,
+    body: dict[str, Any] = Body(default_factory=dict),
+) -> Any:
+    """Restart API, workers, or both through canonical control and audit."""
+    action = {
+        "api": "restart_api",
+        "workers": "restart_workers",
+        "all": "restart_all",
+    }.get(target)
+    if action is None:
+        from grace_control.services.admin_control_security import require_control_request
+        require_control_request(request)
+        raise HTTPException(400, f"target must be api|workers|all, got {target!r}")
+    return await legacy_admin_action(
+        request,
+        action=action,
+        entity_type="project",
+        entity_id=None,
+        body=body,
+    )
+
+
 @router.post("/cleanup")
 async def cleanup_endpoint(
+    request: Request,
+    body: dict[str, Any] = Body(default_factory=dict),
     worktrees: bool = Query(True, description="Clean orphaned git worktrees."),
     state_files: bool = Query(True, description="Remove .grace_state/ entries older than `stale_state_days`."),
     stale_leases: bool = Query(True, description="Release DB leases older than `stale_lease_minutes`."),
     stale_lease_minutes: int = Query(30, ge=1, description="Lease age threshold in minutes."),
     stale_state_days: int = Query(7, ge=1, description="State-file age threshold in days."),
-) -> dict[str, Any]:
-    """Idempotent cleanup. Proxies to supervisor.sock.
-
-    Safe to call repeatedly. Returns a structured report of what was removed.
-    """
-    return await _proxy_supervisor(
-        "POST",
-        "/control/cleanup",
-        params={
+) -> Any:
+    """Keep the pre-Control-Center supervisor cleanup alias unavailable."""
+    return await legacy_admin_action(
+        request,
+        action="lifecycle_cleanup",
+        entity_type="project",
+        entity_id=None,
+        body=body,
+        parameters={
             "worktrees": str(worktrees).lower(),
             "state_files": str(state_files).lower(),
             "stale_leases": str(stale_leases).lower(),
@@ -284,21 +294,35 @@ async def cleanup_endpoint(
     )
 
 
-@router.post("/reload")
-async def reload_endpoint() -> dict[str, Any]:
-    """Re-prime the mtime watcher. Proxies to supervisor.sock.
-
-    Use after `git pull` so the next mtime scan picks up new files. Does
-    NOT restart children — see `/restart/{target}` for that.
-    """
+async def _reload_local() -> dict[str, Any]:
     return await _proxy_supervisor("POST", "/control/reload")
 
 
 @router.post("/shutdown")
-async def shutdown_endpoint() -> dict[str, Any]:
-    """Stop the supervisor and all children (graceful). Proxies to supervisor.sock.
+async def shutdown_endpoint(
+    request: Request,
+    body: dict[str, Any] = Body(default_factory=dict),
+) -> Any:
+    """Keep the destructive pre-Control-Center shutdown alias unavailable."""
+    return await legacy_admin_action(
+        request,
+        action="shutdown",
+        entity_type="project",
+        entity_id=None,
+        body=body,
+    )
 
-    The supervisor sends SIGTERM to children, waits `terminate_grace`
-    seconds (default 5s), then SIGKILL. The supervisor itself exits.
-    """
-    return await _proxy_supervisor("POST", "/control/stop")
+
+@router.post("/reload")
+async def reload_endpoint(
+    request: Request,
+    body: dict[str, Any] = Body(default_factory=dict),
+) -> Any:
+    """Re-prime the watcher through canonical control and audit."""
+    return await legacy_admin_action(
+        request,
+        action="reload",
+        entity_type="project",
+        entity_id=None,
+        body=body,
+    )

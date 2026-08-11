@@ -1,26 +1,20 @@
 """Admin pipeline router — new read endpoints for pipeline observability v2."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from fastapi import APIRouter, HTTPException, Query
+from datetime import datetime
+from typing import Any
 
+from fastapi import APIRouter, Body, HTTPException, Query, Request
+
+from grace_control.api.routers.admin_controls import legacy_admin_action
 from grace_control.core.structured_logger import GraceLogger
 from grace_control.db import get_db
-from grace_control.db.schema import StageRun, Packet, Feature, Wave
+from grace_control.db.schema import Feature, Packet, StageRun, Wave
 from grace_control.services.admin_aggregation_service import AdminAggregationService
 from grace_control.services.aggregated_logs_service import get_aggregated_logs
 from grace_control.services.stage_metrics_service import (
-    get_stage_metrics,
     get_all_stages_reference,
-    recompute_metrics,
-)
-from grace_control.services.packet_control_service import (
-    retry_packet,
-    cancel_packet,
-    delete_packet,
-    rerun_stage,
-    stop_worker,
-    dev_replay,
+    get_stage_metrics,
 )
 
 router = APIRouter()
@@ -314,7 +308,7 @@ def stage_logs(packet_id: str, stage_key: str, stream: str = Query("all"), tail:
                     if line.strip():
                         lines.append({"ts": "", "source": "stdout", "level": "info", "msg": line.strip()})
                 source_file = srun.stdout_path
-            except (OSError, IOError):
+            except OSError:
                 pass
 
         if srun.stderr_path and stream in ("all", "stderr"):
@@ -324,7 +318,7 @@ def stage_logs(packet_id: str, stage_key: str, stream: str = Query("all"), tail:
                     if line.strip():
                         lines.append({"ts": "", "source": "stderr", "level": "error" if "error" in line.lower() else "warn", "msg": line.strip()})
                 source_file = source_file or srun.stderr_path
-            except (OSError, IOError):
+            except OSError:
                 pass
 
         return {"lines": lines, "source_file": source_file, "truncated": len(lines) > tail}
@@ -388,68 +382,112 @@ def stages_reference():
 
 
 @router.post("/api/admin/packet/{packet_id}/retry")
-def retry_packet_endpoint(packet_id: str, body: dict):
-    actor = body.get("actor")
-    reason = body.get("reason", "manual_retry")
-    try:
-        return retry_packet(packet_id, actor=actor, reason=reason)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+async def retry_packet_endpoint(
+    request: Request,
+    packet_id: str,
+    body: dict[str, Any] = Body(default_factory=dict),
+):
+    return await legacy_admin_action(
+        request,
+        action="retry",
+        entity_type="packet",
+        entity_id=packet_id,
+        body=body,
+        parameters={"reason": body.get("reason", "manual_retry")},
+    )
 
 
 @router.post("/api/admin/packet/{packet_id}/cancel")
-def cancel_packet_endpoint(packet_id: str, body: dict):
-    actor = body.get("actor")
-    reason = body.get("reason", "manual_cancel")
-    try:
-        return cancel_packet(packet_id, actor=actor, reason=reason)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+async def cancel_packet_endpoint(
+    request: Request,
+    packet_id: str,
+    body: dict[str, Any] = Body(default_factory=dict),
+):
+    return await legacy_admin_action(
+        request,
+        action="cancel",
+        entity_type="packet",
+        entity_id=packet_id,
+        body=body,
+        parameters={"reason": body.get("reason", "manual_cancel")},
+    )
 
 
 @router.post("/api/admin/packet/{packet_id}/delete")
-def delete_packet_endpoint(packet_id: str, body: dict):
-    confirm = body.get("confirm", "")
-    actor = body.get("actor")
-    try:
-        return delete_packet(packet_id, confirm=confirm, actor=actor)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+async def delete_packet_endpoint(
+    request: Request,
+    packet_id: str,
+    body: dict[str, Any] = Body(default_factory=dict),
+):
+    return await legacy_admin_action(
+        request,
+        action="delete",
+        entity_type="packet",
+        entity_id=packet_id,
+        body=body,
+    )
 
 
 @router.post("/api/admin/packet/{packet_id}/stages/{stage_key}/rerun")
-def rerun_stage_endpoint(packet_id: str, stage_key: str, body: dict):
+async def rerun_stage_endpoint(
+    request: Request,
+    packet_id: str,
+    stage_key: str,
+    body: dict[str, Any] = Body(default_factory=dict),
+):
     if stage_key not in ("verifier", "reviewer"):
         raise HTTPException(status_code=400, detail="Rerun only allowed for verifier/reviewer")
-    actor = body.get("actor")
-    try:
-        return rerun_stage(packet_id, stage_key, actor=actor)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    return await legacy_admin_action(
+        request,
+        action="rerun_stage",
+        entity_type="packet",
+        entity_id=packet_id,
+        body=body,
+        parameters={"stage_key": stage_key},
+    )
 
 
 @router.post("/api/admin/workers/{worker_id}/stop")
-def stop_worker_endpoint(worker_id: str, body: dict):
-    actor = body.get("actor")
-    try:
-        return stop_worker(worker_id, actor=actor)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+async def stop_worker_endpoint(
+    request: Request,
+    worker_id: str,
+    body: dict[str, Any] = Body(default_factory=dict),
+):
+    return await legacy_admin_action(
+        request,
+        action="stop_worker",
+        entity_type="worker",
+        entity_id=worker_id,
+        body=body,
+    )
 
 
 @router.post("/api/admin/packet/{packet_id}/dev-replay")
-async def dev_replay_endpoint(packet_id: str, body: dict):
-    stage_key = body.get("stage_key")
-    actor = body.get("actor")
-    try:
-        return await dev_replay(packet_id, stage_key=stage_key, actor=actor)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+async def dev_replay_endpoint(
+    request: Request,
+    packet_id: str,
+    body: dict[str, Any] = Body(default_factory=dict),
+):
+    return await legacy_admin_action(
+        request,
+        action="dev_replay",
+        entity_type="packet",
+        entity_id=packet_id,
+        body=body,
+        parameters={"stage_key": body.get("stage_key", "")},
+    )
 
 
 @router.post("/api/admin/stages/metrics/recompute")
-def recompute_metrics_endpoint(body: dict):
-    period = body.get("period", "24h")
-    import asyncio as _asyncio
-    _asyncio.ensure_future(recompute_metrics(period_kind=period))
-    return {"ok": True, "message": f"Metrics recompute for {period} started"}
+async def recompute_metrics_endpoint(
+    request: Request,
+    body: dict[str, Any] = Body(default_factory=dict),
+):
+    return await legacy_admin_action(
+        request,
+        action="recompute_metrics",
+        entity_type="project",
+        entity_id=None,
+        body=body,
+        parameters={"period": body.get("period", "24h")},
+    )

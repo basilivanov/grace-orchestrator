@@ -403,21 +403,27 @@ def test_system_workers_shape(client):
 
 
 def test_resume_control_rejects_unknown_packet(client):
-    r = client.post("/api/admin/packet/p1/resume")
-    assert r.status_code == 400
-    assert "not found" in r.json()["detail"].lower()
+    r = client.post(
+        "/api/admin/packet/p1/resume",
+        json={"confirmation": {"intent": "confirm"}},
+    )
+    assert r.status_code == 404
+    assert "not found" in str(r.json()).lower()
 
 
 def test_delete_control_rejects_unknown_packet(client):
     r = client.post("/api/admin/packet/p1/delete", json={"confirm": "p1"})
-    assert r.status_code == 400
-    assert "not found" in r.json()["detail"].lower()
+    assert r.status_code == 501
+    assert r.json()["error_code"] == "CONTROL_UNAVAILABLE"
 
 
 def test_stop_control_rejects_unknown_packet(client):
-    r = client.post("/api/admin/packet/p1/stop")
-    assert r.status_code == 400
-    assert "not found" in r.json()["detail"].lower()
+    r = client.post(
+        "/api/admin/packet/p1/stop",
+        json={"confirmation": {"intent": "confirm", "value": "p1"}},
+    )
+    assert r.status_code == 404
+    assert "not found" in str(r.json()).lower()
 
 
 # ── 19-20. SPA shell + static ─────────────────────────────────────────────

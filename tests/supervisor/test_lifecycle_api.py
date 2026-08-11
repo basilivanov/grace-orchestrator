@@ -1,13 +1,8 @@
 # AI_HEADER: tests for /api/admin/lifecycle/* GET/POST endpoints
-import asyncio
-import os
-import socket
-import sys
 import threading
 import time
 from pathlib import Path
 
-import httpx
 import pytest
 import uvicorn
 from httpx import ASGITransport, AsyncClient
@@ -15,7 +10,6 @@ from httpx import ASGITransport, AsyncClient
 from grace_control.api.main import app
 from grace_control.db import init_db
 from grace_control.supervisor import Supervisor, SupervisorConfig, build_control_app
-
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SRC_DIR = REPO_ROOT / "src"
@@ -103,12 +97,16 @@ async def test_lifecycle_restart_proxy(supervisor_env) -> None:
     tmp_path, sock = supervisor_env
 
     transport = ASGITransport(app=app)
+    project_key = app.__dict__["state"].runtime_identity["project_key"]
     async with AsyncClient(transport=transport, base_url="http://test") as c:
-        r = await c.post("/api/admin/lifecycle/restart/workers")
+        r = await c.post(
+            "/api/admin/lifecycle/restart/workers",
+            json={"confirmation": {"intent": "confirm", "value": project_key}},
+        )
         assert r.status_code == 200, r.text
         body = r.json()
         assert body["ok"] is True
-        assert body["target"] == "workers"
+        assert body["response"]["target"] == "workers"
 
 
 @pytest.mark.asyncio
@@ -124,17 +122,18 @@ async def test_lifecycle_restart_invalid_target(supervisor_env) -> None:
 
 @pytest.mark.asyncio
 async def test_lifecycle_cleanup_proxy(supervisor_env) -> None:
-    """POST /api/admin/lifecycle/cleanup reaches supervisor.sock and returns a report."""
+    """The pre-Control-Center cleanup alias is audited but unavailable."""
     tmp_path, _ = supervisor_env
 
     transport = ASGITransport(app=app)
+    project_key = app.__dict__["state"].runtime_identity["project_key"]
     async with AsyncClient(transport=transport, base_url="http://test") as c:
-        r = await c.post("/api/admin/lifecycle/cleanup")
-        assert r.status_code == 200, r.text
-        body = r.json()
-        assert body["ok"] is True
-        assert "report" in body
-        assert "worktrees_removed" in body["report"]
+        r = await c.post(
+            "/api/admin/lifecycle/cleanup",
+            json={"confirmation": {"intent": "confirm", "value": project_key}},
+        )
+        assert r.status_code == 501, r.text
+        assert r.json()["error_code"] == "CONTROL_UNAVAILABLE"
 
 
 @pytest.mark.asyncio
@@ -142,22 +141,31 @@ async def test_lifecycle_reload_proxy(supervisor_env) -> None:
     tmp_path, _ = supervisor_env
 
     transport = ASGITransport(app=app)
+    project_key = app.__dict__["state"].runtime_identity["project_key"]
     async with AsyncClient(transport=transport, base_url="http://test") as c:
-        r = await c.post("/api/admin/lifecycle/reload")
+        r = await c.post(
+            "/api/admin/lifecycle/reload",
+            json={"confirmation": {"intent": "confirm", "value": project_key}},
+        )
         assert r.status_code == 200
-        assert r.json() == {"ok": True, "watcher_primed": False}
+        assert r.json()["ok"] is True
+        assert r.json()["response"] == {"ok": True, "watcher_primed": False}
 
 
 @pytest.mark.asyncio
 async def test_lifecycle_shutdown_proxy(supervisor_env) -> None:
-    """POST /api/admin/lifecycle/shutdown returns ok + the supervisor begins to stop."""
+    """The destructive pre-Control-Center shutdown alias is unavailable."""
     tmp_path, _ = supervisor_env
 
     transport = ASGITransport(app=app)
+    project_key = app.__dict__["state"].runtime_identity["project_key"]
     async with AsyncClient(transport=transport, base_url="http://test") as c:
-        r = await c.post("/api/admin/lifecycle/shutdown")
-        assert r.status_code == 200
-        assert r.json() == {"ok": True, "stopping": True}
+        r = await c.post(
+            "/api/admin/lifecycle/shutdown",
+            json={"confirmation": {"intent": "confirm", "value": project_key}},
+        )
+        assert r.status_code == 501
+        assert r.json()["error_code"] == "CONTROL_UNAVAILABLE"
 
 
 @pytest.mark.asyncio
