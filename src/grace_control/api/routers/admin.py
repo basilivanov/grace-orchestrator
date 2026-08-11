@@ -1,20 +1,21 @@
 # ############################################################################
 # AI_HEADER: api_routers_admin
-# ROLE: Admin v2 router — /api/admin/* read endpoints + planned control stubs.
+# ROLE: Admin v2 router — /api/admin/* read endpoints and packet controls.
 #       Powers the vanilla SPA at /admin. All read endpoints compose
-#       AdminAggregationService. Control endpoints (resume/delete/stop) return
-#       501 with `planned: "v2"` until TZ_SESSION_RESUME is implemented.
+#       AdminAggregationService. Packet controls delegate to the domain service
+#       and return validation/state errors instead of fabricating success.
 # ############################################################################
 
 # START_MODULE_CONTRACT
 # purpose: Serve the admin SPA's JSON API. Read-only v1. Endpoints are designed
 #          per docs/TZ_ADMIN_PANEL.md. Forward-compatible with TZ_SESSION_RESUME
 #          and TZ_FRONTEND_ACCEPTANCE (graceful when tables/stages are absent).
-# inputs: HTTP GET (read) / POST (planned stubs) with path and query params.
+# inputs: HTTP GET (read) / POST (packet control) with path and query params.
 # returns: Plain dicts (no `data` envelope) for direct SPA consumption.
 # side_effects: None.
 # emitted_logs: None.
-# error_behavior: 404 on missing entities; 403 on path-traversal; 501 on stubs.
+# error_behavior: 404 on missing entities; 400 on invalid controls; 403 on
+#                 path-traversal.
 # END_MODULE_CONTRACT
 
 # START_MODULE_MAP
@@ -45,13 +46,26 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse, Response
 
+from grace_control.config.settings import settings
 from grace_control.core.structured_logger import GraceLogger
 from grace_control.db import get_db
 from grace_control.db.schema import Feature
 from grace_control.services.admin_aggregation_service import AdminAggregationService
+from grace_control.services.packet_control_service import (
+    cancel_packet as _cancel,
+)
+from grace_control.services.packet_control_service import (
+    delete_packet as _delete,
+)
+from grace_control.services.packet_control_service import (
+    retry_packet as _retry,
+)
+from grace_control.services.safe_filesystem_service import FilesystemReadError, SafeFilesystemService
 
 router = APIRouter()
 _log = GraceLogger("admin")
@@ -375,18 +389,35 @@ def system_health() -> dict:
     return _svc.get_system_health()
 
 
+# START_FUNCTION_CONTRACT
+# name: system_logs
+# purpose: Return a bounded tail from the current project's configured logs
+#          root without reading a process-global temporary directory.
+# inputs: tail — requested line count, bounded to 10..5000.
+# returns: JSON lines, total byte count, source-relative path and truncation.
+# side_effects: Reads only the server-resolved project logs root.
+# emitted_logs: filesystem_read_rejected, filesystem_read_done.
+# error_behavior: Missing/unavailable project logs become an empty safe result.
+# END_FUNCTION_CONTRACT
 @router.get("/api/admin/system/logs")
 def system_logs(tail: int = Query(100, ge=10, le=5000)) -> dict:
-    """Return recent lines from the server log file (JSONL + access logs)."""
-    from pathlib import Path
-    import glob
-    # Find the most recent api log file
-    candidates = sorted(Path("/tmp").glob("api*.log"), key=lambda p: p.stat().st_mtime, reverse=True)
-    if not candidates:
-        return {"lines": [], "source": ""}
-    log_path = candidates[0]
-    lines = log_path.read_text(errors="replace").splitlines()
-    return {"lines": lines[-tail:], "total": len(lines), "source": log_path.name}
+    """Return recent lines from the current project's configured log root."""
+    try:
+        reader = SafeFilesystemService.from_runtime(settings_obj=settings)
+        entries = reader.list_entries("logs")["entries"]
+        files = [entry for entry in entries if entry.get("kind") == "file"]
+        if not files:
+            return {"lines": [], "total": 0, "source": "", "truncated": False}
+        selected = max(files, key=lambda entry: float(entry.get("mtime") or 0))
+        payload = reader.tail_file("logs", str(selected["relative_path"]), lines=tail)
+        return {
+            "lines": str(payload.get("content") or "").splitlines(),
+            "total": int(payload.get("size") or 0),
+            "source": str(selected["relative_path"]),
+            "truncated": bool(payload.get("truncated")),
+        }
+    except (FilesystemReadError, OSError, ValueError):
+        return {"lines": [], "total": 0, "source": "", "truncated": False}
 
 
 # START_FUNCTION_CONTRACT
@@ -447,10 +478,7 @@ def unarchive_feature(feature_id: str) -> dict:
 
 # END_BLOCK_FEATURE_SEARCH_SYSTEM
 
-# START_BLOCK_PLANNED_CONTROL_STUBS
-
-
-from grace_control.services.packet_control_service import retry_packet as _retry, cancel_packet as _cancel, delete_packet as _delete
+# START_BLOCK_PACKET_CONTROLS
 
 
 @router.post("/api/admin/packet/{packet_id}/resume")
@@ -459,17 +487,17 @@ def packet_resume(packet_id: str) -> dict:
     try:
         return _retry(packet_id, actor="admin_ui", reason="manual_retry")
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.post("/api/admin/packet/{packet_id}/delete")
-def packet_delete(packet_id: str, body: dict = {}) -> dict:
+def packet_delete(packet_id: str, body: dict[str, Any] | None = None) -> dict:
     """Delete a packet and its runs."""
-    confirm = body.get("confirm", "")
+    confirm = (body or {}).get("confirm", "")
     try:
         return _delete(packet_id, confirm=confirm, actor="admin_ui")
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.post("/api/admin/packet/{packet_id}/stop")
@@ -478,6 +506,6 @@ def packet_stop(packet_id: str) -> dict:
     try:
         return _cancel(packet_id, actor="admin_ui", reason="manual_cancel")
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
-# END_BLOCK_PLANNED_CONTROL_STUBS
+# END_BLOCK_PACKET_CONTROLS

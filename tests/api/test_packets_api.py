@@ -1,6 +1,7 @@
 """Block H: Packets API tests — 14 tests."""
-import pytest
 import uuid
+
+import pytest
 
 
 def _uniq():
@@ -19,6 +20,13 @@ async def _plan(api, title=None, waves=None):
     return r
 
 
+async def _claim(api, worker_id="w1"):
+    """Claim one packet and return the fencing tokens required on release."""
+    response = await api.post("/api/packets/claim", json={"worker_id": worker_id})
+    assert response.status_code == 200
+    return response.json()["data"]
+
+
 @pytest.mark.asyncio
 async def test_list_empty(api):
     r = await api.get("/api/packets/")
@@ -28,8 +36,7 @@ async def test_list_empty(api):
 
 @pytest.mark.asyncio
 async def test_list_filter_by_state(api):
-    r = await _plan(api)
-    pid = r.json()["data"]["packets"][0]
+    await _plan(api)
     await api.post("/api/workers/register", json={"worker_id": "w1"})
     await api.post("/api/packets/claim", json={"worker_id": "w1"})
 
@@ -91,9 +98,11 @@ async def test_release_accepted(api):
     r = await _plan(api)
     pid = r.json()["data"]["packets"][0]
     await api.post("/api/workers/register", json={"worker_id": "w1"})
-    await api.post("/api/packets/claim", json={"worker_id": "w1"})
+    claim = await _claim(api)
     r = await api.post(f"/api/packets/{pid}/release", json={
-        "worker_id": "w1", "status": "accepted", "result": {"accepted": True}})
+        "worker_id": "w1", "lease_id": claim["lease_id"],
+        "claimed_attempt": claim["claimed_attempt"], "status": "accepted",
+        "result": {"accepted": True}})
     assert r.json()["data"]["state"] == "accepted"
 
 
@@ -102,9 +111,10 @@ async def test_release_rejected(api):
     r = await _plan(api)
     pid = r.json()["data"]["packets"][0]
     await api.post("/api/workers/register", json={"worker_id": "w1"})
-    await api.post("/api/packets/claim", json={"worker_id": "w1"})
+    claim = await _claim(api)
     r = await api.post(f"/api/packets/{pid}/release", json={
-        "worker_id": "w1", "status": "rejected", "result": {}})
+        "worker_id": "w1", "lease_id": claim["lease_id"],
+        "claimed_attempt": claim["claimed_attempt"], "status": "rejected", "result": {}})
     assert r.json()["data"]["state"] == "rejected"
 
 
@@ -114,9 +124,10 @@ async def test_release_unknown_status_is_failed(api):
     r = await _plan(api)
     pid = r.json()["data"]["packets"][0]
     await api.post("/api/workers/register", json={"worker_id": "w1"})
-    await api.post("/api/packets/claim", json={"worker_id": "w1"})
+    claim = await _claim(api)
     r = await api.post(f"/api/packets/{pid}/release", json={
-        "worker_id": "w1", "status": "garbage", "result": {}})
+        "worker_id": "w1", "lease_id": claim["lease_id"],
+        "claimed_attempt": claim["claimed_attempt"], "status": "garbage", "result": {}})
     assert r.status_code == 422
 
 
@@ -135,9 +146,10 @@ async def test_release_blocked(api):
     r = await _plan(api)
     pid = r.json()["data"]["packets"][0]
     await api.post("/api/workers/register", json={"worker_id": "w1"})
-    await api.post("/api/packets/claim", json={"worker_id": "w1"})
+    claim = await _claim(api)
     r = await api.post(f"/api/packets/{pid}/release", json={
-        "worker_id": "w1", "status": "blocked",
+        "worker_id": "w1", "lease_id": claim["lease_id"],
+        "claimed_attempt": claim["claimed_attempt"], "status": "blocked",
         "result": {"accepted": False, "domain_status": "blocked", "reason": "scope impossible"}})
     assert r.status_code == 200
     assert r.json()["data"]["state"] == "blocked_final"
@@ -151,9 +163,11 @@ async def test_cancel_invalid_state_is_400(api):
     r = await _plan(api)
     pid = r.json()["data"]["packets"][0]
     await api.post("/api/workers/register", json={"worker_id": "w1"})
-    await api.post("/api/packets/claim", json={"worker_id": "w1"})
+    claim = await _claim(api)
     await api.post(f"/api/packets/{pid}/release",
-                   json={"worker_id": "w1", "status": "accepted", "result": {"accepted": True}})
+                   json={"worker_id": "w1", "lease_id": claim["lease_id"],
+                         "claimed_attempt": claim["claimed_attempt"],
+                         "status": "accepted", "result": {"accepted": True}})
     # ACCEPTED → CANCELLED not allowed by state machine
     r = await api.post(f"/api/packets/{pid}/cancel", json={"reason": "test"})
     assert r.status_code in (400, 500)

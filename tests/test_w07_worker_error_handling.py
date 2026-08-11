@@ -16,19 +16,18 @@ Tests cover:
 from __future__ import annotations
 
 import asyncio
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from dataclasses import dataclass
+
+import pytest
 
 from grace_control.worker.worker import (
+    ExecutionState,
     Worker,
     WorkerFailureType,
-    ExecutionState,
     classify_worker_failure,
     is_failure_retryable,
     release_status_from_result,
 )
-
 
 # ─── Test 1: Worker timeout releases retryable status ───────────────────────
 
@@ -184,13 +183,15 @@ def test_worker_dead_except_removed_or_unreachable_tested():
     """
     # All failure types must be classifiable
     all_types = list(WorkerFailureType)
-    assert len(all_types) == 6, f"Expected 6 failure types, got: {all_types}"
+    assert len(all_types) == 8, f"Expected 8 failure types, got: {all_types}"
     assert WorkerFailureType.AGENT_TIMEOUT in all_types
     assert WorkerFailureType.AGENT_NONZERO in all_types
     assert WorkerFailureType.SCOPE_VIOLATION in all_types
     assert WorkerFailureType.WORKTREE_PREFLIGHT_FAILED in all_types
     assert WorkerFailureType.STALE_LEASE in all_types
     assert WorkerFailureType.API_ERROR in all_types
+    assert WorkerFailureType.PARALLEL_LEASE_LOST in all_types
+    assert WorkerFailureType.MERGE_LEASE_LOST in all_types
 
     # is_failure_retryable must be deterministic for each type
     retryable_types = [t for t in all_types if is_failure_retryable(t)]
@@ -200,6 +201,10 @@ def test_worker_dead_except_removed_or_unreachable_tested():
         "STALE_LEASE must be non-retryable"
     assert WorkerFailureType.SCOPE_VIOLATION in non_retryable_types, \
         "SCOPE_VIOLATION must be non-retryable"
+    assert WorkerFailureType.PARALLEL_LEASE_LOST in non_retryable_types, \
+        "PARALLEL_LEASE_LOST must be non-retryable"
+    assert WorkerFailureType.MERGE_LEASE_LOST in non_retryable_types, \
+        "MERGE_LEASE_LOST must be non-retryable"
     assert WorkerFailureType.AGENT_TIMEOUT in retryable_types, \
         "AGENT_TIMEOUT must be retryable"
     assert WorkerFailureType.AGENT_NONZERO in retryable_types, \
@@ -501,7 +506,7 @@ async def test_phase_execute_classifies_agent_nonzero_result():
         max_attempts=3,
     )
 
-    result = await worker._phase_execute(claim, exec_state, agent_timeout=600)
+    await worker._phase_execute(claim, exec_state, agent_timeout=600)
 
     # failure_type must be set to agent_nonzero for non-accepted results
     assert exec_state.failure_type == WorkerFailureType.AGENT_NONZERO, \
@@ -543,7 +548,7 @@ async def test_phase_execute_classifies_scope_violation_result():
         max_attempts=3,
     )
 
-    result = await worker._phase_execute(claim, exec_state, agent_timeout=600)
+    await worker._phase_execute(claim, exec_state, agent_timeout=600)
 
     # failure_type must be scope_violation
     assert exec_state.failure_type == WorkerFailureType.SCOPE_VIOLATION, \

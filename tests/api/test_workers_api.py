@@ -41,9 +41,11 @@ async def test_worker_idle_after_release(api):
         "feature_spec": {"title": "T", "waves": [{"title": "W1", "packets": [{"title": "P1", "scope": ["x.py"]}]}]}})
     pid = r.json()["data"]["packets"][0]
     await api.post("/api/workers/register", json={"worker_id": "w1"})
-    await api.post("/api/packets/claim", json={"worker_id": "w1"})
+    claim = (await api.post("/api/packets/claim", json={"worker_id": "w1"})).json()["data"]
     await api.post(f"/api/packets/{pid}/release", json={
-        "worker_id": "w1", "status": "accepted", "result": {"accepted": True}})
+        "worker_id": "w1", "lease_id": claim["lease_id"],
+        "claimed_attempt": claim["claimed_attempt"], "status": "accepted",
+        "result": {"accepted": True}})
     r = await api.get("/api/workers/")
     w = r.json()["data"][0]
     assert w["current_packet_id"] is None

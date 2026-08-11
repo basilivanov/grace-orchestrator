@@ -18,15 +18,13 @@ Asserts:
 15. /api/admin/search returns results by packet title.
 16. /api/admin/system/health returns shape.
 17. /api/admin/system/workers returns shape.
-18. POST /api/admin/packet/{id}/resume|delete|stop → 501 with planned: v2.
-19. /admin returns the SPA shell HTML.
-20. /static/admin.css and /static/admin.js are served.
+18. POST /api/admin/packet/{id}/resume|delete|stop reject an unknown packet.
+19. /admin keeps the no-registry legacy shell available.
+20. /admin.html and its static assets are served.
 21. /openapi.json contains all admin endpoints.
 22. Blocking decision's decided_by is populated from recovery_* event.
 """
-import os
 from datetime import datetime
-from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -34,9 +32,12 @@ from fastapi.testclient import TestClient
 from grace_control.api.main import app
 from grace_control.db import get_db, init_db
 from grace_control.db.schema import (
-    Event, Feature, Packet, PacketRun, Wave,
+    Event,
+    Feature,
+    Packet,
+    PacketRun,
+    Wave,
 )
-
 
 # ── Fixtures ────────────────────────────────────────────────────────────────
 
@@ -401,69 +402,60 @@ def test_system_workers_shape(client):
 # ── 18. planned stubs ──────────────────────────────────────────────────────
 
 
-def test_resume_stub_returns_501(client):
+def test_resume_control_rejects_unknown_packet(client):
     r = client.post("/api/admin/packet/p1/resume")
-    assert r.status_code == 501
-    body = r.json()
-    assert body["error"] == "not_implemented"
-    assert body["planned"] == "v2"
-    assert "doc" in body
+    assert r.status_code == 400
+    assert "not found" in r.json()["detail"].lower()
 
 
-def test_delete_stub_returns_501(client):
-    r = client.post("/api/admin/packet/p1/delete")
-    assert r.status_code == 501
-    body = r.json()
-    assert body["planned"] == "v2"
+def test_delete_control_rejects_unknown_packet(client):
+    r = client.post("/api/admin/packet/p1/delete", json={"confirm": "p1"})
+    assert r.status_code == 400
+    assert "not found" in r.json()["detail"].lower()
 
 
-def test_stop_stub_returns_501(client):
+def test_stop_control_rejects_unknown_packet(client):
     r = client.post("/api/admin/packet/p1/stop")
-    assert r.status_code == 501
-    body = r.json()
-    assert body["planned"] == "v2"
+    assert r.status_code == 400
+    assert "not found" in r.json()["detail"].lower()
 
 
 # ── 19-20. SPA shell + static ─────────────────────────────────────────────
 
 
-def test_admin_shell_serves_html(client):
+def test_admin_legacy_shell_serves_html_without_project_registry(client):
     r = client.get("/admin")
     assert r.status_code == 200
     assert "text/html" in r.headers["content-type"]
     assert "<html" in r.text
-    assert "/static/admin.css" in r.text
-    assert "/static/admin.js" in r.text
+    assert "GRACE Control Plane" in r.text
+    assert 'id="board"' in r.text
 
 
 def test_admin_static_assets_served(client):
+    r = client.get("/admin.html")
+    assert r.status_code == 200
+    assert "/static/admin.css" in r.text
+    assert "/static/admin.js" in r.text
     r = client.get("/static/admin.css")
     assert r.status_code == 200
     assert "text/css" in r.headers["content-type"] or "css" in r.headers.get("content-type", "")
     r = client.get("/static/admin.js")
     assert r.status_code == 200
     body = r.text
-    assert "window.setHealth" in body
-    assert "window.api" in body
-    assert "window.replayStage" in body
+    assert "function loadData" in body
+    assert "function renderDashboard" in body
 
 
-def test_packet_detail_template_smoke(client):
-    """Template smoke: /admin with packet_id shows PIPELINE, CURRENT RUN, and stage rows."""
+def test_packet_detail_shell_smoke(client):
+    """The no-registry shell leaves packet loading to the bounded JS API."""
     _seed_rejected(client)
     r = client.get("/admin?packet_id=p1")
     assert r.status_code == 200
     html = r.text
-    assert "Pipeline" in html
-    assert "CURRENT RUN" in html
-    assert "pipeline-card" in html
-    assert "Materialized" in html
-    assert "Executor selected" in html
-    assert "Coder run" in html
-    assert "Started" in html or "started" in html
-    assert "Duration" in html or "duration" in html
-    assert "Attempt" in html or "attempt" in html
-    assert "Worker" in html or "worker" in html
+    assert 'id="board"' in html
+    assert "Loading pipeline data" in html
+    assert "loadData" in html
 
 
 def test_packet_detail_aggregation_finished_at(client):

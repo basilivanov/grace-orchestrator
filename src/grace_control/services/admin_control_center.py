@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from collections.abc import Mapping, Sequence
 from typing import Any
 from urllib.parse import quote
@@ -188,6 +189,7 @@ def _json_confirmation(value: str | None) -> tuple[dict[str, Any] | str, str | N
         return parsed, None
     return {}, "CONFIRMATION_INVALID"
 _LOG_TAILS = (100, 500, 2000)
+_OPENAPI_CACHE_TTL_SECONDS = 5.0
 
 
 # START_BLOCK_SERVICE
@@ -199,7 +201,8 @@ class AdminControlCenterService:
     # purpose: Bind the UI read model to the accepted cross-project Hub service.
     # inputs: hub — configured AdminCrossProjectService.
     # returns: None.
-    # side_effects: None; no remote request is made during construction.
+    # side_effects: Initializes an app-scoped project-keyed OpenAPI cache;
+    #               no remote request is made during construction.
     # emitted_logs: None.
     # error_behavior: Raises TypeError when hub is not an AdminCrossProjectService.
     # END_FUNCTION_CONTRACT
@@ -207,6 +210,11 @@ class AdminControlCenterService:
         if not isinstance(hub, AdminCrossProjectService):
             raise TypeError("AdminControlCenterService requires the Admin Hub service")
         self._hub = hub
+        cache = getattr(hub, "_admin_openapi_cache", None)
+        if not isinstance(cache, dict):
+            cache = {}
+            hub._admin_openapi_cache = cache
+        self._openapi_cache: dict[str, tuple[float, dict[str, Any]]] = cache
 
     # START_FUNCTION_CONTRACT
     # name: contexts
@@ -885,7 +893,7 @@ class AdminControlCenterService:
         if not context.enabled:
             model["response_error"] = "Project is disabled; API discovery was not requested."
             return model
-        openapi_result = await self._read(project_key, "/openapi.json", operation="openapi")
+        openapi_result = await self._cached_openapi(project_key)
         if not openapi_result.get("ok"):
             model["response_error"] = _capability_message(openapi_result)
             model["error_class"] = openapi_result.get("error_class")
@@ -988,6 +996,27 @@ class AdminControlCenterService:
         else:
             model["response_error"] = result.get("error") or result.get("error_class")
         return model
+
+    # START_FUNCTION_CONTRACT
+    # name: _cached_openapi
+    # purpose: Read and project-key-cache a successful OpenAPI document for a
+    #          short interval so repeated explorer renders do not fan out a
+    #          full schema request on every page refresh.
+    # inputs: project_key — explicit immutable registry key.
+    # returns: Normalized project read result for `/openapi.json`.
+    # side_effects: At most one bounded project API GET per project per TTL.
+    # emitted_logs: Hub-owned project read logs on cache misses.
+    # error_behavior: Transport/capability errors are returned uncached.
+    # END_FUNCTION_CONTRACT
+    async def _cached_openapi(self, project_key: str) -> dict[str, Any]:
+        now = time.monotonic()
+        cached = self._openapi_cache.get(project_key)
+        if cached is not None and now - cached[0] < _OPENAPI_CACHE_TTL_SECONDS:
+            return cached[1]
+        result = await self._read(project_key, "/openapi.json", operation="openapi")
+        if result.get("ok"):
+            self._openapi_cache[project_key] = (now, result)
+        return result
 
     # START_FUNCTION_CONTRACT
     # name: _explorer_shell
