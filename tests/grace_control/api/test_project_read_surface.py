@@ -24,6 +24,7 @@
 #   - function: test_safe_filesystem_api_returns_typed_expected_errors
 #   - function: test_git_read_service_uses_real_repository_and_rejects_unsafe_inputs
 #   - function: test_project_client_retrieves_openapi
+#   - function: test_project_client_rejects_network_path_reference_before_transport
 #   - function: test_optional_capability_is_unavailable_not_broken
 #   - function: test_runtime_identity_separates_grace_and_target_heads
 # END_MODULE_MAP
@@ -447,6 +448,44 @@ def test_project_client_retrieves_openapi():
         assert result.payload["openapi"] == "3.1.0"
 
     asyncio.run(exercise())
+
+
+# START_FUNCTION_CONTRACT
+# name: test_project_client_rejects_network_path_reference_before_transport
+# purpose: Prove a project-local client rejects a network-path reference before
+#          HTTPX can resolve another authority or attach project credentials.
+# inputs: None; uses an in-memory HTTPX transport and a tokenized context.
+# returns: None.
+# side_effects: No transport request is permitted.
+# emitted_logs: None directly; client validation may emit no request log.
+# error_behavior: Fails if the alternate authority reaches the transport.
+# END_FUNCTION_CONTRACT
+def test_project_client_rejects_network_path_reference_before_transport():
+    context = ProjectContext(
+        key="transport",
+        name="Transport",
+        enabled=True,
+        unix_user=None,
+        project_root=Path("/tmp/transport-project"),
+        api_url="http://selected.example.test",
+        api_socket=None,
+        description="",
+        tags=(),
+        api_token="project-secret",
+    )
+    requests: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"unexpected": True})
+
+    async def exercise() -> None:
+        client = ProjectClient(context, transport=httpx.MockTransport(handler))
+        with pytest.raises(ValueError, match="absolute path component"):
+            await client.get_json("//other-host/collect")
+
+    asyncio.run(exercise())
+    assert requests == []
 
 
 # START_FUNCTION_CONTRACT

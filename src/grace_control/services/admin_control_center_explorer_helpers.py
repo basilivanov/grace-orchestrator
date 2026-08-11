@@ -24,6 +24,7 @@
 #   - function: _normalize_worktrees
 #   - function: _lease_views
 #   - function: _stale_base_view
+#   - function: _openapi_path_is_safe
 #   - function: _openapi_operations
 #   - function: _openapi_parameter_definitions
 #   - function: _openapi_request
@@ -38,7 +39,7 @@ import re
 from collections.abc import Mapping
 from pathlib import PurePosixPath
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from grace_control.core.structured_logger import GraceLogger
 
@@ -404,6 +405,29 @@ def _schema_from_responses(responses: Mapping[str, Any]) -> Any:
 
 
 # START_FUNCTION_CONTRACT
+# name: _openapi_path_is_safe
+# purpose: Accept only same-origin OpenAPI path components for the discovered
+#          GET executor and reject URL authorities, fragments and queries.
+# inputs: value — raw OpenAPI path key.
+# returns: True when value is a strict absolute path component.
+# side_effects: None.
+# emitted_logs: None.
+# error_behavior: Malformed, network-path, scheme-bearing, query-bearing or
+#                 fragment-bearing values are rejected.
+# END_FUNCTION_CONTRACT
+def _openapi_path_is_safe(value: Any) -> bool:
+    if not isinstance(value, str) or not value.startswith("/") or value.startswith("//"):
+        return False
+    if "\\" in value or "?" in value or "#" in value:
+        return False
+    try:
+        parsed = urlsplit(value)
+    except ValueError:
+        return False
+    return not parsed.scheme and not parsed.netloc and not parsed.query and not parsed.fragment
+
+
+# START_FUNCTION_CONTRACT
 # name: _openapi_parameter_definitions
 # purpose: Extract bounded scalar path/query parameters that are safe to expose
 #          to the discovered GET executor.
@@ -462,7 +486,7 @@ def _openapi_operations(document: Any) -> tuple[list[dict[str, Any]], set[str]]:
     if not isinstance(paths, Mapping):
         return operations, get_paths
     for raw_path, item in list(paths.items())[:_MAX_OPENAPI_OPERATIONS]:
-        if not isinstance(raw_path, str) or not raw_path.startswith("/") or not isinstance(item, Mapping):
+        if not _openapi_path_is_safe(raw_path) or not isinstance(item, Mapping):
             continue
         common_parameters = item.get("parameters", [])
         for method, operation in item.items():
@@ -511,6 +535,8 @@ def _openapi_request(
     operation: Mapping[str, Any],
     params: Mapping[str, Any],
 ) -> tuple[str, dict[str, Any], str | None]:
+    if not _openapi_path_is_safe(path):
+        return path, {}, "API_PATH_INVALID"
     definitions = operation.get("parameter_definitions", [])
     if not isinstance(definitions, list):
         definitions = []

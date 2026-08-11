@@ -28,6 +28,7 @@
 #   - function: test_stage05_git_worktrees_and_stale_base_are_display_only
 #   - function: test_stage05_leases_mask_tokens_and_raw_keeps_unknown_fields
 #   - function: test_stage05_openapi_is_dynamic_get_only_and_allowlisted
+#   - function: test_stage05_openapi_rejects_network_path_reference
 #   - function: explorer_browser
 #   - function: test_stage05_logs_follow_browser_preserves_scrolled_position
 # END_MODULE_MAP
@@ -128,6 +129,9 @@ class _ExplorerClient(_FakeProjectClient):
                             ],
                             "responses": {"200": {"description": "ok"}},
                         },
+                    },
+                    "//other-host/collect": {
+                        "get": {"summary": "Cross-origin trap", "responses": {"200": {"description": "must not run"}}},
                     },
                     "/api/mutation": {
                         "post": {"summary": "Mutation", "responses": {"200": {"description": "changed"}}},
@@ -281,8 +285,9 @@ async def test_stage05_global_events_and_logs_continue_with_context():
 
 # START_FUNCTION_CONTRACT
 # name: test_stage05_logs_are_source_selectable_and_bounded
-# purpose: Prove explicit source/tail/filter controls and follow-off viewport
-#          semantics are represented without loading complete logs.
+# purpose: Prove explicit source/tail/filter controls, follow-off viewport
+#          semantics and the exact bounded HX Follow response without loading
+#          complete logs.
 # inputs: None.
 # returns: None.
 # side_effects: Performs ASGI GET requests.
@@ -313,6 +318,9 @@ async def test_stage05_logs_are_source_selectable_and_bounded():
     assert "line-97" in all_response.text and "line-98" in all_response.text
     assert "line-97" in api_response.text and "line-98" not in api_response.text
     assert "<html" not in follow_fragment.text and 'hx-trigger="every 5s"' in follow_fragment.text
+    assert follow_fragment.text.count('data-testid="log-filters"') == 1
+    assert follow_fragment.text.count('data-testid="bounded-log-viewer"') == 1
+    assert 'hx-select="#bounded-log-viewer"' in follow_fragment.text
 
 
 # START_FUNCTION_CONTRACT
@@ -467,6 +475,31 @@ async def test_stage05_openapi_is_dynamic_get_only_and_allowlisted():
     assert "API_PATH_NOT_DISCOVERED" in rejected.text
     assert not any(urlsplit(call).path == "/api/not-discovered" for call in explorer.calls)
     assert not any(urlsplit(call).path == "/api/items/{item_id}" for call in explorer.calls)
+
+
+# START_FUNCTION_CONTRACT
+# name: test_stage05_openapi_rejects_network_path_reference
+# purpose: Prove a discovered network-path reference is excluded before it can
+#          enter the API explorer GET allowlist or project request boundary.
+# inputs: None.
+# returns: None.
+# side_effects: Performs one bounded OpenAPI page/read request.
+# emitted_logs: None.
+# error_behavior: Fails if a cross-origin-looking OpenAPI path is executable.
+# END_FUNCTION_CONTRACT
+@pytest.mark.asyncio
+async def test_stage05_openapi_rejects_network_path_reference():
+    explorer = _ExplorerClient("alpha")
+    app, _ = _app(alpha_client=explorer)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://hub.test") as client:
+        response = await client.get(
+            "/admin/p/alpha/api",
+            params={"path": "//other-host/collect", "execute": "true"},
+        )
+    assert response.status_code == 200
+    assert "API_PATH_NOT_DISCOVERED" in response.text
+    assert not any("other-host" in call for call in explorer.calls)
 
 
 # START_FUNCTION_CONTRACT

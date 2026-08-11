@@ -35,6 +35,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -100,7 +101,13 @@ class ProjectClient:
         method: str = "GET",
         payload: Mapping[str, Any] | None = None,
     ) -> ProjectApiResult:
-        if not path or not path.startswith("/"):
+        if not path or not path.startswith("/") or path.startswith("//") or "\\" in path or "#" in path:
+            raise ValueError("project API path must be an absolute path component")
+        try:
+            parsed_path = urlsplit(path)
+        except ValueError as exc:
+            raise ValueError("project API path must be an absolute path component") from exc
+        if parsed_path.scheme or parsed_path.netloc or parsed_path.fragment:
             raise ValueError("project API path must be an absolute path component")
         normalized_method = method.upper()
         attempted_at = _now_iso()
