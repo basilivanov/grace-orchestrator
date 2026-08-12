@@ -1,19 +1,18 @@
 # ############################################################################
-# AI_HEADER: admin_cross_project_query_mixin — cross-project query composition
+# AI_HEADER: admin_cross_project_query_service — cross-project query composition
 # ROLE: Owns event, log and search read-model composition for the Admin Hub.
-#       It delegates project selection, bounded fan-out and transport to the
-#       compatibility facade so callers and tests retain the same seams.
+#       It delegates project selection, bounded fan-out and requests to one
+#       explicit CrossProjectTransport boundary.
 # ############################################################################
 
 # START_MODULE_CONTRACT
 # purpose: Query project-local events, logs and search endpoints and merge their
 #          bounded results into project-attributed Hub DTOs.
-# inputs: ProjectContext values, query filters and facade-provided selection,
+# inputs: ProjectContext values, query filters and explicit CrossProjectTransport selection,
 #          fan-out and request methods.
 # returns: JSON-safe event, log and search pages with ordering, cursors,
 #          coverage and isolated errors.
-# side_effects: Performs bounded project-local read requests through the facade
-#                transport seam.
+# side_effects: Performs bounded project-local read requests through the explicit transport seam.
 # emitted_logs: cross_project_fanout_start, cross_project_project_error,
 #                cross_project_fanout_done.
 # error_behavior: Isolates project failures and malformed responses; invalid
@@ -22,7 +21,7 @@
 
 # START_MODULE_MAP
 # mapping:
-#   - class: AdminCrossProjectQueryMixin
+#   - class: AdminCrossProjectQueryService
 #     methods:
 #       - query_events
 #       - query_logs
@@ -61,6 +60,7 @@ from grace_control.services.admin_cross_project_helpers import (
     _safe_int,
     _search_row,
 )
+from grace_control.services.admin_cross_project_transport import CrossProjectTransport
 
 _log = GraceLogger("admin_cross_project_query")
 
@@ -97,8 +97,22 @@ _AGGREGATED_LOG_SOURCES = {
 
 
 # START_BLOCK_SERVICE
-class AdminCrossProjectQueryMixin:
-    """Event, log and search composition for the cross-project facade."""
+class AdminCrossProjectQueryService:
+    """Event, log and search projection over an explicit transport."""
+
+    # START_FUNCTION_CONTRACT
+    # name: __init__
+    # purpose: Bind event, log and search projection to one explicit
+    #          CrossProjectTransport boundary.
+    # inputs: transport — configured cross-project transport.
+    # returns: None.
+    # side_effects: None; no project request is made during construction.
+    # emitted_logs: None.
+    # error_behavior: Never raises.
+    # END_FUNCTION_CONTRACT
+    def __init__(self, transport: CrossProjectTransport) -> None:
+        self._transport = transport
+
 
     # START_FUNCTION_CONTRACT
     # name: query_events
@@ -131,7 +145,7 @@ class AdminCrossProjectQueryMixin:
     ) -> dict[str, Any]:
         page_limit = _bounded_limit(limit, 200)
         page_offset = _bounded_offset(offset)
-        contexts = self._select_contexts(project)
+        contexts = self._transport.select_contexts(project)
         filters = {
             "entity_id": entity_id,
             "entity_type": entity_type,
@@ -156,9 +170,9 @@ class AdminCrossProjectQueryMixin:
         params = {**filters, "limit": fetch_limit, "offset": 0}
 
         async def query(context: ProjectContext) -> _RemoteResult:
-            return await self._request(context, "/api/events", params)
+            return await self._transport.request(context, "/api/events", params)
 
-        results = await self._fanout(contexts, query, operation="events")
+        results = await self._transport.fanout(contexts, query, operation="events")
         merged: list[dict[str, Any]] = []
         errors: list[dict[str, Any]] = []
         totals: list[int] = []
@@ -263,7 +277,7 @@ class AdminCrossProjectQueryMixin:
         page_limit = _bounded_limit(tail, 2000)
         page_offset = _bounded_offset(0)
         expression = re.compile(regex) if regex else None
-        contexts = self._select_contexts(project)
+        contexts = self._transport.select_contexts(project)
         filters = {
             "source": source,
             "worker": worker,
@@ -313,14 +327,14 @@ class AdminCrossProjectQueryMixin:
             else:
                 log_path = "/api/admin/system/logs"
                 log_params = {"tail": fetch_tail}
-            return await self._request(
+            return await self._transport.request(
                 context,
                 log_path,
                 log_params,
                 operation="logs",
             )
 
-        results = await self._fanout(contexts, query, operation="logs")
+        results = await self._transport.fanout(contexts, query, operation="logs")
         rows: list[dict[str, Any]] = []
         errors: list[dict[str, Any]] = []
         bounded_totals: list[int] = []
@@ -406,12 +420,12 @@ class AdminCrossProjectQueryMixin:
         limit: int = 50,
     ) -> dict[str, Any]:
         result_limit = _bounded_limit(limit, 200)
-        contexts = self._select_contexts(project)
+        contexts = self._transport.select_contexts(project)
 
         async def query(context: ProjectContext) -> _RemoteResult:
-            return await self._request(context, "/api/admin/search", {"q": q, "limit": result_limit}, operation="search")
+            return await self._transport.request(context, "/api/admin/search", {"q": q, "limit": result_limit}, operation="search")
 
-        results = await self._fanout(contexts, query, operation="search")
+        results = await self._transport.fanout(contexts, query, operation="search")
         normalized: list[dict[str, Any]] = []
         errors: list[dict[str, Any]] = []
         for result in results:

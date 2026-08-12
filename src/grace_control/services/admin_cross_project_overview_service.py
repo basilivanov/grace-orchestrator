@@ -1,27 +1,27 @@
 # ############################################################################
-# AI_HEADER: admin_cross_project_overview_mixin — cross-project overview reads
+# AI_HEADER: admin_cross_project_overview_service — cross-project overview reads
 # ROLE: Owns the Admin Hub overview and diagnostics read-model composition.
-#       It delegates selection, fan-out and transport to the compatibility
-#       facade so existing operational seams remain authoritative.
+#       It delegates all project selection, fan-out and requests to one
+#       explicit CrossProjectTransport boundary.
 # ############################################################################
 
 # START_MODULE_CONTRACT
 # purpose: Compose project overview and diagnostic DTOs for the Admin Hub.
-# inputs: ProjectContext values and facade-provided project selection, fan-out
-#          and request methods.
+# inputs: ProjectContext values and explicit CrossProjectTransport selection,
+#          fan-out and request methods.
 # returns: JSON-safe project cards, diagnostic snapshots, aggregates, coverage
 #          and normalized attention items.
 # side_effects: Performs bounded project-local health, diagnostics and event
-#                reads through the facade transport seam.
+#                reads through the explicit transport seam.
 # emitted_logs: cross_project_fanout_start, cross_project_project_error,
 #                cross_project_fanout_done.
 # error_behavior: Isolates project-local failures; unknown project keys and
-#                 invalid explicit selectors follow facade selection behavior.
+#                 invalid explicit selectors follow transport selection behavior.
 # END_MODULE_CONTRACT
 
 # START_MODULE_MAP
 # mapping:
-#   - class: AdminCrossProjectOverviewMixin
+#   - class: AdminCrossProjectOverviewService
 #     methods:
 #       - get_projects_overview
 #       - get_diagnostics
@@ -56,6 +56,7 @@ from grace_control.services.admin_cross_project_helpers import (
     _sort_attention,
     _value,
 )
+from grace_control.services.admin_cross_project_transport import CrossProjectTransport
 
 _log = GraceLogger("admin_cross_project_overview")
 
@@ -78,8 +79,43 @@ _DIAGNOSTIC_FIELDS = frozenset({
 
 
 # START_BLOCK_SERVICE
-class AdminCrossProjectOverviewMixin:
-    """Overview and diagnostics composition for the cross-project facade."""
+class AdminCrossProjectOverviewService:
+    """Overview and diagnostics projection over an explicit transport."""
+
+    # START_FUNCTION_CONTRACT
+    # name: __init__
+    # purpose: Bind overview and diagnostics projection to one explicit
+    #          CrossProjectTransport boundary.
+    # inputs: transport — configured cross-project transport.
+    # returns: None.
+    # side_effects: None; no project request is made during construction.
+    # emitted_logs: None.
+    # error_behavior: Never raises.
+    # END_FUNCTION_CONTRACT
+    def __init__(self, transport: CrossProjectTransport) -> None:
+        self._transport = transport
+
+    # START_FUNCTION_CONTRACT
+    # name: get_attention
+    # purpose: Return the normalized operator attention model for selected
+    #          projects using the overview projection.
+    # inputs: project — optional one-or-many explicit project keys.
+    # returns: Attention, coverage, errors and fetched timestamp DTO.
+    # side_effects: Reads overview/diagnostic project APIs through transport.
+    # emitted_logs: Same bounded fan-out events as get_projects_overview.
+    # error_behavior: Offline and malformed projects become attention/error rows.
+    # END_FUNCTION_CONTRACT
+    async def get_attention(
+        self,
+        project: Sequence[str] | str | None = None,
+    ) -> dict[str, Any]:
+        overview = await self.get_projects_overview(project)
+        return {
+            "attention": overview["attention"],
+            "coverage": overview["coverage"],
+            "errors": overview["errors"],
+            "fetched_at": overview["fetched_at"],
+        }
 
     # START_FUNCTION_CONTRACT
     # name: get_projects_overview
@@ -103,22 +139,22 @@ class AdminCrossProjectOverviewMixin:
     ) -> dict[str, Any]:
         selected_values = _selector_values(project) if project is not None else []
         contexts = (
-            self._registry.list_projects()
+            self._transport.list_contexts()
             if project is None or "all" in selected_values
-            else self._select_contexts(project)
+            else self._transport.select_contexts(project)
         )
 
         async def collect(context: ProjectContext) -> dict[str, Any]:
             if not context.enabled:
                 return self._overview_for_disabled(context)
             health, diagnostics, events = await asyncio.gather(
-                self._request(context, "/api/admin/system/health", operation="health"),
-                self._request(context, "/api/diagnostics/state"),
-                self._request(context, "/api/events", {"limit": 1, "offset": 0}),
+                self._transport.request(context, "/api/admin/system/health", operation="health"),
+                self._transport.request(context, "/api/diagnostics/state"),
+                self._transport.request(context, "/api/events", {"limit": 1, "offset": 0}),
             )
             return self._overview_for_context(context, health, diagnostics, events)
 
-        rows = await self._fanout(contexts, collect, operation="overview")
+        rows = await self._transport.fanout(contexts, collect, operation="overview")
         projects = [row["project"] for row in rows]
         errors = [error for row in rows for error in row["errors"]]
         attention = [item for row in rows for item in row["attention"]]
@@ -150,16 +186,16 @@ class AdminCrossProjectOverviewMixin:
     #                 unknown project keys raise KeyError.
     # END_FUNCTION_CONTRACT
     async def get_diagnostics(self, project: str | None = None) -> dict[str, Any]:
-        contexts = self._select_contexts(project)
+        contexts = self._transport.select_contexts(project)
 
         async def query(context: ProjectContext) -> tuple[_RemoteResult, _RemoteResult]:
             diagnostics, health = await asyncio.gather(
-                self._request(context, "/api/diagnostics/state", operation="diagnostics"),
-                self._request(context, "/api/admin/system/health", operation="health"),
+                self._transport.request(context, "/api/diagnostics/state", operation="diagnostics"),
+                self._transport.request(context, "/api/admin/system/health", operation="health"),
             )
             return diagnostics, health
 
-        results = await self._fanout(contexts, query, operation="diagnostics")
+        results = await self._transport.fanout(contexts, query, operation="diagnostics")
         snapshots: list[dict[str, Any]] = []
         errors: list[dict[str, Any]] = []
         coverage_rows: list[dict[str, bool]] = []
