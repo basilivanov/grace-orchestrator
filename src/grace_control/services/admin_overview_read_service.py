@@ -37,6 +37,7 @@ from sqlalchemy.orm import Session
 
 from grace_control.core.structured_logger import GraceLogger
 from grace_control.db.schema import Event, Feature, Packet, Wave, Worker
+from grace_control.services.admin_read_models import ProjectHealthSnapshot, WorkerSnapshot
 from grace_control.services.git_service import GitService
 
 _log = GraceLogger("admin_overview_read")
@@ -202,22 +203,17 @@ class AdminOverviewReadService:
     # error_behavior: Missing/unreadable metadata leaves safe defaults intact.
     # END_FUNCTION_CONTRACT
     def get_system_health(self) -> dict[str, Any]:
-        health: dict[str, Any] = {
-            "supervisor_alive": False,
-            "api_alive": True,
-            "workers_alive": 0,
-            "db_ok": True,
-            "code_sha": "",
-            "version": "0.1.0",
-        }
+        supervisor_alive = False
+        workers_alive = 0
+        code_sha = ""
         target = environ.get("GRACE_TARGET_DIR", "")
         if target:
             state_path = Path(target) / "supervisor.json"
             if state_path.exists():
                 try:
                     state = json.loads(state_path.read_text())
-                    health["supervisor_alive"] = True
-                    health["workers_alive"] = (
+                    supervisor_alive = True
+                    workers_alive = (
                         len(state.get("workers", []))
                         if isinstance(state.get("workers"), list)
                         else 0
@@ -231,10 +227,17 @@ class AdminOverviewReadService:
                 timeout=2,
             )
             if result.success:
-                health["code_sha"] = result.stdout.strip()
+                code_sha = result.stdout.strip()
         except Exception:
             pass
-        return health
+        return ProjectHealthSnapshot(
+            supervisor_alive=supervisor_alive,
+            api_alive=True,
+            workers_alive=workers_alive,
+            db_ok=True,
+            code_sha=code_sha,
+            version="0.1.0",
+        ).to_dict()
 
     # START_FUNCTION_CONTRACT
     # name: get_workers
@@ -259,14 +262,14 @@ class AdminOverviewReadService:
     # END_FUNCTION_CONTRACT
     @staticmethod
     def _worker_to_dict(worker: Worker) -> dict[str, Any]:
-        return {
-            "id": worker.id,
-            "status": worker.status,
-            "current_packet_id": worker.current_packet_id,
-            "last_heartbeat": _iso(worker.last_heartbeat),
-            "started_at": _iso(worker.started_at),
-            "current_elapsed": _elapsed_seconds(worker.last_heartbeat, None),
-        }
+        return WorkerSnapshot(
+            id=worker.id,
+            status=worker.status,
+            current_packet_id=worker.current_packet_id,
+            last_heartbeat=_iso(worker.last_heartbeat),
+            started_at=_iso(worker.started_at),
+            current_elapsed=_elapsed_seconds(worker.last_heartbeat, None),
+        ).to_dict()
 
 
 # END_BLOCK_SERVICE

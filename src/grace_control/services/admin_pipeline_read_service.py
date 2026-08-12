@@ -37,9 +37,45 @@ from sqlalchemy.orm import Session
 from grace_control.core.structured_logger import GraceLogger
 from grace_control.db.schema import Event, Packet, PacketRun
 from grace_control.services.admin_overview_read_service import _iso, _packet_state
+from grace_control.services.admin_read_models import PipelineStageView
 from grace_control.services.admin_read_ports import ArtifactEvidenceReader
 
 _log = GraceLogger("admin_pipeline_read")
+
+
+# START_BLOCK_HELPERS
+def _pipeline_stage(
+    key: str,
+    label: str,
+    status: str,
+    started_at: str | None,
+    finished_at: str | None,
+    duration_ms: int | None,
+    meta: str,
+    target_tab: str,
+) -> dict[str, Any]:
+    # START_FUNCTION_CONTRACT
+    # name: _pipeline_stage
+    # purpose: Serialize one canonical operator pipeline stage card.
+    # inputs: Stable stage-card scalar fields from pipeline derivation.
+    # returns: Plain dictionary with the unchanged eight-key stage shape.
+    # side_effects: None.
+    # emitted_logs: None.
+    # error_behavior: Dataclass construction errors propagate for invalid input.
+    # END_FUNCTION_CONTRACT
+    return PipelineStageView(
+        key=key,
+        label=label,
+        status=status,
+        started_at=started_at,
+        finished_at=finished_at,
+        duration_ms=duration_ms,
+        meta=meta,
+        target_tab=target_tab,
+    ).to_dict()
+
+
+# END_BLOCK_HELPERS
 
 
 # START_BLOCK_SERVICE
@@ -97,52 +133,30 @@ class AdminPipelineReadService:
         architect_start = _iso(architect_run.started_at) if architect_run and architect_run.started_at else created_at
         architect_finish = _iso(architect_run.finished_at) if architect_run and architect_run.finished_at else created_at
         architect_status = "running" if architect_live else (architect_run.status if architect_run else "done")
-        architect_stage = {
-            "key": "architect",
-            "label": "Architect",
-            "status": architect_status,
-            "started_at": architect_start,
-            "finished_at": architect_finish,
-            "duration_ms": architect_duration,
-            "meta": "🟢 LIVE" if architect_live else "",
-            "target_tab": "spec",
-        }
+        architect_stage = _pipeline_stage(
+            "architect", "Architect", architect_status, architect_start,
+            architect_finish, architect_duration,
+            "🟢 LIVE" if architect_live else "", "spec",
+        )
         context_live = self._planning_run_is_live(context_run)
         context_duration = (context_run.duration_ms or 0) if context_run else 0
         context_start = _iso(context_run.started_at) if context_run and context_run.started_at else created_at
         context_finish = _iso(context_run.finished_at) if context_run and context_run.finished_at else (run_started or created_at)
         context_status = "running" if context_live else (context_run.status if context_run else ("done" if has_run else "pending"))
-        context_stage = {
-            "key": "context_builder",
-            "label": "Context Builder",
-            "status": context_status,
-            "started_at": context_start,
-            "finished_at": context_finish,
-            "duration_ms": context_duration,
-            "meta": "🟢 LIVE" if context_live else "",
-            "target_tab": "spec",
-        }
-        materialized_stage = {
-            "key": "materialized",
-            "label": "Materialize",
-            "status": "done",
-            "started_at": created_at,
-            "finished_at": created_at,
-            "duration_ms": 0,
-            "meta": packet.slug or "",
-            "target_tab": "spec",
-        }
+        context_stage = _pipeline_stage(
+            "context_builder", "Context Builder", context_status, context_start,
+            context_finish, context_duration,
+            "🟢 LIVE" if context_live else "", "spec",
+        )
+        materialized_stage = _pipeline_stage(
+            "materialized", "Materialize", "done", created_at, created_at, 0,
+            packet.slug or "", "spec",
+        )
         if last_run and last_run.executor_id:
-            executor_stage = {
-                "key": "executor",
-                "label": "Executor",
-                "status": "done",
-                "started_at": run_started,
-                "finished_at": run_started,
-                "duration_ms": 0,
-                "meta": last_run.executor_id,
-                "target_tab": "runs",
-            }
+            executor_stage = _pipeline_stage(
+                "executor", "Executor", "done", run_started, run_started, 0,
+                last_run.executor_id, "runs",
+            )
         else:
             first_claim = next((event for event in events if event.event_type == "packet_claimed"), None)
             executor = (
@@ -150,16 +164,11 @@ class AdminPipelineReadService:
                 if first_claim and first_claim.payload_json
                 else ""
             )
-            executor_stage = {
-                "key": "executor",
-                "label": "Executor",
-                "status": "done" if executor else "skipped",
-                "started_at": _iso(first_claim.timestamp) if first_claim else None,
-                "finished_at": _iso(first_claim.timestamp) if first_claim else None,
-                "duration_ms": 0,
-                "meta": executor,
-                "target_tab": "runs",
-            }
+            claim_timestamp = _iso(first_claim.timestamp) if first_claim else None
+            executor_stage = _pipeline_stage(
+                "executor", "Executor", "done" if executor else "skipped",
+                claim_timestamp, claim_timestamp, 0, executor, "runs",
+            )
         coder_stage = self._stage_coder_run(events, last_run, packet)
         coder_stage["target_tab"] = "runs"
         evidence = (
@@ -429,23 +438,20 @@ class AdminPipelineReadService:
                 architect_finish = _iso(architect_run.finished_at) if architect_run.finished_at else created_iso
                 architect_live = self._planning_run_is_live(architect_run)
                 architect_status = "running" if architect_live else architect_run.status
-        stages.append({
-            "key": "context_builder", "label": "Context Builder",
-            "status": context_status or ("pending" if is_planning else ("done" if has_run else "pending")),
-            "started_at": context_start, "finished_at": context_finish,
-            "duration_ms": context_duration, "meta": "🟢 LIVE" if context_live else "",
-            "target_tab": "spec",
-        })
-        stages.append({
-            "key": "architect", "label": "Architect",
-            "status": architect_status or ("running" if is_planning else "done"),
-            "started_at": architect_start, "finished_at": architect_finish,
-            "duration_ms": architect_duration, "meta": "🟢 LIVE" if architect_live else "",
-            "target_tab": "spec",
-        })
+        stages.append(_pipeline_stage(
+            "context_builder", "Context Builder",
+            context_status or ("pending" if is_planning else ("done" if has_run else "pending")),
+            context_start, context_finish, context_duration,
+            "🟢 LIVE" if context_live else "", "spec",
+        ))
+        stages.append(_pipeline_stage(
+            "architect", "Architect", architect_status or ("running" if is_planning else "done"),
+            architect_start, architect_finish, architect_duration,
+            "🟢 LIVE" if architect_live else "", "spec",
+        ))
         stages.extend([
-            {"key": "materialized", "label": "Materialize", "status": "done", "started_at": created_iso, "finished_at": created_iso, "duration_ms": 0, "meta": packet.slug or "", "target_tab": "spec"},
-            {"key": "executor", "label": "Executor", "status": "done" if executor else "skipped", "started_at": run_started, "finished_at": run_started, "duration_ms": 0, "meta": executor, "target_tab": "runs"},
+            _pipeline_stage("materialized", "Materialize", "done", created_iso, created_iso, 0, packet.slug or "", "spec"),
+            _pipeline_stage("executor", "Executor", "done" if executor else "skipped", run_started, run_started, 0, executor, "runs"),
         ])
         if not has_run:
             coder_status = "pending"
@@ -457,25 +463,25 @@ class AdminPipelineReadService:
             coder_status = "done"
         else:
             coder_status = "pending"
-        stages.append({
-            "key": "coder_run", "label": "Coder", "status": coder_status,
-            "started_at": run_started, "finished_at": run_finished,
-            "duration_ms": run_duration if coder_status in ("done", "failed", "running") else 0,
-            "meta": (last_run.worker_id or "") if last_run else "", "target_tab": "runs",
-        })
+        stages.append(_pipeline_stage(
+            "coder_run", "Coder", coder_status, run_started, run_finished,
+            run_duration if coder_status in ("done", "failed", "running") else 0,
+            (last_run.worker_id or "") if last_run else "", "runs",
+        ))
         stages.extend([
-            {"key": key, "label": label, "status": "skipped" if profile in ("FAST", "NORMAL") else "pending", "started_at": None, "finished_at": None, "duration_ms": 0, "meta": "", "target_tab": "evidence"}
+            _pipeline_stage(key, label, "skipped" if profile in ("FAST", "NORMAL") else "pending", None, None, 0, "", "evidence")
             for key, label in (("t0", "T0 Lint"), ("t1", "T1 Tests"), ("t2", "T2 E2E"))
         ])
         if profile == "STRICT":
             verifier_status = "running" if state == "running" else ("done" if state in ("accepted", "merged") else "pending")
-            stages.append({"key": "verifier", "label": "Verifier", "status": verifier_status, "started_at": None, "finished_at": None, "duration_ms": 0, "meta": "STRICT profile active", "target_tab": "evidence"})
+            stages.append(_pipeline_stage("verifier", "Verifier", verifier_status, None, None, 0, "STRICT profile active", "evidence"))
         else:
-            stages.append({"key": "verifier", "label": "Verifier", "status": "skipped", "started_at": None, "finished_at": None, "duration_ms": 0, "meta": "", "target_tab": "evidence"})
+            stages.append(_pipeline_stage("verifier", "Verifier", "skipped", None, None, 0, "", "evidence"))
         reviewer_status = "done" if state in ("merged", "accepted") else ("failed" if state in ("rejected", "failed", "blocked", "blocked_recoverable", "blocked_final") else "pending")
-        stages.append({"key": "reviewer", "label": "Reviewer", "status": reviewer_status, "started_at": run_finished, "finished_at": run_finished, "duration_ms": 0, "meta": "", "target_tab": "events"})
+        stages.append(_pipeline_stage("reviewer", "Reviewer", reviewer_status, run_finished, run_finished, 0, "", "events"))
         merge_status = "done" if state in ("merged", "accepted") else ("skipped" if state in ("rejected", "failed", "blocked", "blocked_recoverable", "blocked_final") else "pending")
-        stages.append({"key": "merge", "label": "Merge", "status": merge_status, "started_at": updated_iso if merge_status == "done" else None, "finished_at": updated_iso if merge_status == "done" else None, "duration_ms": 0, "meta": _packet_state(packet) if merge_status == "done" else "", "target_tab": "events"})
+        merge_time = updated_iso if merge_status == "done" else None
+        stages.append(_pipeline_stage("merge", "Merge", merge_status, merge_time, merge_time, 0, _packet_state(packet) if merge_status == "done" else "", "events"))
         return {
             "stages": stages,
             "has_started": has_run,
@@ -582,11 +588,9 @@ class AdminPipelineReadService:
             if event.event_type == "packet_claimed":
                 last_claim_index = index
         if last_claim_index is None:
-            return {
-                "key": "coder_run", "label": "Coder run", "status": "pending",
-                "started_at": None, "finished_at": None, "duration_ms": 0,
-                "meta": "", "target_tab": "runs",
-            }
+            return _pipeline_stage(
+                "coder_run", "Coder run", "pending", None, None, 0, "", "runs",
+            )
         claim_event = events[last_claim_index]
         next_event = next(
             (
@@ -620,11 +624,10 @@ class AdminPipelineReadService:
             meta = (claim_event.payload_json or {}).get("worker_id", "") or ""
         if not meta:
             meta = f"attempt {packet.attempt_count}/{packet.max_attempts}"
-        return {
-            "key": "coder_run", "label": "Coder run", "status": status,
-            "started_at": started_at, "finished_at": finished_at,
-            "duration_ms": duration_ms, "meta": meta, "target_tab": "runs",
-        }
+        return _pipeline_stage(
+            "coder_run", "Coder run", status, started_at, finished_at,
+            duration_ms, meta, "runs",
+        )
 
     def _stage_acceptance(
         self,
@@ -643,11 +646,9 @@ class AdminPipelineReadService:
                     status, meta = "skipped", "no separate run (NORMAL profile)"
                 else:
                     status, meta = "pending", "no command configured"
-                output.append({
-                    "key": stage_name, "label": label, "status": status,
-                    "started_at": None, "finished_at": None, "duration_ms": 0,
-                    "meta": meta, "target_tab": "evidence",
-                })
+                output.append(_pipeline_stage(
+                    stage_name, label, status, None, None, 0, meta, "evidence",
+                ))
                 continue
             evidence_status = (evidence.get("status") or "").lower()
             if evidence_status == "passed":
@@ -661,12 +662,11 @@ class AdminPipelineReadService:
                 meta_parts.append(str(evidence["summary"])[:60])
             if evidence.get("blocking_issues"):
                 meta_parts.append(f"{len(evidence['blocking_issues'])} blocking")
-            output.append({
-                "key": stage_name, "label": label, "status": status,
-                "started_at": None, "finished_at": None, "duration_ms": 0,
-                "meta": " · ".join(meta_parts) if meta_parts else evidence_status or "",
-                "target_tab": "evidence",
-            })
+            output.append(_pipeline_stage(
+                stage_name, label, status, None, None, 0,
+                " · ".join(meta_parts) if meta_parts else evidence_status or "",
+                "evidence",
+            ))
         return output
 
     def _stage_verifier(
@@ -677,31 +677,29 @@ class AdminPipelineReadService:
         packet: Packet,
     ) -> dict[str, Any]:
         if acceptance_profile != "STRICT":
-            return {
-                "key": "verifier", "label": "Evidence verifier", "status": "skipped",
-                "started_at": None, "finished_at": None, "duration_ms": 0,
-                "meta": f"not in profile ({acceptance_profile})", "target_tab": "evidence",
-            }
+            return _pipeline_stage(
+                "verifier", "Evidence verifier", "skipped", None, None, 0,
+                f"not in profile ({acceptance_profile})", "evidence",
+            )
         verifier_events = [
             event for event in events
             if (event.payload_json or {}).get("component", "") == "evidence_service"
             or "verifier" in (event.event_type or "").lower()
         ]
         if not verifier_events:
-            return {
-                "key": "verifier", "label": "Evidence verifier", "status": "pending",
-                "started_at": None, "finished_at": None, "duration_ms": 0,
-                "meta": "STRICT profile active", "target_tab": "evidence",
-            }
+            return _pipeline_stage(
+                "verifier", "Evidence verifier", "pending", None, None, 0,
+                "STRICT profile active", "evidence",
+            )
         last_event = verifier_events[-1]
-        return {
-            "key": "verifier", "label": "Evidence verifier",
-            "status": "done" if _packet_state(packet) != "running" else "running",
-            "started_at": _iso(last_event.timestamp), "finished_at": _iso(last_event.timestamp),
-            "duration_ms": 0,
-            "meta": (last_event.payload_json or {}).get("reason", "") or last_event.event_type,
-            "target_tab": "evidence",
-        }
+        event_time = _iso(last_event.timestamp)
+        return _pipeline_stage(
+            "verifier", "Evidence verifier",
+            "done" if _packet_state(packet) != "running" else "running",
+            event_time, event_time, 0,
+            (last_event.payload_json or {}).get("reason", "") or last_event.event_type,
+            "evidence",
+        )
 
     def _stage_reviewer(
         self,
@@ -716,11 +714,9 @@ class AdminPipelineReadService:
         ]
         if not review_events:
             meta = "not started" if _packet_state(packet) in ("draft", "ready") else ""
-            return {
-                "key": "reviewer", "label": "Reviewer gate", "status": "pending",
-                "started_at": None, "finished_at": None, "duration_ms": 0,
-                "meta": meta, "target_tab": "events",
-            }
+            return _pipeline_stage(
+                "reviewer", "Reviewer gate", "pending", None, None, 0, meta, "events",
+            )
         last_event = review_events[-1]
         reason = (last_event.payload_json or {}).get("reason", "") or ""
         decision = reason.split(":", 1)[-1].upper() if ":" in reason else reason.upper()
@@ -730,11 +726,11 @@ class AdminPipelineReadService:
             status = "failed"
         else:
             status = "pending"
-        return {
-            "key": "reviewer", "label": "Reviewer gate", "status": status,
-            "started_at": _iso(last_event.timestamp), "finished_at": _iso(last_event.timestamp),
-            "duration_ms": 0, "meta": decision or last_event.event_type, "target_tab": "events",
-        }
+        event_time = _iso(last_event.timestamp)
+        return _pipeline_stage(
+            "reviewer", "Reviewer gate", status, event_time, event_time, 0,
+            decision or last_event.event_type, "events",
+        )
 
     def _stage_merge(
         self,
@@ -743,28 +739,22 @@ class AdminPipelineReadService:
         packet: Packet,
     ) -> dict[str, Any]:
         if _packet_state(packet) in ("merged", "accepted"):
-            return {
-                "key": "merge", "label": "Merge", "status": "done",
-                "started_at": _iso(packet.updated_at), "finished_at": _iso(packet.updated_at),
-                "duration_ms": 0, "meta": _packet_state(packet), "target_tab": "runs",
-            }
+            packet_time = _iso(packet.updated_at)
+            return _pipeline_stage(
+                "merge", "Merge", "done", packet_time, packet_time, 0,
+                _packet_state(packet), "runs",
+            )
         if _packet_state(packet) in ("rejected", "failed"):
-            return {
-                "key": "merge", "label": "Merge", "status": "skipped",
-                "started_at": None, "finished_at": None, "duration_ms": 0,
-                "meta": "not reached", "target_tab": "events",
-            }
+            return _pipeline_stage(
+                "merge", "Merge", "skipped", None, None, 0, "not reached", "events",
+            )
         if _packet_state(packet) in ("blocked", "blocked_recoverable", "blocked_final"):
-            return {
-                "key": "merge", "label": "Merge", "status": "skipped",
-                "started_at": None, "finished_at": None, "duration_ms": 0,
-                "meta": "blocked", "target_tab": "events",
-            }
-        return {
-            "key": "merge", "label": "Merge", "status": "pending",
-            "started_at": None, "finished_at": None, "duration_ms": 0,
-            "meta": "", "target_tab": "events",
-        }
+            return _pipeline_stage(
+                "merge", "Merge", "skipped", None, None, 0, "blocked", "events",
+            )
+        return _pipeline_stage(
+            "merge", "Merge", "pending", None, None, 0, "", "events",
+        )
 
 
 # END_BLOCK_STAGE_HELPERS

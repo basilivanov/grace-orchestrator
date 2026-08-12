@@ -37,6 +37,7 @@ from urllib.parse import quote, urlencode
 
 from grace_control.config.project_registry import ProjectContext
 from grace_control.core.structured_logger import GraceLogger
+from grace_control.services.admin_read_models import AttentionItem, CrossProjectCoverage
 from grace_control.services.project_client import ProjectApiResult
 
 _log = GraceLogger("admin_cross_project_helpers")
@@ -620,18 +621,18 @@ def _attention_item(
     reason: str,
     timestamp: Any,
 ) -> dict[str, Any]:
-    return {
-        "severity": severity,
-        "project_key": context.key,
-        "project_name": context.name,
-        "kind": kind,
-        "entity_type": entity_type,
-        "entity_id": entity_id,
-        "title": title,
-        "reason": reason,
-        "timestamp": timestamp,
-        "detail_url": _entity_url(context.key, entity_type or "project", entity_id or context.key),
-    }
+    return AttentionItem(
+        severity=severity,
+        project_key=context.key,
+        project_name=context.name,
+        kind=kind,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        title=title,
+        reason=reason,
+        timestamp=timestamp,
+        detail_url=_entity_url(context.key, entity_type or "project", entity_id or context.key),
+    ).to_dict()
 
 
 def _blocked_or_failed(state: str) -> bool:
@@ -670,14 +671,14 @@ def _coverage(rows: Sequence[Mapping[str, Any]], total: int) -> dict[str, Any]:
     partial = sum(1 for row in rows if row.get("partial"))
     disabled = sum(1 for row in rows if row.get("disabled"))
     failed = max(total - responded - disabled, 0)
-    return {
-        "projects_total": total,
-        "projects_responded": responded,
-        "projects_failed": failed,
-        "projects_disabled": disabled,
-        "projects_partial": partial,
-        "partial": partial > 0 or failed > 0,
-    }
+    return CrossProjectCoverage(
+        projects_total=total,
+        projects_responded=responded,
+        projects_failed=failed,
+        projects_disabled=disabled,
+        projects_partial=partial,
+        partial=partial > 0 or failed > 0,
+    ).to_dict()
 
 
 def _coverage_from_results(results: Sequence[_RemoteResult], total: int) -> dict[str, int]:

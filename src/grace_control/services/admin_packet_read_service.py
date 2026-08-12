@@ -39,6 +39,7 @@ from grace_control.services.admin_overview_read_service import (
     _iso,
     _packet_state,
 )
+from grace_control.services.admin_read_models import PacketRunSummary
 from grace_control.services.admin_read_ports import PacketSessionReader
 
 _log = GraceLogger("admin_packet_read")
@@ -56,6 +57,36 @@ def _packet_spec_value(packet: Packet, key: str, default: Any) -> Any:
     spec = packet.spec_json if isinstance(packet.spec_json, dict) else {}
     value = spec.get(key, default)
     return value if isinstance(value, type(default)) else default
+
+
+def _packet_run_summary(run: PacketRun) -> dict[str, Any]:
+    # START_FUNCTION_CONTRACT
+    # name: _packet_run_summary
+    # purpose: Serialize one rich PacketRun row through the bounded read model.
+    # inputs: run — persisted PacketRun ORM row.
+    # returns: Plain dictionary preserving the packet-runs endpoint shape.
+    # side_effects: None.
+    # emitted_logs: None.
+    # error_behavior: Propagates missing ORM attributes as the prior mapper did.
+    # END_FUNCTION_CONTRACT
+    return PacketRunSummary(
+        run_id=run.id,
+        run_number=run.run_number,
+        worker_id=run.worker_id or "",
+        executor_id=run.executor_id or "",
+        model=run.model or "",
+        status=run.status,
+        duration_ms=run.duration_ms or 0,
+        started_at=_iso(run.started_at),
+        finished_at=_iso(run.finished_at),
+        elapsed_seconds=_elapsed_seconds(run.started_at, run.finished_at),
+        is_running=_is_running(run.status, run.started_at, run.finished_at),
+        tokens_in=run.tokens_in,
+        tokens_out=run.tokens_out,
+        cost_usd=float(run.cost_usd) if run.cost_usd is not None else None,
+        base_sha=run.base_sha,
+        integration_base_sha=run.integration_base_sha,
+    ).to_dict()
 
 
 # END_BLOCK_HELPERS
@@ -292,27 +323,7 @@ class AdminPacketReadService:
             .all()
         )
         return {
-            "runs": [
-                {
-                    "run_id": run.id,
-                    "run_number": run.run_number,
-                    "worker_id": run.worker_id or "",
-                    "executor_id": run.executor_id or "",
-                    "model": run.model or "",
-                    "status": run.status,
-                    "duration_ms": run.duration_ms or 0,
-                    "started_at": _iso(run.started_at),
-                    "finished_at": _iso(run.finished_at),
-                    "elapsed_seconds": _elapsed_seconds(run.started_at, run.finished_at),
-                    "is_running": _is_running(run.status, run.started_at, run.finished_at),
-                    "tokens_in": run.tokens_in,
-                    "tokens_out": run.tokens_out,
-                    "cost_usd": float(run.cost_usd) if run.cost_usd is not None else None,
-                    "base_sha": run.base_sha,
-                    "integration_base_sha": run.integration_base_sha,
-                }
-                for run in runs
-            ]
+            "runs": [_packet_run_summary(run) for run in runs]
         }
 
     # START_FUNCTION_CONTRACT

@@ -41,6 +41,7 @@ from grace_control.services.admin_cross_project_helpers import (
     _aggregate_snapshots,
     _attention_for_project,
     _attention_for_snapshot,
+    _attention_item,
     _coverage,
     _data_mapping,
     _error_dto,
@@ -48,7 +49,6 @@ from grace_control.services.admin_cross_project_helpers import (
     _health_status,
     _malformed_error,
     _now_iso,
-    _project_url,
     _RemoteResult,
     _safe_json,
     _selector_values,
@@ -347,18 +347,16 @@ class AdminCrossProjectOverviewService:
     # error_behavior: Never raises.
     # END_FUNCTION_CONTRACT
     def _overview_for_disabled(self, context: ProjectContext) -> dict[str, Any]:
-        item = {
-            "severity": "info",
-            "project_key": context.key,
-            "project_name": context.name,
-            "kind": "disabled",
-            "entity_type": "project",
-            "entity_id": context.key,
-            "title": "Project is disabled",
-            "reason": "registry entry is disabled",
-            "timestamp": None,
-            "detail_url": _project_url(context.key),
-        }
+        item = _attention_item(
+            context,
+            "info",
+            "disabled",
+            "project",
+            context.key,
+            "Project is disabled",
+            "registry entry is disabled",
+            None,
+        )
         return {
             "project": {
                 "project_key": context.key,
