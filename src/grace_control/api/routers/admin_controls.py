@@ -1,7 +1,7 @@
 # ############################################################################
 # AI_HEADER: admin_controls_router — authorized Hub and project-local controls
-# ROLE: Binds the Stage 06 single-project mutation proxy to a narrow local
-#       control dispatcher, audit events and maintenance/OpenAPI safety gates.
+# ROLE: Registers the stable Stage 06 route surface and keeps historical
+#       helper/import seams while coherent owner modules execute route bodies.
 # ############################################################################
 
 # START_MODULE_CONTRACT
@@ -23,7 +23,9 @@
 #     routes:
 #       - GET /api/admin-hub/projects/{project_key}/controls
 #       - POST /api/admin-hub/projects/{project_key}/controls
+#       - POST /api/admin-hub/projects/{project_key}/control
 #       - POST /api/admin-hub/projects/{project_key}/openapi-control
+#       - POST /api/admin-hub/projects/{project_key}/api-control
 #       - GET /api/admin-hub/projects/{project_key}/maintenance
 #       - GET /api/admin/maintenance/snapshot
 #       - POST /api/admin/control/action
@@ -41,6 +43,51 @@ import httpx
 from fastapi import APIRouter, Body, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from grace_control.api.routers.admin_controls_hub import (
+    project_control_impl as _project_control_impl,
+)
+from grace_control.api.routers.admin_controls_hub import (
+    project_controls_impl as _project_controls_impl,
+)
+from grace_control.api.routers.admin_controls_hub import (
+    project_maintenance_impl as _project_maintenance_impl,
+)
+from grace_control.api.routers.admin_controls_hub import (
+    project_openapi_control_impl as _project_openapi_control_impl,
+)
+from grace_control.api.routers.admin_controls_local import (
+    _LOCAL_ACTIONS,
+)
+from grace_control.api.routers.admin_controls_local import (
+    _unavailable_result as _local_unavailable_result,
+)
+from grace_control.api.routers.admin_controls_local import (
+    dispatch_local_action_impl as _dispatch_local_action_impl,
+)
+from grace_control.api.routers.admin_controls_local import (
+    legacy_admin_action_impl as _legacy_admin_action_impl,
+)
+from grace_control.api.routers.admin_controls_local import (
+    local_control_action_impl as _local_control_action_impl,
+)
+from grace_control.api.routers.admin_controls_maintenance import (
+    local_maintenance_cleanup_impl as _local_maintenance_cleanup_impl,
+)
+from grace_control.api.routers.admin_controls_maintenance import (
+    local_maintenance_snapshot_impl as _local_maintenance_snapshot_impl,
+)
+from grace_control.api.routers.admin_controls_openapi import (
+    _DANGEROUS_OPENAPI_PREFIXES,
+)
+from grace_control.api.routers.admin_controls_openapi import (
+    decode_response as _decode_response_impl,
+)
+from grace_control.api.routers.admin_controls_openapi import (
+    local_openapi_control_impl as _local_openapi_control_impl,
+)
+from grace_control.api.routers.admin_controls_openapi import (
+    openapi_operation_allowed as _openapi_operation_allowed_impl,
+)
 from grace_control.core.event_recorder import record_event
 from grace_control.core.structured_logger import GraceLogger
 from grace_control.services.admin_control_local_helpers import (
@@ -65,16 +112,6 @@ from grace_control.services.maintenance_service import MaintenanceService
 
 router = APIRouter()
 _log = GraceLogger("admin_controls_router")
-_LOCAL_ACTIONS = frozenset({
-    "retry", "resume", "cancel", "stop", "archive", "unarchive", "merge",
-    "cleanup", "restart_api", "restart_workers", "restart_all", "reload",
-})
-_DANGEROUS_OPENAPI_PREFIXES = (
-    "/api/admin/control",
-    "/api/admin/lifecycle",
-    "/api/packets/claim",
-    "/api/admin/shutdown",
-)
 _maintenance_control_service = AdminMaintenanceControlService()
 
 
@@ -95,17 +132,15 @@ async def project_controls(
     entity_type: str | None = None,
     entity_id: str | None = None,
 ) -> dict[str, Any]:
-    service = _mutation_service(request)
-    try:
-        return await service.available_controls(
-            project_key,
-            entity_type=entity_type,
-            entity_id=entity_id,
-        )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="project not found") from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return await _project_controls_impl(
+        request,
+        project_key,
+        entity_type,
+        entity_id,
+        mutation_service=_mutation_service,
+    )
+
+
 # START_FUNCTION_CONTRACT
 # name: project_control
 # purpose: Execute one authorized, confirmed mutation against exactly one
@@ -124,24 +159,20 @@ async def project_control(
     project_key: str,
     body: dict[str, Any] = Body(default_factory=dict),
 ) -> JSONResponse:
-    require_control_request(request)
-    _log.info("admin_control_request", project_key=project_key)
-    service = _mutation_service(request)
-    payload = _control_body(body, request)
-    try:
-        result = await service.execute(
-            project_key,
-            action=str(payload.get("action") or ""),
-            entity_type=str(payload.get("entity_type") or "project"),
-            entity_id=_optional_text(payload.get("entity_id")),
-            confirmation=payload.get("confirmation"),
-            parameters=payload.get("parameters"),
-            actor=_actor(request),
-            request_id=_optional_text(payload.get("request_id")),
-        )
-    except (KeyError, ValueError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return _mutation_response(result)
+    return await _project_control_impl(
+        request,
+        project_key,
+        body,
+        require_control_request=require_control_request,
+        mutation_service=_mutation_service,
+        control_body=_control_body,
+        optional_text=_optional_text,
+        actor=_actor,
+        mutation_response=_mutation_response,
+        log_info=_log.info,
+    )
+
+
 # START_FUNCTION_CONTRACT
 # name: project_openapi_control
 # purpose: Execute only a selected project's exact discovered non-GET OpenAPI
@@ -159,28 +190,16 @@ async def project_openapi_control(
     project_key: str,
     body: dict[str, Any] = Body(default_factory=dict),
 ) -> JSONResponse:
-    require_control_request(request)
-    if body.get("control_mode") is not True:
-        return JSONResponse(
-            status_code=400,
-            content={"ok": False, "error_code": "API_CONTROL_MODE_REQUIRED",
-                     "message": "Enable control actions before executing mutations"},
-        )
-    service = _mutation_service(request)
-    try:
-        result = await service.execute_openapi(
-            project_key,
-            path=str(body.get("path") or ""),
-            method=str(body.get("method") or ""),
-            confirmation=body.get("confirmation"),
-            parameters=body.get("parameters"),
-            body=body.get("body"),
-            actor=_actor(request),
-            request_id=_optional_text(body.get("request_id")),
-        )
-    except (KeyError, ValueError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return _mutation_response(result)
+    return await _project_openapi_control_impl(
+        request,
+        project_key,
+        body,
+        require_control_request=require_control_request,
+        mutation_service=_mutation_service,
+        optional_text=_optional_text,
+        actor=_actor,
+        mutation_response=_mutation_response,
+    )
 
 
 # START_FUNCTION_CONTRACT
@@ -195,23 +214,17 @@ async def project_openapi_control(
 # END_FUNCTION_CONTRACT
 @router.get("/api/admin-hub/projects/{project_key}/maintenance")
 async def project_maintenance(request: Request, project_key: str) -> JSONResponse:
-    service = _mutation_service(request)
-    try:
-        context = service._hub._registry.get(project_key)
-        result = await service._hub._request(
-            context,
-            "/api/admin/maintenance/snapshot",
-            operation="maintenance_snapshot",
-        )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="project not found") from exc
-    if result.ok:
-        return JSONResponse(status_code=200, content=mask_operator_data(result.payload or {}))
-    return JSONResponse(status_code=result.http_status or 502, content={
-        "ok": False,
-        "error": mask_operator_data(result.error or result.error_class or "maintenance unavailable"),
-    })
+    return await _project_maintenance_impl(
+        request,
+        project_key,
+        mutation_service=_mutation_service,
+        mask_data=mask_operator_data,
+    )
+
+
 # END_BLOCK_HUB
+
+
 # START_BLOCK_LOCAL_CONTROL
 # START_FUNCTION_CONTRACT
 # name: local_control_action
@@ -230,107 +243,21 @@ async def local_control_action(
     request: Request,
     body: dict[str, Any] = Body(default_factory=dict),
 ) -> JSONResponse:
-    require_control_request(request)
-    audit = _audit_identity(body, request)
-    identity = str(audit["project_key"])
-    action = str(body.get("action") or "").casefold()
-    action = {"resume": "retry", "stop": "cancel"}.get(action, action)
-    entity_type = str(body.get("entity_type") or "project")
-    entity_id = _optional_text(body.get("entity_id"))
-    params = body.get("parameters") if isinstance(body.get("parameters"), Mapping) else {}
-    if failure := _audit_or_failure(
-        "admin_action_requested", audit, reason="operator requested action", phase="before mutation",
-    ):
-        return failure
-    if not _confirmation_allowed(action, identity, entity_type, entity_id, body.get("confirmation")):
-        result = {
-            **audit,
-            "ok": False,
-            "result": "failed",
-            "error_code": "CONFIRMATION_REQUIRED",
-            "reason": "server-side confirmation was missing or invalid",
-            "retry_allowed": False,
-        }
-        if failure := _audit_or_failure(
-            "admin_action_failed", audit, reason=result["reason"], phase="failure outcome",
-        ):
-            return failure
-        return JSONResponse(status_code=400, content=result)
-    if action not in _LOCAL_ACTIONS:
-        result = _unavailable_result(audit, action)
-        if failure := _audit_or_failure(
-            "admin_action_failed", audit, reason=result["reason"], phase="failure outcome",
-        ):
-            return failure
-        return JSONResponse(status_code=501, content=result)
-    try:
-        response = await _dispatch_local_action(
-            action,
-            entity_type,
-            entity_id,
-            dict(params),
-            request,
-            identity,
-        )
-    except HTTPException as exc:
-        result = {
-            **audit,
-            "ok": False,
-            "result": "failed",
-            "error": mask_operator_data(exc.detail),
-            "reason": "project domain rejected action",
-            "retry_allowed": False,
-        }
-        if failure := _audit_or_failure(
-            "admin_action_failed", audit, reason=result["reason"], phase="failure outcome",
-        ):
-            return failure
-        return JSONResponse(status_code=exc.status_code, content=result)
-    except Exception as exc:
-        _log.warn("admin_action_dispatch_failed", action=action, reason="exception")
-        result = {
-            **audit,
-            "ok": False,
-            "result": "failed",
-            "error": mask_operator_data(str(exc)[:240]),
-            "reason": "project domain raised an error",
-            "retry_allowed": False,
-        }
-        if failure := _audit_or_failure(
-            "admin_action_failed", audit, reason=result["reason"], phase="failure outcome",
-        ):
-            return failure
-        return JSONResponse(status_code=502, content=result)
-    if isinstance(response, Mapping) and response.get("wait"):
-        result = {
-            **audit,
-            "ok": False,
-            "result": "failed",
-            "wait": True,
-            "error_code": "MERGE_SLOT_WAIT",
-            "reason": str(response.get("wait_reason") or "waiting_for_merge_slot"),
-            "display_message": "WAIT — merge slot is not available; verify current packet state before retrying",
-            "retry_allowed": False,
-            "attention": True,
-        }
-        if failure := _audit_or_failure(
-            "admin_action_failed", audit, reason=result["reason"], phase="failure outcome", outcome=result,
-        ):
-            return failure
-        return JSONResponse(status_code=202, content=result)
-    result = {
-        **audit,
-        "ok": True,
-        "result": "success",
-        "response": mask_operator_data(response),
-        "reason": "project domain completed action",
-        "retry_allowed": False,
-    }
-    if failure := _audit_or_failure(
-        "admin_action_completed", audit, reason=result["reason"], phase="after mutation", outcome=result,
-    ):
-        return failure
-    return JSONResponse(status_code=200, content=result)
+    return await _local_control_action_impl(
+        request,
+        body,
+        require_control_request=require_control_request,
+        audit_identity=_audit_identity,
+        optional_text=_optional_text,
+        audit_or_failure=_audit_or_failure,
+        confirmation_allowed=_confirmation_allowed,
+        unavailable_result=_unavailable_result,
+        dispatch_local_action=_dispatch_local_action,
+        local_actions=_LOCAL_ACTIONS,
+        mask_data=mask_operator_data,
+        log_warn=_log.warn,
+    )
+
 
 # START_FUNCTION_CONTRACT
 # name: legacy_admin_action
@@ -344,21 +271,18 @@ async def local_control_action(
 # END_FUNCTION_CONTRACT
 async def legacy_admin_action(
     request: Request, *, action: str, entity_type: str, entity_id: str | None,
-    body: Mapping[str, Any] | None = None, parameters: Mapping[str, Any] | None = None) -> JSONResponse:
-    source = dict(body or {})
-    supplied_parameters = source.get("parameters")
-    merged_parameters = dict(supplied_parameters) if isinstance(supplied_parameters, Mapping) else {}
-    if isinstance(parameters, Mapping):
-        merged_parameters.update(parameters)
-    legacy_value = source.get("confirm", source.get("confirmation_value", source.get("typed_value", "")))
-    confirmation = source.get("confirmation", {
-        "intent": "confirm" if "confirm" in source else source.get("confirmation_intent") or "",
-        "value": legacy_value,
-    })
-    payload: dict[str, Any] = {"action": action, "entity_type": entity_type, "entity_id": entity_id,
-                               "parameters": merged_parameters, "confirmation": confirmation}
-    payload.update({key: source[key] for key in ("project_key", "request_id") if key in source})
-    return await local_control_action(request, payload)
+    body: Mapping[str, Any] | None = None, parameters: Mapping[str, Any] | None = None,
+) -> JSONResponse:
+    return await _legacy_admin_action_impl(
+        request,
+        action=action,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        body=body,
+        parameters=parameters,
+        local_control_action=local_control_action,
+    )
+
 
 # START_FUNCTION_CONTRACT
 # name: local_maintenance_snapshot
@@ -372,43 +296,14 @@ async def legacy_admin_action(
 # END_FUNCTION_CONTRACT
 @router.get("/api/admin/maintenance/snapshot")
 def local_maintenance_snapshot() -> dict[str, Any]:
-    service = _maintenance_service()
-    packet_states, leases = _maintenance_state()
-    safe_states = _maintenance_control_service.safe_cleanup_packet_states(packet_states, leases)
-    snapshot = service.snapshot(packet_states=safe_states).to_dict()
-    accepted_abandoned = [
-        row for row in leases["parallel"]
-        if str(packet_states.get(str(row.get("packet_id")), "")).casefold() == "accepted"
-        and row.get("stale_candidate")
-    ]
-    return {
-        "ok": True,
-        "data": {
-            "dry_run": True,
-            "snapshot": snapshot,
-            "state_directories": _state_directory_summary(
-                getattr(service, "state_root", None)
-            ),
-            "ordinary_leases": leases["ordinary"],
-            "parallel_leases": leases["parallel"],
-            "merge_leases": leases["merge"],
-            "accepted_abandoned_reservations": accepted_abandoned,
-            "cleanup_protected": [
-                row["slug"] for row in snapshot.get("worktrees", [])
-                if not row.get("is_stale")
-            ],
-            "plan": {
-                "would_remove_worktrees": [
-                    row["slug"] for row in snapshot.get("worktrees", [])
-                    if row.get("is_stale")
-                ],
-                "would_release_leases": [
-                    row["packet_id"] for row in leases["ordinary"] if row.get("stale_candidate")
-                ],
-                "accepted_abandoned_reservations": accepted_abandoned,
-            },
-        },
-    }
+    return _local_maintenance_snapshot_impl(
+        maintenance_service_fn=_maintenance_service,
+        maintenance_state_fn=_maintenance_state,
+        maintenance_control_service=_maintenance_control_service,
+        state_directory_summary_fn=_state_directory_summary,
+    )
+
+
 # START_FUNCTION_CONTRACT
 # name: local_maintenance_cleanup
 # purpose: Execute or dry-run only the bounded stale-worktree cleanup backed by
@@ -425,75 +320,20 @@ async def local_maintenance_cleanup(
     request: Request,
     body: dict[str, Any] = Body(default_factory=dict),
 ) -> JSONResponse:
-    require_control_request(request)
-    audit = _audit_identity(body, request, action="cleanup", entity_type="project")
-    if failure := _audit_or_failure(
-        "admin_action_requested", audit, reason="maintenance cleanup requested", phase="before mutation",
-    ):
-        return failure
-    if not _confirmation_allowed("cleanup", audit["project_key"], "project", None, body.get("confirmation")):
-        failure = {
-            **audit, "ok": False, "result": "failed",
-            "error_code": "CONFIRMATION_REQUIRED",
-            "reason": "server-side confirmation was missing or invalid",
-            "retry_allowed": False,
-        }
-        if audit_failure := _audit_or_failure(
-            "admin_action_failed", audit, reason=failure["reason"], phase="failure outcome",
-        ):
-            return audit_failure
-        return JSONResponse(status_code=400, content=failure)
-    dry_run = bool(body.get("dry_run", False))
-    packet_states, leases = _maintenance_state()
-    try:
-        maintenance = _maintenance_service()
-        safe_states = _maintenance_control_service.safe_cleanup_packet_states(packet_states, leases)
-        snapshot = maintenance.snapshot(packet_states=safe_states).to_dict()
-        protected = {
-            str(row.get("slug")): "live_or_uncertain_ownership"
-            for row in snapshot.get("worktrees", [])
-            if not row.get("is_stale")
-        }
-        result = maintenance.cleanup_stale_worktrees(
-            packet_states=safe_states,
-            dry_run=dry_run,
-        ).to_dict()
-    except Exception as exc:
-        failure = {
-            **audit, "ok": False, "result": "failed",
-            "error": mask_operator_data(str(exc)[:240]),
-            "reason": "maintenance failed closed", "retry_allowed": False,
-        }
-        if audit_failure := _audit_or_failure(
-            "admin_action_failed", audit, reason=failure["reason"], phase="failure outcome",
-        ):
-            return audit_failure
-        return JSONResponse(status_code=502, content=failure)
-    response = {
-        **audit,
-        "ok": not bool(result.get("errors")),
-        "result": "success" if not result.get("errors") else "failed",
-        "response": mask_operator_data({
-            "dry_run": dry_run,
-            "deleted": result.get("worktrees_removed", []),
-            "kept": sorted(protected),
-            "kept_reasons": protected,
-            "errors": result.get("errors", []),
-            "bytes_freed": result.get("bytes_freed", 0),
-        }),
-        "reason": "maintenance dry run completed" if dry_run else "maintenance cleanup completed",
-        "retry_allowed": False,
-    }
-    if audit_failure := _audit_or_failure(
-        "admin_action_completed" if response["ok"] else "admin_action_failed",
-        audit,
-        reason=response["reason"],
-        result=response["result"],
-        phase="after mutation",
-        outcome=response,
-    ):
-        return audit_failure
-    return JSONResponse(status_code=200 if response["ok"] else 502, content=response)
+    return await _local_maintenance_cleanup_impl(
+        request,
+        body,
+        require_control_request=require_control_request,
+        audit_identity=_audit_identity,
+        audit_or_failure=_audit_or_failure,
+        confirmation_allowed=_confirmation_allowed,
+        maintenance_service_fn=_maintenance_service,
+        maintenance_state_fn=_maintenance_state,
+        maintenance_control_service=_maintenance_control_service,
+        mask_data=mask_operator_data,
+    )
+
+
 # END_BLOCK_LOCAL_CONTROL
 
 
@@ -514,87 +354,21 @@ async def local_openapi_control(
     request: Request,
     body: dict[str, Any] = Body(default_factory=dict),
 ) -> JSONResponse:
-    require_control_request(request)
-    audit = _audit_identity(body, request, action="openapi", entity_type="api_operation")
-    path = str(body.get("path") or "")
-    method = str(body.get("method") or "").upper()
-    if failure := _audit_or_failure(
-        "admin_action_requested", audit, reason="OpenAPI mutation requested", phase="before mutation",
-    ):
-        return failure
-    if not _confirmation_allowed("openapi", audit["project_key"], "api_operation", path, body.get("confirmation")):
-        failure = {**audit, "ok": False, "result": "failed", "error_code": "CONFIRMATION_REQUIRED", "retry_allowed": False}
-        if audit_failure := _audit_or_failure(
-            "admin_action_failed", audit, reason="OpenAPI confirmation was missing or invalid", phase="failure outcome",
-        ):
-            return audit_failure
-        return JSONResponse(status_code=400, content=failure)
-    if not _openapi_operation_allowed(request, path, method):
-        failure = {**audit, "ok": False, "result": "failed", "error_code": "API_PATH_OR_METHOD_REJECTED", "retry_allowed": False}
-        if audit_failure := _audit_or_failure(
-            "admin_action_failed", audit, reason="OpenAPI operation rejected", phase="failure outcome",
-        ):
-            return audit_failure
-        return JSONResponse(status_code=400, content=failure)
-    headers: dict[str, str] = {"x-grace-admin-request-id": audit["request_id"]}
-    for name in ("authorization", "x-grace-api-token"):
-        value = request.headers.get(name)
-        if value:
-            headers[name] = value
-    params = body.get("parameters") if isinstance(body.get("parameters"), Mapping) else {}
-    content_body = body.get("body") if isinstance(body.get("body"), Mapping) else None
-    materialized_path, query_params = _materialize_openapi_request(request.app, path, method, params)
-    if not materialized_path:
-        failure = {**audit, "ok": False, "result": "failed", "error_code": "API_PATH_PARAM_REQUIRED", "retry_allowed": False}
-        if audit_failure := _audit_or_failure(
-            "admin_action_failed", audit, reason="OpenAPI path parameters rejected", phase="failure outcome",
-        ):
-            return audit_failure
-        return JSONResponse(status_code=400, content=failure)
-    try:
-        transport = httpx.ASGITransport(app=request.app)
-        async with httpx.AsyncClient(transport=transport, base_url=str(request.base_url)) as client:
-            response = await client.request(
-                method,
-                materialized_path,
-                params=query_params,
-                json=content_body,
-                headers=headers,
-            )
-        downstream = _decode_response(response)
-    except (httpx.TimeoutException, httpx.NetworkError):
-        failure = {**audit, "ok": False, "result": "unknown_after_timeout", "error": UNKNOWN_OUTCOME_MESSAGE, "retry_allowed": False}
-        if audit_failure := _audit_or_failure(
-            "admin_action_failed", audit, reason=UNKNOWN_OUTCOME_MESSAGE, phase="failure outcome", outcome=failure,
-        ):
-            return audit_failure
-        return JSONResponse(status_code=504, content=failure)
-    except Exception as exc:
-        failure = {**audit, "ok": False, "result": "failed", "error": mask_operator_data(str(exc)[:240]), "retry_allowed": False}
-        if audit_failure := _audit_or_failure(
-            "admin_action_failed", audit, reason="OpenAPI downstream failure", phase="failure outcome", outcome=failure,
-        ):
-            return audit_failure
-        return JSONResponse(status_code=502, content=failure)
-    success = 200 <= response.status_code < 300
-    result = {
-        **audit,
-        "ok": success,
-        "result": "success" if success else "failed",
-        "status": response.status_code,
-        "response": downstream,
-        "retry_allowed": False,
-    }
-    if audit_failure := _audit_or_failure(
-        "admin_action_completed" if success else "admin_action_failed",
-        audit,
-        reason="OpenAPI downstream completed" if success else "OpenAPI downstream failed",
-        result=result["result"],
-        phase="after mutation",
-        outcome=result,
-    ):
-        return audit_failure
-    return JSONResponse(status_code=response.status_code if not success else 200, content=result)
+    return await _local_openapi_control_impl(
+        request,
+        body,
+        require_control_request=require_control_request,
+        audit_identity=_audit_identity,
+        audit_or_failure=_audit_or_failure,
+        confirmation_allowed=_confirmation_allowed,
+        openapi_operation_allowed=_openapi_operation_allowed,
+        materialize_openapi_request=_materialize_openapi_request,
+        decode_response=_decode_response,
+        mask_data=mask_operator_data,
+        unknown_outcome_message=UNKNOWN_OUTCOME_MESSAGE,
+    )
+
+
 # END_BLOCK_LOCAL_OPENAPI
 
 
@@ -636,6 +410,8 @@ def _control_body(body: Mapping[str, Any], request: Request) -> dict[str, Any]:
             "value": result.get("confirmation_value") or result.get("typed_value") or "",
         }
     return result
+
+
 # START_FUNCTION_CONTRACT
 # name: _mutation_response
 # purpose: Map normalized result state to an HTTP status without converting
@@ -657,6 +433,8 @@ def _mutation_response(result: Mapping[str, Any]) -> JSONResponse:
         if status < 400:
             status = 502
     return JSONResponse(status_code=status, content=mask_operator_data(dict(result)))
+
+
 # START_FUNCTION_CONTRACT
 # name: _actor
 # purpose: Derive a bounded display-safe actor identity from authenticated
@@ -767,6 +545,8 @@ def _confirmation_allowed(
         return True
     expected = str(entity_id or project_key)
     return value in {expected, project_key}
+
+
 # START_FUNCTION_CONTRACT
 # name: _unavailable_result
 # purpose: Build the explicit planned/501 unavailable response required by the
@@ -777,15 +557,7 @@ def _confirmation_allowed(
 # error_behavior: Never raises.
 # END_FUNCTION_CONTRACT
 def _unavailable_result(audit: Mapping[str, Any], action: str) -> dict[str, Any]:
-    return {
-        **dict(audit),
-        "ok": False,
-        "result": "failed",
-        "available": False,
-        "error_code": "CONTROL_UNAVAILABLE",
-        "reason": f"Not implemented / unavailable for this runtime: {action or 'unknown'}",
-        "retry_allowed": False,
-    }
+    return _local_unavailable_result(audit, action)
 
 
 # START_FUNCTION_CONTRACT
@@ -806,108 +578,18 @@ async def _dispatch_local_action(
     request: Request,
     project_key: str,
 ) -> Any:
-    if action in {"retry", "resume"}:
-        if entity_type.casefold() != "packet" or not entity_id:
-            raise HTTPException(status_code=400, detail="packet entity is required")
-        from grace_control.core.state_machine import StateTransitionError
-        from grace_control.services.packet_service import (
-            MaxRetriesReachedError,
-            PacketNotFoundError,
-            PacketService,
-        )
-        try:
-            await PacketService().retry(entity_id)
-        except PacketNotFoundError as exc:
-            raise HTTPException(status_code=404, detail="Packet not found") from exc
-        except MaxRetriesReachedError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        except StateTransitionError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"packet_id": entity_id, "state": "ready"}
-    if action in {"cancel", "stop"}:
-        if entity_type.casefold() != "packet" or not entity_id:
-            raise HTTPException(status_code=400, detail="packet entity is required")
-        from grace_control.core.state_machine import StateTransitionError
-        from grace_control.services.packet_service import PacketNotFoundError, PacketService
-        try:
-            result = await PacketService().cancel(entity_id, str(params.get("reason") or "admin control"))
-        except PacketNotFoundError as exc:
-            raise HTTPException(status_code=404, detail="Packet not found") from exc
-        except StateTransitionError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {
-            "packet_id": result.packet_id,
-            "state": getattr(result, "state", "unknown"),
-            "reason": getattr(result, "reason", ""),
-        }
-    if action in {"archive", "unarchive"}:
-        if entity_type.casefold() != "feature" or not entity_id:
-            raise HTTPException(status_code=400, detail="feature entity is required")
-        try:
-            return _maintenance_control_service.set_feature_archive(
-                entity_id,
-                archived=action == "archive",
-            )
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-    if action == "merge":
-        if entity_type.casefold() != "packet" or not entity_id:
-            raise HTTPException(status_code=400, detail="packet entity is required")
-        from grace_control.api.routers.packets import merge_packet
-        merge_response = await merge_packet(entity_id, params)
-        if isinstance(merge_response, JSONResponse) and merge_response.status_code == 202:
-            return {
-                "wait": True,
-                "state": "waiting",
-                "wait_reason": "waiting_for_merge_slot",
-                "retry_allowed": False,
-            }
-        return merge_response
-    if action.startswith("restart_"):
-        target = {"restart_api": "api", "restart_workers": "workers", "restart_all": "all"}[action]
-        from grace_control.api.routers.lifecycle import _restart_local
-        result = await _restart_local(target)
-        if isinstance(result, Mapping) and (
-            result.get("ok") is False
-            or result.get("success") is False
-            or str(result.get("status") or "").casefold() in {"failed", "error"}
-        ):
-            raise HTTPException(status_code=502, detail=result.get("error") or "supervisor restart failed")
-        return result
-    if action == "reload":
-        from grace_control.api.routers.lifecycle import _reload_local
-        result = await _reload_local()
-        if isinstance(result, Mapping) and (
-            result.get("ok") is False
-            or result.get("success") is False
-            or str(result.get("status") or "").casefold() in {"failed", "error"}
-        ):
-            raise HTTPException(status_code=502, detail=result.get("error") or "supervisor reload failed")
-        return result
-    if action == "cleanup":
-        dry_run = bool(params.get("dry_run", False))
-        packet_states, leases = _maintenance_state()
-        maintenance = _maintenance_service()
-        safe_states = _maintenance_control_service.safe_cleanup_packet_states(packet_states, leases)
-        snapshot = maintenance.snapshot(packet_states=safe_states).to_dict()
-        protected = {
-            str(row.get("slug")): "live_or_uncertain_ownership"
-            for row in snapshot.get("worktrees", [])
-            if not row.get("is_stale")
-        }
-        result = maintenance.cleanup_stale_worktrees(
-            packet_states=safe_states,
-            dry_run=dry_run,
-        ).to_dict()
-        return {
-            "dry_run": dry_run,
-            "cleanup": mask_operator_data(result),
-            "kept": sorted(protected),
-            "kept_reasons": protected,
-        }
-    raise HTTPException(status_code=501, detail="control is unavailable")
+    return await _dispatch_local_action_impl(
+        action,
+        entity_type,
+        entity_id,
+        params,
+        request,
+        project_key,
+        maintenance_control_service=_maintenance_control_service,
+        maintenance_service_fn=_maintenance_service,
+        maintenance_state_fn=_maintenance_state,
+        mask_data=mask_operator_data,
+    )
 
 
 # START_FUNCTION_CONTRACT
@@ -963,14 +645,12 @@ def _state_directory_summary(state_root: Any) -> list[dict[str, Any]]:
 # error_behavior: Missing/malformed docs return False.
 # END_FUNCTION_CONTRACT
 def _openapi_operation_allowed(request: Request, path: str, method: str) -> bool:
-    if not path.startswith("/") or path.startswith("//") or "\\" in path or "#" in path:
-        return False
-    path_only = path.split("?", 1)[0]
-    if any(path_only.startswith(prefix) for prefix in _DANGEROUS_OPENAPI_PREFIXES):
-        return False
-    document = request.app.openapi()
-    operations = document.get("paths", {}).get(path_only)
-    return isinstance(operations, Mapping) and method.casefold() in operations and method.casefold() not in {"get", "head", "options"}
+    return _openapi_operation_allowed_impl(
+        request,
+        path,
+        method,
+        dangerous_prefixes=_DANGEROUS_OPENAPI_PREFIXES,
+    )
 
 
 # START_FUNCTION_CONTRACT
@@ -982,18 +662,14 @@ def _openapi_operation_allowed(request: Request, path: str, method: str) -> bool
 # error_behavior: Non-JSON response becomes bounded masked text.
 # END_FUNCTION_CONTRACT
 def _decode_response(response: httpx.Response) -> dict[str, Any]:
-    try:
-        body: Any = response.json()
-    except (ValueError, TypeError):
-        body = response.text[:4000]
-    return {
-        "status": response.status_code,
-        "body": mask_operator_data(body),
-        "headers": mask_operator_data({
-            key: value for key, value in response.headers.items()
-            if key.casefold() in {"content-type", "content-length", "date"}
-        }),
-    }
+    return _decode_response_impl(response)
 
 
 # END_BLOCK_HELPERS
+
+__all__ = [
+    "router",
+    "legacy_admin_action",
+    "_LOCAL_ACTIONS",
+    "_DANGEROUS_OPENAPI_PREFIXES",
+]
