@@ -47,13 +47,14 @@ def _session_run_status_usable(db: Session, external_id: str) -> bool:
     """Conservative usability check for a stored executor session.
 
     Returns False (skip resume) when:
-    * session external_id is empty or malformed;
+    * session external_id is empty;
     * the most recent packet run referencing this session ended with
       exit_code != 0, was timed out, or had a session/auth error in stderr.
 
     This is intentionally conservative: when we cannot prove the session is
     healthy, we skip it. A stale session id or failed prior run must never be
-    resumed blindly.
+    resumed blindly. External IDs are provider-owned and are not required to
+    use an internal GRACE-specific prefix.
 
     Layout expected on PacketRun.result_json (TZ §6.5):
       {
@@ -61,15 +62,15 @@ def _session_run_status_usable(db: Session, external_id: str) -> bool:
           "exit_code": int | None,
           "stderr": "...",
           "stderr_tail": "...",
-          "evidence": {"session_id": "ses_..."}
+          "evidence": {"session_id": "provider-session-id"}
         },
-        "diagnostics": {"session_id": "ses_...", "stderr_tail": "..."}
+        "diagnostics": {"session_id": "provider-session-id", "stderr_tail": "..."}
       }
     """
     if not external_id:
         return False
     sid = external_id.strip()
-    if not sid.startswith("ses_") or len(sid) < 6:
+    if not sid:
         return False
     # Inspect the most recent packet run that recorded this session id.
     try:
@@ -102,10 +103,10 @@ def _session_run_status_usable(db: Session, external_id: str) -> bool:
                 rj.get("session_id"),
                 (rj.get("evidence", {}) or {}).get("session_id") if isinstance(rj.get("evidence"), dict) else None,
             ]
-            sid_candidates = [s for s in sid_candidates if s]
+            sid_candidates = [str(s).strip() for s in sid_candidates if s]
             if not sid_candidates:
                 continue
-            if external_id not in sid_candidates:
+            if sid not in sid_candidates:
                 continue
             # Found the latest run for this session. Check health.
             if r.status in ("rejected", "failed", "timeout"):
@@ -125,8 +126,6 @@ def _session_run_status_usable(db: Session, external_id: str) -> bool:
             for blob in (stderr, stderr_tail):
                 if not blob:
                     continue
-                if "Session not found" in blob:
-                    return False
                 if "401" in blob or "403" in blob or "unauthorized" in blob.lower():
                     return False
             return True

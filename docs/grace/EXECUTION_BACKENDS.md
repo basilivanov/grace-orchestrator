@@ -65,10 +65,6 @@ agents:
       mode: file
 ```
 
-`inject_dir` is an explicit profile flag. When true, the run service
-inserts `--dir <worktree_path>` after the first `run` token. If absent or
-false, no tool-specific inference is performed.
-
 ## Worktree and API behavior
 
 Before execution, `PacketExecutionAdapter._call_executor` validates that

@@ -28,7 +28,6 @@ def _prof(extras: dict) -> AgentProfile:
         "resume_mode": "never",
         "resume_flag": "--session",
         "fork_flag": "--fork",
-        "inject_dir": False,
         "multimodal": False,
     }
     raw.update(extras)
@@ -82,4 +81,5 @@ def test_to_dict_passes_workspace_safety_fields_for_coder_profile():
     assert d["workspace_mode"] == "full_git_worktree"
     assert d["resume_safe"] is False
     assert "validate_session_before_use" not in d
+    assert "inject_dir" not in d
     assert d["workspace_scope_safety"] == "default"

@@ -16,7 +16,6 @@
 # END_MODULE_MAP
 
 from __future__ import annotations
-import json
 import re
 import sys
 from pathlib import Path
@@ -30,14 +29,10 @@ from grace_control.core.structured_logger import GraceLogger
 _log = GraceLogger("agent_run_service")
 
 
-# Session ID extraction patterns per backend.
+# Session ID extraction patterns for supported providers.
 _SESSION_PATTERNS: dict[str, list[re.Pattern]] = {
     "agy": [
         re.compile(r'Conversation ID:\s*(\S+)'),
-    ],
-    "cli": [  # fallback for unknown backends
-        re.compile(r'"session_id":\s*"(ses_\w+)"'),
-        re.compile(r'Session:\s*(ses_\w+)'),
     ],
 }
 
@@ -52,22 +47,13 @@ def _extract_session_id(stdout: str, backend: str) -> str | None:
     Returns:
         The session ID string if found, None otherwise.
     """
-    patterns = _SESSION_PATTERNS.get(backend, _SESSION_PATTERNS["cli"])
+    patterns = _SESSION_PATTERNS.get(backend, [])
     for pat in patterns:
         m = pat.search(stdout)
         if m:
             sid = m.group(1)
             _log.info("session_id_extracted", backend=backend, session_id=sid)
             return sid
-    # Try JSON parse as last resort
-    try:
-        data = json.loads(stdout)
-        if isinstance(data, dict) and "session_id" in data:
-            sid = data["session_id"]
-            _log.info("session_id_extracted_json", backend=backend, session_id=sid)
-            return str(sid)
-    except (json.JSONDecodeError, TypeError):
-        pass
     return None
 
 
@@ -128,14 +114,6 @@ class AgentRunService:
                     f"All placeholders must be resolved before execution. "
                     f"Check profile command template and context variables."
                 )
-
-        # Inject --dir <worktree_path> only when requested by the profile.
-        inject_dir = bool(executor.get("inject_dir", False))
-        if inject_dir:
-            for i, part in enumerate(command):
-                if part == "run":
-                    command = command[:i + 1] + ["--dir", str(worktree_path)] + command[i + 1:]
-                    break
 
         # Build subprocess env FIRST so extras resolution sees injected vars.
         raw_env = executor.get("env", {})

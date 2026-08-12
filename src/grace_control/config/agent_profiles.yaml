@@ -21,7 +21,6 @@ agents:
     cwd: "{worktree_path}"
     effort: xhigh
     priority: 400
-    inject_dir: false
     input:
       mode: file
     model: "${GRACE_MINI_SWE_ARCHITECT_MODEL:-openai/gpt-5.5}"
@@ -50,7 +49,6 @@ agents:
     cwd: "{worktree_path}"
     effort: medium
     priority: 300
-    inject_dir: false
     input:
       mode: file
     env:
@@ -84,7 +82,6 @@ agents:
     cwd: "{worktree_path}"
     effort: xhigh
     priority: 400
-    inject_dir: false
     input:
       mode: file
     model: "${GRACE_MINI_SWE_REVIEWER_MODEL:-openai/gpt-5.6-sol}"
@@ -112,7 +109,6 @@ agents:
     cwd: "{worktree_path}"
     effort: medium
     priority: 300
-    inject_dir: false
     input:
       mode: file
     model: "${GRACE_MINI_SWE_VERIFIER_MODEL:-openai/gpt-5.5}"
@@ -140,7 +136,6 @@ agents:
     cwd: "{worktree_path}"
     effort: medium
     priority: 100
-    inject_dir: false
     input:
       mode: file
     model: "${GRACE_MINI_SWE_DEEPSEEK_ARCHITECT_MODEL:-openai/deepseek-v4-pro}"
@@ -169,7 +164,6 @@ agents:
     cwd: "{worktree_path}"
     effort: medium
     priority: 200
-    inject_dir: false
     input:
       mode: file
     minimal_repo: false
@@ -201,7 +195,6 @@ agents:
     cwd: "{worktree_path}"
     effort: high
     priority: 100
-    inject_dir: false
     input:
       mode: file
     minimal_repo: false
@@ -214,6 +207,7 @@ agents:
     backend: cli
     resume_mode: on_retry
     resume_flag: "--conversation"
+    resume_safe: true
     command:
     - agy
     - run
@@ -251,7 +245,6 @@ agents:
     cwd: "{worktree_path}"
     effort: medium
     priority: 100
-    inject_dir: false
     input:
       mode: file
     model: "${GRACE_MINI_SWE_DEEPSEEK_REVIEWER_MODEL:-openai/deepseek-v4-pro}"
@@ -279,7 +272,6 @@ agents:
     cwd: "{worktree_path}"
     effort: medium
     priority: 100
-    inject_dir: false
     input:
       mode: file
     model: "${GRACE_MINI_SWE_DEEPSEEK_VERIFIER_MODEL:-openai/deepseek-v4-flash}"
@@ -306,7 +298,6 @@ agents:
     - "{effort}"
     cwd: "{worktree_path}"
     effort: low
-    inject_dir: false
     input:
       mode: file
     model: "${GRACE_MINI_SWE_CONTEXT_MODEL:-openai/gemini-3-flash-agent}"

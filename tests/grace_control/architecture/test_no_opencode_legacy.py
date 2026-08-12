@@ -60,6 +60,11 @@ def test_removed_runtime_contract_is_absent() -> None:
     assert "opencode_runtime_adapter" not in packet_executor.lower()
     assert "agent_runtime_use_opencode_adapter" not in packet_executor
 
+    profile_values = profile_data.get("agents") or {}
+    assert all("inject_dir" not in profile for profile in profile_values.values())
+    agent_run_service = (_ROOT / "src" / "grace_control" / "services" / "agent_run_service.py").read_text()
+    assert "inject_dir" not in agent_run_service
+
     active_roots = (
         _ROOT / "src",
         _ROOT / "tests",

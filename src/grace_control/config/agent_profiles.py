@@ -42,7 +42,6 @@ class AgentProfile:
         self.resume_mode = raw.get("resume_mode", "never")
         self.resume_flag = raw.get("resume_flag", "")
         self.fork_flag = raw.get("fork_flag", "")
-        self.inject_dir = raw.get("inject_dir", False)
         self.multimodal = raw.get("multimodal", False)
         # TZ §6: workspace / session safety knobs read by packet_executor
         # and agent_run_service. None = inherit from settings.
@@ -127,7 +126,6 @@ class AgentProfile:
             "resume_mode": self.resume_mode,
             "resume_flag": self.resume_flag,
             "fork_flag": self.fork_flag,
-            "inject_dir": self.inject_dir,
             "multimodal": self.multimodal,
             "minimal_repo": self.minimal_repo,
             "skip_context_builder": self.skip_context_builder,

@@ -77,7 +77,6 @@ def test_mini_swe_profiles_are_loadable_and_use_python_executable():
             "grace_control.runtime.mini_swe_runner",
         ]
         assert data["cwd"] == "{worktree_path}"
-        assert data["inject_dir"] is False
         assert role in data["command"]
         assert "{packet_path}" in data["command"]
         assert "{worktree_path}" in data["command"]

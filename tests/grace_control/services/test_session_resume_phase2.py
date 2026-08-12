@@ -16,31 +16,14 @@ class TestExtractSessionId:
         stdout = "Running...\nConversation ID: conv_001\nDone."
         assert _extract_session_id(stdout, "agy") == "conv_001"
 
-    def test_fallback_cli_patterns(self):
-        stdout = '{"session_id": "ses_fallback", "other": 1}'
-        assert _extract_session_id(stdout, "cli") == "ses_fallback"
-
     def test_no_match_returns_none(self):
-        assert _extract_session_id("no session here", "cli") is None
+        assert _extract_session_id("no session here", "agy") is None
 
     def test_empty_stdout(self):
-        assert _extract_session_id("", "cli") is None
+        assert _extract_session_id("", "agy") is None
 
-    def test_json_dict_without_session_id(self):
-        assert _extract_session_id('{"foo": 1}', "cli") is None
-
-    def test_json_array(self):
-        assert _extract_session_id('[{"session_id": "a"}]', "cli") is None
-
-    def test_unknown_backend_uses_cli_fallback(self):
-        stdout = "Session: ses_unknown_backend"
-        assert _extract_session_id(stdout, "unknown_backend") == "ses_unknown_backend"
-
-    def test_session_id_in_json_with_pipe_delimiters(self):
-        stdout = (
-            'INFO piped output | 1 | 2 | {"session_id": "ses_piped"} ...'
-        )
-        assert _extract_session_id(stdout, "cli") == "ses_piped"
+    def test_unknown_backend_has_no_provider_parser(self):
+        assert _extract_session_id("Conversation ID: conv_unknown", "unknown_backend") is None
 
 
 # ── SESSION_PATTERNS ────────────────────────────────────────────────────
@@ -49,7 +32,7 @@ class TestExtractSessionId:
 class TestSessionPatterns:
     def test_all_backends_have_patterns(self):
         assert "agy" in _SESSION_PATTERNS
-        assert "cli" in _SESSION_PATTERNS
+        assert set(_SESSION_PATTERNS) == {"agy"}
 
     def test_agy_patterns_are_compiled(self):
         for pat in _SESSION_PATTERNS["agy"]:
@@ -88,10 +71,10 @@ class TestResumeFlagInjection:
         from grace_control.services.agent_run_service import AgentRunService
         svc = AgentRunService()
         executor = {
-            "command": ["echo", "hello"],
+            "command": ["agy", "run"],
             "resume_mode": "on_retry",
-            "resume_flag": "--session",
-            "backend": "cli",
+            "resume_flag": "--conversation",
+            "backend": "agy",
             "model": "test",
             "role": "coder",
             "cwd": str(Path.cwd()),
@@ -100,22 +83,22 @@ class TestResumeFlagInjection:
         out = await svc.run(
             executor, packet_id="p1", worktree_path=Path.cwd(), state_root=Path.cwd(),
             packet_markdown="test", timeout_seconds=10,
-            resume_session_id="ses_001",
+            resume_session_id="conv_001",
         )
         cmd = out.get("command_preview", [])
-        assert "--session" in cmd
-        assert "ses_001" in cmd
+        assert "--conversation" in cmd
+        assert "conv_001" in cmd
 
     @pytest.mark.asyncio
     async def test_fork_injects_fork_flag(self):
         from grace_control.services.agent_run_service import AgentRunService
         svc = AgentRunService()
         executor = {
-            "command": ["echo", "hello"],
+            "command": ["agy", "run"],
             "resume_mode": "on_fork",
-            "resume_flag": "--session",
+            "resume_flag": "--conversation",
             "fork_flag": "--fork",
-            "backend": "cli",
+            "backend": "agy",
             "model": "test",
             "role": "coder",
             "cwd": str(Path.cwd()),
@@ -124,11 +107,11 @@ class TestResumeFlagInjection:
         out = await svc.run(
             executor, packet_id="p1", worktree_path=Path.cwd(), state_root=Path.cwd(),
             packet_markdown="test", timeout_seconds=10,
-            resume_session_id="ses_001", fork=True,
+            resume_session_id="conv_001", fork=True,
         )
         cmd = out.get("command_preview", [])
-        assert "--session" in cmd
-        assert "ses_001" in cmd
+        assert "--conversation" in cmd
+        assert "conv_001" in cmd
         assert "--fork" in cmd
 
     @pytest.mark.asyncio
@@ -136,10 +119,10 @@ class TestResumeFlagInjection:
         from grace_control.services.agent_run_service import AgentRunService
         svc = AgentRunService()
         executor = {
-            "command": ["echo", "hello"],
+            "command": ["agy", "run"],
             "resume_mode": "never",
-            "resume_flag": "--session",
-            "backend": "cli",
+            "resume_flag": "--conversation",
+            "backend": "agy",
             "model": "test",
             "role": "verifier",
             "cwd": str(Path.cwd()),
@@ -147,28 +130,10 @@ class TestResumeFlagInjection:
         out = await svc.run(
             executor, packet_id="p1", worktree_path=Path.cwd(), state_root=Path.cwd(),
             packet_markdown="test", timeout_seconds=10,
-            resume_session_id="ses_001",
+            resume_session_id="conv_001",
         )
         cmd = out.get("command_preview", [])
-        assert "--session" not in cmd
-
-    @pytest.mark.asyncio
-    async def test_session_id_in_result(self):
-        from grace_control.services.agent_run_service import AgentRunService
-        svc = AgentRunService()
-        executor = {
-            "command": ["echo", '{"session_id":"ses_echo"}'],
-            "resume_mode": "never",
-            "backend": "cli",
-            "model": "test",
-            "role": "coder",
-            "cwd": str(Path.cwd()),
-        }
-        out = await svc.run(
-            executor, packet_id="p1", worktree_path=Path.cwd(), state_root=Path.cwd(),
-            packet_markdown="test", timeout_seconds=10,
-        )
-        assert out.get("session_id") == "ses_echo"
+        assert "--conversation" not in cmd
 
     @pytest.mark.asyncio
     async def test_agy_conversation_flag(self):

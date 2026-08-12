@@ -51,7 +51,7 @@ class TestSave:
     def test_save_creates_record(self, db, store):
         sid = store.save(db, packet_id="p1", run_id="run1", role="coder",
                          executor_id="coder-x", backend="cli",
-                         attempt_number=0, external_id="ses_ext_001")
+                         attempt_number=0, external_id="conv_ext_001")
         assert sid is not None
         assert sid.startswith("ses_")
         db.flush()
@@ -90,14 +90,14 @@ class TestFindLatest:
     def test_finds_latest_for_role(self, db, store):
         sid1 = store.save(db, packet_id="p1", run_id="r1", role="coder",
                           executor_id="ex1", backend="cli",
-                          attempt_number=0, external_id="ses_ext_1")
+                          attempt_number=0, external_id="conv_ext_1")
         sid2 = store.save(db, packet_id="p1", run_id="r2", role="coder",
                           executor_id="ex1", backend="cli",
-                          attempt_number=1, external_id="ses_ext_2")
+                          attempt_number=1, external_id="conv_ext_2")
         _add_healthy_run(db, run_id="r1", packet_id="p1", run_number=1,
-                         external_id="ses_ext_1")
+                         external_id="conv_ext_1")
         _add_healthy_run(db, run_id="r2", packet_id="p1", run_number=2,
-                         external_id="ses_ext_2")
+                         external_id="conv_ext_2")
         db.flush()
         found = store.find_latest(db, "p1", "coder")
         assert found is not None
@@ -106,14 +106,14 @@ class TestFindLatest:
     def test_filters_by_executor_id(self, db, store):
         store.save(db, packet_id="p1", run_id="r1", role="coder",
                    executor_id="exA", backend="cli",
-                   attempt_number=0, external_id="ses_ext_a")
+                   attempt_number=0, external_id="conv_ext_a")
         store.save(db, packet_id="p1", run_id="r2", role="coder",
                    executor_id="exB", backend="cli",
-                   attempt_number=1, external_id="ses_ext_b")
+                   attempt_number=1, external_id="conv_ext_b")
         _add_healthy_run(db, run_id="r1", packet_id="p1", run_number=1,
-                         external_id="ses_ext_a")
+                         external_id="conv_ext_a")
         _add_healthy_run(db, run_id="r2", packet_id="p1", run_number=2,
-                         external_id="ses_ext_b")
+                         external_id="conv_ext_b")
         db.flush()
         found = store.find_latest(db, "p1", "coder", executor_id="exA")
         assert found is not None
@@ -139,14 +139,14 @@ class TestFindForFork:
     def test_finds_any_completed(self, db, store):
         store.save(db, packet_id="p1", run_id="r1", role="coder",
                    executor_id="exA", backend="cli",
-                   attempt_number=0, external_id="ses_ext_a")
+                   attempt_number=0, external_id="conv_ext_a")
         store.save(db, packet_id="p1", run_id="r2", role="coder",
                    executor_id="exB", backend="cli",
-                   attempt_number=1, external_id="ses_ext_b")
+                   attempt_number=1, external_id="conv_ext_b")
         _add_healthy_run(db, run_id="r1", packet_id="p1", run_number=1,
-                         external_id="ses_ext_a")
+                         external_id="conv_ext_a")
         _add_healthy_run(db, run_id="r2", packet_id="p1", run_number=2,
-                         external_id="ses_ext_b")
+                         external_id="conv_ext_b")
         db.flush()
         found = store.find_for_fork(db, "p1", "coder")
         assert found is not None

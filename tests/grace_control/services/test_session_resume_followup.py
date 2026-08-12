@@ -3,9 +3,13 @@ from __future__ import annotations
 
 import pytest
 from pathlib import Path
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 from grace_control.config.agent_profiles import load_agent_profiles
+from grace_control.db.schema import Base, PacketRun
 from grace_control.services.agent_run_service import _extract_session_id
+from grace_control.services.session_store import SessionStore
 
 
 class TestAgentProfileResumeFields:
@@ -18,6 +22,7 @@ class TestAgentProfileResumeFields:
         assert d["resume_mode"] == "on_retry"
         assert d["resume_flag"] == "--conversation"
         assert d["backend"] == "cli"
+        assert d["resume_safe"] is True
 
     def test_verifier_mini_swe_never_resumes(self):
         p = load_agent_profiles().get("verifier-mini-swe")
@@ -47,14 +52,9 @@ class TestSessionExtraction:
         sid = _extract_session_id(stdout, "agy")
         assert sid == "conv_12345"
 
-    def test_cli_fallback_to_json(self):
-        stdout = '{"session_id": "ses_cli_test"}'
-        sid = _extract_session_id(stdout, "cli")
-        assert sid == "ses_cli_test"
-
     def test_no_session_id(self):
-        assert _extract_session_id("No session here", "cli") is None
-        assert _extract_session_id("", "cli") is None
+        assert _extract_session_id("No session here", "agy") is None
+        assert _extract_session_id("", "agy") is None
 
 
 class TestMaintenanceStaleDetection:
@@ -161,3 +161,93 @@ class TestAgentRunServiceSessionExtractionIntegration:
             f"Expected conv_test_123, got {result.get('session_id')}"
         )
         assert called, "FakeSupervisor.run() was never called"
+
+
+@pytest.mark.asyncio
+async def test_agy_session_round_trip_reaches_conversation_resume(tmp_path: Path):
+    """A healthy provider ID survives extraction, storage, lookup, and resume."""
+    from grace_control.services.agent_run_service import AgentRunService
+    from grace_control.services.process_supervisor import ProcessResult
+
+    profile = load_agent_profiles()["coder_agy"]
+    executor = profile.to_dict()
+
+    class FakeSupervisor:
+        def __init__(self):
+            self.commands = []
+
+        async def run(self, command, **kwargs):
+            self.commands.append(list(command))
+            return ProcessResult(
+                stdout="Conversation ID: conv_round_trip\nTask complete.",
+                stderr="",
+                exit_code=0,
+                duration_ms=10,
+            )
+
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine, autoflush=False)()
+    try:
+        supervisor = FakeSupervisor()
+        service = AgentRunService()
+        service._supervisor = supervisor
+        worktree = tmp_path / "worktree"
+        worktree.mkdir()
+        state_root = tmp_path / "state"
+        state_root.mkdir()
+
+        first = await service.run(
+            executor,
+            packet_id="pkt_round_trip",
+            worktree_path=worktree,
+            state_root=state_root,
+            packet_markdown="# task",
+        )
+        assert first["session_id"] == "conv_round_trip"
+
+        store = SessionStore()
+        store.save(
+            db,
+            packet_id="pkt_round_trip",
+            run_id="pkt_round_trip-R01",
+            role="coder",
+            executor_id="coder_agy",
+            backend="cli",
+            attempt_number=1,
+            external_id=first["session_id"],
+            status="completed",
+        )
+        db.add(PacketRun(
+            id="pkt_round_trip-R01",
+            packet_id="pkt_round_trip",
+            run_number=1,
+            status="accepted",
+            result_json={
+                "legacy_result": {
+                    "exit_code": 0,
+                    "stderr": "",
+                    "evidence": {"session_id": first["session_id"]},
+                },
+            },
+        ))
+        db.commit()
+
+        previous = store.find_latest(
+            db, "pkt_round_trip", "coder", executor_id="coder_agy"
+        )
+        assert previous is not None
+        assert previous.external_id == "conv_round_trip"
+
+        await service.run(
+            executor,
+            packet_id="pkt_round_trip",
+            worktree_path=worktree,
+            state_root=state_root,
+            packet_markdown="# retry",
+            resume_session_id=previous.external_id,
+        )
+        resumed_command = supervisor.commands[-1]
+        assert resumed_command[-2:] == ["--conversation", "conv_round_trip"]
+    finally:
+        db.close()

@@ -136,15 +136,15 @@ def test_usability_reads_exit_code_from_legacy_result(_db):
                    result_json={
                        "legacy_result": {
                            "exit_code": 1,
-                           "stderr": "Session not found",
-                           "evidence": {"session_id": "ses_deadbeef01"},
+                           "stderr": "agent failed",
+                           "evidence": {"session_id": "conv_deadbeef01"},
                        },
                    })
-        _make_session(db, external_id="ses_deadbeef01", packet_id="pkt_U1")
+        _make_session(db, external_id="conv_deadbeef01", packet_id="pkt_U1")
         from grace_control.services.session_store import (
             _session_run_status_usable,
         )
-        assert _session_run_status_usable(db, "ses_deadbeef01") is False
+        assert _session_run_status_usable(db, "conv_deadbeef01") is False
 
 
 def test_usability_true_for_clean_session(_db):
@@ -155,14 +155,14 @@ def test_usability_true_for_clean_session(_db):
                        "legacy_result": {
                            "exit_code": 0,
                            "stderr": "",
-                           "evidence": {"session_id": "ses_clean0001"},
+                           "evidence": {"session_id": "conv_clean0001"},
                        },
                    })
-        _make_session(db, external_id="ses_clean0001", packet_id="pkt_U2")
+        _make_session(db, external_id="conv_clean0001", packet_id="pkt_U2")
         from grace_control.services.session_store import (
             _session_run_status_usable,
         )
-        assert _session_run_status_usable(db, "ses_clean0001") is True
+        assert _session_run_status_usable(db, "conv_clean0001") is True
 
 
 def test_usability_reads_session_id_from_diagnostics_top_level(_db):
@@ -173,34 +173,34 @@ def test_usability_reads_session_id_from_diagnostics_top_level(_db):
         _make_run(db, packet_id="pkt_U3", run_number=1, status="accepted",
                    result_json={
                        "diagnostics": {
-                           "session_id": "ses_top001",
+                           "session_id": "conv_top001",
                            "stderr_tail": "",
                        },
                        "legacy_result": {"exit_code": 0, "stderr": ""},
                    })
-        _make_session(db, external_id="ses_top001", packet_id="pkt_U3")
+        _make_session(db, external_id="conv_top001", packet_id="pkt_U3")
         from grace_control.services.session_store import (
             _session_run_status_usable,
         )
-        assert _session_run_status_usable(db, "ses_top001") is True
+        assert _session_run_status_usable(db, "conv_top001") is True
 
 
-def test_usability_false_on_session_not_found_in_stderr(_db):
+def test_usability_false_on_unauthorized_stderr(_db):
     from grace_control.db import get_db
     with get_db() as db:
         _make_run(db, packet_id="pkt_U4", run_number=1, status="rejected",
                    result_json={
                        "legacy_result": {
                            "exit_code": 1,
-                           "stderr": "Error: Session not found: ses_ghost00",
-                           "evidence": {"session_id": "ses_ghost0000"},
+                           "stderr": "401 Unauthorized",
+                           "evidence": {"session_id": "conv_ghost0000"},
                        },
                    })
-        _make_session(db, external_id="ses_ghost0000", packet_id="pkt_U4")
+        _make_session(db, external_id="conv_ghost0000", packet_id="pkt_U4")
         from grace_control.services.session_store import (
             _session_run_status_usable,
         )
-        assert _session_run_status_usable(db, "ses_ghost0000") is False
+        assert _session_run_status_usable(db, "conv_ghost0000") is False
 
 
 def test_find_latest_skips_unusable_session(_db):
@@ -208,13 +208,13 @@ def test_find_latest_skips_unusable_session(_db):
     from grace_control.db import get_db
     from grace_control.services.session_store import SessionStore
     with get_db() as db:
-        _make_session(db, external_id="ses_dead00002", packet_id="pkt_F1")
+        _make_session(db, external_id="conv_dead00002", packet_id="pkt_F1")
         _make_run(db, packet_id="pkt_F1", run_number=1, status="rejected",
                    result_json={
                        "legacy_result": {
                            "exit_code": 1,
-                           "stderr": "Session not found",
-                           "evidence": {"session_id": "ses_dead00002"},
+                           "stderr": "agent failed",
+                           "evidence": {"session_id": "conv_dead00002"},
                        },
                    })
         store = SessionStore()
@@ -227,14 +227,14 @@ def test_find_for_fork_skips_unusable_session(_db):
     from grace_control.db import get_db
     from grace_control.services.session_store import SessionStore
     with get_db() as db:
-        _make_session(db, external_id="ses_dead00003", packet_id="pkt_F2",
+        _make_session(db, external_id="conv_dead00003", packet_id="pkt_F2",
                        executor_id="coder-old-executor")
         _make_run(db, packet_id="pkt_F2", run_number=1, status="failed",
                    result_json={
                        "legacy_result": {
                            "exit_code": 1,
-                           "stderr": "Session not found",
-                           "evidence": {"session_id": "ses_dead00003"},
+                           "stderr": "agent failed",
+                           "evidence": {"session_id": "conv_dead00003"},
                        },
                    })
         store = SessionStore()
@@ -247,20 +247,20 @@ def test_find_for_fork_returns_usable_session(_db):
     from grace_control.db import get_db
     from grace_control.services.session_store import SessionStore
     with get_db() as db:
-        _make_session(db, external_id="ses_alive0001", packet_id="pkt_F3",
+        _make_session(db, external_id="conv_alive0001", packet_id="pkt_F3",
                        executor_id="coder-old")
         _make_run(db, packet_id="pkt_F3", run_number=1, status="accepted",
                    result_json={
                        "legacy_result": {
                            "exit_code": 0,
                            "stderr": "",
-                           "evidence": {"session_id": "ses_alive0001"},
+                           "evidence": {"session_id": "conv_alive0001"},
                        },
                    })
         store = SessionStore()
         result = store.find_for_fork(db, "pkt_F3", "coder")
         assert result is not None
-        assert result.external_id == "ses_alive0001"
+        assert result.external_id == "conv_alive0001"
 
 
 # ── session_resume in returned dict (TZ §6.4 follow-up) ────────────────────
@@ -315,10 +315,9 @@ def test_session_resume_used_false_when_resume_safe_false(monkeypatch, tmp_path)
         "input_mode": "none",
         "input_template": "",
         "resume_mode": "on_retry",
-        "resume_flag": "--session",
+        "resume_flag": "--conversation",
         "fork_flag": "--fork",
         "resume_safe": False,
-        "inject_dir": False,
     }
     result = asyncio.run(svc.run(
         executor,
@@ -326,13 +325,13 @@ def test_session_resume_used_false_when_resume_safe_false(monkeypatch, tmp_path)
         worktree_path=tmp_path,
         state_root=tmp_path,
         packet_markdown="# task",
-        resume_session_id="ses_deadbeef01",
+        resume_session_id="conv_deadbeef01",
         fork=False,
     ))
     assert "session_resume" in result
     decision = result["session_resume"]
     assert decision["used"] is False
-    assert decision["session_id"] == "ses_deadbeef01"
+    assert decision["session_id"] == "conv_deadbeef01"
     assert decision["reason"] == "profile_not_resume_safe"
 
 
@@ -352,10 +351,9 @@ def test_session_resume_used_true_when_all_gates_pass(monkeypatch, tmp_path):
         "input_mode": "none",
         "input_template": "",
         "resume_mode": "on_retry",
-        "resume_flag": "--session",
+        "resume_flag": "--conversation",
         "fork_flag": "--fork",
         "resume_safe": True,
-        "inject_dir": False,
     }
     result = asyncio.run(svc.run(
         executor,
@@ -363,7 +361,7 @@ def test_session_resume_used_true_when_all_gates_pass(monkeypatch, tmp_path):
         worktree_path=tmp_path,
         state_root=tmp_path,
         packet_markdown="# task",
-        resume_session_id="ses_alivecafe01",
+        resume_session_id="conv_alivecafe01",
         fork=False,
     ))
     decision = result["session_resume"]
@@ -388,7 +386,6 @@ def test_session_resume_used_false_when_resume_mode_never(monkeypatch, tmp_path)
         "input_template": "",
         "resume_mode": "never",
         "resume_safe": True,
-        "inject_dir": False,
     }
     result = asyncio.run(svc.run(
         executor,
@@ -396,7 +393,7 @@ def test_session_resume_used_false_when_resume_mode_never(monkeypatch, tmp_path)
         worktree_path=tmp_path,
         state_root=tmp_path,
         packet_markdown="# task",
-        resume_session_id="ses_shouldnotbeused",
+        resume_session_id="conv_shouldnotbeused",
         fork=False,
     ))
     decision = result["session_resume"]
@@ -434,7 +431,7 @@ def test_extract_diagnostics_lifts_session_resume_from_evidence():
             "failure_stage": "agent_run",
             "session_resume": {
                 "requested": True,
-                "session_id": "ses_deadbeef01",
+                "session_id": "conv_deadbeef01",
                 "used": False,
                 "reason": "profile_not_resume_safe",
             },
