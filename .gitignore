@@ -80,4 +80,7 @@ agents/
 %2Ftmp%2F*
 test_grace.db
 .grace/
+.goldw/
+.lw3/
+.grace-live-wt/
 .pip_libs/

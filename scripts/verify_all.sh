@@ -8,7 +8,7 @@ echo "=== GRACE Control Plane — Full Verification ==="
 echo ""
 
 echo "[1/7] Unit Tests"
-$PY -m pytest tests/ --asyncio-mode=auto --ignore=tests/test_hello_grace.py -q
+$PY -m pytest tests/ --asyncio-mode=auto -q
 echo ""
 
 echo "[2/7] API Health"
