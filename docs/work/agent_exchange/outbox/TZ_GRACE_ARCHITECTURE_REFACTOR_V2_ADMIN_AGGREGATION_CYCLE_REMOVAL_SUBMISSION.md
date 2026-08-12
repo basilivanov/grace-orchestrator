@@ -41,9 +41,9 @@ OverviewReadService ────────────────────
 The effective construction order in `AdminAggregationService.__init__` is:
 
 ```text
-size_calc → resolver → artifacts(resolver) → logs(resolver)
+size_calc → overview → resolver → artifacts(resolver) → logs(resolver)
 → pipeline(artifacts) → packet(size_calc, pipeline, logs)
-→ features(size_calc, pipeline) → overview
+→ features(size_calc, pipeline)
 ```
 
 All collaborator fields are assigned by their owning constructor. The
