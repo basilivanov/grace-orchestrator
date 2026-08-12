@@ -65,6 +65,10 @@ rules:
     path: src/grace_control/api/routers/admin_controls.py
     reason: read-only FastAPI app state and maintenance service state access; the textual checker flags these non-mutation reads
     expires_wave: never
+  - rule: GRC103
+    path: src/grace_control/api/routers/admin_control_center.py
+    reason: read-only FastAPI app state access for the accepted Admin Hub service; the textual checker flags this non-mutation read
+    expires_wave: never
   - rule: GRC106
     path: src/grace_control/adapters/packet_executor.py
     reason: packet metadata origin key is a JSON contract field, not a Git remote or branch
