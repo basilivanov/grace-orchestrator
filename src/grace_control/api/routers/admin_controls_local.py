@@ -34,6 +34,11 @@ from fastapi.responses import JSONResponse
 
 from grace_control.core.structured_logger import GraceLogger
 from grace_control.services.admin_control_security import mask_operator_data
+from grace_control.services.supervisor_control_service import (
+    SupervisorNotRunningError,
+    SupervisorRemoteError,
+    SupervisorUnavailableError,
+)
 
 _log = GraceLogger("admin_controls_local")
 
@@ -242,7 +247,7 @@ def _unavailable_result(audit: Mapping[str, Any], action: str) -> dict[str, Any]
 # purpose: Route a narrow action to existing local domain/API functions without
 #          duplicating packet transition or fencing logic.
 # inputs: action/entity/params/request, immutable identity and maintenance
-#         callbacks.
+#         callbacks, including the explicit lifecycle service factory.
 # returns: JSON-like domain response.
 # side_effects: Local state transition, supervisor control or safe maintenance.
 # emitted_logs: Existing domain/service logs.
@@ -259,6 +264,7 @@ async def dispatch_local_action_impl(
     maintenance_control_service: Any,
     maintenance_service_fn: Callable[[], Any],
     maintenance_state_fn: Callable[[], tuple[dict[str, str], dict[str, list[dict[str, Any]]]]],
+    lifecycle_service_fn: Callable[[], Any],
     mask_data: Callable[[Any], Any] = mask_operator_data,
 ) -> Any:
     if action in {"retry", "resume"}:
@@ -322,8 +328,16 @@ async def dispatch_local_action_impl(
         return merge_response
     if action.startswith("restart_"):
         target = {"restart_api": "api", "restart_workers": "workers", "restart_all": "all"}[action]
-        from grace_control.api.routers.lifecycle import _restart_local
-        result = await _restart_local(target)
+        try:
+            result = await lifecycle_service_fn().restart(target)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except SupervisorNotRunningError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except SupervisorRemoteError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        except SupervisorUnavailableError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
         if isinstance(result, Mapping) and (
             result.get("ok") is False
             or result.get("success") is False
@@ -332,8 +346,14 @@ async def dispatch_local_action_impl(
             raise HTTPException(status_code=502, detail=result.get("error") or "supervisor restart failed")
         return result
     if action == "reload":
-        from grace_control.api.routers.lifecycle import _reload_local
-        result = await _reload_local()
+        try:
+            result = await lifecycle_service_fn().reload()
+        except SupervisorNotRunningError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except SupervisorRemoteError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        except SupervisorUnavailableError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
         if isinstance(result, Mapping) and (
             result.get("ok") is False
             or result.get("success") is False

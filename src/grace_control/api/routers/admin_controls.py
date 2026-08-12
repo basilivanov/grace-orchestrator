@@ -90,6 +90,7 @@ from grace_control.api.routers.admin_controls_openapi import (
 )
 from grace_control.core.event_recorder import record_event
 from grace_control.core.structured_logger import GraceLogger
+from grace_control.lifecycle_composition import build_lifecycle_service
 from grace_control.services.admin_control_local_helpers import (
     _audit_failure_response as _build_audit_failure_response,
 )
@@ -588,6 +589,7 @@ async def _dispatch_local_action(
         maintenance_control_service=_maintenance_control_service,
         maintenance_service_fn=_maintenance_service,
         maintenance_state_fn=_maintenance_state,
+        lifecycle_service_fn=build_lifecycle_service,
         mask_data=mask_operator_data,
     )
 

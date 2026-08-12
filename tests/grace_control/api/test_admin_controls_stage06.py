@@ -838,8 +838,13 @@ async def test_supervisor_failure_stays_failed(monkeypatch):
     async def failed_restart(_target: str) -> dict[str, Any]:
         return {"ok": False, "status": "failed", "error": "worker did not restart"}
 
-    from grace_control.api.routers import lifecycle
-    monkeypatch.setattr(lifecycle, "_restart_local", failed_restart)
+    from grace_control.api.routers import admin_controls
+
+    class _FailedLifecycle:
+        async def restart(self, _target: str) -> dict[str, Any]:
+            return await failed_restart(_target)
+
+    monkeypatch.setattr(admin_controls, "build_lifecycle_service", _FailedLifecycle)
     app = create_app(
         GraceSettings(api_auth_enabled=False),
         project_registry=_registry(),
