@@ -100,7 +100,7 @@ def _seed_rejected_packet(
         id="p1-1", packet_id="p1", run_number=1, executor_id="exec-A",
         worker_id="w-1", model="deepseek/deepseek-v4-flash",
         status=run_status, duration_ms=1234,
-        command_preview=["opencode", "run", "--model", "deepseek-v4-flash"],
+        command_preview=["agy", "run", "--model", "deepseek-v4-flash"],
         prompt="Implement the login screen",
         started_at=datetime(2026, 6, 7, 10, 0, 0),
         finished_at=datetime(2026, 6, 7, 10, 0, 5),
@@ -200,7 +200,7 @@ def test_blocking_decision_populated_for_rejected(db_url, svc, session):
     assert "ruff" in out["last_failure"]["summary"]
     assert any("E501" in i for i in out["last_failure"]["blocking_issues"])
     assert out["last_failure"]["command_preview"] == [
-        "opencode", "run", "--model", "deepseek-v4-flash",
+        "agy", "run", "--model", "deepseek-v4-flash",
     ]
 
 
@@ -222,7 +222,7 @@ def test_packet_run_includes_command_preview_and_prompt(db_url, svc, session):
     out = svc.get_packet_run(session, "p1", "1")
     assert out is not None
     assert out["model"] == "deepseek/deepseek-v4-flash"
-    assert out["command_preview"] == ["opencode", "run", "--model", "deepseek-v4-flash"]
+    assert out["command_preview"] == ["agy", "run", "--model", "deepseek-v4-flash"]
     assert out["prompt"] == "Implement the login screen"
     assert "artifacts_summary" in out
     assert out["artifacts_summary"]["total_size"] == 0  # no evidence dir

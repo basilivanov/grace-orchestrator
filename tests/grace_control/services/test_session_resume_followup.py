@@ -12,23 +12,21 @@ class TestAgentProfileResumeFields:
     """AgentProfile.to_dict() must include session resume fields."""
 
     def test_coder_deepseek_flash_has_resume_fields(self):
-        p = load_agent_profiles().get("coder-deepseek-flash")
-        assert p is not None, "coder-deepseek-flash profile not found"
+        p = load_agent_profiles().get("coder_agy")
+        assert p is not None, "coder_agy profile not found"
         d = p.to_dict()
         assert d["resume_mode"] == "on_retry"
-        assert d["resume_flag"] == "--session"
-        assert d["fork_flag"] == "--fork"
-        assert d["inject_dir"] is True
+        assert d["resume_flag"] == "--conversation"
         assert d["backend"] == "cli"
 
-    def test_verifier_cheap_never_resumes(self):
-        p = load_agent_profiles().get("verifier-cheap")
+    def test_verifier_mini_swe_never_resumes(self):
+        p = load_agent_profiles().get("verifier-mini-swe")
         assert p is not None
         d = p.to_dict()
         assert d["resume_mode"] == "never"
 
     def test_context_collector_never_resumes(self):
-        p = load_agent_profiles().get("context-collector-flash")
+        p = load_agent_profiles().get("context-json-flash")
         assert p is not None
         d = p.to_dict()
         assert d["resume_mode"] == "never"
@@ -44,16 +42,6 @@ class TestAgentProfileResumeFields:
 class TestSessionExtraction:
     """Session ID extraction from agent stdout."""
 
-    def test_opencode_json_session_id(self):
-        stdout = '{"session_id": "ses_abc123"}'
-        sid = _extract_session_id(stdout, "opencode")
-        assert sid == "ses_abc123"
-
-    def test_opencode_text_session(self):
-        stdout = "Session: ses_xyz789\nDone."
-        sid = _extract_session_id(stdout, "opencode")
-        assert sid == "ses_xyz789"
-
     def test_agy_conversation_id(self):
         stdout = "Conversation ID: conv_12345\nTask complete."
         sid = _extract_session_id(stdout, "agy")
@@ -65,7 +53,7 @@ class TestSessionExtraction:
         assert sid == "ses_cli_test"
 
     def test_no_session_id(self):
-        assert _extract_session_id("No session here", "opencode") is None
+        assert _extract_session_id("No session here", "cli") is None
         assert _extract_session_id("", "cli") is None
 
 
@@ -134,7 +122,8 @@ class TestAgentRunServiceSessionExtractionIntegration:
         called = []
 
         class FakeSupervisor:
-            async def run(self, command, cwd, env=None, timeout_seconds=600, stdin_text=None):
+            async def run(self, command, cwd, env=None, timeout_seconds=600,
+                          stdin_text=None, **kwargs):
                 called.append(command)
                 return ProcessResult(
                     stdout="Conversation ID: conv_test_123\nTask complete.",
@@ -172,44 +161,3 @@ class TestAgentRunServiceSessionExtractionIntegration:
             f"Expected conv_test_123, got {result.get('session_id')}"
         )
         assert called, "FakeSupervisor.run() was never called"
-
-    @pytest.mark.asyncio
-    async def test_cli_backend_opencode_command_extracts_session_id(self, tmp_path: Path):
-        from grace_control.services.agent_run_service import AgentRunService
-        from grace_control.services.process_supervisor import ProcessResult
-
-        class FakeSupervisor:
-            async def run(self, command, cwd, env=None, timeout_seconds=600, stdin_text=None):
-                return ProcessResult(
-                    stdout="Session: ses_opencode_456\nDone.",
-                    stderr="",
-                    exit_code=0,
-                    duration_ms=100,
-                )
-
-        svc = AgentRunService()
-        svc._supervisor = FakeSupervisor()
-
-        executor = {
-            "executor_id": "coder-deepseek-flash",
-            "command": ["opencode", "run", "--model", "deepseek-v4"],
-            "backend": "cli",
-            "model": "deepseek-v4",
-            "input_mode": "none",
-        }
-
-        wtree = tmp_path / "wt"
-        wtree.mkdir()
-        state = tmp_path / "state"
-        state.mkdir()
-
-        result = await svc.run(
-            executor,
-            packet_id="pkt_test2",
-            worktree_path=wtree,
-            state_root=state,
-            packet_markdown="test task 2",
-            timeout_seconds=10,
-        )
-
-        assert result["session_id"] == "ses_opencode_456"

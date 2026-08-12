@@ -321,12 +321,12 @@ class AgentSession(Base):
     __tablename__ = "agent_sessions"
 
     id = Column(String, primary_key=True)            # internal UID (ses_XXXX)
-    external_id = Column(String, nullable=True, index=True)  # session_id from opencode/agy
+    external_id = Column(String, nullable=True, index=True)  # session id emitted by an executor
     packet_id = Column(String, nullable=False, index=True)
     run_id = Column(String, nullable=True, index=True)  # PacketRun.id
     role = Column(String, nullable=False)             # coder | architect | verifier | reviewer
     executor_id = Column(String, nullable=True)       # agent profile ID
-    backend = Column(String, nullable=False)          # opencode | agy
+    backend = Column(String, nullable=False)          # executor backend identifier
     attempt_number = Column(Integer, nullable=False)
     status = Column(String, nullable=False, default="active")  # active | completed | failed | forked
     parent_session_id = Column(String, nullable=True) # for forks — points to original

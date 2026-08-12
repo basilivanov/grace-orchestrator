@@ -79,7 +79,7 @@ def _seed_rejected(client, evidence_path: str = ""):
             id="p1-1", packet_id="p1", run_number=1, executor_id="exec-A",
             worker_id="w-1", model="deepseek/deepseek-v4-flash",
             status="rejected", duration_ms=1234,
-            command_preview=["opencode", "run", "--model", "deepseek-v4-flash"],
+            command_preview=["agy", "run", "--model", "deepseek-v4-flash"],
             prompt="Implement login",
             started_at=datetime(2026, 6, 7, 10, 0, 0),
             finished_at=datetime(2026, 6, 7, 10, 0, 5),
@@ -213,7 +213,7 @@ def test_blocking_decision_rejected_returns_200(client):
     assert body["decided_by"] == "feature_recovery"
     assert body["last_failure"] is not None
     assert body["last_failure"]["command_preview"] == [
-        "opencode", "run", "--model", "deepseek-v4-flash",
+        "agy", "run", "--model", "deepseek-v4-flash",
     ]
 
 
@@ -259,7 +259,7 @@ def test_packet_run_returns_full_data(client):
     assert r.status_code == 200
     body = r.json()
     assert body["model"] == "deepseek/deepseek-v4-flash"
-    assert body["command_preview"] == ["opencode", "run", "--model", "deepseek-v4-flash"]
+    assert body["command_preview"] == ["agy", "run", "--model", "deepseek-v4-flash"]
     assert body["prompt"] == "Implement login"
     assert "artifacts_summary" in body
 

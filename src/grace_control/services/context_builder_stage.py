@@ -171,7 +171,7 @@ class ContextBuilderStage:
             collector = ContextCollector(
                 project_root=agent_root,
                 model=ctx_model.get("model"),
-                cli=ctx_model.get("command", "opencode"),
+                cli=ctx_model.get("command", ""),
                 executor_id=ctx_model.get("executor_id"),
                 stdout_log_path=stdout_path,
                 stderr_log_path=stderr_path,

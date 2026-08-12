@@ -4,35 +4,6 @@ from __future__ import annotations
 
 import pytest
 
-from grace_control.services.agent_run_service import _opencode_session_usable
-
-
-# ── Pure helper: _opencode_session_usable ──────────────────────────────────
-
-
-def test_empty_session_id_not_usable():
-    assert _opencode_session_usable("") is False
-    assert _opencode_session_usable(None) is False  # type: ignore[arg-type]
-
-
-def test_short_session_id_not_usable():
-    assert _opencode_session_usable("ses") is False
-    assert _opencode_session_usable("ses_") is False
-    assert _opencode_session_usable("ses_a") is False
-    # ses_ab is 6 chars, which is the minimum.
-    assert _opencode_session_usable("ses_ab") is True
-
-
-def test_non_ses_prefixed_session_not_usable():
-    assert _opencode_session_usable("abc_1234567") is False
-    assert _opencode_session_usable("openses_1234567") is False
-    assert _opencode_session_usable("ses") is False  # too short anyway
-
-
-def test_well_formed_ses_id_usable():
-    assert _opencode_session_usable("ses_a1b2c3d4") is True
-    assert _opencode_session_usable("ses_xxxxxxxxxxxxxxxxx") is True
-
 
 # ── Redaction helper (TZ §6.6) ────────────────────────────────────────────
 
@@ -117,7 +88,7 @@ def _db():
 
 
 def _make_session(db, external_id: str, packet_id: str = "pkt_T1",
-                   role: str = "coder", executor_id: str = "coder-opencode-fixture"):
+                   role: str = "coder", executor_id: str = "coder-mini-swe"):
     from grace_control.db.schema import AgentSession
     s = AgentSession(
         id=f"ses_internal_{external_id[-6:]}",
@@ -143,7 +114,7 @@ def _make_run(db, *, packet_id: str, run_number: int, status: str,
         id=f"{packet_id}-R{run_number:02d}",
         packet_id=packet_id,
         run_number=run_number,
-        executor_id="coder-opencode-fixture",
+        executor_id="coder-mini-swe",
         worker_id="worker-test",
         status=status,
         result_json=result_json,
@@ -301,12 +272,14 @@ def test_find_for_fork_returns_usable_session(_db):
 
 
 class _FakeSupervisorResult:
-    def __init__(self, stdout="", stderr="", exit_code=0, timed_out=False, duration_ms=0):
+    def __init__(self, stdout="", stderr="", exit_code=0, timed_out=False,
+                 duration_ms=0, timeout_reason=""):
         self.stdout = stdout
         self.stderr = stderr
         self.exit_code = exit_code
         self.timed_out = timed_out
         self.duration_ms = duration_ms
+        self.timeout_reason = timeout_reason
 
 
 def _stub_supervisor(monkeypatch, out: _FakeSupervisorResult):
@@ -331,12 +304,12 @@ def test_session_resume_used_false_when_resume_safe_false(monkeypatch, tmp_path)
     out = _FakeSupervisorResult(exit_code=0, stdout="ok", duration_ms=10)
     svc = _stub_supervisor(monkeypatch, out)
     executor = {
-        "executor_id": "coder-opencode-fixture",
-        "backend": "opencode",
-        "command": ["opencode", "run"],
+        "executor_id": "coder-mini-swe",
+        "backend": "cli",
+        "command": ["agy", "run"],
         "extras": [],
         "env": {},
-        "model": "opencode/gpt-5",
+        "model": "gemini-3.5-flash",
         "effort": "low",
         "cwd": "{worktree_path}",
         "input_mode": "none",
@@ -345,7 +318,6 @@ def test_session_resume_used_false_when_resume_safe_false(monkeypatch, tmp_path)
         "resume_flag": "--session",
         "fork_flag": "--fork",
         "resume_safe": False,
-        "validate_session_before_use": True,
         "inject_dir": False,
     }
     result = asyncio.run(svc.run(
@@ -369,12 +341,12 @@ def test_session_resume_used_true_when_all_gates_pass(monkeypatch, tmp_path):
     out = _FakeSupervisorResult(exit_code=0, stdout="ok", duration_ms=10)
     svc = _stub_supervisor(monkeypatch, out)
     executor = {
-        "executor_id": "coder-opencode-fixture",
-        "backend": "opencode",
-        "command": ["opencode", "run"],
+        "executor_id": "coder-mini-swe",
+        "backend": "cli",
+        "command": ["agy", "run"],
         "extras": [],
         "env": {},
-        "model": "opencode/gpt-5",
+        "model": "gemini-3.5-flash",
         "effort": "low",
         "cwd": "{worktree_path}",
         "input_mode": "none",
@@ -383,7 +355,6 @@ def test_session_resume_used_true_when_all_gates_pass(monkeypatch, tmp_path):
         "resume_flag": "--session",
         "fork_flag": "--fork",
         "resume_safe": True,
-        "validate_session_before_use": True,
         "inject_dir": False,
     }
     result = asyncio.run(svc.run(
@@ -405,7 +376,7 @@ def test_session_resume_used_false_when_resume_mode_never(monkeypatch, tmp_path)
     out = _FakeSupervisorResult(exit_code=0, stdout="ok", duration_ms=10)
     svc = _stub_supervisor(monkeypatch, out)
     executor = {
-        "executor_id": "coder-deepseek-flash",
+        "executor_id": "coder-mini-swe-deepseek",
         "backend": "cli",
         "command": ["ds", "run"],
         "extras": [],
@@ -417,7 +388,6 @@ def test_session_resume_used_false_when_resume_mode_never(monkeypatch, tmp_path)
         "input_template": "",
         "resume_mode": "never",
         "resume_safe": True,
-        "validate_session_before_use": True,
         "inject_dir": False,
     }
     result = asyncio.run(svc.run(

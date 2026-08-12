@@ -285,7 +285,7 @@ class ArchitectStage:
 
         arch_run.status = "running"
         arch_run.started_at = now
-        arch_run.executor_id = "deepseek-v4-pro"
+        arch_run.executor_id = "architect-mini-swe-deepseek"
         arch_run.prompt = task_desc[:2000]
 
         from grace_control.config.settings import settings

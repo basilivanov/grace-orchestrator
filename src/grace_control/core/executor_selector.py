@@ -83,18 +83,15 @@ def select_executor(role: str, attempt: int = 1) -> dict[str, Any]:
 def _profile_matches_role(executor_id: str, role: str) -> bool:
     """Heuristic: profile ID containing the role name matches.
 
-    For context_collector role, prefer context-json-flash (internal
-    JSON helper, strictly read-only) over context-collector-flash
-    (which is the live Stage 0 bundle writer). context-json-flash
-    must be selected first because it does NOT have coder-like
-    permissions.
+    For context_collector role, prefer context-json-flash, the internal
+    read-only JSON helper, when it is available.
     """
     role_map = {
         "architect": ["architect", "premium"],
-        "coder": ["coder", "opencode"],
+        "coder": ["coder"],
         "verifier": ["verifier", "verify"],
         "reviewer": ["reviewer"],
-        "context_collector": ["context-json-flash", "context-collector-flash", "context"],
+        "context_collector": ["context-json-flash"],
     }
     keywords = role_map.get(role, [role])
     eid_lower = executor_id.lower()
@@ -118,7 +115,7 @@ def resolve_model(role: str) -> dict[str, Any]:
 
     Callers (ContextCollector, ReviewerGate) need a string `command`
     (CLI binary name) and a `model` string. The `kind` field indicates
-    which CLI to use (opencode/agy/...). The `executor_id` field
+    which CLI to use. The `executor_id` field
     identifies the exact agent profile for profile lookup in run_llm.
     """
     profiles = list(load_agent_profiles().values())
@@ -126,12 +123,12 @@ def resolve_model(role: str) -> dict[str, Any]:
     profiles = [p for p in profiles if not p.disabled]
     matching = [p for p in profiles if _profile_matches_role(p.executor_id, role)]
     if not matching:
-        return {"model": "gemini-3.5-flash", "command": "opencode", "kind": "opencode", "executor_id": "opencode"}
+        return {"model": "gemini-3.5-flash", "command": "agy", "kind": "agy", "executor_id": "coder_agy"}
 
-    # For context_collector role, prefer context-json-flash (internal read-only
-    # JSON helper) over context-collector-flash (live Stage 0 bundle writer).
+    # For context_collector role, prefer context-json-flash, the internal
+    # read-only JSON helper.
     if role == "context_collector":
-        for candidate in ("context-json-flash", "context-collector-flash"):
+        for candidate in ("context-json-flash",):
             for p in matching:
                 if p.executor_id == candidate:
                     best = p
@@ -147,9 +144,9 @@ def resolve_model(role: str) -> dict[str, Any]:
         best = matching[0]
 
     cmd = best.command
-    cli_name = cmd[0] if isinstance(cmd, list) and cmd else "opencode"
-    kind_map = {"opencode": "opencode", "agy": "agy", "python3": "mini-swe", "python": "mini-swe"}
-    kind = "opencode"
+    cli_name = cmd[0] if isinstance(cmd, list) and cmd else "agy"
+    kind_map = {"agy": "agy", "python3": "mini-swe", "python": "mini-swe"}
+    kind = "cli"
     command_text = " ".join(cmd) if isinstance(cmd, list) else str(cmd)
     if "grace_control.runtime.mini_swe_runner" in command_text:
         kind = "mini-swe"

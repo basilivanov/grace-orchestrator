@@ -4,7 +4,7 @@ Covers:
 1. Scenario validation with context_builder field
 2. _submit_feature filters out context-builder packets
 3. _run_stage0_context_builder scenario parsing and mutation detection
-4. Agent profile alias (role: context-builder -> context-collector-flash)
+4. Agent profile routing uses the read-only mini-swe context profile
 """
 
 from __future__ import annotations
@@ -149,38 +149,6 @@ def test_load_scenario_with_context_builder():
     )
 
 
-# ── Agent profile alias ─────────────────────────────────────────────────────
-
-
-def test_context_builder_role_alias():
-    """context-builder role maps to context-collector-flash executor."""
-    from grace_control.config.agent_profiles import load_agent_profiles
-    profiles = load_agent_profiles()
-    assert "context-collector-flash" in profiles
-    prof = profiles["context-collector-flash"]
-    assert "context_bundle_path" in "\n".join(prof.command)
-    assert "bounded GRACE Context Builder" in "\n".join(prof.command)
-
-
-def test_context_builder_role_in_codex():
-    """context-collector-flash has both context_collector and context-builder roles."""
-    from grace_control.config.agent_profiles import load_agent_profiles
-    profiles = load_agent_profiles()
-
-    # Verify the codex section references context-builder
-    import yaml
-    from pathlib import Path
-    yaml_path = Path(__file__).resolve().parents[3] / "src" / "grace_control" / "config" / "agent_profiles.yaml"
-    raw = yaml.safe_load(yaml_path.read_text()) or {}
-    codex = raw.get("codex", {})
-    executors = codex.get("executors", [])
-    cb_entry = next((e for e in executors if e.get("executor_id") == "context-collector-flash"), None)
-    assert cb_entry is not None, "context-collector-flash not in codex executors"
-    roles = cb_entry.get("roles", [])
-    assert "context-builder" in roles, "context-builder role not in context-collector-flash roles"
-    assert "context_collector" in roles, "context_collector role not in context-collector-flash roles"
-
-
 # ── _submit_feature filtering ───────────────────────────────────────────────
 
 
@@ -194,8 +162,8 @@ def _build_runner_with_scenario(scenario_data: dict) -> any:
         api_url="http://127.0.0.1:8042",
         target_dir="/tmp/grace-live-test",
         source_dir=".",
-        agent_profile="coder-deepseek-flash",
-        architect_profile="architect-premium",
+        agent_profile="coder-mini-swe",
+        architect_profile="architect-mini-swe",
         workspace_mode=None,
         target_repo_root=None,
         max_waves=0,
@@ -361,8 +329,8 @@ def test_stage0_no_target_repo(scenario_with_cb):
         api_url="http://127.0.0.1:8042",
         target_dir="/nonexistent/path",
         source_dir=".",
-        agent_profile="coder-deepseek-flash",
-        architect_profile="architect-premium",
+        agent_profile="coder-mini-swe",
+        architect_profile="architect-mini-swe",
         workspace_mode=None,
         target_repo_root="/nonexistent/path",
         max_waves=0,
@@ -392,8 +360,8 @@ def _build_runner_for_mutation(clean_git_repo: Path, scenario_data: dict) -> any
         api_url="http://127.0.0.1:8042",
         target_dir=str(clean_git_repo),
         source_dir=".",
-        agent_profile="coder-deepseek-flash",
-        architect_profile="architect-premium",
+        agent_profile="coder-mini-swe",
+        architect_profile="architect-mini-swe",
         workspace_mode=None,
         target_repo_root=str(clean_git_repo),
         max_waves=0,

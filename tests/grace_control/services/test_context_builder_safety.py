@@ -27,18 +27,14 @@ from grace_control.services.feature_planning_service import (
 )
 
 
-class TestContextCollectorDoesNotUseGenericOpencodeProfile:
-    """resolve_model('context_collector') must return context-json-flash
-    (read-only) rather than the generic coder-like 'opencode' profile.
-    """
+class TestContextCollectorUsesDedicatedProfile:
+    """resolve_model('context_collector') must return the dedicated read-only profile."""
 
     def test_resolve_model_returns_executor_id(self):
         ctx = resolve_model("context_collector")
         assert "executor_id" in ctx, "resolve_model must include executor_id"
         eid = ctx["executor_id"]
-        assert eid != "opencode", (
-            f"context_collector must not use generic opencode profile, got {eid!r}"
-        )
+        assert eid == "context-json-flash"
 
     def test_resolve_model_returns_context_json_flash(self):
         ctx = resolve_model("context_collector")
@@ -51,7 +47,7 @@ class TestContextCollectorDoesNotUseGenericOpencodeProfile:
         collector = ContextCollector(
             project_root=Path("/tmp"),
             model="test-model",
-            cli="opencode",
+            cli="",
             executor_id="context-json-flash",
         )
         assert collector._executor_id == "context-json-flash", (
@@ -61,19 +57,7 @@ class TestContextCollectorDoesNotUseGenericOpencodeProfile:
     def test_profile_matches_role_context_collector_prefers_json_flash(self):
         """context-json-flash must match context_collector role."""
         assert _profile_matches_role("context-json-flash", "context_collector") is True
-        assert _profile_matches_role("context-collector-flash", "context_collector") is True
-
-    def test_profile_matches_role_opencode_is_not_context_collector(self):
-        """Generic opencode profile must NOT be selected for context_collector."""
-        profiles = load_agent_profiles()
-        opencode_profile = profiles.get("opencode")
-        if opencode_profile is None:
-            pytest.skip("opencode profile not present in agent_profiles.yaml")
-        result = resolve_model("context_collector")
-        assert result["executor_id"] != "opencode", (
-            "context_collector must not resolve to 'opencode' profile"
-        )
-
+        assert _profile_matches_role("context-legacy", "context_collector") is False
 
 class TestContextJsonProfileIsReadOnly:
     """The context-json-flash profile must be explicitly read-only."""
@@ -133,57 +117,6 @@ def test_default_context_scopes_follow_target_topology(tmp_path):
         profile = profiles["context-json-flash"]
         assert profile.resume_mode == "never", (
             "context-json-flash must not resume sessions"
-        )
-
-
-class TestContextCollectorFlashPromptIsReadOnly:
-    """context-collector-flash (live Stage 0) must also be read-only."""
-
-    def test_profile_exists(self):
-        profiles = load_agent_profiles()
-        profile = profiles.get("context-collector-flash")
-        assert profile is not None, "context-collector-flash profile must exist"
-
-    def test_prompt_contains_read_only(self):
-        profiles = load_agent_profiles()
-        profile = profiles["context-collector-flash"]
-        command_parts = profile.command
-        prompt_text = ""
-        for part in command_parts:
-            if len(part) > 100:
-                prompt_text = part
-                break
-        assert "READ-ONLY" in prompt_text, (
-            "context-collector-flash prompt must contain explicit READ-ONLY"
-        )
-
-    def test_prompt_forbids_file_modification(self):
-        profiles = load_agent_profiles()
-        profile = profiles["context-collector-flash"]
-        command_parts = profile.command
-        prompt_text = ""
-        for part in command_parts:
-            if len(part) > 100:
-                prompt_text = part
-                break
-        forbidden_phrases = ["MUST NOT create", "MUST NOT edit", "MUST NOT delete"]
-        found = any(phrase in prompt_text for phrase in forbidden_phrases)
-        assert found, (
-            f"context-collector-flash prompt must forbid create/edit/delete; "
-            f"found none of {forbidden_phrases}"
-        )
-
-    def test_prompt_forbids_implementation(self):
-        profiles = load_agent_profiles()
-        profile = profiles["context-collector-flash"]
-        command_parts = profile.command
-        prompt_text = ""
-        for part in command_parts:
-            if len(part) > 100:
-                prompt_text = part
-                break
-        assert "MUST NOT implement" in prompt_text or "do not" in prompt_text.lower(), (
-            "context-collector-flash prompt must forbid implementation"
         )
 
 
@@ -457,12 +390,10 @@ class TestContextCollectorFilterRelevantStillReturnsJson:
         result = collector._fallback_analysis("test task", small_files, ["src/"])
         assert "Fallback" in result.summary or result.complexity_score > 0
 
-    def test_resolve_model_context_collector_not_opencode(self):
-        """Regression: resolve_model('context_collector') never returns 'opencode' executor_id."""
+    def test_resolve_model_context_collector_uses_read_only_profile(self):
+        """Regression: context collection always uses the read-only profile."""
         result = resolve_model("context_collector")
-        assert result["executor_id"] != "opencode", (
-            "Bug regression: context collector must not use generic opencode profile"
-        )
+        assert result["executor_id"] == "context-json-flash"
 
 
 class TestContextJsonFlashTemplateRender:

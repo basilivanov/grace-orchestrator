@@ -1,7 +1,7 @@
 """Tests for AgentProfile.to_dict() — TZ §6 profile passthrough.
 
 Reviewer found that to_dict() was missing workspace_mode, resume_safe,
-validate_session_before_use, workspace_scope_safety — fields packet_executor
+workspace_scope_safety — fields packet_executor
 and agent_run_service read via executor.get(...). Without these fields
 in the dict, the executor silently fell back to settings defaults.
 """
@@ -15,7 +15,7 @@ from grace_control.config.agent_profiles import AgentProfile
 def _prof(extras: dict) -> AgentProfile:
     raw = {
         "backend": "cli",
-        "command": ["opencode", "run"],
+        "command": ["agy", "run"],
         "extras": [],
         "model": "gpt-test",
         "effort": "low",
@@ -53,10 +53,10 @@ def test_to_dict_includes_resume_safe_true_when_set():
     assert d["resume_safe"] is True
 
 
-def test_to_dict_includes_validate_session_before_use_default_true():
+def test_to_dict_omits_removed_session_validation_field():
     p = _prof({})
     d = p.to_dict()
-    assert d["validate_session_before_use"] is True
+    assert "validate_session_before_use" not in d
 
 
 def test_to_dict_includes_workspace_scope_safety_default():
@@ -71,17 +71,15 @@ def test_to_dict_includes_workspace_scope_safety_unsafe_allowed():
     assert d["workspace_scope_safety"] == "unsafe_allowed_for_fixture"
 
 
-def test_to_dict_passes_all_through_for_real_yaml_coder_opencode_fixture():
-    """Reproduce the live config used in coder-opencode-fixture: every
-    TZ §6 knob set in YAML must reach the executor dict."""
+def test_to_dict_passes_workspace_safety_fields_for_coder_profile():
+    """Every remaining generic workspace safety field must reach the executor dict."""
     p = _prof({
         "workspace_mode": "full_git_worktree",
         "resume_safe": False,
-        "validate_session_before_use": True,
         "workspace_scope_safety": "default",
     })
     d = p.to_dict()
     assert d["workspace_mode"] == "full_git_worktree"
     assert d["resume_safe"] is False
-    assert d["validate_session_before_use"] is True
+    assert "validate_session_before_use" not in d
     assert d["workspace_scope_safety"] == "default"

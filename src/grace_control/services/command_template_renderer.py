@@ -2,7 +2,7 @@
 # START_MODULE_CONTRACT
 # purpose: Substitutes template variables in agent command templates.
 #          Only accepts list[str] commands (rejects string).
-#          No knowledge of specific CLI tools (opencode, codex, agy).
+#          No knowledge of specific CLI tools.
 # inputs: command list with {placeholders}, context dict.
 # returns: list[str] with placeholders replaced.
 # side_effects: None.

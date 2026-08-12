@@ -3,8 +3,7 @@
 # purpose: Orchestrate a single CLI agent run: render command template,
 #          build env (inheriting parent), handle stdin/file/none input modes,
 #          spawn process with timeout, collect artifacts. No hardcoded CLI names.
-#          Also injects session resume flags (TZ_SESSION_RESUME.md Phase 2)
-#          and extracts session_id from agent stdout.
+#          Also injects session resume flags and extracts session_id from agent stdout.
 # inputs: executor dict (from AgentProfile.to_dict()), context params.
 # returns: dict with accepted, domain_status, stdout, stderr, exit_code, etc.
 #          Includes 'session_id' field when extractable from stdout.
@@ -31,13 +30,8 @@ from grace_control.core.structured_logger import GraceLogger
 _log = GraceLogger("agent_run_service")
 
 
-# Session ID extraction patterns per backend (TZ_SESSION_RESUME.md Phase 2)
+# Session ID extraction patterns per backend.
 _SESSION_PATTERNS: dict[str, list[re.Pattern]] = {
-    "opencode": [
-        re.compile(r'"session_id":\s*"(ses_\w+)"'),
-        re.compile(r'Session:\s*(ses_\w+)'),
-        re.compile(r'Session:\s*(\S+)'),
-    ],
     "agy": [
         re.compile(r'Conversation ID:\s*(\S+)'),
     ],
@@ -53,8 +47,7 @@ def _extract_session_id(stdout: str, backend: str) -> str | None:
 
     Args:
         stdout: Raw stdout from the agent subprocess.
-        backend: The backend type from the executor dict
-                 (e.g. "opencode", "agy", "cli").
+        backend: The backend type from the executor dict (for example, "agy" or "cli").
 
     Returns:
         The session ID string if found, None otherwise.
@@ -76,28 +69,6 @@ def _extract_session_id(stdout: str, backend: str) -> str | None:
     except (json.JSONDecodeError, TypeError):
         pass
     return None
-
-
-def _opencode_session_usable(session_id: str) -> bool:
-    """Best-effort check whether an opencode session id is still usable.
-
-    Conservative default: returns False (skip resume) when we cannot
-    prove the session is valid. Stale opencode sessions cause
-    `Session not found` exit_code=1 — never blindly resume.
-
-    This is intentionally simple and CLI-free. A future iteration may
-    inspect `~/.local/share/opencode/storage/session/<id>` or call
-    `opencode session list`. For now: trust the format prefix only.
-    """
-    if not session_id:
-        return False
-    sid = session_id.strip()
-    # opencode session ids look like `ses_<8 hex>` or longer base32.
-    if not sid.startswith("ses_"):
-        return False
-    if len(sid) < 6:
-        return False
-    return True
 
 
 class AgentRunService:
@@ -158,16 +129,8 @@ class AgentRunService:
                     f"Check profile command template and context variables."
                 )
 
-        # Inject --dir <worktree_path> for backends that require it (e.g. opencode
-        # which connects to a server and would otherwise use the server's cwd).
-        # Controlled by the profile field `inject_dir: true` — avoids hardcoding
-        # CLI tool names. Legacy fallback: if command[0] basename is "opencode"
-        # and the profile has no explicit inject_dir field, still inject (back-compat).
-        inject_dir = executor.get("inject_dir")
-        if inject_dir is None:
-            # Back-compat: auto-detect opencode by binary name
-            cmd0 = command[0] if command else ""
-            inject_dir = (cmd0 == "opencode" or cmd0.endswith("/opencode"))
+        # Inject --dir <worktree_path> only when requested by the profile.
+        inject_dir = bool(executor.get("inject_dir", False))
         if inject_dir:
             for i, part in enumerate(command):
                 if part == "run":
@@ -186,8 +149,7 @@ class AgentRunService:
         env["GRACE_AGENT_WORKTREE"] = isolated_root
         env["GRACE_AGENT_RUN_DIR"] = str(effective_run_dir.resolve())
 
-        # Render env-driven extras (e.g. `--attach $OPENCODE_SERVER_URL`)
-        # against the final subprocess env (not just os.environ).
+        # Render env-driven extras against the final subprocess env.
         raw_extras = executor.get("extras", [])
         rendered_extras: list[str] = []
         if isinstance(raw_extras, str):
@@ -214,13 +176,10 @@ class AgentRunService:
                 rendered_extras.append(pending_flag)
         command = command + rendered_extras
 
-        # TZ_SESSION_RESUME.md Phase 2: inject session resume/fork flags.
-        # Hardened: never inject stale session id when profile is not
-        # explicitly marked safe, when validation is required and not feasible,
-        # or when the session id looks empty/invalid.
+        # Inject session resume/fork flags only for profiles that explicitly
+        # opt into safe resume.
         resume_mode = executor.get("resume_mode", "never")
         resume_safe = bool(executor.get("resume_safe", False))
-        validate_before_use = bool(executor.get("validate_session_before_use", False))
         session_resume_used = False
         session_resume_reason = "disabled_for_profile"
         if resume_session_id and resume_mode != "never":
@@ -231,9 +190,6 @@ class AgentRunService:
                 session_resume_reason = "invalid_or_empty"
             elif not resume_safe:
                 session_resume_reason = "profile_not_resume_safe"
-            elif validate_before_use and not _opencode_session_usable(sid):
-                # Conservative: if we cannot validate, skip resume.
-                session_resume_reason = "invalid_or_stale"
             else:
                 resume_flag = executor.get("resume_flag", "--session")
                 command.append(resume_flag)
@@ -330,16 +286,15 @@ class AgentRunService:
             command_preview=command, env_preview=preview_env,
         )
 
-        # TZ_SESSION_RESUME.md Phase 2: extract session_id from stdout
+        # Extract a session_id from stdout when the backend emits one.
         backend = executor.get("backend", "cli")
         # When backend=cli (universal backend), derive the actual CLI kind
-        # from command[0] so session extraction uses the right patterns
-        # (e.g. AGY needs Conversation ID, opencode needs Session: ses_...).
+        # from command[0] so session extraction uses the right patterns.
         if backend == "cli":
             cmd = executor.get("command", [])
             if isinstance(cmd, list) and cmd:
                 first = str(cmd[0]).lower()
-                if first in ("agy", "opencode", "codex"):
+                if first in ("agy", "codex"):
                     backend = first
         result_session_id = _extract_session_id(result.stdout, backend)
 

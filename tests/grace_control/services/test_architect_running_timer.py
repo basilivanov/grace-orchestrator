@@ -129,7 +129,7 @@ def _seed_running_packet(
         executor_id="exec-A", worker_id="w-1",
         model="deepseek/deepseek-v4-flash",
         status=run_status, duration_ms=duration_ms,
-        command_preview=["opencode", "run", "--model", "deepseek-v4-flash"],
+        command_preview=["agy", "run", "--model", "deepseek-v4-flash"],
         prompt="Implement feature X",
         started_at=started,
         finished_at=finished_at,

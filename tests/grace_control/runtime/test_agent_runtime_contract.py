@@ -44,9 +44,9 @@ def _make_packet_data(**overrides) -> dict:
 def _make_executor(**overrides) -> dict:
     ex = {
         "role": "coder",
-        "adapter": "opencode",
-        "executor_id": "coder-opencode-fixture",
-        "agent_name": "opencode-coder",
+        "adapter": "cli",
+        "executor_id": "coder-mini-swe",
+        "agent_name": "mini-swe-coder",
         "provider": "deepseek",
         "model": "deepseek-v4-flash",
         "frozen_scope": ["src/frozen"],
@@ -117,7 +117,7 @@ class TestAgentRuntimeContract:
             assert c.cwd == str(p / "wt")
             assert c.runtime_run_id == "pkt_w3_test-R01"
             assert c.role == "coder"
-            assert c.adapter == "opencode"
+            assert c.adapter == "cli"
             assert c.packet_scope == ["src/foo", "src/bar"]
             assert c.frozen_scope == ["src/frozen"]
 

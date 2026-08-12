@@ -48,11 +48,7 @@ class AgentProfile:
         # and agent_run_service. None = inherit from settings.
         self.workspace_mode = raw.get("workspace_mode")  # full_git_worktree | target_repo_worktree | scoped_copy
         self.resume_safe = bool(raw.get("resume_safe", False))
-        self.validate_session_before_use = bool(raw.get("validate_session_before_use", True))
         # Per-profile override for scoped_copy verification safety.
-        # "unsafe_allowed_for_fixture" lets the coder-opencode-fixture
-        # run even with a scoped_copy workspace (it has no broad-repo
-        # verification needs).
         self.workspace_scope_safety = raw.get("workspace_scope_safety", "default")
         self._validate()
 
@@ -140,7 +136,6 @@ class AgentProfile:
             # to_dict() or they'll silently fall back to settings defaults.
             "workspace_mode": self.workspace_mode,
             "resume_safe": self.resume_safe,
-            "validate_session_before_use": self.validate_session_before_use,
             "workspace_scope_safety": self.workspace_scope_safety,
         }
 

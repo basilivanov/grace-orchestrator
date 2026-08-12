@@ -307,15 +307,15 @@ def test_tools_grace_lint_returns_violations(client_w10, tmp_path):
 # ── GRC109: hardcoded CLI agents ───────────────────────────────────────
 
 
-def test_grc109_hardcoded_opencode_in_service_fails():
-    """opencode in service code fails GRC109."""
-    src = '# opencode run --model test\n'
+def test_grc109_hardcoded_cli_agent_in_service_fails():
+    """A hardcoded CLI agent name in service code fails GRC109."""
+    src = '# codex run --model test\n'
     vs = _v(src, path="src/grace_control/services/foo_service.py")
     assert any(v.code == "GRC109" for v in vs)
 
 
 def test_grc109_allowed_in_config():
     """CLI agent names in config/ are allowed."""
-    src = '# this config references opencode\n'
+    src = '# this config references a CLI agent\n'
     vs = _v(src, path="src/grace_control/config/agent_profiles.yaml")
     assert not any(v.code == "GRC109" for v in vs)

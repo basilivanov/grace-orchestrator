@@ -440,11 +440,10 @@ def test_autofix_maps_matrix_description_to_relative_file():
 
 class TestSessionMode:
 
-    def test_opencode_run_new_reports_new_session(self):
-        from grace_control.core.agent_session_adapter import OpenCodeSessionAdapter, AgentRunRequest
-        adapter = OpenCodeSessionAdapter(default_model="deepseek/deepseek-v4-flash")
-        # Session mode test: create request and check mode
-        assert adapter.default_model == "deepseek/deepseek-v4-flash"
+    def test_profile_run_new_uses_canonical_defaults(self):
+        from grace_control.core.agent_session_adapter import AgentProfileSessionAdapter
+        adapter = AgentProfileSessionAdapter()
+        assert adapter.default_executor_id == "architect-mini-swe"
 
     def test_autofix_success_creates_patched_plan(self):
         """Verify autofix persistence fields exist."""

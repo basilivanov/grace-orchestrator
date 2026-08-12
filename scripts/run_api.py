@@ -11,7 +11,7 @@ if "GRACE_DB_URL" not in os.environ and "GRACE_DATABASE_URL" in os.environ:
 os.environ.setdefault("GRACE_DB_URL", f"sqlite:///{Path.cwd() / 'grace.db'}")
 
 # Protect API from OOM killer: set oom_score_adj to OOM_SCORE_ADJ_MIN (-1000).
-# When opencode run consumes 4+ GB RSS and system runs out of memory,
+# When an agent run consumes 4+ GB RSS and system runs out of memory,
 # the OOM killer must kill the big subprocess, NOT the API.
 try:
     with open("/proc/self/oom_score_adj", "w") as _f:

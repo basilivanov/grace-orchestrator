@@ -168,19 +168,13 @@ def test_no_direct_env_reads_outside_allowlist():
 def test_agent_profile_minimal_repo_fields():
     from grace_control.config.agent_profiles import load_agent_profiles
     profiles = load_agent_profiles()
-    # If coder-opencode-fixture is in profiles, check its fields
-    if "coder-opencode-fixture" in profiles:
-        prof = profiles["coder-opencode-fixture"]
-        assert prof.minimal_repo is True
-        assert prof.skip_context_builder is True
-        d = prof.to_dict()
-        assert d["minimal_repo"] is True
-        assert d["skip_context_builder"] is True
-
-    if "coder-opencode" in profiles:
-        prof = profiles["coder-opencode"]
+    if "coder-mini-swe" in profiles:
+        prof = profiles["coder-mini-swe"]
         assert prof.minimal_repo is False
         assert prof.skip_context_builder is False
+        d = prof.to_dict()
+        assert d["minimal_repo"] is False
+        assert d["skip_context_builder"] is False
 
 
 def test_agent_profile_prompt_content():
@@ -188,31 +182,20 @@ def test_agent_profile_prompt_content():
     from grace_control.config.agent_profiles import get_agent_profile, reset_cache
     reset_cache()
 
-    # --- architect-premium ---
-    arch = get_agent_profile("architect-premium")
-    assert arch is not None, "architect-premium profile not found"
+    # --- architect-mini-swe ---
+    arch = get_agent_profile("architect-mini-swe")
+    assert arch is not None, "architect-mini-swe profile not found"
     arch_text = "\n".join(arch.command)
-    for text in [
-        "GRACE Architect",
-        "Do not crawl the whole repository",
-        "contract-first",
-        "context_bundle_path",
-        "knowledge-plan.xml",
-        "verification-matrix.xml",
-    ]:
-        assert text in arch_text, f"architect-premium missing: {text!r}"
+    assert "grace_control.runtime.mini_swe_runner" in arch_text
+    assert "--role" in arch_text
+    assert "architect" in arch_text
+    assert "--task-file" in arch_text
 
-    # --- context-collector-flash ---
-    col = get_agent_profile("context-collector-flash")
-    assert col is not None, "context-collector-flash profile not found"
+    # --- context-json-flash ---
+    col = get_agent_profile("context-json-flash")
+    assert col is not None, "context-json-flash profile not found"
     col_text = "\n".join(col.command)
-    for text in [
-        "bounded GRACE Context Builder",
-        "Do not read outside cwd",
-        "Do not crawl the whole repository",
-        "AI_HEADER",
-        "START_MODULE_CONTRACT",
-        "START_FUNCTION_CONTRACT",
-        "context_bundle_path",
-    ]:
-        assert text in col_text, f"context-collector-flash missing: {text!r}"
+    assert "grace_control.runtime.mini_swe_runner" in col_text
+    assert "--role" in col_text
+    assert "context_collector" in col_text
+    assert "--task-file" in col_text

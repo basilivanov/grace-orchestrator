@@ -30,16 +30,13 @@ def test_agents_run_echo_succeeds(client, tmp_path):
     """Run a simple echo command via agents API."""
     payload = {
         "packet_id": "pkt-agents-1",
-        "executor_id": "coder_opencode",
+        "executor_id": "coder-mini-swe",
         "model": "test-model",
         "worktree_path": str(tmp_path),
         "packet_markdown": "# hello",
         "timeout_seconds": 10,
     }
     r = client.post("/api/agents/run", json=payload)
-    # The executor profile has "command": ["opencode", "run", ...] but the default
-    # model is "codex-5.1", and opencode might not be on PATH.
-    # In tests without opencode installed, we expect exit_code != 0 or stderr.
     assert r.status_code in (200, 400), r.text
     if r.status_code == 400:
         assert "unknown executor_id" in r.json()["detail"]
@@ -62,11 +59,10 @@ def test_agents_run_persists_artifacts(client, tmp_path):
     """The endpoint should accept a valid executor_id."""
     payload = {
         "packet_id": "pkt-agents-log",
-        "executor_id": "coder_opencode",
+        "executor_id": "coder-mini-swe",
         "worktree_path": str(tmp_path / "wt"),
         "packet_markdown": "# hi",
         "timeout_seconds": 5,
     }
     r = client.post("/api/agents/run", json=payload)
-    # Accept either 200 or 400 (if opencode not on PATH in CI)
     assert r.status_code in (200, 400), r.text

@@ -94,9 +94,6 @@ CHECK_SCOPE_PARENT_EXISTS_OR_CREATABLE = "CHECK_SCOPE_PARENT_EXISTS_OR_CREATABLE
 CHECK_FROZEN_SCOPE_NO_OVERLAP = "CHECK_FROZEN_SCOPE_NO_OVERLAP"
 CHECK_ARTIFACT_DIR_WRITABLE = "CHECK_ARTIFACT_DIR_WRITABLE"
 CHECK_WORKTREE_DIRTY_BEFORE_RUN = "CHECK_WORKTREE_DIRTY_BEFORE_RUN"
-CHECK_OPENCODE_BINARY_AVAILABLE = "CHECK_OPENCODE_BINARY_AVAILABLE"
-CHECK_OPENCODE_AUTH_VISIBLE = "CHECK_OPENCODE_AUTH_VISIBLE"
-CHECK_OPENCODE_MODEL_CONFIG_PRESENT = "CHECK_OPENCODE_MODEL_CONFIG_PRESENT"
 
 
 class AgentRuntimeSelftest:
@@ -246,10 +243,7 @@ class AgentRuntimeSelftest:
                      actual="writable" if writable else "not writable",
                      failure_code=AgentRuntimeFailureCode.AGENT_ARTIFACT_DIR_NOT_WRITABLE if not writable else None)
 
-        # OpenCode checks
-        self._run_opencode_checks(contract)
-
-        # Determine overall result — build critical set dynamically
+        # Determine overall result.
         critical_codes = [
             AgentRuntimeFailureCode.AGENT_ENV_BAD_USER,
             AgentRuntimeFailureCode.AGENT_ENV_BAD_HOME,
@@ -264,10 +258,6 @@ class AgentRuntimeSelftest:
             AgentRuntimeFailureCode.AGENT_TARGET_REPO_NOT_FOUND,
             AgentRuntimeFailureCode.AGENT_ORCHESTRATOR_REPO_NOT_FOUND,
         ]
-        if getattr(settings, "agent_runtime_require_opencode_auth", False):
-            critical_codes.append(AgentRuntimeFailureCode.AGENT_ENV_MISSING_AUTH)
-        if getattr(settings, "agent_runtime_require_model_config", False):
-            critical_codes.append(AgentRuntimeFailureCode.AGENT_MODEL_UNAVAILABLE)
         critical = self._checks_failing_with_codes(critical_codes)
 
         if critical:
@@ -317,42 +307,6 @@ class AgentRuntimeSelftest:
 
     def _checks_failing_with_codes(self, codes: list[str]) -> list[RuntimeCheck]:
         return [c for c in self._checks if not c.ok and c.failure_code in codes]
-
-    def _run_opencode_checks(self, contract: AgentRuntimeContract) -> None:
-        strict_auth = getattr(settings, "agent_runtime_require_opencode_auth", False)
-        strict_model = getattr(settings, "agent_runtime_require_model_config", False)
-
-        # Check opencode binary — 'which' is a real binary (unlike 'command -v'
-        # which is a shell builtin and cannot run with shell=False).
-        rc, out, _ = self._shell("which opencode")
-        opencode_available = rc == 0
-        self._check(CHECK_OPENCODE_BINARY_AVAILABLE,
-                     ok=opencode_available,
-                     expected="opencode binary on PATH",
-                     actual=out if opencode_available else "not found",
-                     failure_code=None)
-
-        if opencode_available:
-            # Auth check
-            rc_auth, auth_out, _ = self._shell("opencode auth list")
-            auth_ok = rc_auth == 0 and bool(auth_out.strip())
-            auth_failure = AgentRuntimeFailureCode.AGENT_ENV_MISSING_AUTH if strict_auth else None
-            self._check(CHECK_OPENCODE_AUTH_VISIBLE,
-                         ok=auth_ok or not strict_auth,
-                         expected="opencode auth configured" if strict_auth else "opencode auth (soft)",
-                         actual=auth_out if auth_out else "(none detected)",
-                         failure_code=auth_failure)
-
-            # Model config check
-            rc_model, model_out, _ = self._shell("opencode models")
-            model_ok = rc_model == 0 and bool(model_out.strip())
-            model_failure = AgentRuntimeFailureCode.AGENT_MODEL_UNAVAILABLE if strict_model else None
-            self._check(CHECK_OPENCODE_MODEL_CONFIG_PRESENT,
-                         ok=model_ok or not strict_model,
-                         expected="opencode models configured" if strict_model else "opencode models (soft)",
-                         actual=model_out if model_out else "(none detected)",
-                         failure_code=model_failure)
-
 
 # _quote was a shell-style single-quote escaper used with shell=True.
 # Replaced by shlex.quote() which properly handles all special characters

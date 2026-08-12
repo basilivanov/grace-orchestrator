@@ -1,6 +1,6 @@
 # ############################################################################
 # AI_HEADER: agent_session_adapter
-# ROLE: Abstract adapter for OpenCode session resume/fallback.
+# ROLE: Abstract adapter for profile-backed session resume/fallback.
 # ############################################################################
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ _log = GraceLogger("agent_session_adapter")
 
 
 class AgentSessionHandle(BaseModel):
-    runner: str = "opencode"
+    runner: str = "profile"
     role: str = "architect"
     model: str | None = None
     session_id: str | None = None
@@ -66,14 +66,14 @@ class AgentSessionAdapter:
         raise NotImplementedError
 
 
-class OpenCodeSessionAdapter(AgentSessionAdapter):
-    """Profile-backed architect adapter with legacy OpenCode-compatible defaults."""
+class AgentProfileSessionAdapter(AgentSessionAdapter):
+    """Profile-backed architect adapter using the canonical LLM runner."""
 
     def __init__(
         self,
-        default_model: str = "deepseek/deepseek-v4-pro",
-        default_executor_id: str = "deepseek-v4-pro",
-        runner_name: str = "opencode",
+        default_model: str = "openai/gpt-5.5",
+        default_executor_id: str = "architect-mini-swe",
+        runner_name: str = "mini-swe",
     ):
         self.default_model = default_model
         self.default_executor_id = default_executor_id
@@ -127,8 +127,8 @@ class OpenCodeSessionAdapter(AgentSessionAdapter):
             _log.info("session_resume_not_implemented",
                       role=handle.role, session_id=handle.session_id,
                       fallback="new_session")
-            # Future: implement actual OpenCode resume via CLI
-            # Currently not available — fall back to new run
+            # Actual resume is not available for this profile adapter yet;
+            # fall back to a fresh run while retaining the repair context.
 
         _log.info("repair_session_mode",
                   role=handle.role if handle else "unknown",

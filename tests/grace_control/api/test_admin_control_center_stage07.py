@@ -357,7 +357,7 @@ def _seed_project_database(fixture: dict[str, Any]) -> None:
                            duration_ms=1000, executor_id=f"context-{key}", result_json={"status": "built"}),
     ]
     session = AgentSession(id=f"ses-{key}-internal", external_id=session_external_id, packet_id=shared.id,
-                           run_id=shared_run.id, role="coder", executor_id=f"executor-{key}", backend="opencode",
+                           run_id=shared_run.id, role="coder", executor_id=f"executor-{key}", backend="cli",
                            attempt_number=1, status="completed", created_at=now - timedelta(seconds=25),
                            finished_at=now - timedelta(seconds=5))
     ordinary = Lease(packet_id=running.id, worker_id=worker.id, claimed_attempt=1,

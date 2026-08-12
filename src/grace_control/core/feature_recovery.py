@@ -368,7 +368,7 @@ def _next_executor_hint(signal: FailureSignal) -> str:
         eid = executor.get("executor_id", "")
         if eid and eid not in prev:
             return eid
-    return "coder-deepseek-flash"
+    return "coder-mini-swe-deepseek"
 
 
 # ── Phase 4: Session Resume Stubs ──────────────────────────────────────

@@ -72,7 +72,7 @@ async def test_acceptance_failure_persists_metadata(tmp_path: Path):
     adapter._persist_run(
         status="rejected",
         run_id="pkt_t-R01",
-        executor={"executor_id": "coder-deepseek-flash"},
+        executor={"executor_id": "coder-mini-swe"},
         safe_data={"branch_name": "agent/pkt_t-attempt-0001"},
         accept_report=accept_report,
         evr=evr,

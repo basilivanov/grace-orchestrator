@@ -21,9 +21,6 @@ from grace_control.runtime.agent_runtime_selftest import (
     CHECK_CWD_EQUALS_WORKTREE_ROOT,
     CHECK_FROZEN_SCOPE_NO_OVERLAP,
     CHECK_GIT_ROOT_EQUALS_WORKTREE_ROOT,
-    CHECK_OPENCODE_AUTH_VISIBLE,
-    CHECK_OPENCODE_BINARY_AVAILABLE,
-    CHECK_OPENCODE_MODEL_CONFIG_PRESENT,
     CHECK_ORCHESTRATOR_REPO_EXISTS,
     CHECK_PACKET_SCOPE_RELATIVE,
     CHECK_SCOPE_PARENT_EXISTS_OR_CREATABLE,
@@ -68,7 +65,7 @@ def _make_contract(
         wave_id="wave_w3",
         packet_id=packet_id,
         role="coder",
-        adapter="opencode",
+        adapter="cli",
         target_repo_root=target,
         orchestrator_repo_root=orch,
         worktree_root=str(wt),
@@ -143,9 +140,7 @@ class TestSelftestPassing:
             for cid in (CHECK_CONTRACT_HAS_PACKET_ID, CHECK_CONTRACT_HAS_TARGET_REPO_ROOT,
                         CHECK_TARGET_REPO_EXISTS, CHECK_ORCHESTRATOR_REPO_EXISTS,
                         CHECK_WORKTREE_ROOT_EXISTS, CHECK_CWD_EQUALS_WORKTREE_ROOT,
-                        CHECK_PACKET_SCOPE_RELATIVE, CHECK_ARTIFACT_DIR_WRITABLE,
-                        CHECK_OPENCODE_BINARY_AVAILABLE, CHECK_OPENCODE_AUTH_VISIBLE,
-                        CHECK_OPENCODE_MODEL_CONFIG_PRESENT):
+                        CHECK_PACKET_SCOPE_RELATIVE, CHECK_ARTIFACT_DIR_WRITABLE):
                 assert cid in check_ids, f"missing check: {cid}"
 
     def test_selftest_records_each_check_as_event_payload(self):
@@ -361,92 +356,6 @@ class TestSelftestFailureBlocksExecutor:
         assert not result.ok
         assert result.failure_code == AgentRuntimeFailureCode.AGENT_ENV_BAD_GIT_ROOT
         assert "Runtime selftest failed" in result.summary
-
-
-class TestOpenCodeChecks:
-    """OpenCode binary/auth/model checks with configurable strictness."""
-
-    def test_opencode_binary_available_pass(self):
-        with tempfile.TemporaryDirectory() as _td:
-            td = Path(_td)
-            contract = _make_contract(td)
-            selftest = AgentRuntimeSelftest(shell_runner=_noop_shell)
-            result = selftest.run(contract, _make_trace())
-            oc = [c for c in result.checks if c.check_id == CHECK_OPENCODE_BINARY_AVAILABLE]
-            assert oc
-            # _noop_shell returns success, so binary is "available"
-            assert oc[0].ok
-
-    def test_opencode_auth_missing_is_warning_when_not_strict(self):
-        with tempfile.TemporaryDirectory() as _td:
-            td = Path(_td)
-            contract = _make_contract(td)
-            selftest = AgentRuntimeSelftest(shell_runner=_noop_shell)
-            result = selftest.run(contract, _make_trace())
-            oc = [c for c in result.checks if c.check_id == CHECK_OPENCODE_AUTH_VISIBLE]
-            assert oc
-            # _noop_shell returns empty auth output, but non-strict means ok=True
-
-    def test_opencode_auth_missing_is_failure_when_strict(self):
-        """When agent_runtime_require_opencode_auth is True, missing auth fails."""
-        from grace_control.config.settings import settings
-        original_auth = settings.agent_runtime_require_opencode_auth
-        original_git = settings.agent_runtime_fail_on_bad_git_root
-        original_cwd = settings.agent_runtime_fail_on_bad_cwd
-        try:
-            settings.agent_runtime_require_opencode_auth = True
-            settings.agent_runtime_fail_on_bad_git_root = False
-            settings.agent_runtime_fail_on_bad_cwd = False
-            with tempfile.TemporaryDirectory() as _td:
-                td = Path(_td)
-                contract = _make_contract(td)
-                selftest = AgentRuntimeSelftest(shell_runner=_noop_shell)
-                result = selftest.run(contract, _make_trace())
-                assert not result.ok, "missing auth (strict) should make selftest fail"
-                assert result.failure_code == AgentRuntimeFailureCode.AGENT_ENV_MISSING_AUTH
-                oc = [c for c in result.checks if c.check_id == CHECK_OPENCODE_AUTH_VISIBLE]
-                assert oc
-                assert not oc[0].ok
-                assert oc[0].failure_code == AgentRuntimeFailureCode.AGENT_ENV_MISSING_AUTH
-        finally:
-            settings.agent_runtime_require_opencode_auth = original_auth
-            settings.agent_runtime_fail_on_bad_git_root = original_git
-            settings.agent_runtime_fail_on_bad_cwd = original_cwd
-
-    def test_opencode_model_missing_is_warning_when_not_strict(self):
-        with tempfile.TemporaryDirectory() as _td:
-            td = Path(_td)
-            contract = _make_contract(td)
-            selftest = AgentRuntimeSelftest(shell_runner=_noop_shell)
-            result = selftest.run(contract, _make_trace())
-            oc = [c for c in result.checks if c.check_id == CHECK_OPENCODE_MODEL_CONFIG_PRESENT]
-            assert oc
-            assert oc[0].ok  # non-strict
-
-    def test_opencode_model_missing_is_failure_when_strict(self):
-        from grace_control.config.settings import settings
-        original_model = settings.agent_runtime_require_model_config
-        original_git = settings.agent_runtime_fail_on_bad_git_root
-        original_cwd = settings.agent_runtime_fail_on_bad_cwd
-        try:
-            settings.agent_runtime_require_model_config = True
-            settings.agent_runtime_fail_on_bad_git_root = False
-            settings.agent_runtime_fail_on_bad_cwd = False
-            with tempfile.TemporaryDirectory() as _td:
-                td = Path(_td)
-                contract = _make_contract(td)
-                selftest = AgentRuntimeSelftest(shell_runner=_noop_shell)
-                result = selftest.run(contract, _make_trace())
-                assert not result.ok, "missing model (strict) should make selftest fail"
-                assert result.failure_code == AgentRuntimeFailureCode.AGENT_MODEL_UNAVAILABLE
-                oc = [c for c in result.checks if c.check_id == CHECK_OPENCODE_MODEL_CONFIG_PRESENT]
-                assert oc
-                assert not oc[0].ok
-                assert oc[0].failure_code == AgentRuntimeFailureCode.AGENT_MODEL_UNAVAILABLE
-        finally:
-            settings.agent_runtime_require_model_config = original_model
-            settings.agent_runtime_fail_on_bad_git_root = original_git
-            settings.agent_runtime_fail_on_bad_cwd = original_cwd
 
 
 class TestFailureCodes:

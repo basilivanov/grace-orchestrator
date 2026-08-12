@@ -243,8 +243,6 @@ def _read_agent_logs(packet_id: str, tail: int) -> list[AggregatedLines]:
                 continue
             ev_path = Path(run.evidence_path)
             agent_file = ev_path / "agent.jsonl"
-            if not agent_file.exists():
-                agent_file = ev_path / "raw_opencode_events.jsonl"
             if agent_file.exists():
                 for line in _tail_file(agent_file, tail):
                     try:

@@ -163,14 +163,14 @@ def test_agent_profile_rejects_string_command():
     from grace_control.config.agent_profiles import AgentProfile
     import pytest
     with pytest.raises(ValueError, match="must be a list"):
-        AgentProfile("bad_exec", {"command": "opencode"})
+        AgentProfile("bad_exec", {"command": "agy"})
 
 
 def test_agent_profile_accepts_list_command():
     """AgentProfile accepts list command."""
     from grace_control.config.agent_profiles import AgentProfile
-    p = AgentProfile("ok", {"command": ["opencode", "run", "--model", "{model}"]})
-    assert p.command == ["opencode", "run", "--model", "{model}"]
+    p = AgentProfile("ok", {"command": ["agy", "run", "--model", "{model}"]})
+    assert p.command == ["agy", "run", "--model", "{model}"]
 
 
 # ── Env builder ────────────────────────────────────────────────────────

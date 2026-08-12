@@ -69,15 +69,15 @@ class CodebaseContext:
 class ContextCollector:
 
     def __init__(self, project_root: Path | None = None,
-                 model: str | None = None, cli: str = "opencode",
+                 model: str | None = None, cli: str = "",
                  executor_id: str | None = None,
                  stdout_log_path: Path | str | None = None,
                  stderr_log_path: Path | str | None = None):
         self._root = project_root or Path.cwd()
         self._model = model or os.environ.get("GRACE_CONTEXT_MODEL", "deepseek/deepseek-v4-flash")
         # executor_id takes priority over cli for profile lookup in run_llm.
-        # This ensures the read-only context-json-flash profile is used instead
-        # of the generic coder-like "opencode" profile.
+        # This ensures the read-only context profile is used instead of a
+        # generic fallback profile.
         self._executor_id = executor_id or cli
         self._cli = cli
         self._stdout_log_path = stdout_log_path

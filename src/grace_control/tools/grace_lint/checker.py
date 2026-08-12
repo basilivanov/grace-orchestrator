@@ -432,7 +432,7 @@ def _check_router_db_loops(content: str, path: str, al: dict) -> list[Violation]
     return violations
 
 
-_KNOWN_CLI_AGENTS = {"opencode", "codex", "agy", "gemini", "claude"}
+_KNOWN_CLI_AGENTS = {"codex", "agy", "gemini", "claude"}
 
 
 def _check_hardcoded_cli_agent(content: str, path: str, al: dict) -> list[Violation]:

@@ -44,7 +44,7 @@ _log = GraceLogger("session_store")
 
 
 def _session_run_status_usable(db: Session, external_id: str) -> bool:
-    """Conservative usability check for a stored opencode session.
+    """Conservative usability check for a stored executor session.
 
     Returns False (skip resume) when:
     * session external_id is empty or malformed;
@@ -52,9 +52,8 @@ def _session_run_status_usable(db: Session, external_id: str) -> bool:
       exit_code != 0, was timed out, or had a session/auth error in stderr.
 
     This is intentionally conservative: when we cannot prove the session is
-    healthy, we skip it. Stale opencode session ids cause
-    `Session not found` exit_code=1 which is the most common coder failure
-    we observed.
+    healthy, we skip it. A stale session id or failed prior run must never be
+    resumed blindly.
 
     Layout expected on PacketRun.result_json (TZ §6.5):
       {

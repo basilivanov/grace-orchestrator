@@ -138,15 +138,15 @@ class TestSessionHandleConversion:
         from grace_control.core.agent_session_adapter import AgentSessionHandle
 
         raw = {
-            "runner": "opencode",
+            "runner": "profile",
             "role": "architect",
-            "model": "deepseek/deepseek-v4-pro",
+            "model": "openai/deepseek-v4-pro",
             "session_id": "sess_abc123",
         }
         handle = AgentSessionHandle(**raw)
         assert handle.session_id == "sess_abc123"
-        assert handle.runner == "opencode"
-        assert handle.model == "deepseek/deepseek-v4-pro"
+        assert handle.runner == "profile"
+        assert handle.model == "openai/deepseek-v4-pro"
 
     def test_session_handle_from_json_string(self):
         """previous_session restored from JSON string must be valid."""
@@ -154,7 +154,7 @@ class TestSessionHandleConversion:
         import json
 
         raw_str = json.dumps({
-            "runner": "opencode",
+            "runner": "profile",
             "session_id": "sess_def456",
         })
         raw = json.loads(raw_str)
@@ -177,7 +177,7 @@ class TestSessionHandleConversion:
         """When session_id is absent, run_architect_repair should use new session."""
         from grace_control.core.agent_session_adapter import AgentSessionHandle
 
-        raw = {"runner": "opencode", "role": "architect"}
+        raw = {"runner": "profile", "role": "architect"}
         handle = AgentSessionHandle(**raw)
         assert handle.session_id is None
         # The repair code checks: if previous_session and previous_session.session_id

@@ -14,7 +14,7 @@ from grace_control.core.agent_session_adapter import (
     AgentSessionHandle,
     AgentSessionAdapter,
     AgentRunResult,
-    OpenCodeSessionAdapter,
+    AgentProfileSessionAdapter,
 )
 from grace_control.core.structured_logger import GraceLogger
 
@@ -141,7 +141,7 @@ async def run_architect_repair(
 ) -> tuple[dict | None, str | None]:
     """Run architect repair: attempt resume, build prompt, call LLM, parse result."""
     if adapter is None:
-        adapter = OpenCodeSessionAdapter(
+        adapter = AgentProfileSessionAdapter(
             default_model="openai/gpt-5.5",
             default_executor_id="architect-mini-swe",
             runner_name="mini-swe",

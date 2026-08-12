@@ -18,9 +18,7 @@ class AgentRuntimeFailureCode:
     AGENT_ENV_BAD_HOME = "AGENT_ENV_BAD_HOME"
     AGENT_ENV_BAD_CWD = "AGENT_ENV_BAD_CWD"
     AGENT_ENV_BAD_GIT_ROOT = "AGENT_ENV_BAD_GIT_ROOT"
-    AGENT_ENV_MISSING_AUTH = "AGENT_ENV_MISSING_AUTH"
     AGENT_ENV_MISSING_CONFIG = "AGENT_ENV_MISSING_CONFIG"
-    AGENT_MODEL_UNAVAILABLE = "AGENT_MODEL_UNAVAILABLE"
     AGENT_WORKTREE_INVALID = "AGENT_WORKTREE_INVALID"
     AGENT_WORKTREE_DIRTY_BEFORE_RUN = "AGENT_WORKTREE_DIRTY_BEFORE_RUN"
     AGENT_SCOPE_PARENT_NOT_CREATABLE = "AGENT_SCOPE_PARENT_NOT_CREATABLE"
@@ -35,11 +33,6 @@ class AgentRuntimeFailureCode:
     AGENT_PROCESS_CRASHED = "AGENT_PROCESS_CRASHED"
     AGENT_COMMAND_TIMEOUT = "AGENT_COMMAND_TIMEOUT"
     AGENT_PERMISSION_BLOCKED = "AGENT_PERMISSION_BLOCKED"
-    AGENT_OPENCODE_SERVER_NOT_RUNNING = "AGENT_OPENCODE_SERVER_NOT_RUNNING"
-    AGENT_OPENCODE_SERVER_UNHEALTHY = "AGENT_OPENCODE_SERVER_UNHEALTHY"
-    AGENT_OPENCODE_SERVER_START_FAILED = "AGENT_OPENCODE_SERVER_START_FAILED"
-    AGENT_OPENCODE_SERVER_TIMEOUT = "AGENT_OPENCODE_SERVER_TIMEOUT"
-    AGENT_OPENCODE_ATTACH_FAILED = "AGENT_OPENCODE_ATTACH_FAILED"
     AGENT_CHANGED_OUT_OF_SCOPE = "AGENT_CHANGED_OUT_OF_SCOPE"
     AGENT_TOUCHED_FROZEN_SCOPE = "AGENT_TOUCHED_FROZEN_SCOPE"
     AGENT_SCOPE_ENFORCEMENT_FAILED = "AGENT_SCOPE_ENFORCEMENT_FAILED"
@@ -54,7 +47,7 @@ class AgentRuntimeContract(BaseModel):
     wave_id: str | None = None
     packet_id: str
     role: str
-    adapter: str = "opencode"
+    adapter: str = "cli"
     target_repo_root: str
     orchestrator_repo_root: str
     worktree_root: str
@@ -117,7 +110,7 @@ class AgentRuntimeContractBuilder:
             wave_id=packet_data.get("wave_id", ""),
             packet_id=packet_data.get("id", ""),
             role=executor.get("role", "coder"),
-            adapter=executor.get("adapter", "opencode"),
+            adapter=executor.get("adapter", "cli"),
             target_repo_root=target_repo_root or str(project_root),
             orchestrator_repo_root=str(project_root),
             worktree_root=str(worktree_path),

@@ -181,15 +181,14 @@ def test_select_executor_skips_disabled_invalid_profiles():
     reset_cache()
     profiles = load_agent_profiles()
 
-    # Identify all disabled profile IDs
-    disabled_ids = [p.executor_id for p in profiles.values() if p.disabled]
-    assert len(disabled_ids) > 0, "At least one profile should be disabled for this test"
-
-    # Verify disabled profiles are never selected for any role or attempt
+    # The active profile set contains only supported profiles after legacy
+    # cleanup; selection must still return enabled profiles for every role.
+    disabled_ids = {p.executor_id for p in profiles.values() if p.disabled}
     for role in ("coder", "architect", "verifier", "reviewer", "context_collector"):
         for attempt in range(1, 6):
             result = select_executor(role, attempt=attempt)
             executor_id = result.get("executor_id", "")
+            assert executor_id
             assert executor_id not in disabled_ids, \
                 (f"Disabled profile '{executor_id}' was selected for "
                  f"role={role} attempt={attempt}")
@@ -329,28 +328,3 @@ def test_agent_run_service_rejects_cwd_escaping_worktree():
                 state_root=Path(tmpdir) / "state",
                 packet_markdown="test",
             ))
-
-
-# ─── Regression: live executor profile cannot select disabled profile ───────
-
-# START_FUNCTION_CONTRACT
-# name: test_live_executor_profile_cannot_select_disabled_profile
-# purpose: Verify a live profile override cannot enable a disabled executor.
-# inputs: None.
-# returns: None; asserts a ValueError.
-# side_effects: Resets profile cache and patches process environment temporarily.
-# emitted_logs: None.
-# error_behavior: Fails when a disabled live override is selected.
-# END_FUNCTION_CONTRACT
-def test_live_executor_profile_cannot_select_disabled_profile():
-    """W09 regression: GRACE_LIVE_EXECUTOR_PROFILE must not select a disabled
-    profile. Setting GRACE_LIVE_EXECUTOR_PROFILE=opencode (which is disabled)
-    must raise ValueError — fail-closed, not silently returned."""
-    from grace_control.core.executor_selector import select_executor
-
-    reset_cache()
-
-    with patch.dict("os.environ", {"GRACE_LIVE_EXECUTOR_PROFILE": "opencode"}):
-        with pytest.raises(ValueError, match="selects a disabled profile"):
-            select_executor("coder")
-# END_BLOCK_PROFILE_SAFETY

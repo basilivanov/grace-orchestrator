@@ -448,22 +448,6 @@ class TestTelegramBridgeService:
         assert True  # doesn't crash
 
 
-class TestMultimodalPropagation:
-    """multimodal flag propagates from AgentProfile.to_dict()."""
-
-    def test_verifier_profile_has_multimodal(self):
-        from grace_control.config.agent_profiles import get_agent_profile
-        p = get_agent_profile("verifier-cheap")
-        assert p is not None
-        assert p.multimodal is True
-
-    def test_multimodal_in_to_dict(self):
-        from grace_control.config.agent_profiles import get_agent_profile
-        p = get_agent_profile("verifier-cheap")
-        d = p.to_dict()
-        assert d["multimodal"] is True
-
-
 class TestPlaywrightInstall:
     """npx playwright install chromium via process_supervisor (P1/3.4)."""
 

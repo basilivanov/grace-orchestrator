@@ -296,7 +296,6 @@ Conservative: если git или DB недоступны — **не трога�
 - **Health check**: supervisor ждёт `GET /health` прежде чем запустить workers, гарантируя что API готов принимать claim'ы.
 - **Graceful restart**: `grace_ctl restart workers` → SIGTERM → 5s wait → SIGKILL → новый subprocess.
 - **Reaping orphans**: при старте supervisor форсированно убивает все процессы `run_api.py`, `live_worker.py`, `grace_control.cli` через `pgrep -9`.
-- **OPENCODE env isolation**: supervisor фильтрует `OPENCODE`/`OPENCODE_*` из окружения детей, иначе `opencode run` возвращает "Session not found".
 - **Cleanup as first-class**: `SupervisorCleanupService` — единая точка для орфанов, state и stale leases. Идемпотентно, без race conditions.
 - **Lifecycle HTTP proxy**: `/api/admin/lifecycle/*` — единый source of truth. POST проксирует на unix-socket, GET читает state file. Никакой бизнес-логики в HTTP-слое.
 
@@ -306,13 +305,6 @@ Conservative: если git или DB недоступны — **не трога�
 `supervisor.json` отсутствует. Supervisor не запущен или упал. Запустить:
 ```bash
 scripts/live_supervisor.sh --target-dir $TARGET --source-dir $SOURCE
-```
-
-### "Session not found" от opencode
-`OPENCODE`/`OPENCODE_*` переменные попали в окружение ребёнка. Supervisor фильтрует их, но если запускать `live_supervisor.sh` через `nohup` — переменные могут протечь до `unset`. Решение:
-```bash
-env -u OPENCODE -u OPENCODE_SERVER_URL -u OPENCODE_SERVER_PASSWORD \
-  bash scripts/live_supervisor.sh ...
 ```
 
 ### "Connection refused" на supervisor.sock

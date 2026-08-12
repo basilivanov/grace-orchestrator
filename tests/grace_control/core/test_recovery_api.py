@@ -49,7 +49,7 @@ def test_evaluate_endpoint_applied(MockCtrl):
         action=RecoveryAction.SWITCH_CODER,
         failure_class=FailureClass.RETRYABLE_CODER,
         reason="switch model",
-        next_executor_hint="coder-sonnet",
+        next_executor_hint="coder-mini-swe-deepseek",
     )
     mock_ctrl = MockCtrl.return_value
     mock_ctrl.evaluate.return_value = _async_decision(decision)
@@ -59,7 +59,7 @@ def test_evaluate_endpoint_applied(MockCtrl):
     assert resp.status_code == 200
     data = resp.json()["data"]
     assert data["status"] == "applied"
-    assert data["next_executor_hint"] == "coder-sonnet"
+    assert data["next_executor_hint"] == "coder-mini-swe-deepseek"
 
 
 @patch("grace_control.db.get_db")

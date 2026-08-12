@@ -255,8 +255,8 @@ async def test_full_coder_switch_real_db(db):
         reason="T1 failed",
         coder_attempt_count=2, attempt_count=2,
         acceptance_verdict="rework_required",
-        current_executor_id="coder-deepseek-flash",
-        previous_executor_ids=["coder-deepseek-flash"] * 1,
+        current_executor_id="coder-mini-swe-deepseek",
+        previous_executor_ids=["coder-mini-swe-deepseek"] * 1,
     )
     fc = classify_failure(signal)
     assert fc == FailureClass.RETRYABLE_CODER

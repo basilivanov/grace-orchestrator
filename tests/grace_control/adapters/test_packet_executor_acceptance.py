@@ -547,7 +547,7 @@ class TestEvidenceVerifierReviewerRouting:
         # Mock _resolve_executor to return skip_context_builder=True
         with patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._resolve_executor") as mock_resolve:
             mock_resolve.return_value = {
-                "executor_id": "coder-opencode-fixture",
+                "executor_id": "coder-mini-swe",
                 "backend": "cli",
                 "skip_context_builder": True,
             }
@@ -566,7 +566,7 @@ class TestEvidenceVerifierReviewerRouting:
             assert "context_builder" in legacy["evidence"]
             assert legacy["evidence"]["context_builder"]["skipped"] is True
             assert legacy["evidence"]["context_builder"]["reason"] == "executor.skip_context_builder=true"
-            assert legacy["evidence"]["context_builder"]["executor_id"] == "coder-opencode-fixture"
+            assert legacy["evidence"]["context_builder"]["executor_id"] == "coder-mini-swe"
 
     @patch("grace_control.adapters.packet_executor.run_reviewer_gate")
     @patch("grace_control.adapters.packet_executor.run_evidence_verifier")
@@ -577,7 +577,7 @@ class TestEvidenceVerifierReviewerRouting:
         """skip_context_builder: absent/false -> records skipped: false in evidence."""
         with patch("grace_control.adapters.packet_executor.PacketExecutionAdapter._resolve_executor") as mock_resolve:
             mock_resolve.return_value = {
-                "executor_id": "coder-opencode",
+                "executor_id": "coder-mini-swe",
                 "backend": "cli",
             }
             mock_run = _make_mock_packet_run()
@@ -678,7 +678,7 @@ class TestCallExecutorTargetRepoWorktree:
             base_ref="main",
             base_sha="123456",
             executor={
-                "executor_id": "coder-opencode",
+                "executor_id": "coder-mini-swe",
                 "workspace_mode": "target_repo_worktree",
             },
             evidence_dir=tmp_path / "evidence",
@@ -762,7 +762,7 @@ class TestCallExecutorTargetRepoWorktree:
         })
 
         executor = {
-            "executor_id": "coder-opencode",
+            "executor_id": "coder-mini-swe",
             "workspace_mode": "target_repo_worktree",
         }
 
@@ -912,7 +912,7 @@ class TestCallExecutorTargetRepoWorktree:
              patch.object(settings, "target_repo_root", str(target_dir)):
              
             mock_resolve.return_value = {
-                "executor_id": "coder-opencode",
+                "executor_id": "coder-mini-swe",
                 "backend": "cli",
             }
             

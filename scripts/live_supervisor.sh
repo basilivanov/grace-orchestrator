@@ -48,7 +48,7 @@ SOURCE_DIR="${SOURCE_DIR:-$DEFAULT_SOURCE_DIR}"
 
 # A supervisor may be launched through sudo -E, which intentionally preserves
 # the caller's environment.  Resolve HOME from the actual runtime user so
-# mini-swe/opencode state is writable by the worker owner instead of inheriting
+# mini-swe state is writable by the worker owner instead of inheriting
 # another user's private config directory.
 if [[ -n "${GRACE_HOME:-}" ]]; then
   export HOME="$GRACE_HOME"
@@ -131,12 +131,6 @@ if ! flock -n "$SUPERVISOR_LOCK_FD"; then
 fi
 
 cd "$TARGET_DIR"
-
-# Drop OPENCODE runtime vars from the parent shell.
-# Without this, 'opencode run' in subprocesses picks them up and tries to
-# attach to a nonexistent server session, failing with "Session not found".
-for v in $(env | grep -E '^OPENCODE(_|$)' | cut -d= -f1); do unset "$v"; done
-for v in $(env | grep -E '^OPENCODE$' | cut -d= -f1); do unset "$v"; done
 
 # Hand off to the supervisor. From here on, the supervisor is the
 # process tree root: SIGINT/SIGTERM go to it, and it propagates to

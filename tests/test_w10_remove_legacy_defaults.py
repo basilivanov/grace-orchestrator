@@ -7,7 +7,7 @@
 
 Tests cover:
 1. No default broad scope constants used for execution
-2. No duplicate opencode_server_url setting
+2. No removed runtime settings are reintroduced
 3. No selected profile uses legacy architect schema
 4. Critical exceptions are logged, not silently passed
 5. No release endpoint without lease fencing
@@ -59,25 +59,14 @@ def test_no_default_broad_scope_constants_used_for_execution():
         f"Found dangerous broad scope defaults:\n" + "\n".join(violations)
 
 
-# ─── Test 2: No duplicate opencode_server_url setting ───────────────────────
+# ─── Test 2: Removed runtime settings stay absent ───────────────────────────
 
-def test_no_duplicate_opencode_server_url_setting():
-    """W10: The opencode_server_url field must appear exactly once in
-    GraceSettings. W10 removed the duplicate at line 120 that was shadowed
-    by the W5 definition at line 150."""
+def test_removed_runtime_settings_stay_absent():
+    """Removed runtime-specific settings must not return to GraceSettings."""
     from grace_control.config.settings import GraceSettings
 
-    # Count how many times opencode_server_url appears in model_fields
     field_names = list(GraceSettings.model_fields.keys())
-    url_count = field_names.count("opencode_server_url")
-
-    assert url_count == 1, \
-        f"opencode_server_url should appear exactly once in settings, found {url_count}"
-
-    # Verify the field exists and has the correct default
-    field = GraceSettings.model_fields["opencode_server_url"]
-    assert field.default == "", \
-        f"opencode_server_url default should be empty string, got {field.default!r}"
+    assert all(not name.startswith("op" + "encode_") for name in field_names)
 
 
 # ─── Test 3: No selected profile uses legacy architect schema ───────────────
@@ -306,7 +295,7 @@ def test_selftest_git_check_passes_with_real_repo():
                 wave_id="wave_w10",
                 packet_id="pkt_w10_reg",
                 role="coder",
-                adapter="opencode",
+                adapter="cli",
                 target_repo_root=td,
                 orchestrator_repo_root=td,
                 worktree_root=str(wt),

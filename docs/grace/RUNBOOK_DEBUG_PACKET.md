@@ -9,18 +9,13 @@ curl http://localhost:8042/api/trace/packets/{packet_id}
 ## Inspect run timeline
 
 The trace response includes `runs[]` with status, executor_id, duration, and
-`timeline[]` with event sequence.
+`timeline[]` with the event sequence.
 
 ## Inspect artifacts
 
 ```bash
-# List artifacts
 curl http://localhost:8042/api/packets/{packet_id}/runs/{run_id}/artifacts
-
-# Read stdout
 curl "http://localhost:8042/api/packets/{packet_id}/runs/{run_id}/artifacts/file?path=agent_stdout.log"
-
-# Read stderr (tail)
 curl "http://localhost:8042/api/packets/{packet_id}/runs/{run_id}/artifacts/file?path=agent_stderr.log&tail=50"
 ```
 
@@ -28,11 +23,11 @@ curl "http://localhost:8042/api/packets/{packet_id}/runs/{run_id}/artifacts/file
 
 | Symptom | Likely cause |
 | --- | --- |
-| `domain_status=timeout` | Agent took too long; increase `timeout_seconds` in profile |
-| `no_changes_produced` | Agent ran but did not modify any allowed files |
-| `merge 409` | Packet already merged or state transition conflict |
-| `executor_id not found` | Profile missing from `agent_profiles.yaml` |
-| `Command not found: opencode` | CLI tool not installed or not on PATH |
+| `domain_status=timeout` | Increase `timeout_seconds` in the selected profile |
+| `no_changes_produced` | The agent did not modify an allowed path |
+| `merge 409` | The packet was already merged or state transition conflicted |
+| `executor_id not found` | The profile is missing from `agent_profiles.yaml` |
+| `command not found` | The selected CLI tool is not installed or not on `PATH` |
 
 ## Rerun a packet
 

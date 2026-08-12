@@ -537,10 +537,6 @@ class Supervisor:
                    "GRACE_WORKTREE_ROOT", "GRACE_SOURCE_DIR"):
             if _k in env:
                 env[_k] = env[_k]
-        # Opencode runtime vars must NOT leak into children, otherwise
-        # `opencode run` returns "Session not found".
-        for k in [k for k in list(env) if k == "OPENCODE" or k.startswith("OPENCODE_")]:
-            del env[k]
         return env
 
     def _make_worker_argv(self, slot: int) -> tuple[list[str], dict[str, str]]:

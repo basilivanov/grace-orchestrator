@@ -30,7 +30,7 @@ router = APIRouter(tags=["agents"])
 
 class RunRequest(BaseModel):
     packet_id: str
-    executor_id: str = "coder_opencode"
+    executor_id: str = "coder-mini-swe"
     role: str = "coder"
     model: str = ""
     effort: str = ""

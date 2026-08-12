@@ -138,38 +138,15 @@ class GraceSettings(BaseSettings):
 
     # ── W3 Agent Runtime Selftest ──
     agent_runtime_selftest_enabled: bool = True
-    agent_runtime_require_opencode_auth: bool = False
-    agent_runtime_require_model_config: bool = False
     agent_runtime_fail_on_bad_cwd: bool = True
     agent_runtime_fail_on_bad_git_root: bool = True
     agent_runtime_fail_on_dirty_worktree: bool = False
-
-    # ── W4 OpenCode Direct Runtime Adapter ──
-    agent_runtime_use_opencode_adapter: bool = False
-    opencode_binary: str = "opencode"
-    opencode_direct_timeout_seconds: int = 1800
-    opencode_process_kill_grace_seconds: int = 5
-    opencode_json_events_required: bool = True
-    opencode_capture_raw_events: bool = True
-
-    # ── W5 OpenCode Serve/Attach ──
-    opencode_runtime_mode: str = "direct"
-    opencode_server_host: str = "127.0.0.1"
-    opencode_server_port: int = 4096
-    opencode_server_url: str = ""
-    opencode_server_password: str = ""
-    opencode_server_start_timeout_seconds: int = 20
-    opencode_server_health_timeout_seconds: int = 5
-    opencode_server_restart_on_unhealthy: bool = True
-    opencode_server_log_path: str = ".grace/opencode-server.log"
-    opencode_server_pid_path: str = ".grace/opencode-server.pid"
 
     # ── W6 Post-run Scope Enforcement + Diagnostics ──
     agent_runtime_fail_on_no_changes: bool = False
 
     # ── W7 Runtime Hardening ──
     agent_runtime_allow_non_git_scope_skip: bool = False
-    opencode_server_kill_grace_seconds: int = 5
 
     # ── W10 Reviewer Rework Packets ──
     agent_runtime_rework_packets_enabled: bool = True
@@ -211,8 +188,6 @@ def _apply_project_fallbacks(target: GraceSettings, project: ProjectConfig) -> N
         "require_remote_sync": project.execution.require_remote_sync,
         "execution_backend": project.execution.backend,
         "sandbox_mode": project.safety.sandbox_mode,
-        "opencode_server_url": project.opencode.server_url,
-        "opencode_server_password": project.opencode.server_password,
         "target_repo_root": project.execution.target_repo_root,
     }
     for field_name, project_value in project_overrides.items():

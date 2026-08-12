@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
-from grace_control.db.schema import AgentSession, Base
+from grace_control.db.schema import AgentSession, Base, PacketRun
 from grace_control.services.session_store import SessionStore
 
 
@@ -28,13 +28,29 @@ def store() -> SessionStore:
     return SessionStore()
 
 
+def _add_healthy_run(db: Session, *, run_id: str, packet_id: str,
+                     run_number: int, external_id: str) -> None:
+    db.add(PacketRun(
+        id=run_id,
+        packet_id=packet_id,
+        run_number=run_number,
+        status="accepted",
+        result_json={
+            "legacy_result": {
+                "exit_code": 0,
+                "evidence": {"session_id": external_id},
+            },
+        },
+    ))
+
+
 # ── save ──────────────────────────────────────────────────────────────────
 
 
 class TestSave:
     def test_save_creates_record(self, db, store):
         sid = store.save(db, packet_id="p1", run_id="run1", role="coder",
-                         executor_id="coder-x", backend="opencode",
+                         executor_id="coder-x", backend="cli",
                          attempt_number=0, external_id="ses_ext_001")
         assert sid is not None
         assert sid.startswith("ses_")
@@ -47,7 +63,7 @@ class TestSave:
 
     def test_save_with_parent(self, db, store):
         sid = store.save(db, packet_id="p1", run_id="r1", role="coder",
-                         executor_id="c2", backend="opencode",
+                         executor_id="c2", backend="cli",
                          attempt_number=1, external_id="ext2",
                          parent_session_id="ses_parent")
         assert sid is not None
@@ -57,7 +73,7 @@ class TestSave:
 
     def test_save_without_optional_fields(self, db, store):
         sid = store.save(db, packet_id="p1", run_id=None, role="verifier",
-                         executor_id=None, backend="opencode",
+                         executor_id=None, backend="cli",
                          attempt_number=0, external_id=None)
         assert sid is not None
         db.flush()
@@ -73,11 +89,15 @@ class TestSave:
 class TestFindLatest:
     def test_finds_latest_for_role(self, db, store):
         sid1 = store.save(db, packet_id="p1", run_id="r1", role="coder",
-                          executor_id="ex1", backend="opencode",
-                          attempt_number=0, external_id="ext1")
+                          executor_id="ex1", backend="cli",
+                          attempt_number=0, external_id="ses_ext_1")
         sid2 = store.save(db, packet_id="p1", run_id="r2", role="coder",
-                          executor_id="ex1", backend="opencode",
-                          attempt_number=1, external_id="ext2")
+                          executor_id="ex1", backend="cli",
+                          attempt_number=1, external_id="ses_ext_2")
+        _add_healthy_run(db, run_id="r1", packet_id="p1", run_number=1,
+                         external_id="ses_ext_1")
+        _add_healthy_run(db, run_id="r2", packet_id="p1", run_number=2,
+                         external_id="ses_ext_2")
         db.flush()
         found = store.find_latest(db, "p1", "coder")
         assert found is not None
@@ -85,11 +105,15 @@ class TestFindLatest:
 
     def test_filters_by_executor_id(self, db, store):
         store.save(db, packet_id="p1", run_id="r1", role="coder",
-                   executor_id="exA", backend="opencode",
-                   attempt_number=0, external_id="extA")
+                   executor_id="exA", backend="cli",
+                   attempt_number=0, external_id="ses_ext_a")
         store.save(db, packet_id="p1", run_id="r2", role="coder",
-                   executor_id="exB", backend="opencode",
-                   attempt_number=1, external_id="extB")
+                   executor_id="exB", backend="cli",
+                   attempt_number=1, external_id="ses_ext_b")
+        _add_healthy_run(db, run_id="r1", packet_id="p1", run_number=1,
+                         external_id="ses_ext_a")
+        _add_healthy_run(db, run_id="r2", packet_id="p1", run_number=2,
+                         external_id="ses_ext_b")
         db.flush()
         found = store.find_latest(db, "p1", "coder", executor_id="exA")
         assert found is not None
@@ -100,7 +124,7 @@ class TestFindLatest:
 
     def test_failed_sessions_are_skipped(self, db, store):
         sid = store.save(db, packet_id="p1", run_id="r1", role="coder",
-                         executor_id="ex1", backend="opencode",
+                         executor_id="ex1", backend="cli",
                          attempt_number=0, external_id="ext1")
         db.flush()
         store.mark_failed(db, sid)
@@ -114,11 +138,15 @@ class TestFindLatest:
 class TestFindForFork:
     def test_finds_any_completed(self, db, store):
         store.save(db, packet_id="p1", run_id="r1", role="coder",
-                   executor_id="exA", backend="opencode",
-                   attempt_number=0, external_id="extA")
+                   executor_id="exA", backend="cli",
+                   attempt_number=0, external_id="ses_ext_a")
         store.save(db, packet_id="p1", run_id="r2", role="coder",
-                   executor_id="exB", backend="opencode",
-                   attempt_number=1, external_id="extB")
+                   executor_id="exB", backend="cli",
+                   attempt_number=1, external_id="ses_ext_b")
+        _add_healthy_run(db, run_id="r1", packet_id="p1", run_number=1,
+                         external_id="ses_ext_a")
+        _add_healthy_run(db, run_id="r2", packet_id="p1", run_number=2,
+                         external_id="ses_ext_b")
         db.flush()
         found = store.find_for_fork(db, "p1", "coder")
         assert found is not None
@@ -135,7 +163,7 @@ class TestFindForFork:
 class TestMarkStatus:
     def test_mark_completed(self, db, store):
         sid = store.save(db, packet_id="p1", run_id="r1", role="coder",
-                         executor_id="ex1", backend="opencode",
+                         executor_id="ex1", backend="cli",
                          attempt_number=0, external_id="ext1")
         db.flush()
         assert store.mark_completed(db, sid)
@@ -146,7 +174,7 @@ class TestMarkStatus:
 
     def test_mark_failed(self, db, store):
         sid = store.save(db, packet_id="p1", run_id="r1", role="coder",
-                         executor_id="ex1", backend="opencode",
+                         executor_id="ex1", backend="cli",
                          attempt_number=0, external_id="ext1")
         db.flush()
         assert store.mark_failed(db, sid)
@@ -166,13 +194,13 @@ class TestMarkStatus:
 class TestGetSessionsForPacket:
     def test_returns_all_sessions_for_packet(self, db, store):
         store.save(db, packet_id="p1", run_id="r1", role="coder",
-                   executor_id="ex1", backend="opencode",
+                   executor_id="ex1", backend="cli",
                    attempt_number=0, external_id="a")
         store.save(db, packet_id="p1", run_id="r2", role="verifier",
-                   executor_id="ex2", backend="opencode",
+                   executor_id="ex2", backend="cli",
                    attempt_number=0, external_id="b")
         store.save(db, packet_id="p2", run_id="r3", role="coder",
-                   executor_id="ex1", backend="opencode",
+                   executor_id="ex1", backend="cli",
                    attempt_number=0, external_id="c")
         db.flush()
         result = store.get_sessions_for_packet(db, "p1")
@@ -183,13 +211,13 @@ class TestGetSessionsForPacket:
 
     def test_orders_by_created_at(self, db, store):
         store.save(db, packet_id="p1", run_id="r1", role="coder",
-                   executor_id="x", backend="opencode",
+                   executor_id="x", backend="cli",
                    attempt_number=2, external_id="c")
         store.save(db, packet_id="p1", run_id="r2", role="coder",
-                   executor_id="x", backend="opencode",
+                   executor_id="x", backend="cli",
                    attempt_number=0, external_id="a")
         store.save(db, packet_id="p1", run_id="r3", role="coder",
-                   executor_id="x", backend="opencode",
+                   executor_id="x", backend="cli",
                    attempt_number=1, external_id="b")
         db.flush()
         result = store.get_sessions_for_packet(db, "p1")
@@ -201,10 +229,10 @@ class TestGetSessionsForPacket:
 
     def test_includes_fork_of(self, db, store):
         sid1 = store.save(db, packet_id="p1", run_id="r1", role="coder",
-                          executor_id="x", backend="opencode",
+                          executor_id="x", backend="cli",
                           attempt_number=0, external_id="a")
         store.save(db, packet_id="p1", run_id="r2", role="coder",
-                   executor_id="y", backend="opencode",
+                   executor_id="y", backend="cli",
                    attempt_number=2, external_id="b",
                    parent_session_id=sid1)
         db.flush()

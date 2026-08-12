@@ -12,18 +12,6 @@ from grace_control.services.agent_run_service import _extract_session_id, _SESSI
 
 
 class TestExtractSessionId:
-    def test_opencode_json_mode(self):
-        stdout = '{"session_id": "ses_abc123", "result": "ok"}'
-        assert _extract_session_id(stdout, "opencode") == "ses_abc123"
-
-    def test_opencode_default_mode(self):
-        stdout = "Some text\nSession: ses_xyz789\nMore text"
-        assert _extract_session_id(stdout, "opencode") == "ses_xyz789"
-
-    def test_opencode_default_no_prefix(self):
-        stdout = "Session: abc123"
-        assert _extract_session_id(stdout, "opencode") == "abc123"
-
     def test_agy_conversation_id(self):
         stdout = "Running...\nConversation ID: conv_001\nDone."
         assert _extract_session_id(stdout, "agy") == "conv_001"
@@ -33,16 +21,16 @@ class TestExtractSessionId:
         assert _extract_session_id(stdout, "cli") == "ses_fallback"
 
     def test_no_match_returns_none(self):
-        assert _extract_session_id("no session here", "opencode") is None
+        assert _extract_session_id("no session here", "cli") is None
 
     def test_empty_stdout(self):
-        assert _extract_session_id("", "opencode") is None
+        assert _extract_session_id("", "cli") is None
 
     def test_json_dict_without_session_id(self):
-        assert _extract_session_id('{"foo": 1}', "opencode") is None
+        assert _extract_session_id('{"foo": 1}', "cli") is None
 
     def test_json_array(self):
-        assert _extract_session_id('[{"session_id": "a"}]', "opencode") is None
+        assert _extract_session_id('[{"session_id": "a"}]', "cli") is None
 
     def test_unknown_backend_uses_cli_fallback(self):
         stdout = "Session: ses_unknown_backend"
@@ -60,13 +48,8 @@ class TestExtractSessionId:
 
 class TestSessionPatterns:
     def test_all_backends_have_patterns(self):
-        assert "opencode" in _SESSION_PATTERNS
         assert "agy" in _SESSION_PATTERNS
         assert "cli" in _SESSION_PATTERNS
-
-    def test_opencode_patterns_are_compiled(self):
-        for pat in _SESSION_PATTERNS["opencode"]:
-            assert hasattr(pat, "search")
 
     def test_agy_patterns_are_compiled(self):
         for pat in _SESSION_PATTERNS["agy"]:
@@ -90,6 +73,7 @@ class TestResumeFlagInjection:
             "model": "test",
             "role": "coder",
             "cwd": str(Path.cwd()),
+            "resume_safe": True,
         }
         out = await svc.run(
             executor, packet_id="p1", worktree_path=Path.cwd(), state_root=Path.cwd(),
@@ -111,6 +95,7 @@ class TestResumeFlagInjection:
             "model": "test",
             "role": "coder",
             "cwd": str(Path.cwd()),
+            "resume_safe": True,
         }
         out = await svc.run(
             executor, packet_id="p1", worktree_path=Path.cwd(), state_root=Path.cwd(),
@@ -134,6 +119,7 @@ class TestResumeFlagInjection:
             "model": "test",
             "role": "coder",
             "cwd": str(Path.cwd()),
+            "resume_safe": True,
         }
         out = await svc.run(
             executor, packet_id="p1", worktree_path=Path.cwd(), state_root=Path.cwd(),
@@ -173,7 +159,7 @@ class TestResumeFlagInjection:
         executor = {
             "command": ["echo", '{"session_id":"ses_echo"}'],
             "resume_mode": "never",
-            "backend": "opencode",
+            "backend": "cli",
             "model": "test",
             "role": "coder",
             "cwd": str(Path.cwd()),
@@ -196,6 +182,7 @@ class TestResumeFlagInjection:
             "model": "gemini",
             "role": "coder",
             "cwd": str(Path.cwd()),
+            "resume_safe": True,
         }
         out = await svc.run(
             executor, packet_id="p1", worktree_path=Path.cwd(), state_root=Path.cwd(),
