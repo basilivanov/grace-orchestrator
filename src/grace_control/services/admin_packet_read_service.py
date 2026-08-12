@@ -2,7 +2,7 @@
 # AI_HEADER: admin_packet_read_service — packet and run read models
 # ROLE: Owns packet detail, run summaries, timeline, blocking decisions and
 #       session reads behind the stable admin aggregation facade. It delegates
-#       pipeline projections and artifact evidence to focused collaborators.
+#       pipeline projections and session reads to explicit collaborators.
 # ############################################################################
 
 # START_MODULE_CONTRACT
@@ -39,6 +39,7 @@ from grace_control.services.admin_overview_read_service import (
     _iso,
     _packet_state,
 )
+from grace_control.services.admin_read_ports import PacketSessionReader
 
 _log = GraceLogger("admin_packet_read")
 
@@ -66,24 +67,22 @@ class AdminPacketReadService:
 
     # START_FUNCTION_CONTRACT
     # name: __init__
-    # purpose: Configure size, pipeline and optional artifact collaborators.
-    # inputs: size_calculator, pipeline_service and artifact_service.
+    # purpose: Configure every collaborator required by packet read methods.
+    # inputs: size_calculator, pipeline_service and session_reader.
     # returns: None.
     # side_effects: None.
     # emitted_logs: None.
-    # error_behavior: Never raises during configuration.
+    # error_behavior: Collaborator contract errors propagate during calls.
     # END_FUNCTION_CONTRACT
     def __init__(
         self,
         size_calculator: Any,
         pipeline_service: Any,
-        artifact_service: Any | None = None,
-        session_service: Any | None = None,
+        session_reader: PacketSessionReader,
     ) -> None:
         self._size_calc = size_calculator
         self._pipeline_service = pipeline_service
-        self._artifact_service = artifact_service
-        self._session_service = session_service
+        self._session_reader = session_reader
 
     # START_FUNCTION_CONTRACT
     # name: get_packet_detail
@@ -326,33 +325,7 @@ class AdminPacketReadService:
     # error_behavior: SessionStore returns its table_missing/empty fallback.
     # END_FUNCTION_CONTRACT
     def get_packet_sessions(self, db: Session, packet_id: str) -> dict[str, Any]:
-        if self._session_service is not None:
-            return self._session_service.get_packet_sessions(db, packet_id)
-        from grace_control.services.session_store import SessionStore
-        return SessionStore().get_sessions_for_packet(db, packet_id)
-
-    # START_FUNCTION_CONTRACT
-    # name: resolve_run
-    # purpose: Resolve a persisted PacketRun by canonical ID, legacy composed
-    #          ID or numeric run number.
-    # inputs: db, packet_id and browser/API selector.
-    # returns: PacketRun or None.
-    # side_effects: Reads one or more PacketRun queries.
-    # emitted_logs: None.
-    # error_behavior: Unknown/non-numeric selectors return None.
-    # END_FUNCTION_CONTRACT
-    def resolve_run(self, db: Session, packet_id: str, run_id: str) -> PacketRun | None:
-        selector = str(run_id)
-        run = db.query(PacketRun).filter_by(packet_id=packet_id, id=selector).first()
-        if run:
-            return run
-        run = db.query(PacketRun).filter_by(id=f"{packet_id}-{selector}").first()
-        if run:
-            return run
-        try:
-            return db.query(PacketRun).filter_by(packet_id=packet_id, run_number=int(selector)).first()
-        except (TypeError, ValueError):
-            return None
+        return self._session_reader.get_packet_sessions(db, packet_id)
 
     # END_BLOCK_SERVICE
 

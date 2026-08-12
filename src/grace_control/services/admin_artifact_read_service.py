@@ -31,7 +31,6 @@ from __future__ import annotations
 
 import base64
 import mimetypes
-from collections.abc import Callable
 from datetime import UTC
 from pathlib import Path
 from typing import Any
@@ -40,6 +39,7 @@ from sqlalchemy.orm import Session
 
 from grace_control.core.structured_logger import GraceLogger
 from grace_control.db.schema import PacketRun
+from grace_control.services.admin_packet_run_resolver import PacketRunResolver
 from grace_control.services.safe_filesystem_service import (
     FilesystemReadError,
     SafeFilesystemService,
@@ -123,15 +123,15 @@ class AdminArtifactReadService:
 
     # START_FUNCTION_CONTRACT
     # name: __init__
-    # purpose: Configure the artifact reader with the facade's canonical run
+    # purpose: Configure the artifact reader with the canonical packet-run
     #          selector resolver.
-    # inputs: run_resolver — callable resolving a packet/run selector.
+    # inputs: run_resolver — shared lower-level PacketRunResolver.
     # returns: None.
     # side_effects: None.
     # emitted_logs: None.
     # error_behavior: Never raises during configuration.
     # END_FUNCTION_CONTRACT
-    def __init__(self, run_resolver: Callable[..., PacketRun | None]) -> None:
+    def __init__(self, run_resolver: PacketRunResolver) -> None:
         self._run_resolver = run_resolver
 
     # START_FUNCTION_CONTRACT
@@ -151,7 +151,7 @@ class AdminArtifactReadService:
         packet_id: str,
         run_id: str,
     ) -> dict[str, Any] | None:
-        run = self._run_resolver(db, packet_id, run_id)
+        run = self._run_resolver.resolve_run(db, packet_id, run_id)
         if not run:
             return None
         evidence_path = Path(run.evidence_path) if run.evidence_path else None
@@ -233,7 +233,7 @@ class AdminArtifactReadService:
                 .first()
             )
         else:
-            run = self._run_resolver(db, packet_id, run_id)
+            run = self._run_resolver.resolve_run(db, packet_id, run_id)
         if not run:
             return {"verdict": "", "summary": "", "stages": [], "screenshots": []}
         acceptance = (run.result_json or {}).get("acceptance_report", {}) or {}
@@ -296,7 +296,7 @@ class AdminArtifactReadService:
         packet_id: str,
         run_id: str,
     ) -> dict[str, Any]:
-        run = self._run_resolver(db, packet_id, run_id)
+        run = self._run_resolver.resolve_run(db, packet_id, run_id)
         if not run or not run.evidence_path:
             return {"tree": [], "evidence_path": ""}
         evidence_dir = Path(run.evidence_path)
@@ -325,7 +325,7 @@ class AdminArtifactReadService:
         path: str,
         tail: int = 0,
     ) -> tuple[bytes, str] | None:
-        run = self._run_resolver(db, packet_id, run_id)
+        run = self._run_resolver.resolve_run(db, packet_id, run_id)
         if not run or not run.evidence_path:
             return None
         evidence_dir = Path(run.evidence_path).resolve()
@@ -369,7 +369,7 @@ class AdminArtifactReadService:
         path: str,
         max_bytes: int = 512 * 1024,
     ) -> dict[str, Any] | None:
-        run = self._run_resolver(db, packet_id, run_id)
+        run = self._run_resolver.resolve_run(db, packet_id, run_id)
         if not run or not run.evidence_path:
             return None
         evidence_dir = Path(run.evidence_path).resolve()

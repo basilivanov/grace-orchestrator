@@ -68,6 +68,7 @@ from grace_control.services.admin_packet_read_service import (
     AdminPacketReadService,
     _packet_spec_value,  # noqa: F401
 )
+from grace_control.services.admin_packet_run_resolver import PacketRunResolver
 from grace_control.services.admin_pipeline_read_service import AdminPipelineReadService
 
 _log = GraceLogger("admin_aggregation")
@@ -95,13 +96,11 @@ class AdminAggregationService:
 
         self._size_calc = SizeCalculator(state_root=state_root, worktree_root=worktree_root)
         self._overview = AdminOverviewReadService()
-        self._pipeline = AdminPipelineReadService()
-        self._packet = AdminPacketReadService(self._size_calc, self._pipeline)
-        self._artifacts = AdminArtifactReadService(self._packet.resolve_run)
-        self._logs = AdminLogsReadService(self._packet.resolve_run)
-        self._packet._artifact_service = self._artifacts
-        self._packet._session_service = self._logs
-        self._pipeline._artifact_service = self._artifacts
+        self._resolver = PacketRunResolver()
+        self._artifacts = AdminArtifactReadService(self._resolver)
+        self._logs = AdminLogsReadService(self._resolver)
+        self._pipeline = AdminPipelineReadService(self._artifacts)
+        self._packet = AdminPacketReadService(self._size_calc, self._pipeline, self._logs)
         self._features = AdminFeatureReadService(self._size_calc, self._pipeline)
 
     # START_FUNCTION_CONTRACT
@@ -338,7 +337,7 @@ class AdminAggregationService:
 
     # START_BLOCK_COMPATIBILITY
     def _run_for_selector(self, db: Session, packet_id: str, run_id: str) -> Any:
-        return self._packet.resolve_run(db, packet_id, run_id)
+        return self._resolver.resolve_run(db, packet_id, run_id)
 
     def _derive_stages(self, db: Session, packet: Any) -> list[dict[str, Any]]:
         return self._pipeline.derive_stages(db, packet)

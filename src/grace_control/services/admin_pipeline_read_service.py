@@ -37,6 +37,7 @@ from sqlalchemy.orm import Session
 from grace_control.core.structured_logger import GraceLogger
 from grace_control.db.schema import Event, Packet, PacketRun
 from grace_control.services.admin_overview_read_service import _iso, _packet_state
+from grace_control.services.admin_read_ports import ArtifactEvidenceReader
 
 _log = GraceLogger("admin_pipeline_read")
 
@@ -47,15 +48,15 @@ class AdminPipelineReadService:
 
     # START_FUNCTION_CONTRACT
     # name: __init__
-    # purpose: Configure the optional artifact evidence collaborator.
-    # inputs: artifact_service — object exposing get_packet_evidence.
+    # purpose: Configure the artifact evidence collaborator used by pipeline
+    #          projections.
+    # inputs: evidence_reader — narrow reader exposing get_packet_evidence.
     # returns: None.
     # side_effects: None.
-    # error_behavior: Missing collaborator is tolerated until evidence is
-    #                 requested by a pipeline projection.
+    # error_behavior: Collaborator contract errors propagate during calls.
     # END_FUNCTION_CONTRACT
-    def __init__(self, artifact_service: Any | None = None) -> None:
-        self._artifact_service = artifact_service
+    def __init__(self, evidence_reader: ArtifactEvidenceReader) -> None:
+        self._evidence_reader = evidence_reader
 
     # START_FUNCTION_CONTRACT
     # name: derive_pipeline
@@ -162,8 +163,12 @@ class AdminPipelineReadService:
         coder_stage = self._stage_coder_run(events, last_run, packet)
         coder_stage["target_tab"] = "runs"
         evidence = (
-            self._artifact_service.get_packet_evidence(db, packet.id, run_id=str(last_run.run_number))
-            if last_run and self._artifact_service
+            self._evidence_reader.get_packet_evidence(
+                db,
+                packet.id,
+                run_id=str(last_run.run_number),
+            )
+            if last_run
             else {"stages": []}
         )
         evidence_stages = {
