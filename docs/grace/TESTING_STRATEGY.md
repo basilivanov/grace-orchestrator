@@ -40,11 +40,11 @@ or external provider are marked `external`/`live` and are not counted as
 deterministic CI coverage. `tests/live/` remains an explicit runtime smoke
 family and is invoked only through `make test-live`.
 
-`make lint` uses one explicit `CI_LINT_SCOPE` shared by Ruff and GraceLint:
-the canon checker, canonical hygiene script, and their architecture/script
-tests. This is the supported CI control surface. The broader legacy runtime
-tree has pre-existing lint debt from earlier refactor packets; it remains
-auditable and is not represented as green by a blanket ignore.
+`make lint` evaluates one explicit `CI_LINT_SCOPE` shared by Ruff and
+GraceLint: `src/grace_control`, `tests`, and `scripts`. The baseline-aware
+runner still executes both linters over the complete supported scope, reports
+their existing diagnostics, and fails on any diagnostic drift. It does not
+use a path whitelist, broad ignore, or new rule allowlist.
 
 ## Conventions
 

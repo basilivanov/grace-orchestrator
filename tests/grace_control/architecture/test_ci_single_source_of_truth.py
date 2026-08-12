@@ -24,6 +24,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from grace_control.core.structured_logger import GraceLogger
@@ -47,14 +48,15 @@ def test_makefile_defines_canonical_ci_targets() -> None:
     assert "test:" in makefile
     assert 'pytest tests -m "not external and not live"' in makefile
     assert "lint:" in makefile
-    assert "CI_LINT_SCOPE :=" in makefile
-    assert "ruff check $(CI_LINT_SCOPE)" in makefile
-    assert "scripts/grace_lint.py $(CI_LINT_SCOPE)" in makefile
+    assert "CI_LINT_SCOPE := src/grace_control tests scripts" in makefile
+    assert "CI_LINT_BASELINE := .grace/ci_lint_baseline.json" in makefile
+    assert "scripts/ci_lint_baseline.py" in makefile
+    assert '"external or live"' in makefile
     assert "docs-check:" in makefile
     assert "generate_docs.py --check" in makefile
     assert "hygiene:" in makefile
     assert "scripts/ci_repo_hygiene.py" in makefile
-    assert 'pytest tests -m "external"' in makefile
+    assert 'pytest tests -m "external or live"' in makefile
     assert "tests/live/test_*.py" in makefile
 
 
@@ -75,6 +77,47 @@ def test_ci_target_composes_canonical_targets() -> None:
     ci_end = makefile.find("\n\n", ci_start)
     ci_body = makefile[ci_start:] if ci_end == -1 else makefile[ci_start:ci_end]
     assert "ci_repo_hygiene.py" not in ci_body
+
+
+# START_FUNCTION_CONTRACT
+# name: test_lint_gate_covers_supported_full_scope
+# purpose: Prevent the canonical lint target from shrinking to a green whitelist.
+# inputs: None; reads Makefile and the baseline-aware lint runner.
+# returns: None; assertions pass when both linters receive the complete supported scope.
+# side_effects: Reads repository text files only.
+# emitted_logs: None.
+# error_behavior: Assertion failure when a supported source/test/script root is omitted.
+# END_FUNCTION_CONTRACT
+def test_lint_gate_covers_supported_full_scope() -> None:
+    makefile = (_ROOT / "Makefile").read_text(encoding="utf-8")
+    runner = (_ROOT / "scripts" / "ci_lint_baseline.py").read_text(encoding="utf-8")
+    assert "CI_LINT_SCOPE := src/grace_control tests scripts" in makefile
+    assert "-m\", \"ruff\"" in runner
+    assert "scripts/grace_lint.py" in runner
+    assert "--scope" in runner
+    assert "src/grace_control" in runner
+    assert "tests" in runner
+    assert "scripts" in runner
+    assert "src/grace_control/tools/grace_lint/checker.py" not in makefile
+    baseline = json.loads((_ROOT / ".grace" / "ci_lint_baseline.json").read_text(encoding="utf-8"))
+    assert baseline["scope"] == ["src/grace_control", "tests", "scripts"]
+    assert baseline["ruff"]["diagnostic_count"] > 0
+    assert baseline["gracelint"]["diagnostic_count"] > 0
+
+
+# START_FUNCTION_CONTRACT
+# name: test_test_live_runs_all_excluded_pytest_markers
+# purpose: Ensure the explicit external/live target covers every marker excluded by deterministic CI.
+# inputs: None; reads Makefile text.
+# returns: None; assertion passes when external and live are selected together.
+# side_effects: Reads Makefile text only.
+# emitted_logs: None.
+# error_behavior: Assertion failure when a registered excluded marker has no runner.
+# END_FUNCTION_CONTRACT
+def test_test_live_runs_all_excluded_pytest_markers() -> None:
+    makefile = (_ROOT / "Makefile").read_text(encoding="utf-8")
+    assert 'pytest tests -m "not external and not live"' in makefile
+    assert 'pytest tests -m "external or live"' in makefile
 
 
 # START_FUNCTION_CONTRACT

@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "scope": [
+    "src/grace_control",
+    "tests",
+    "scripts"
+  ],
+  "baseline_commit": "d77cbc1ec328c7993e03878a3d02d17777dab1d1",
+  "ruff": {
+    "exit_code": 1,
+    "diagnostic_count": 1020,
+    "sha256": "f29c5206f5e680a8457d105d7477977d98d946e8647dd5dcb839cf28c4685a5a"
+  },
+  "gracelint": {
+    "exit_code": 1,
+    "diagnostic_count": 3249,
+    "sha256": "30b589bb3b27585ade2ba0c0d186087bc90a8d279fdefa72ac4c3d478783a4d5"
+  }
+}

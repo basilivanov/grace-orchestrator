@@ -53,9 +53,9 @@ deterministic test scope and excludes tests marked `external` or `live`.
 Those tests require a running API, browser, or external provider and are run
 explicitly with `make test-live` when that environment is available; the target
 also runs the standalone `tests/live/` scenarios.
-`make lint` uses the explicit `CI_LINT_SCOPE` for the canon-compliant CI
-control surface; legacy runtime lint debt remains visible in the broad audit
-command recorded by the packet submission rather than being suppressed.
+`make lint` evaluates `src/grace_control`, `tests`, and `scripts` with both
+Ruff and GraceLint. Existing diagnostics remain visible through the
+baseline-aware full-scope gate; any new or changed diagnostic fails the gate.
 
 The public operator surface is HTTP/OpenAPI; the control CLI and OpenCode
 runtime are removed. Lifecycle/admin behavior is composed through typed

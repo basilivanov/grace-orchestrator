@@ -43,11 +43,11 @@ entry includes:
 ## How to run
 
 ```bash
-# Canonical CI scope (the same scope is used by Ruff and GraceLint)
+# Canonical CI scope (the same full scope is used by Ruff and GraceLint)
 make lint
 
-# Broad audit of the legacy runtime tree (informational until its named
-# structural refactor packets are complete)
+# Reproduce the raw full-scope GraceLint audit (known baseline diagnostics
+# remain visible; make lint fails if the reviewed diagnostic baseline changes)
 python3 scripts/grace_lint.py src/grace_control tests scripts
 
 # Specific rules

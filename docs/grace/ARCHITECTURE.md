@@ -40,13 +40,13 @@ aggregation.
 
 The root `Makefile` is the single source of truth for `test`, `lint`,
 `docs-check`, and `hygiene`; `make ci` composes those targets. The workflow
-only installs dependencies and delegates to Make. `CI_LINT_SCOPE` is the
-explicit canon-compliant CI control surface (`checker.py`, the canonical
-hygiene script, and their architecture/script tests); the broader legacy
-runtime tree retains pre-existing lint debt recorded by earlier packets and
-is not silently presented as green by this gate. Tests requiring a running
-API, browser, or external provider are marked `external`/`live` and are not
-silently presented as deterministic CI coverage.
+only installs dependencies and delegates to Make. `make lint` evaluates the
+complete supported Python scope (`src/grace_control`, `tests`, and `scripts`)
+with both Ruff and GraceLint. The baseline-aware gate keeps every diagnostic
+visible and fails when the reviewed baseline changes; it is not a path
+exclusion or a linter suppression. Tests requiring a running API, browser, or
+external provider are marked `external`/`live` and are not silently presented
+as deterministic CI coverage.
 
 ## Execution backends
 

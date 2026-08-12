@@ -2,7 +2,8 @@ PYTHON ?= $(shell if test -x .venv/bin/python; then echo .venv/bin/python; elif 
 PIP ?= $(shell if test -x .venv/bin/pip; then echo .venv/bin/pip; elif command -v pip3 >/dev/null 2>&1; then command -v pip3; else command -v pip; fi)
 GRACE_DB_URL ?= sqlite:////tmp/grace-orchestrator-export/test_grace.db
 GRACE_PLANNING_LOGS_ROOT ?= /tmp/grace-orchestrator-export/planning_logs
-CI_LINT_SCOPE := src/grace_control/tools/grace_lint/checker.py scripts/ci_repo_hygiene.py tests/grace_control/architecture tests/scripts
+CI_LINT_SCOPE := src/grace_control tests scripts
+CI_LINT_BASELINE := .grace/ci_lint_baseline.json
 
 .PHONY: help install dev test test-live lint hygiene format docs docs-check ci clean
 
@@ -31,16 +32,15 @@ test:
 	GRACE_DB_URL=$(GRACE_DB_URL) GRACE_PLANNING_LOGS_ROOT=$(GRACE_PLANNING_LOGS_ROOT) $(PYTHON) -m pytest tests -m "not external and not live" -q
 
 test-live:
-	@echo "Running external pytest tests and standalone live scenarios; an API/worker/browser environment is required."
-	$(PYTHON) -m pytest tests -m "external" -q
+	@echo "Running external/live pytest tests and standalone live scenarios; an API/worker/browser environment is required."
+	$(PYTHON) -m pytest tests -m "external or live" -q
 	@for test_file in tests/live/test_*.py; do \
 		echo "--- $$test_file"; \
 		PYTHONPATH=src $(PYTHON) "$$test_file"; \
 	done
 
 lint:
-	$(PYTHON) -m ruff check $(CI_LINT_SCOPE)
-	$(PYTHON) scripts/grace_lint.py $(CI_LINT_SCOPE)
+	$(PYTHON) scripts/ci_lint_baseline.py --baseline $(CI_LINT_BASELINE) --scope $(CI_LINT_SCOPE)
 
 hygiene:
 	$(PYTHON) scripts/ci_repo_hygiene.py
