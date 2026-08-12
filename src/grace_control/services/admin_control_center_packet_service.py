@@ -7,7 +7,7 @@
 # START_MODULE_CONTRACT
 # purpose: Decompose packet drill-down reads into bounded base, selection and
 #          tab responsibilities while preserving the facade's DTO contract.
-# inputs: AdminControlCenterService facade and explicit project/packet selectors.
+# inputs: AdminProjectAccess, explorer, mutation and explicit project/packet selectors.
 # returns: Existing packet tab view-model dictionaries.
 # side_effects: Selected-project Admin reads and read-only control availability;
 #               explorer tabs delegate to their focused owner.
@@ -27,9 +27,9 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import Any
 from urllib.parse import quote
 
 from grace_control.core.structured_logger import GraceLogger
@@ -40,6 +40,7 @@ from grace_control.services.admin_control_center_explorer_helpers import (
     _normalize_artifacts,
     _stale_base_view,
 )
+from grace_control.services.admin_control_center_explorer_service import AdminControlCenterExplorerService
 from grace_control.services.admin_control_center_helpers import (
     _capability_message,
     _filter_timeline,
@@ -53,9 +54,7 @@ from grace_control.services.admin_control_center_helpers import (
     _unwrap,
 )
 from grace_control.services.admin_mutation_service import AdminMutationService
-
-if TYPE_CHECKING:
-    from grace_control.services.admin_control_center import AdminControlCenterService
+from grace_control.services.admin_project_access import AdminProjectAccess
 
 _log = GraceLogger("admin_control_center")
 
@@ -90,15 +89,26 @@ class AdminControlCenterPacketService:
 
     # START_FUNCTION_CONTRACT
     # name: __init__
-    # purpose: Bind packet composition to the stable facade.
-    # inputs: facade — initialized AdminControlCenterService coordinator.
+    # purpose: Bind packet composition to explicit read, explorer and mutation
+    #          collaborators.
+    # inputs: access — project read boundary; explorer — Files/Git owner;
+    #         mutation — one app-scoped mutation owner; packet_tabs — tab names.
     # returns: None.
     # side_effects: None; no project request is made during construction.
     # emitted_logs: None.
-    # error_behavior: Validation is retained by the facade constructor.
+    # error_behavior: Collaborator contract errors propagate at construction.
     # END_FUNCTION_CONTRACT
-    def __init__(self, facade: AdminControlCenterService) -> None:
-        self._facade = facade
+    def __init__(
+        self,
+        access: AdminProjectAccess,
+        explorer: AdminControlCenterExplorerService,
+        mutation: AdminMutationService,
+        packet_tabs: Sequence[str],
+    ) -> None:
+        self._access = access
+        self._explorer = explorer
+        self._mutation = mutation
+        self._packet_tabs = tuple(packet_tabs)
 
     # START_FUNCTION_CONTRACT
     # name: packet_page
@@ -196,8 +206,8 @@ class AdminControlCenterPacketService:
         stage_id: str | None,
     ) -> _PacketPageState:
         detail_result, blocking_result = await asyncio.gather(
-            self._facade._read(project_key, f"/api/admin/packet/{packet_id}/detail", operation="packet_detail"),
-            self._facade._read(project_key, f"/api/admin/packet/{packet_id}/blocking_decision", operation="blocking"),
+            self._access.read(project_key, f"/api/admin/packet/{packet_id}/detail", operation="packet_detail"),
+            self._access.read(project_key, f"/api/admin/packet/{packet_id}/blocking_decision", operation="blocking"),
         )
         detail = _unwrap(detail_result.get("payload")) if detail_result.get("ok") else {}
         state = _PacketPageState(
@@ -205,7 +215,7 @@ class AdminControlCenterPacketService:
             blocking=blocking_result,
         )
         if tab in {"spec", "pipeline", "stages", "evidence", "logs", "artifacts", "files", "git", "raw"}:
-            raw_result = await self._facade._read(
+            raw_result = await self._access.read(
                 project_key,
                 f"/api/admin/packet/{packet_id}/raw",
                 operation="packet_raw",
@@ -213,7 +223,7 @@ class AdminControlCenterPacketService:
             raw = _unwrap(raw_result.get("payload")) if raw_result.get("ok") else {}
             state.raw = raw if isinstance(raw, dict) else {}
         if tab == "timeline":
-            timeline_result = await self._facade._read(
+            timeline_result = await self._access.read(
                 project_key,
                 f"/api/admin/packet/{packet_id}/timeline?limit=200&offset=0",
                 operation="timeline",
@@ -222,7 +232,7 @@ class AdminControlCenterPacketService:
             if isinstance(timeline_payload, Mapping):
                 state.timeline = [_normalize_event(row) for row in timeline_payload.get("events", [])]
         if tab in {"runs", "evidence", "logs", "artifacts", "files", "raw", "git"} or run_id:
-            runs_result = await self._facade._read(
+            runs_result = await self._access.read(
                 project_key,
                 f"/api/admin/packet/{packet_id}/runs",
                 operation="runs",
@@ -263,7 +273,7 @@ class AdminControlCenterPacketService:
                 None,
             )
             if selected is None:
-                run_result = await self._facade._read(
+                run_result = await self._access.read(
                     project_key,
                     f"/api/admin/packet/{packet_id}/runs/{run_id}",
                     operation="run_detail",
@@ -309,7 +319,7 @@ class AdminControlCenterPacketService:
         )
         if stage_match is None:
             return
-        stage_result = await self._facade._read(
+        stage_result = await self._access.read(
             project_key,
             f"/api/admin/stage/{stage_id}/raw",
             operation="stage_detail",
@@ -376,14 +386,14 @@ class AdminControlCenterPacketService:
                 artifact_path,
             )
         if tab == "files":
-            state.packet_files = await self._facade.files_page(
+            state.packet_files = await self._explorer.files_page(
                 project_key,
                 root=file_root,
                 path=file_path,
                 preview_path=file_path if file_path and not file_path.endswith("/") else None,
             )
         if tab == "raw" and state.selected_run:
-            run_raw_result = await self._facade._read(
+            run_raw_result = await self._access.read(
                 project_key,
                 f"/api/admin/packet/{packet_id}/runs/{state.selected_run.get('id')}/raw",
                 operation="run_raw",
@@ -411,7 +421,7 @@ class AdminControlCenterPacketService:
     # error_behavior: Capability gaps become available=false messages.
     # END_FUNCTION_CONTRACT
     async def _load_sessions(self, project_key: str, packet_id: str) -> Any:
-        result = await self._facade._read(
+        result = await self._access.read(
             project_key,
             f"/api/admin/packet/{packet_id}/sessions",
             operation="sessions",
@@ -435,7 +445,7 @@ class AdminControlCenterPacketService:
     # error_behavior: Failed reads return a typed error mapping.
     # END_FUNCTION_CONTRACT
     async def _load_diagnostics(self, project_key: str) -> dict[str, Any]:
-        result = await self._facade._read(
+        result = await self._access.read(
             project_key,
             "/api/diagnostics/state",
             operation="diagnostics",
@@ -462,7 +472,7 @@ class AdminControlCenterPacketService:
     ) -> tuple[Any, dict[str, Any]]:
         if not selected_run:
             return {"available": False, "message": "Select a run to inspect evidence.", "source": "API"}, {}
-        result = await self._facade._read(
+        result = await self._access.read(
             project_key,
             f"/api/admin/packet/{packet_id}/runs/{selected_run.get('id')}/evidence",
             operation="evidence",
@@ -517,7 +527,7 @@ class AdminControlCenterPacketService:
             path = f"/api/admin/packet/{packet_id}/logs/aggregated"
             params = {"sources": selected_source or "all", "tail": bounded_tail}
             operation = "packet_logs"
-        result = await self._facade._read(project_key, path, params=params, operation=operation)
+        result = await self._access.read(project_key, path, params=params, operation=operation)
         logs = (
             _mask_secrets(_unwrap(result.get("payload")))
             if result.get("ok")
@@ -556,7 +566,7 @@ class AdminControlCenterPacketService:
                 {"artifacts": [], "truncated": False, "message": "Select a run to inspect artifacts.", "source": "API"},
                 None,
             )
-        result = await self._facade._read(
+        result = await self._access.read(
             project_key,
             f"/api/admin/packet/{packet_id}/runs/{selected_run.get('id')}/artifacts",
             operation="artifacts",
@@ -592,7 +602,7 @@ class AdminControlCenterPacketService:
     ) -> dict[str, Any] | None:
         if not artifact_path:
             return None
-        result = await self._facade._read(
+        result = await self._access.read(
             project_key,
             f"/api/admin/packet/{packet_id}/runs/{selected_run.get('id')}/artifacts/preview",
             params={"path": artifact_path, "max_bytes": 512 * 1024},
@@ -676,7 +686,7 @@ class AdminControlCenterPacketService:
         if state.selected_stage is not None:
             state.selected_stage = _normalize_stage(state.selected_stage)
         if tab == "git":
-            state.packet_git = await self._facade.git_page(
+            state.packet_git = await self._explorer.git_page(
                 project_key,
                 packet=packet,
                 ref=git_ref,
@@ -712,8 +722,8 @@ class AdminControlCenterPacketService:
             "stage_raw": state.stage_raw,
             "stale_base": stale_base,
             "raw": _mask_secrets(state.raw),
-            "tabs": self._facade._packet_tabs,
-            "tab": tab if tab in self._facade._packet_tabs else "overview",
+            "tabs": self._packet_tabs,
+            "tab": tab if tab in self._packet_tabs else "overview",
             "run_id": run_id,
             "stage_id": stage_id,
             "timeline_filters": {
@@ -749,7 +759,7 @@ class AdminControlCenterPacketService:
         packet: Mapping[str, Any],
     ) -> dict[str, bool]:
         try:
-            catalog = await AdminMutationService(self._facade._hub).available_controls(
+            catalog = await self._mutation.available_controls(
                 project_key,
                 entity_type="packet",
                 entity_id=packet_id,

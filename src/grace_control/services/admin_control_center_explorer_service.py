@@ -7,7 +7,7 @@
 # START_MODULE_CONTRACT
 # purpose: Compose Files, Git and OpenAPI explorer view models for one explicit
 #          registry project without bypassing the Hub or safety helpers.
-# inputs: AdminControlCenterService facade and explorer selectors.
+# inputs: AdminProjectAccess, project shell, mutation owner and explorer selectors.
 # returns: Existing JSON-safe explorer dictionaries.
 # side_effects: Bounded selected-project reads and one delegated OpenAPI mutation
 #               when the explicit control gate permits it.
@@ -34,7 +34,7 @@ import asyncio
 import json
 import time
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from grace_control.core.structured_logger import GraceLogger
 from grace_control.services.admin_control_center_explorer_helpers import (
@@ -49,10 +49,9 @@ from grace_control.services.admin_control_center_helpers import (
     _mask_secrets,
     _unwrap,
 )
+from grace_control.services.admin_control_center_project_shell import AdminControlCenterProjectShell
 from grace_control.services.admin_mutation_service import AdminMutationService
-
-if TYPE_CHECKING:
-    from grace_control.services.admin_control_center import AdminControlCenterService
+from grace_control.services.admin_project_access import AdminProjectAccess
 
 _log = GraceLogger("admin_control_center")
 
@@ -113,15 +112,24 @@ class AdminControlCenterExplorerService:
 
     # START_FUNCTION_CONTRACT
     # name: __init__
-    # purpose: Bind explorer composition to the stable facade.
-    # inputs: facade — initialized AdminControlCenterService coordinator.
+    # purpose: Bind explorer composition to explicit access, shell and mutation
+    #          collaborators.
+    # inputs: access — project read/cache boundary; shell — selector owner;
+    #         mutation — one app-scoped guarded mutation owner.
     # returns: None.
-    # side_effects: None; cache storage is owned by the facade.
+    # side_effects: None; cache storage is owned by AdminProjectAccess.
     # emitted_logs: None.
-    # error_behavior: Validation is retained by the facade constructor.
+    # error_behavior: Collaborator contract errors propagate at construction.
     # END_FUNCTION_CONTRACT
-    def __init__(self, facade: AdminControlCenterService) -> None:
-        self._facade = facade
+    def __init__(
+        self,
+        access: AdminProjectAccess,
+        shell: AdminControlCenterProjectShell,
+        mutation: AdminMutationService,
+    ) -> None:
+        self._access = access
+        self._shell = shell
+        self._mutation = mutation
 
     # START_FUNCTION_CONTRACT
     # name: files_page
@@ -142,7 +150,7 @@ class AdminControlCenterExplorerService:
         preview_path: str | None = None,
         tail: int = 0,
     ) -> dict[str, Any]:
-        shell = await self._facade._explorer_shell(project_key)
+        shell = await self._shell.explorer_shell(project_key)
         model: dict[str, Any] = {
             **shell,
             "root": root or "",
@@ -157,11 +165,11 @@ class AdminControlCenterExplorerService:
             "source": "FILE",
             "capability_available": False,
         }
-        context = self._facade._context(project_key)
+        context = self._access.context(project_key)
         if not context.enabled:
             model["error"] = "Project is disabled; filesystem capability was not requested."
             return model
-        roots_result = await self._facade._read(project_key, "/api/admin/fs/roots", operation="filesystem_roots")
+        roots_result = await self._access.read(project_key, "/api/admin/fs/roots", operation="filesystem_roots")
         roots_payload = _unwrap(roots_result.get("payload")) if roots_result.get("ok") else {}
         roots = roots_payload.get("roots", []) if isinstance(roots_payload, Mapping) else []
         if not roots_result.get("ok"):
@@ -183,7 +191,7 @@ class AdminControlCenterExplorerService:
             model["path_error"] = {"code": path_error, "message": "Only a relative logical path is allowed."}
             return model
         model["path"] = clean_path
-        listing_result = await self._facade._read(
+        listing_result = await self._access.read(
             project_key,
             "/api/admin/fs/list",
             params={"root": selected_root, "path": clean_path},
@@ -209,7 +217,7 @@ class AdminControlCenterExplorerService:
                 return model
             endpoint = "/api/admin/fs/tail" if tail and tail > 0 else "/api/admin/fs/file"
             params: dict[str, Any] = {"root": selected_root, "path": clean_preview}
-            stat_result = await self._facade._read(
+            stat_result = await self._access.read(
                 project_key,
                 "/api/admin/fs/stat",
                 params={"root": selected_root, "path": clean_preview},
@@ -221,7 +229,7 @@ class AdminControlCenterExplorerService:
                 params["lines"] = min(int(tail), 1000)
             else:
                 params["max_bytes"] = 512 * 1024
-            preview_result = await self._facade._read(
+            preview_result = await self._access.read(
                 project_key,
                 endpoint,
                 params=params,
@@ -254,7 +262,7 @@ class AdminControlCenterExplorerService:
         ref: str | None = None,
         path: str | None = None,
     ) -> dict[str, Any]:
-        shell = await self._facade._explorer_shell(project_key)
+        shell = await self._shell.explorer_shell(project_key)
         model: dict[str, Any] = {
             **shell,
             "repository": {},
@@ -268,7 +276,7 @@ class AdminControlCenterExplorerService:
             "error": None,
             "source": "GIT",
         }
-        context = self._facade._context(project_key)
+        context = self._access.context(project_key)
         if not context.enabled:
             model["error"] = "Project is disabled; Git capability was not requested."
             return model
@@ -355,7 +363,7 @@ class AdminControlCenterExplorerService:
         actor: str = "operator",
         allow_mutation: bool = False,
     ) -> dict[str, Any]:
-        shell = await self._facade._explorer_shell(project_key)
+        shell = await self._shell.explorer_shell(project_key)
         model: dict[str, Any] = {
             **shell,
             "document": {},
@@ -377,7 +385,7 @@ class AdminControlCenterExplorerService:
             "execution_requested": bool(execute),
             "source": "API",
         }
-        context = self._facade._context(project_key)
+        context = self._access.context(project_key)
         if not context.enabled:
             model["response_error"] = "Project is disabled; API discovery was not requested."
             return model
@@ -435,7 +443,7 @@ class AdminControlCenterExplorerService:
                 query_params=query_params,
             )
             return model
-        result = await self._facade._read(
+        result = await self._access.read(
             project_key,
             request_path,
             params=query_params,
@@ -467,12 +475,12 @@ class AdminControlCenterExplorerService:
     # END_FUNCTION_CONTRACT
     async def _cached_openapi(self, project_key: str) -> dict[str, Any]:
         now = time.monotonic()
-        cached = self._facade._openapi_cache.get(project_key)
+        cached = self._access.openapi_cache.get(project_key)
         if cached is not None and now - cached[0] < _OPENAPI_CACHE_TTL_SECONDS:
             return cached[1]
-        result = await self._facade._read(project_key, "/openapi.json", operation="openapi")
+        result = await self._access.read(project_key, "/openapi.json", operation="openapi")
         if result.get("ok"):
-            self._facade._openapi_cache[project_key] = (now, result)
+            self._access.openapi_cache[project_key] = (now, result)
         return result
 
     # START_FUNCTION_CONTRACT
@@ -490,9 +498,9 @@ class AdminControlCenterExplorerService:
         ref: str | None,
     ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
         return await asyncio.gather(
-            self._facade._read(project_key, "/api/admin/git/repository", operation="git_repository"),
-            self._facade._read(project_key, "/api/admin/git/worktrees", operation="git_worktrees"),
-            self._facade._read(
+            self._access.read(project_key, "/api/admin/git/repository", operation="git_repository"),
+            self._access.read(project_key, "/api/admin/git/worktrees", operation="git_worktrees"),
+            self._access.read(
                 project_key,
                 "/api/admin/git/changed-files",
                 params={"ref": ref} if ref else None,
@@ -517,8 +525,8 @@ class AdminControlCenterExplorerService:
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         params = {"ref": ref, "path": path} if ref or path else None
         return await asyncio.gather(
-            self._facade._read(project_key, "/api/admin/git/diff-stat", params=params, operation="git_diff_stat"),
-            self._facade._read(project_key, "/api/admin/git/diff", params=params, operation="git_diff"),
+            self._access.read(project_key, "/api/admin/git/diff-stat", params=params, operation="git_diff_stat"),
+            self._access.read(project_key, "/api/admin/git/diff", params=params, operation="git_diff"),
         )
 
     # START_FUNCTION_CONTRACT
@@ -568,7 +576,7 @@ class AdminControlCenterExplorerService:
         model["confirmation_display"] = json.dumps(
             _mask_secrets(confirmation), ensure_ascii=False, sort_keys=True,
         )
-        mutation = await AdminMutationService(self._facade._hub).execute_openapi(
+        mutation = await self._mutation.execute_openapi(
             project_key,
             path=selected_path,
             method=selected_method,

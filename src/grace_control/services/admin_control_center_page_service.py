@@ -7,7 +7,7 @@
 # START_MODULE_CONTRACT
 # purpose: Build project-aware global and project-local Events, Logs and Search
 #          view models for the Admin Control Center.
-# inputs: AdminControlCenterService facade and page filter arguments.
+# inputs: Public AdminCrossProjectService, project shell and page filters.
 # returns: Existing JSON-safe page dictionaries consumed by templates/routes.
 # side_effects: Bounded Hub query reads and dashboard context reads.
 # emitted_logs: Hub-owned query read logs.
@@ -27,13 +27,12 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from grace_control.core.structured_logger import GraceLogger
 from grace_control.services.admin_control_center_helpers import _normalize_event
-
-if TYPE_CHECKING:
-    from grace_control.services.admin_control_center import AdminControlCenterService
+from grace_control.services.admin_control_center_project_shell import AdminControlCenterProjectShell
+from grace_control.services.admin_cross_project_service import AdminCrossProjectService
 
 _log = GraceLogger("admin_control_center")
 
@@ -66,15 +65,18 @@ class AdminControlCenterPageService:
 
     # START_FUNCTION_CONTRACT
     # name: __init__
-    # purpose: Bind global page composition to the stable facade.
-    # inputs: facade — initialized AdminControlCenterService coordinator.
+    # purpose: Bind global page composition to explicit public Hub and shell
+    #          collaborators.
+    # inputs: hub — public cross-project read service; shell — dashboard and
+    #         selector owner.
     # returns: None.
     # side_effects: None; no query is issued during construction.
     # emitted_logs: None.
-    # error_behavior: Validation is retained by the facade constructor.
+    # error_behavior: Collaborator contract errors propagate at construction.
     # END_FUNCTION_CONTRACT
-    def __init__(self, facade: AdminControlCenterService) -> None:
-        self._facade = facade
+    def __init__(self, hub: AdminCrossProjectService, shell: AdminControlCenterProjectShell) -> None:
+        self._hub = hub
+        self._shell = shell
 
     # START_FUNCTION_CONTRACT
     # name: events_page
@@ -106,7 +108,7 @@ class AdminControlCenterPageService:
             else ([project_key] if project_key else None)
         )
         project_label = ",".join(str(value) for value in selected) if selected else ""
-        data = await self._facade._hub.query_events(
+        data = await self._hub.query_events(
             project=selected,
             entity_id=entity_id,
             entity_type=entity_type,
@@ -119,8 +121,8 @@ class AdminControlCenterPageService:
             offset=offset,
             cursor=cursor,
         )
-        dashboard = await self._facade.dashboard()
-        current = self._facade._selector_current(
+        dashboard = await self._shell.dashboard()
+        current = self._shell.selector_current(
             dashboard["projects"],
             project_key if isinstance(project_key, str) else None,
         )
@@ -186,7 +188,7 @@ class AdminControlCenterPageService:
             else ([project_key] if project_key else None)
         )
         project_label = ",".join(str(value) for value in selected) if selected else ""
-        data = await self._facade._hub.query_logs(
+        data = await self._hub.query_logs(
             project=selected,
             source=source,
             worker=worker,
@@ -202,10 +204,10 @@ class AdminControlCenterPageService:
             tail=tail,
             cursor=cursor,
         )
-        dashboard = await self._facade.dashboard()
+        dashboard = await self._shell.dashboard()
         return {
             "projects": dashboard["projects"],
-            "current_project": self._facade._selector_current(
+            "current_project": self._shell.selector_current(
                 dashboard["projects"],
                 project_key if isinstance(project_key, str) else None,
             ),
@@ -253,11 +255,11 @@ class AdminControlCenterPageService:
         project_key: str | None = None,
     ) -> dict[str, Any]:
         selected = [project_key] if project_key else None
-        data = await self._facade._hub.search(query, project=selected, limit=200)
-        dashboard = await self._facade.dashboard()
+        data = await self._hub.search(query, project=selected, limit=200)
+        dashboard = await self._shell.dashboard()
         return {
             "projects": dashboard["projects"],
-            "current_project": self._facade._selector_current(dashboard["projects"], project_key),
+            "current_project": self._shell.selector_current(dashboard["projects"], project_key),
             "results": data.get("results", []),
             "errors": data.get("errors", []),
             "query": query,
