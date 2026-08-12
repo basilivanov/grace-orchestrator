@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Start a single GRACE worker process.
 
-Reads GRACE_WORKER_ID from env (set by `grace_ctl start` / supervisor) so
+Reads GRACE_WORKER_ID from env (set by the supervisor) so
 that each spawned worker has a unique, traceable id. Falls back to
 `worker-<pid>` for ad-hoc runs.
 

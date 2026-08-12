@@ -15,7 +15,7 @@
 # error_behavior: Supervisor never dies. Child crashes are detected via
 #                 poll() and trigger an automatic restart. The supervisor's
 #                 own crash is the operator's problem (run under systemd or
-#                 call `grace_ctl start` again).
+#                 start it with the supported deployment script).
 # END_MODULE_CONTRACT
 # START_MODULE_MAP
 # mapping:
@@ -72,7 +72,7 @@ class SourceRouter:
 
     - `api/**`        → restart API
     - `worker/**`, `core/**`, `adapters/**`, `services/**` → restart workers
-    - `supervisor.py`, `supervisor_client.py`, `cli.py`        → restart all
+    - `supervisor.py`, `supervisor_client.py`, `supervisor/`   → restart all
     - everything else (docs, tests, fixtures)                   → no-op
     """
 
@@ -87,7 +87,6 @@ class SourceRouter:
     SELF_GLOBS: tuple[str, ...] = (
         "supervisor.py",
         "supervisor_client.py",
-        "cli.py",
         "supervisor/",
     )
 
@@ -747,7 +746,7 @@ class Supervisor:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CLI entry point
+# Direct supervisor module entry point
 # ─────────────────────────────────────────────────────────────────────────────
 
 

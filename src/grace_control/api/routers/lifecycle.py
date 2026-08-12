@@ -134,7 +134,7 @@ async def _proxy_supervisor(
         raise HTTPException(
             503,
             "supervisor not running — start it with "
-            "`scripts/live_supervisor.sh` or `python -m grace_control.cli start`.",
+            "`scripts/live_supervisor.sh`; use the HTTP API after bootstrap.",
         )
     if not sock.exists():
         raise HTTPException(502, f"supervisor state present but socket missing: {sock}")
@@ -160,7 +160,7 @@ async def status() -> dict[str, Any]:
         raise HTTPException(
             503,
             "supervisor state not found — is the supervisor running? "
-            "Start it with `scripts/live_supervisor.sh` or `python -m grace_control.cli start`.",
+            "Start it with `scripts/live_supervisor.sh`; use the HTTP API after bootstrap.",
         )
     return {
         "supervisor_state": state,
@@ -176,8 +176,7 @@ async def versions() -> dict[str, Any]:
 
     If a child was spawned before the latest code change, it will report an
     older sha (or no sha at all if launched before this field was tracked).
-    Use `grace_ctl restart workers` (or `POST /api/admin/lifecycle/restart/workers`)
-    to bring them in sync.
+    Use `POST /api/admin/lifecycle/restart/workers` to bring them in sync.
     """
     state = read_state_file()
     if state is None:

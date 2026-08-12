@@ -12,8 +12,7 @@ control plane.
 ```text
 Services = the only business-logic core
 FastAPI + OpenAPI = the only public runtime interface
-CLI = deprecated as a runtime interface; if present at all, it is a thin HTTP
-      client that calls the same OpenAPI endpoints
+Control CLI = removed; after bootstrap operators use the HTTP/OpenAPI surface
 scripts/ = CI/dev wrappers only; they must not hold runtime orchestration logic
 Legacy Prefect = isolated behind a single boundary file
                   (`src/grace_control/agent/legacy_backend.py`); removed in W8
@@ -29,8 +28,8 @@ MCP = not part of current scope; only a future optional thin adapter over servic
 3. Agents must call HTTP endpoints; they must not invoke CLI commands, scripts,
    or internal Python services directly.
 4. New capabilities land by adding a router endpoint and re-generating the
-   OpenAPI document. New CLI commands, new prefect flows, or new side-channel
-   scripts are not acceptable.
+   OpenAPI document. New control CLI commands, new prefect flows, or new
+   side-channel scripts are not acceptable.
 ```
 
 ## What this document replaces
@@ -55,12 +54,9 @@ and `docs/grace/TESTING_STRATEGY.md` for the catalog.
 2. **No parallel business logic.** Routers do not run DB aggregation loops
    or business decisions; they call services. Services do not know about
    HTTP, CLI, or Prefect.
-3. **No public CLI entrypoint with business logic.** The `grace` package
-   metadata MUST NOT expose a `grace` script that runs business code. If a
-   CLI is shipped at all (for dev migration), it must be a thin HTTP client
-   over the same endpoints, and the test
-   `test_no_business_cli_in_runtime_package` fails if a runtime business
-   command reappears.
+3. **No public control CLI entrypoint.** The package metadata MUST NOT expose
+   the removed control CLI or any alias for it. The architecture guard
+   `test_no_control_cli_surface` fails if a control command reappears.
 4. **No direct environment reads outside `config/`.** The only files allowed
    to call `os.environ.get("GRACE_...")` are
    `src/grace_control/config/*`, `tests/*`, and the legacy boundary
@@ -96,7 +92,9 @@ job wiring.
 src/grace_control/services/      business logic; no HTTP, no CLI, no Prefect
 src/grace_control/api/routers/   thin FastAPI bindings; call services
 src/grace_control/api/main.py    wiring-only (W5)
-src/grace_control/cli/           only dev-only thin HTTP client if any
+src/grace_control/supervisor_client.py
+                                  internal UDS transport used by API/tests;
+                                  not an operator-facing CLI
 scripts/                         CI/dev wrappers; no runtime orchestration
 src/prefect_grace/               legacy; isolated, removed in W8
 ```

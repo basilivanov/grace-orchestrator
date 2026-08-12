@@ -2,8 +2,8 @@
 # Start the GRACE supervisor in the foreground.
 #
 # The supervisor is the single entry point that owns API + worker
-# processes. It exposes a unix-socket control endpoint that grace_ctl
-# drives; you do not run this script more than once per environment.
+# processes. After bootstrap, operators use the HTTP/OpenAPI control surface;
+# you do not run this script more than once per environment.
 #
 # Optional --repo-dir keeps the writable project repository separate from the
 # control-state --target-dir. It defaults to GRACE_TARGET_REPO_ROOT/target-dir.
@@ -135,7 +135,7 @@ cd "$TARGET_DIR"
 # Hand off to the supervisor. From here on, the supervisor is the
 # process tree root: SIGINT/SIGTERM go to it, and it propagates to
 # children gracefully.
-exec "$PYTHON_BIN" -m grace_control.cli start \
+exec "$PYTHON_BIN" -m grace_control.supervisor \
   --target-dir "$TARGET_DIR" \
   --source-dir "$SOURCE_DIR" \
   --workers    "$WORKERS" \

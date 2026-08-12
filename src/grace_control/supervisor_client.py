@@ -1,7 +1,8 @@
 # AI_HEADER: supervisor_client — HTTP-over-UDS client for the supervisor control socket
 # START_MODULE_CONTRACT
-# purpose: Typed client for the supervisor's FastAPI control app. Used by
-#          grace_ctl and tests to drive the supervisor without shelling out.
+# purpose: Typed internal client for the supervisor's FastAPI control app.
+#          Used by lifecycle integration and tests over the private UDS without
+#          exposing a second operator-facing command surface.
 # inputs: socket_path (Path) or env var GRACE_SUPERVISOR_SOCK.
 # returns: dict responses from the supervisor.
 # side_effects: Opens a unix-socket HTTP connection.
@@ -34,7 +35,7 @@ class SupervisorClient:
 
     Usage:
         client = SupervisorClient.from_env()
-        print(await client.status())
+        await client.status()
         await client.restart("workers")
     """
 
@@ -46,11 +47,11 @@ class SupervisorClient:
         self._timeout = timeout
 
     @classmethod
-    def from_env(cls) -> "SupervisorClient":
+    def from_env(cls) -> SupervisorClient:
         sock = os.environ.get("GRACE_SUPERVISOR_SOCK")
         if not sock:
             raise SupervisorConnectionError(
-                "GRACE_SUPERVISOR_SOCK is not set; pass --socket-path or start supervisor first"
+                "GRACE_SUPERVISOR_SOCK is not set; start the supervisor first"
             )
         return cls(Path(sock))
 
@@ -106,7 +107,7 @@ class SupervisorClient:
     async def reload(self) -> dict[str, Any]:
         return await self._request("POST", "/control/reload")
 
-    # ── sync wrappers for non-async contexts (e.g. CLI commands) ──────
+    # ── sync wrappers for non-async integration contexts ───────────────
 
     def status_sync(self) -> dict[str, Any]:
         return asyncio.run(self.status())

@@ -3,8 +3,6 @@
 import json
 from pathlib import Path
 
-import pytest
-
 from grace_control.supervisor import (
     MtimeWatcher,
     PidRegistry,
@@ -28,7 +26,6 @@ class TestSourceRouter:
     def test_supervisor_self_change_routes_to_all(self) -> None:
         assert self.router.collect(["supervisor.py"]) == "all"
         assert self.router.classify("supervisor_client.py") == "all"
-        assert self.router.classify("cli.py") == "all"
         assert self.router.classify("supervisor/foo.py") == "all"
 
     def test_mixed_api_and_worker_routes_to_all(self) -> None:

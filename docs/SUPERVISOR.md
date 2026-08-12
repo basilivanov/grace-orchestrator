@@ -24,59 +24,27 @@ scripts/live_supervisor.sh \
   --target-dir /tmp/grace-live-wt \
   --source-dir /path/to/grace-orchestrator
 
-# Проверить статус
-GRACE_SUPERVISOR_SOCK=/tmp/grace-live-wt/supervisor.sock python3 -m grace_control.cli status
+# После запуска проверить статус через канонический HTTP API
+curl http://127.0.0.1:8042/api/admin/lifecycle/status
 
-# Перезапустить API (напр. после правок в api/)
-python3 -m grace_control.cli restart api
-# или через HTTP:
+# Перезапустить API (например, после правок в api/)
 curl -X POST http://127.0.0.1:8042/api/admin/lifecycle/restart/api
 
 # Перезапустить workers
-python3 -m grace_control.cli restart workers
+curl -X POST http://127.0.0.1:8042/api/admin/lifecycle/restart/workers
 
 # Полный рестарт
-python3 -m grace_control.cli restart all
+curl -X POST http://127.0.0.1:8042/api/admin/lifecycle/restart/all
 
 # Cleanup (орфаны, state, leases)
-python3 -m grace_control.cli cleanup
-# или через HTTP:
 curl -X POST http://127.0.0.1:8042/api/admin/lifecycle/cleanup
 
 # Остановить всё
-python3 -m grace_control.cli stop
-# или:
 curl -X POST http://127.0.0.1:8042/api/admin/lifecycle/shutdown
 ```
 
-## CLI: `grace_ctl`
-
-```bash
-python3 -m grace_control.cli <command>
-```
-
-Команды:
-| Команда | Описание |
-|---|---|
-| `status` | Показать состояние supervisor, API, workers |
-| `restart api` | Перезапустить API процесс |
-| `restart workers` | Перезапустить worker процессы |
-| `restart all` | Перезапустить всё |
-| `cleanup` | Idempotent cleanup worktree/state/leases (см. ниже) |
-| `reload` | Re-prime mtime watcher (после `git pull`) |
-| `stop` | Остановить supervisor и все дочерние процессы |
-| `start` | Запустить supervisor в foreground (используется `live_supervisor.sh`) |
-
-Флаги:
-- `--json` — вывод в JSON (для `status` и `cleanup`)
-- `--socket-path` — путь к supervisor.sock (по умолчанию `GRACE_SUPERVISOR_SOCK`)
-
-`cleanup` дополнительно:
-- `--worktrees/--no-worktrees` (default: on)
-- `--state-files/--no-state-files` (default: on)
-- `--stale-leases/--no-stale-leases` (default: on)
-- `--stale-lease-minutes N` (default: 30)
-- `--stale-state-days N` (default: 7)
+После bootstrap операторский control surface — только HTTP/OpenAPI. Полный
+контракт доступен по `/openapi.json`; lifecycle endpoints перечислены ниже.
 
 ## API: `/api/admin/lifecycle/*`
 
@@ -126,7 +94,9 @@ curl -X POST http://127.0.0.1:8042/api/admin/lifecycle/shutdown
 
 ## Supervisor control socket (unix-only)
 
-Supervisor слушает на `$TARGET_DIR/supervisor.sock` через uvicorn. Это **приватный** канал — используется только `grace_ctl` и интеграционными тестами. Файловые permissions на сокете = единственная auth на этом уровне.
+Supervisor слушает на `$TARGET_DIR/supervisor.sock` через uvicorn. Это
+**внутренний** канал, используемый HTTP lifecycle proxy и интеграционными
+тестами; операторские команды выполняются через публичный API.
 
 | Endpoint | Описание |
 |---|---|
@@ -136,12 +106,8 @@ Supervisor слушает на `$TARGET_DIR/supervisor.sock` через uvicorn.
 | `POST /control/reload` | re-prime mtime watcher |
 | `POST /control/stop` | graceful stop |
 
-Пример прямого вызова (через `curl --unix-socket`):
-
-```bash
-curl --unix-socket /tmp/grace-live-wt/supervisor.sock \
-     -X POST http://localhost/control/restart/workers
-```
+Операторские вызовы не обращаются к этому сокету напрямую: используйте
+`/api/admin/lifecycle/*` через HTTP API.
 
 ## Архитектура
 
@@ -151,7 +117,7 @@ curl --unix-socket /tmp/grace-live-wt/supervisor.sock \
                     └──────────┬───────────┘
                                │ exec
                     ┌──────────▼───────────┐
-                    │   grace_ctl start    │
+                    │  supervisor module   │
                     │   (Supervisor)       │
                     └────┬─────┬───────────┘
                          │     │
@@ -185,14 +151,14 @@ Supervisor — это Python-процесс (asyncio), который:
 
 - Изменения в `api/` → restart API
 - Изменения в `core/`, `adapters/`, `services/`, `worker/`, `agent/` → restart workers
-- Изменения в `supervisor.py`, `supervisor_client.py`, `cli.py`, `supervisor/` → restart all
+- Изменения в `supervisor.py`, `supervisor_client.py`, `supervisor/` → restart all
 - Изменения в `docs/`, `tests/`, `*.md`, `__pycache__/`, `.git/`, `.venv/`, `node_modules/` → игнорируются
 
 Отключение: `--no-watch` или `export GRACE_NO_WATCH=1`.
 
 ## Cleanup
 
-`POST /api/admin/lifecycle/cleanup` (или `grace_ctl cleanup`) запускает `SupervisorCleanupService` (`src/grace_control/services/supervisor_cleanup_service.py`).
+`POST /api/admin/lifecycle/cleanup` запускает `SupervisorCleanupService` (`src/grace_control/services/supervisor_cleanup_service.py`).
 
 Три независимые оси:
 
@@ -294,8 +260,8 @@ Conservative: если git или DB недоступны — **не трога�
 - **Уникальные worker_id**: supervisor передаёт `GRACE_WORKER_ID=grace-worker-0-pid<num>` каждому worker'у. Больше не `eval-w1` у всех.
 - **Unified lifecycle**: один процесс-владелец заменяет N `nohup ... &` в разных терминалах.
 - **Health check**: supervisor ждёт `GET /health` прежде чем запустить workers, гарантируя что API готов принимать claim'ы.
-- **Graceful restart**: `grace_ctl restart workers` → SIGTERM → 5s wait → SIGKILL → новый subprocess.
-- **Reaping orphans**: при старте supervisor форсированно убивает все процессы `run_api.py`, `live_worker.py`, `grace_control.cli` через `pgrep -9`.
+- **Graceful restart**: `POST /api/admin/lifecycle/restart/workers` → SIGTERM → 5s wait → SIGKILL → новый subprocess.
+- **Reaping orphans**: при старте supervisor форсированно убивает зарегистрированные процессы `run_api.py` и `live_worker.py`.
 - **Cleanup as first-class**: `SupervisorCleanupService` — единая точка для орфанов, state и stale leases. Идемпотентно, без race conditions.
 - **Lifecycle HTTP proxy**: `/api/admin/lifecycle/*` — единый source of truth. POST проксирует на unix-socket, GET читает state file. Никакой бизнес-логики в HTTP-слое.
 
@@ -315,15 +281,15 @@ scripts/live_supervisor.sh --target-dir $TARGET --source-dir $SOURCE
 API упал или не успел подняться. Проверьте:
 ```bash
 tail -50 $TARGET/api.log
-GRACE_SUPERVISOR_SOCK=$TARGET/supervisor.sock python3 -m grace_control.cli status
+curl http://127.0.0.1:8042/api/admin/lifecycle/status
 ```
 
 ### Worker'ы не обновляются после `git pull`
 - mtime watcher может не сработать на `git pull` (mtime сохраняется). Решение:
 ```bash
 touch src/grace_control/**/*.py
-# или
-GRACE_SUPERVISOR_SOCK=$TARGET/supervisor.sock python3 -m grace_control.cli reload
+# или через HTTP API
+curl -X POST http://127.0.0.1:8042/api/admin/lifecycle/reload
 sleep 3  # watcher re-primes
 ```
 
