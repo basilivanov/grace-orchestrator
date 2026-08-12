@@ -1,16 +1,20 @@
 ```mermaid
 stateDiagram-v2
+    accepted --> blocked_recoverable
     accepted --> merged
     blocked --> ready
+    blocked_final --> cancelled
     blocked_recoverable --> blocked_final
     blocked_recoverable --> cancelled
     blocked_recoverable --> ready
     draft --> ready
+    failed --> cancelled
     ready --> cancelled
     ready --> running
     rejected --> blocked_final
     rejected --> blocked_recoverable
     rejected --> cancelled
+    rejected --> failed
     rejected --> ready
     running --> accepted
     running --> blocked_final

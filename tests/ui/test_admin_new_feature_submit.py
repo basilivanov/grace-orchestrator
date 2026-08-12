@@ -14,6 +14,7 @@ import requests
 
 
 PORT = 19050
+pytestmark = pytest.mark.external
 
 
 @pytest.fixture(scope="module")

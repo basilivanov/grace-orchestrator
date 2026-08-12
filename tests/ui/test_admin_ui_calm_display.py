@@ -111,6 +111,7 @@ def test_jinja_state_label_filter():
 # Master pane: no loud raw NOT_STARTED pills; meta line with attention count
 # ---------------------------------------------------------------------------
 
+@pytest.mark.external
 def test_master_pane_does_not_show_raw_not_started_pill():
     status, body = _get("/admin/_partial/master")
     assert status == 200
@@ -124,6 +125,7 @@ def test_master_pane_does_not_show_raw_not_started_pill():
     )
 
 
+@pytest.mark.external
 def test_master_pane_shows_attention_count_text():
     status, body = _get("/admin/_partial/master")
     assert status == 200
@@ -134,6 +136,7 @@ def test_master_pane_shows_attention_count_text():
     )
 
 
+@pytest.mark.external
 def test_master_pane_shows_waves_and_packets_counts():
     status, body = _get("/admin/_partial/master")
     assert status == 200
@@ -142,6 +145,7 @@ def test_master_pane_shows_waves_and_packets_counts():
     assert re.search(r"\d+\s*packet", body), "master pane missing 'M packets' meta"
 
 
+@pytest.mark.external
 def test_master_pane_feature_severity_class_present():
     """Feature rows carry a severity-* class (ok | muted | attention | critical)."""
     status, body = _get("/admin/_partial/master")
@@ -151,6 +155,7 @@ def test_master_pane_feature_severity_class_present():
     )
 
 
+@pytest.mark.external
 def test_master_pane_feature_no_loud_pill_for_normal_state():
     """Features with status NOT_STARTED but no failures should be 'severity-muted',
     NOT 'severity-attention' or 'severity-critical'."""
@@ -179,20 +184,21 @@ def test_master_pane_feature_no_loud_pill_for_normal_state():
 
 def _seed_packet_id_with_rejections() -> str | None:
     """Find a real rejected packet id from the timeline."""
-    with urllib.request.urlopen(f"{BASE_URL}/admin/_partial/master", timeout=10) as r:
-        master = r.read().decode("utf-8", "replace")
+    status, master = _get("/admin/_partial/master")
+    if status != 200:
+        return None
     m = re.search(r'feature_id=([a-zA-Z0-9_-]+)', master)
     if not m:
         return None
     fid = m.group(1)
-    with urllib.request.urlopen(
-        f"{BASE_URL}/admin/_partial/timeline?feature_id={fid}", timeout=10
-    ) as r:
-        body = r.read().decode("utf-8", "replace")
+    status, body = _get(f"/admin/_partial/timeline?feature_id={fid}")
+    if status != 200:
+        return None
     m = re.search(r'packet_id=([a-zA-Z0-9_-]+)', body)
     return m.group(1) if m else None
 
 
+@pytest.mark.external
 def test_detail_pane_uses_needs_attention_header():
     pid = _seed_packet_id_with_rejections()
     if not pid:
@@ -209,6 +215,7 @@ def test_detail_pane_uses_needs_attention_header():
     )
 
 
+@pytest.mark.external
 def test_detail_pane_shows_raw_state_in_metadata():
     """Raw backend state is still visible somewhere in the detail pane
     (as small metadata), so debugging is possible."""
@@ -224,6 +231,7 @@ def test_detail_pane_shows_raw_state_in_metadata():
     )
 
 
+@pytest.mark.external
 def test_detail_pane_uses_calm_label_not_raw_state():
     """The badge in the 'Needs attention' panel should say 'Reviewer rejected',
     not the raw 'rejected' string."""
@@ -237,6 +245,7 @@ def test_detail_pane_uses_calm_label_not_raw_state():
     )
 
 
+@pytest.mark.external
 def test_detail_pane_severity_class_present():
     pid = _seed_packet_id_with_rejections()
     if not pid:
@@ -258,11 +267,15 @@ def browser():
     playwright = pytest.importorskip("playwright")
     sync_api = pytest.importorskip("playwright.sync_api")
     with sync_api.sync_playwright() as p:
-        b = p.chromium.launch(headless=True)
+        try:
+            b = p.chromium.launch(headless=True)
+        except Exception as exc:
+            pytest.skip(f"Chromium unavailable: {exc}")
         yield b
         b.close()
 
 
+@pytest.mark.external
 def test_browser_at_most_one_critical_block_on_overview(browser):
     """The 'critical' severity is reserved for the selected blocking
     detail card. On the overview (no packet selected) there should be
@@ -282,6 +295,7 @@ def test_browser_at_most_one_critical_block_on_overview(browser):
         page.close()
 
 
+@pytest.mark.external
 def test_browser_desktop_calm_visual(browser):
     """Desktop 1440: check that no loud red elements are stacked on
     the left master pane (which should be calm navigation)."""

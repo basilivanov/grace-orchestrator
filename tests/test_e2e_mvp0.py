@@ -42,7 +42,7 @@ async def test_mvp0_vertical_slice(api_client):
         "title": "E2E Test Feature",
         "waves": [{
             "title": "Foundation",
-            "packets": [{"title": "Add test file", "scope": "src/test.py"}],
+            "packets": [{"title": "Add test file", "scope": ["src/test.py"]}],
         }],
     }
     r = await c.post("/api/architect/plan", json={"feature_spec": spec})
@@ -58,8 +58,9 @@ async def test_mvp0_vertical_slice(api_client):
     await c.post("/api/workers/register", json={"worker_id": "w1"})
     r = await c.post("/api/packets/claim", json={"worker_id": "w1"})
     assert r.status_code == 200
-    assert r.json()["data"]["packet_id"] == pid
-    assert r.json()["data"]["lease_id"] is not None
+    claim = r.json()["data"]
+    assert claim["packet_id"] == pid
+    assert claim["lease_id"] is not None
 
     # Verify RUNNING
     r = await c.get(f"/api/packets/{pid}")
@@ -67,7 +68,9 @@ async def test_mvp0_vertical_slice(api_client):
 
     # 3. Release → ACCEPTED
     r = await c.post(f"/api/packets/{pid}/release",
-                     json={"worker_id": "w1", "status": "accepted", "result": {"accepted": True}})
+                     json={"worker_id": "w1", "status": "accepted", "result": {"accepted": True},
+                           "lease_id": claim["lease_id"],
+                           "claimed_attempt": claim["claimed_attempt"]})
     assert r.status_code == 200
     assert r.json()["data"]["state"] == "accepted"
 

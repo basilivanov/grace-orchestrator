@@ -45,6 +45,10 @@ curl -X POST http://127.0.0.1:8042/api/admin/lifecycle/shutdown
 
 После bootstrap операторский control surface — только HTTP/OpenAPI. Полный
 контракт доступен по `/openapi.json`; lifecycle endpoints перечислены ниже.
+Control CLI и OpenCode runtime не являются поддерживаемыми поверхностями.
+Внутренний mini-swe/generic subprocess backend используется только worker-ами
+для исполнения packet. Admin/lifecycle service composition выполняется через
+явную dependency injection-композицию и typed read models.
 
 ## API: `/api/admin/lifecycle/*`
 

@@ -18,6 +18,12 @@
 | [Legacy Removal](grace/LEGACY_REMOVAL.md) | code | manual | W8 |
 | [GraceLint Rules](grace/GRACE_LINT_RULES.md) | code | manual | W9/W10 |
 
+CI policy is owned by the repository `Makefile`: `make test`, `make lint`,
+`make docs-check`, and `make hygiene` are the canonical gates; `make ci`
+composes them without a second workflow implementation. The public operator
+surface is HTTP/OpenAPI. The control CLI and OpenCode runtime are removed;
+the internal mini-swe/generic CLI backend remains an execution detail.
+
 ## Generated docs (do not edit)
 
 | Doc | Update command |
@@ -25,6 +31,10 @@
 | `openapi.json` | `make docs` |
 | `packet-states.md` | `make docs` |
 | `state-diagram.md` | `make docs` |
+
+Deterministic tests run with `make test`; tests requiring a running API,
+browser, or external provider are explicitly marked `external`/`live` and
+run through `make test-live` when the environment is available.
 
 ## Archived
 

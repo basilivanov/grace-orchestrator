@@ -7,12 +7,12 @@ from grace_control.db.schema import Lease, Packet, PacketState, Worker
 from tests.conftest import make_packet
 
 
-def test_lease_expired_by_1_second(db):
+def test_lease_expired_after_grace_period(db):
     with get_db() as d:
         make_packet(d, pid="P1", state=PacketState.RUNNING.value)
         d.add(Worker(id="w1"))
         d.add(Lease(packet_id="P1", worker_id="w1",
-                     expires_at=datetime.now(UTC) - timedelta(seconds=1)))
+                     expires_at=datetime.now(UTC) - timedelta(seconds=31)))
     assert check_expired_leases() == 1
     with get_db() as d:
         assert d.query(Packet).filter_by(id="P1").first().state == PacketState.READY.value

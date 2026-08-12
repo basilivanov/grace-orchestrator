@@ -18,11 +18,13 @@ def _get(path: str) -> tuple[int, str]:
         pytest.skip(f"server unreachable at {url}: {e}")
 
 
+@pytest.mark.external
 def test_maintenance_partial_returns_200():
     status, _ = _get("/admin/_partial/maintenance")
     assert status == 200
 
 
+@pytest.mark.external
 def test_maintenance_partial_self_wraps_in_detail_pane():
     """Partial root must be `#detail-pane` (HTMX outerHTML contract)."""
     status, body = _get("/admin/_partial/maintenance")
@@ -31,6 +33,7 @@ def test_maintenance_partial_self_wraps_in_detail_pane():
     assert "maintenance-pane" in body
 
 
+@pytest.mark.external
 def test_maintenance_partial_has_disk_usage_section():
     status, body = _get("/admin/_partial/maintenance")
     assert status == 200
@@ -39,18 +42,21 @@ def test_maintenance_partial_has_disk_usage_section():
     assert "maint-cell" in body
 
 
+@pytest.mark.external
 def test_maintenance_partial_has_worktrees_section():
     status, body = _get("/admin/_partial/maintenance")
     assert status == 200
     assert "Worktrees" in body
 
 
+@pytest.mark.external
 def test_maintenance_partial_has_branches_section():
     status, body = _get("/admin/_partial/maintenance")
     assert status == 200
     assert "Branches" in body
 
 
+@pytest.mark.external
 def test_maintenance_partial_has_archives_placeholder():
     status, body = _get("/admin/_partial/maintenance")
     assert status == 200
@@ -59,6 +65,7 @@ def test_maintenance_partial_has_archives_placeholder():
     assert "kept forever" in body or "no TTL" in body or "no automatic" in body
 
 
+@pytest.mark.external
 def test_maintenance_partial_has_refresh_button():
     status, body = _get("/admin/_partial/maintenance")
     assert status == 200
@@ -66,6 +73,7 @@ def test_maintenance_partial_has_refresh_button():
     assert "hx-get=\"/admin/_partial/maintenance\"" in body
 
 
+@pytest.mark.external
 def test_maintenance_full_page_includes_view_tabs():
     status, body = _get("/admin?view=maintenance")
     assert status == 200
@@ -73,6 +81,7 @@ def test_maintenance_full_page_includes_view_tabs():
     assert "Maintenance" in body
 
 
+@pytest.mark.external
 def test_maintenance_full_page_view_tab_active():
     status, body = _get("/admin?view=maintenance")
     assert status == 200
@@ -81,6 +90,7 @@ def test_maintenance_full_page_view_tab_active():
     assert body.count("view-tab-active") >= 1
 
 
+@pytest.mark.external
 def test_admin_overview_hides_maintenance_view():
     """Default /admin should NOT show maintenance pane as main view."""
     status, body = _get("/admin")
@@ -92,6 +102,7 @@ def test_admin_overview_hides_maintenance_view():
     assert "console" in body
 
 
+@pytest.mark.external
 def test_css_includes_maintenance_pane_styles():
     status, body = _get("/static/admin.css")
     assert status == 200
@@ -112,6 +123,7 @@ def test_css_includes_maintenance_pane_styles():
     assert ".view-tab-active" in body
 
 
+@pytest.mark.external
 def test_maintenance_uses_human_readable_sizes():
     status, body = _get("/admin/_partial/maintenance")
     assert status == 200
@@ -129,6 +141,7 @@ def test_shell_url_supports_view_param():
     assert shell_url() == "/admin"
 
 
+@pytest.mark.external
 def test_cleanup_endpoint_returns_html():
     """POST /admin/maintenance/cleanup returns HTML (not 500)."""
     import urllib.parse
@@ -146,6 +159,7 @@ def test_cleanup_endpoint_returns_html():
     assert "dry-run" in body or "Freed" in body or "OK" in body
 
 
+@pytest.mark.external
 def test_cleanup_unknown_action_returns_error_banner():
     url = f"{BASE_URL}/admin/maintenance/cleanup?action=foo"
     try:

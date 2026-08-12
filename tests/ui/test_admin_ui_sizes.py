@@ -103,6 +103,7 @@ def test_packet_size_info_size_bytes_sums_runs():
 # ── Live UI: master tree shows packet size ─────────────────────────────────
 
 
+@pytest.mark.external
 def test_master_tree_includes_pkt_size_class():
     """Master partial should reference the .pkt-size class for packet size."""
     status, body = _get("/admin/_partial/master")
@@ -120,6 +121,7 @@ def test_master_tree_includes_pkt_size_class():
 # ── Live UI: timeline shows wave + packet size ─────────────────────────────
 
 
+@pytest.mark.external
 def test_timeline_includes_size_classes_in_css():
     """admin.css must define the size-related classes used by timeline."""
     status, body = _get("/static/admin.css")

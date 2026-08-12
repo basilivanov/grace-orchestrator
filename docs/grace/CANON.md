@@ -21,3 +21,15 @@ No module may import `prefect_grace` (enforced by GraceLint GRC100).
 
 Convention: frozen dataclass DTOs (e.g. `ClaimResult`, `CancelResult`) for
 ORM session safety. Routers never contain DB-aggregation loops.
+
+The public runtime/operator surface is FastAPI/OpenAPI. The control/user CLI
+and OpenCode runtime are removed; mini-swe and the generic CLI/subprocess
+backend remain internal packet-execution infrastructure. Lifecycle routers
+delegate through explicit service/port composition, and Admin
+cross-project/Control Center/aggregation services use constructor injection;
+typed Admin read models are bounded shared service boundaries.
+
+Repository hygiene is owned by `scripts/ci_repo_hygiene.py`. The root
+`Makefile` is the single source of truth for `make test`, `make lint`,
+`make docs-check`, `make hygiene`, and aggregate `make ci`; GitHub Actions
+delegates to those targets rather than copying their policy.

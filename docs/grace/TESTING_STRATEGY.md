@@ -26,11 +26,25 @@ All tests use `MockBackend` (in-process, no subprocess) or inject a
 ## Running
 
 ```bash
-pytest tests/ -q                  # quick
-pytest tests/grace_control/ -q    # core tests only
-make test                         # full suite with coverage
-make lint                         # ruff + black + mypy
+make test        # deterministic suite; external/live are explicitly marked
+make lint        # Ruff + GraceLint over the canonical CI scope
+make docs-check  # generated documentation freshness
+make hygiene     # repository hygiene
+make ci          # all four canonical gates
+make test-live   # explicitly live tests; requires a running environment
 ```
+
+`make test` covers the deterministic project test scope across the top-level
+tests and supported test families. Tests that require a running API, browser,
+or external provider are marked `external`/`live` and are not counted as
+deterministic CI coverage. `tests/live/` remains an explicit runtime smoke
+family and is invoked only through `make test-live`.
+
+`make lint` uses one explicit `CI_LINT_SCOPE` shared by Ruff and GraceLint:
+the canon checker, canonical hygiene script, and their architecture/script
+tests. This is the supported CI control surface. The broader legacy runtime
+tree has pre-existing lint debt from earlier refactor packets; it remains
+auditable and is not represented as green by a blanket ignore.
 
 ## Conventions
 

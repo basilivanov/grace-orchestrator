@@ -151,6 +151,7 @@ def _first_wave_id_for(feature_id: str) -> str | None:
     return m.group(1) if m else None
 
 
+@pytest.mark.external
 def test_timeline_renders_selected_feature_label():
     """The middle pane renders an explicit 'Selected feature' label."""
     fid = _first_feature_id()
@@ -169,6 +170,7 @@ def test_timeline_renders_selected_feature_label():
     )
 
 
+@pytest.mark.external
 def test_timeline_renders_wave_order_label():
     """Each wave shows 'Wave #N' on its own line."""
     fid = _first_feature_id()
@@ -181,6 +183,7 @@ def test_timeline_renders_wave_order_label():
     )
 
 
+@pytest.mark.external
 def test_timeline_renders_packet_grid_with_required_fields():
     """Packet cards show attempts/stage/started/duration (no tooltip-only)."""
     fid = _first_feature_id()
@@ -204,6 +207,7 @@ def test_timeline_renders_packet_grid_with_required_fields():
 # 4. Short titles get fallback in the selected feature block
 # ---------------------------------------------------------------------------
 
+@pytest.mark.external
 def test_short_titles_get_untitled_fallback_in_timeline():
     """When a feature has a placeholder title like 't', the timeline
     shows 'Untitled feature' as the main heading, with the original
@@ -242,6 +246,7 @@ def test_short_titles_get_untitled_fallback_in_timeline():
 # 5. Wave details: summary, progress, packet grid
 # ---------------------------------------------------------------------------
 
+@pytest.mark.external
 def test_wave_details_renders_summary_section():
     """The wave details page has a 'Summary' section with per-state counts."""
     fid = _first_feature_id()
@@ -261,6 +266,7 @@ def test_wave_details_renders_summary_section():
         assert key in body, f"summary must show '{key}' key, got body"
 
 
+@pytest.mark.external
 def test_wave_details_renders_progress_section():
     """The wave details page has a 'Wave progress' section with per-stage counts."""
     fid = _first_feature_id()
@@ -281,6 +287,7 @@ def test_wave_details_renders_progress_section():
     assert "wave-progress-row" in body, "progress rows must be present"
 
 
+@pytest.mark.external
 def test_wave_details_renders_packet_grid():
     """Each packet card in wave details shows attempts/stage/started/duration."""
     fid = _first_feature_id()
@@ -301,6 +308,7 @@ def test_wave_details_renders_packet_grid():
     assert "wave-pkt-grid" in body, "wave packet grid container must be present"
 
 
+@pytest.mark.external
 def test_wave_details_renders_selected_wave_label():
     """The wave details page has an explicit 'Selected wave' label."""
     fid = _first_feature_id()
@@ -322,6 +330,7 @@ def test_wave_details_renders_selected_wave_label():
 # 6. Layout structure tests (no flat "title · id · meta" string)
 # ---------------------------------------------------------------------------
 
+@pytest.mark.external
 def test_wave_card_meta_is_structured_not_concatenated():
     """The wave card meta must be in separate spans/rows, not a single
     flat 'title · wave_id · packets · attention' string."""
@@ -361,19 +370,20 @@ def test_wave_card_meta_is_structured_not_concatenated():
 # 7. Mobile hierarchy test
 # ---------------------------------------------------------------------------
 
-playwright = pytest.importorskip("playwright")
-sync_api = pytest.importorskip("playwright.sync_api")
-
-
 @pytest.fixture(scope="module")
 def browser():
-    from playwright.sync_api import sync_playwright
-    with sync_playwright() as p:
-        b = p.chromium.launch(headless=True)
+    playwright = pytest.importorskip("playwright")
+    sync_api = pytest.importorskip("playwright.sync_api")
+    with sync_api.sync_playwright() as p:
+        try:
+            b = p.chromium.launch(headless=True)
+        except Exception as exc:
+            pytest.skip(f"Chromium unavailable: {exc}")
         yield b
         b.close()
 
 
+@pytest.mark.external
 def test_browser_mobile_390_packet_grid_visible(browser):
     """On 390px, the packet grid (attempts/stage/started/duration)
     is still visible without horizontal scroll."""

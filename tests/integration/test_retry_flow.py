@@ -1,6 +1,15 @@
 """Block L: Retry Flow integration tests — 4 tests."""
 import subprocess
+
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def disable_stale_base_recheck(monkeypatch):
+    """Manual merge fixtures predate the persisted worker base snapshot."""
+    from grace_control.config.settings import settings
+
+    monkeypatch.setattr(settings, "integration_recheck_on_stale_base", False)
 
 
 def _init_repo(path):
@@ -12,6 +21,12 @@ def _init_repo(path):
     (path / "README.md").write_text("hello")
     subprocess.run(["git", "-C", str(path), "add", "."], check=True)
     subprocess.run(["git", "-C", str(path), "commit", "-q", "-m", "init"], check=True)
+
+
+async def _claim(api):
+    response = await api.post("/api/packets/claim", json={"worker_id": "w1"})
+    assert response.status_code == 200
+    return response.json()["data"]
 
 
 async def _setup(api):
@@ -32,18 +47,20 @@ async def test_rejected_then_accepted(api, tmp_path):
     _init_repo(repo)
 
     # Attempt 1 — reject
-    await api.post("/api/packets/claim", json={"worker_id": "w1"})
+    claim = await _claim(api)
     await api.post(f"/api/packets/{pid}/release",
-                   json={"worker_id": "w1", "status": "rejected", "result": {}})
+                   json={"worker_id": "w1", "status": "rejected", "result": {},
+                         "lease_id": claim["lease_id"], "claimed_attempt": claim["claimed_attempt"]})
     r = await api.get(f"/api/packets/{pid}")
     assert r.json()["data"]["state"] == "rejected"
 
     # Retry: mark ready, claim again
     from grace_control.core.packet_operations import retry_packet
     retry_packet(pid)
-    await api.post("/api/packets/claim", json={"worker_id": "w1"})
+    claim = await _claim(api)
     await api.post(f"/api/packets/{pid}/release",
-                   json={"worker_id": "w1", "status": "accepted", "result": {"accepted": True}})
+                   json={"worker_id": "w1", "status": "accepted", "result": {"accepted": True},
+                         "lease_id": claim["lease_id"], "claimed_attempt": claim["claimed_attempt"]})
     await api.post(f"/api/packets/{pid}/merge", json={
         "worktree_path": str(tmp_path / "worktree"),
         "branch_name": "HEAD",
@@ -61,9 +78,10 @@ async def test_max_retries_fails(api):
     pid = await _setup(api)
 
     for attempt in range(3):
-        await api.post("/api/packets/claim", json={"worker_id": "w1"})
+        claim = await _claim(api)
         await api.post(f"/api/packets/{pid}/release",
-                       json={"worker_id": "w1", "status": "rejected", "result": {}})
+                       json={"worker_id": "w1", "status": "rejected", "result": {},
+                             "lease_id": claim["lease_id"], "claimed_attempt": claim["claimed_attempt"]})
         if attempt < 2:
             from grace_control.core.packet_operations import retry_packet
             retry_packet(pid)
@@ -101,15 +119,17 @@ async def test_attempt_count_tracks(api):
     pid = await _setup(api)
 
     for _ in range(2):
-        await api.post("/api/packets/claim", json={"worker_id": "w1"})
+        claim = await _claim(api)
         await api.post(f"/api/packets/{pid}/release",
-                       json={"worker_id": "w1", "status": "rejected", "result": {}})
+                       json={"worker_id": "w1", "status": "rejected", "result": {},
+                             "lease_id": claim["lease_id"], "claimed_attempt": claim["claimed_attempt"]})
         from grace_control.core.packet_operations import retry_packet
         retry_packet(pid)
 
-    await api.post("/api/packets/claim", json={"worker_id": "w1"})
+    claim = await _claim(api)
     await api.post(f"/api/packets/{pid}/release",
-                   json={"worker_id": "w1", "status": "accepted", "result": {"accepted": True}})
+                   json={"worker_id": "w1", "status": "accepted", "result": {"accepted": True},
+                         "lease_id": claim["lease_id"], "claimed_attempt": claim["claimed_attempt"]})
 
     r = await api.get(f"/api/packets/{pid}")
     assert r.json()["data"]["attempt_count"] == 3

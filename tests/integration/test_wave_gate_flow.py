@@ -1,6 +1,15 @@
 """Block N: Wave Gate Flow integration tests — 3 tests."""
 import subprocess
+
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def disable_stale_base_recheck(monkeypatch):
+    """Manual merge fixtures predate the persisted worker base snapshot."""
+    from grace_control.config.settings import settings
+
+    monkeypatch.setattr(settings, "integration_recheck_on_stale_base", False)
 
 
 def _init_repo(path):
@@ -11,6 +20,12 @@ def _init_repo(path):
     (path / "README.md").write_text("hello")
     subprocess.run(["git", "-C", str(path), "add", "."], check=True)
     subprocess.run(["git", "-C", str(path), "commit", "-q", "-m", "init"], check=True)
+
+
+async def _claim(api):
+    response = await api.post("/api/packets/claim", json={"worker_id": "w1"})
+    assert response.status_code == 200
+    return response.json()["data"]
 
 
 @pytest.mark.asyncio
@@ -42,9 +57,10 @@ async def test_full_two_wave_e2e(api, tmp_path):
     # Execute W1
     await api.post("/api/workers/register", json={"worker_id": "w1"})
     for idx, p in enumerate(w1_pids):
-        await api.post("/api/packets/claim", json={"worker_id": "w1"})
+        claim = await _claim(api)
         await api.post(f"/api/packets/{p}/release",
-                       json={"worker_id": "w1", "status": "accepted", "result": {"accepted": True}})
+                       json={"worker_id": "w1", "status": "accepted", "result": {"accepted": True},
+                             "lease_id": claim["lease_id"], "claimed_attempt": claim["claimed_attempt"]})
         await api.post(f"/api/packets/{p}/merge", json={
             "worktree_path": str(tmp_path / f"wt_{idx}"),
             "branch_name": "HEAD",
@@ -61,9 +77,10 @@ async def test_full_two_wave_e2e(api, tmp_path):
 
     # Execute W2
     for idx, p in enumerate(w2_pids):
-        await api.post("/api/packets/claim", json={"worker_id": "w1"})
+        claim = await _claim(api)
         await api.post(f"/api/packets/{p}/release",
-                       json={"worker_id": "w1", "status": "accepted", "result": {"accepted": True}})
+                       json={"worker_id": "w1", "status": "accepted", "result": {"accepted": True},
+                             "lease_id": claim["lease_id"], "claimed_attempt": claim["claimed_attempt"]})
         await api.post(f"/api/packets/{p}/merge", json={
             "worktree_path": str(tmp_path / f"wt2_{idx}"),
             "branch_name": "HEAD",
@@ -109,9 +126,10 @@ async def test_wave_gate_check_idempotent_via_api(api, tmp_path):
     check_wave_gates()
 
     await api.post("/api/workers/register", json={"worker_id": "w1"})
-    await api.post("/api/packets/claim", json={"worker_id": "w1"})
+    claim = await _claim(api)
     await api.post(f"/api/packets/{pids[0]}/release",
-                   json={"worker_id": "w1", "status": "accepted", "result": {"accepted": True}})
+                   json={"worker_id": "w1", "status": "accepted", "result": {"accepted": True},
+                         "lease_id": claim["lease_id"], "claimed_attempt": claim["claimed_attempt"]})
     await api.post(f"/api/packets/{pids[0]}/merge", json={
         "worktree_path": str(tmp_path / "wt"),
         "branch_name": "HEAD",

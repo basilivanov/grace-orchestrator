@@ -43,8 +43,12 @@ entry includes:
 ## How to run
 
 ```bash
-# Default: all rules, all files
+# Canonical CI scope (the same scope is used by Ruff and GraceLint)
 make lint
+
+# Broad audit of the legacy runtime tree (informational until its named
+# structural refactor packets are complete)
+python3 scripts/grace_lint.py src/grace_control tests scripts
 
 # Specific rules
 python3 scripts/grace_lint.py src/ --rules GRC100 GRC101

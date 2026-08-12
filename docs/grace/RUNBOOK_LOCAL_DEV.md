@@ -44,11 +44,26 @@ curl -X POST http://localhost:8042/api/agents/run \
 make test
 make lint
 make docs-check
+make hygiene
 make ci
 ```
+
+The root `Makefile` is the single CI source of truth. `make test` runs the
+deterministic test scope and excludes tests marked `external` or `live`.
+Those tests require a running API, browser, or external provider and are run
+explicitly with `make test-live` when that environment is available; the target
+also runs the standalone `tests/live/` scenarios.
+`make lint` uses the explicit `CI_LINT_SCOPE` for the canon-compliant CI
+control surface; legacy runtime lint debt remains visible in the broad audit
+command recorded by the packet submission rather than being suppressed.
+
+The public operator surface is HTTP/OpenAPI; the control CLI and OpenCode
+runtime are removed. Lifecycle/admin behavior is composed through typed
+services and explicit dependency injection, with typed admin read models at
+the router boundary.
 
 ## Run GraceLint
 
 ```bash
-python scripts/grace_lint.py src/grace_control/
+python scripts/grace_lint.py src/grace_control tests scripts
 ```

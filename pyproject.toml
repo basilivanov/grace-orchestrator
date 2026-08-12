@@ -27,10 +27,15 @@ classifiers = [
 dependencies = [
     "SQLAlchemy>=2.0.0,<3",
     "alembic>=1.13.3,<2",
+    "fastapi>=0.115.0,<1",
+    "httpx>=0.27.0,<1",
+    "jinja2>=3.1.0,<4",
+    "mini-swe-agent>=2.4,<2.5",
     "pyyaml>=6.0.0",
     "pydantic>=2.7.0",
     "pydantic-settings>=2.3.0",
     "anthropic>=0.18.0",
+    "uvicorn>=0.30.0,<1",
 ]
 
 [project.optional-dependencies]
@@ -44,6 +49,10 @@ dev = [
     "bandit>=1.7.0",
     "safety>=3.0.0",
     "coverage>=7.4.0",
+    "pytest>=8.0.0,<10",
+    "pytest-asyncio>=0.23.0,<2",
+    "requests>=2.31.0,<3",
+    "ruff>=0.6.0,<1",
 ]
 
 # The user/control CLI was removed; OpenAPI is the canonical runtime contract.
@@ -131,4 +140,6 @@ addopts = [
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "integration: marks tests as integration tests",
+    "external: requires a running API, browser, or other external process; excluded from deterministic CI",
+    "live: requires a manually started live system; run through make test-live",
 ]

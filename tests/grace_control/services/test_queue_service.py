@@ -231,7 +231,7 @@ def test_ready_rework_supersedes_failed_parent_and_reactivates_feature(_db):
         assert feature.status == "active"
 
 
-def test_rework_lineage_end_to_end_unblocks_dependent_wave(_db):
+def test_rework_lineage_end_to_end_unblocks_dependent_wave(_db, monkeypatch):
     import asyncio
 
     from unittest.mock import MagicMock
@@ -239,6 +239,9 @@ def test_rework_lineage_end_to_end_unblocks_dependent_wave(_db):
     from grace_control.services.git_service import GitResult
     from grace_control.services.merge_service import MergeService
     from grace_control.services.packet_service import PacketService
+    from grace_control.config.settings import settings
+
+    monkeypatch.setattr(settings, "integration_recheck_on_stale_base", False)
 
     with get_db() as s:
         _add_feature(s, "feat_REWORK_E2E", status="degraded")

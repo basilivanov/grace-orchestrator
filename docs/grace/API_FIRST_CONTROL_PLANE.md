@@ -7,7 +7,8 @@ Status: enforced (W1 of `source/codex/tz-api-first-cleanup-waves-w0-w11.md`)
 
 The OpenAPI document published by `src/grace_control/api/main.py:create_app()` is the
 single canonical runtime contract of the GRACE Control Plane. There is no second
-control plane.
+control plane. Lifecycle and admin routes are composed from typed services and
+explicit dependency injection; their read models are part of the API contract.
 
 ```text
 Services = the only business-logic core
@@ -83,8 +84,9 @@ is:
 ```
 
 If `docs/openapi.json` is missing or older than the routers, the
-`make docs-check` target fails. See `docs/grace/CI_CD.md` for the exact
-job wiring.
+`make docs-check` target fails. CI wiring is intentionally single-source:
+the root `Makefile` owns `test`, `lint`, `docs-check`, and `hygiene`, while the
+workflow delegates to those targets.
 
 ## What lives where
 

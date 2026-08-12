@@ -7,7 +7,7 @@
 
 Tests cover:
 1. Architect prompt file exists and loads
-2. _build_architect_prompt uses canonical prompt
+2. build_architect_prompt uses canonical prompt
 3. Architect profiles match canonical schema
 4. Legacy allowed_files schema is rejected or canonicalized
 5. Architect output schema required fields
@@ -45,10 +45,10 @@ def test_architect_prompt_file_exists_and_loads():
         "Missing packet contract section"
 
 
-# ─── Test 2: _build_architect_prompt uses canonical prompt ────────────────
+# ─── Test 2: build_architect_prompt uses canonical prompt ────────────────
 
 def test_build_architect_prompt_uses_canonical_prompt():
-    """W03: _build_architect_prompt must load and include the canonical prompt.
+    """W03: build_architect_prompt must load and include the canonical prompt.
 
     We verify by reading the source file directly (to avoid sqlalchemy import)
     and checking that the method calls load_architect_prompt() instead of
@@ -56,30 +56,28 @@ def test_build_architect_prompt_uses_canonical_prompt():
     """
     from pathlib import Path
 
-    # Read the source file directly to avoid sqlalchemy import
-    svc_path = Path(__file__).resolve().parent.parent / "src" / "grace_control" / "services" / "feature_planning_service.py"
+    # Find the extracted prompt renderer
+    svc_path = Path(__file__).resolve().parent.parent / "src" / "grace_control" / "services" / "architect_stage.py"
     source = svc_path.read_text()
-
-    # Find the _build_architect_prompt method
-    assert "_build_architect_prompt" in source, "_build_architect_prompt method not found"
+    assert "build_architect_prompt" in source, "build_architect_prompt function not found"
 
     # Must call load_architect_prompt (the canonical source loader)
     assert "load_architect_prompt" in source, \
-        "_build_architect_prompt does not call load_architect_prompt()"
+        "build_architect_prompt does not call load_architect_prompt()"
 
     # Must NOT embed inline prompt rules/schema — those come from the canonical file
     # Check that the method does not contain the inline rules that were removed
     # We check for specific patterns that existed in the old inline prompt
-    method_start = source.find("def _build_architect_prompt")
+    method_start = source.find("def build_architect_prompt")
     method_end = source.find("\n    def ", method_start + 1)
     method_source = source[method_start:method_end]
 
     assert "CRITICAL — verification quoting rules" not in method_source, \
-        "_build_architect_prompt still embeds verification rules inline (should be in canonical prompt)"
+        "build_architect_prompt still embeds verification rules inline (should be in canonical prompt)"
     assert "CRITICAL — frozen_scope rules" not in method_source, \
-        "_build_architect_prompt still embeds frozen_scope rules inline (should be in canonical prompt)"
-    assert "W03: Thin renderer" in method_source, \
-        "_build_architect_prompt missing W03 docstring indicating it's a thin renderer"
+        "build_architect_prompt still embeds frozen_scope rules inline (should be in canonical prompt)"
+    assert "W03: Render the canonical Architect prompt" in method_source, \
+        "build_architect_prompt missing its W03 extraction marker"
 
     # The canonical prompt must contain the full rules
     canonical = load_architect_prompt()
@@ -109,13 +107,11 @@ def test_architect_profiles_match_canonical_schema():
         # Check that the command text references canonical fields
         command_text = " ".join(str(c) for c in profile.command)
 
-        # Must reference canonical schema
-        assert "scope" in command_text.lower(), \
-            f"Architect profile '{profile_id}' command does not reference 'scope'"
-
-        # Must reference the canonical prompt file
-        assert "architect_prompt.md" in command_text or "canonical" in command_text.lower(), \
-            f"Architect profile '{profile_id}' does not reference the canonical prompt source"
+        # The current runtime contract passes the canonical packet as a file.
+        assert "--task-file" in command_text, \
+            f"Architect profile '{profile_id}' does not use the packet-file contract"
+        assert "{packet_path}" in command_text, \
+            f"Architect profile '{profile_id}' does not pass the packet file"
 
         # Must NOT use legacy field names as primary
         for legacy_field in LEGACY_FIELD_MAP:

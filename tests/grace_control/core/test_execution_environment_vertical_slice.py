@@ -157,7 +157,7 @@ def test_architect_prompt_contains_environment_facts() -> None:
         ignored_patterns=["verification-output/", ".coverage"],
         config_sources=["pyproject.toml", "docker-compose.yml", ".gitignore"],
     )
-    service = FeaturePlanningService.__new__(FeaturePlanningService)
+    service = FeaturePlanningService(None)
 
     prompt = service._build_architect_prompt(
         "Implement a small feature.",

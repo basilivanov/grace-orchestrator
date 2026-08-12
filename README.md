@@ -16,7 +16,7 @@ GRACE работает как отдельный control plane и может в�
 - GRACE-документы, knowledge graph, волны и пакеты работ.
 - Детерминированное обнаружение окружения проекта: Python/Node, scripts, Makefile, compose-сервисы и правила `.gitignore`.
 - Изолированный Git worktree для каждого пакета и запрет изменений вне разрешённого scope.
-- Профили разных моделей и провайдеров через `mini-swe-agent`; поддерживаются CLI Proxy и прямой DeepSeek API.
+- Профили разных моделей и провайдеров через внутренний `mini-swe`/generic CLI backend; поддерживаются CLI Proxy и прямой DeepSeek API.
 - Acceptance pipeline T0/T1/T2, evidence-проверка и отдельный reviewer.
 - Recovery ladder: повтор coder, смена модели, verifier и возврат к архитектору в зависимости от попытки и причины сбоя.
 - Таймаут по отсутствию прогресса: длительные тесты не прерываются, пока обновляются stdout, stderr или артефакты запуска.
@@ -36,7 +36,6 @@ cd grace-orchestrator
 python3 -m venv .venv
 .venv/bin/pip install -U pip
 .venv/bin/pip install -e ".[dev]"
-.venv/bin/pip install "mini-swe-agent>=2.4,<2.5" fastapi uvicorn sqlalchemy httpx
 ```
 
 ### 2. Указать проект и runtime-каталог
@@ -121,6 +120,28 @@ curl http://127.0.0.1:8042/api/admin/lifecycle/status
 curl http://127.0.0.1:8042/api/features/
 curl http://127.0.0.1:8042/api/trace/features/FEATURE_ID
 ```
+
+## Канонический CI и runtime surface
+
+Публичная поверхность control plane — HTTP/OpenAPI. Операторский control CLI и
+OpenCode runtime удалены; после bootstrap lifecycle и admin-операции выполняются
+через API, а внутренний `mini-swe`/generic subprocess backend остаётся только
+исполнительным механизмом для packet runtime.
+
+Единый источник CI-политики — корневой `Makefile`:
+
+```bash
+make test        # детерминированные тесты; external/live отмечены и исключены
+make lint        # Ruff + GraceLint на том же CI scope
+make docs-check  # свежесть сгенерированных артефактов
+make hygiene     # repository hygiene
+make ci          # композиция четырёх canonical targets
+```
+
+Тесты, которым нужен запущенный API, браузер или внешний провайдер, помечены
+`external`/`live`; их явный ручной запуск выполняется через `make test-live`.
+Сервисы жизненного цикла и admin read-модели собираются через явную
+dependency injection-композицию, а не через скрытый global facade.
 
 ## Конфигурация
 

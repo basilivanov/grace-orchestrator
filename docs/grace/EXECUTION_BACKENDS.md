@@ -13,6 +13,9 @@ by `grace_control.config.settings.execution_backend` and read by
 | `api` | `grace_control.agent.api_backend.ApiAgentBackend` | HTTP provider adapter; mock provider is available |
 
 The old legacy backend was removed in W8 and now raises `ValueError`.
+OpenCode is not a supported runtime backend. The control CLI is also removed;
+the `cli` backend is an internal generic subprocess adapter driven by the
+declarative mini-swe-compatible profiles, not a public operator surface.
 
 ## Backend selection
 

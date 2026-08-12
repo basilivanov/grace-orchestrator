@@ -340,7 +340,7 @@ async def test_stage07_performance_fanout_and_bounded_explorer(tmp_path):
 # emitted_logs: Browser console output is not emitted by the application test.
 # error_behavior: Skips only when Playwright or Chromium is absent.
 # END_FUNCTION_CONTRACT
-@pytest.mark.integration
+@pytest.mark.external
 def test_stage07_browser_desktop_mobile_smoke(stage07_hub_url):
     try:
         from playwright.sync_api import sync_playwright

@@ -1,11 +1,47 @@
 from __future__ import annotations
 
+import json
 import os
-import pytest
-from unittest.mock import AsyncMock, patch
 from datetime import UTC, datetime
+from unittest.mock import AsyncMock, patch
+
+import pytest
 
 from grace_control.db.schema import Feature, FeaturePlanningRun, Packet, PacketState, Wave, Event
+
+
+@pytest.fixture
+def current_architect_llm(monkeypatch):
+    """Provide a deterministic current-contract Architect response for store tests."""
+    monkeypatch.delenv("GRACE_CONTEXT_DISABLED", raising=False)
+
+    async def fake_run_llm(*args, **kwargs):
+        del args, kwargs
+        return json.dumps({
+            "title": "Deterministic test plan",
+            "description": "A plan used by the deterministic planning-store tests.",
+            "waves": [{
+                "title": "W1",
+                "packets": [{
+                    "title": "Implement test feature",
+                    "role": "coder",
+                    "scope": ["src/test_feature.py"],
+                    "frozen_scope": [],
+                    "acceptance_profile": "NORMAL",
+                    "depends_on": [],
+                    "conflict_keys": [],
+                    "description": "Implement the deterministic test feature.",
+                    "coder_instructions": ["Keep the change local to the packet scope."],
+                    "acceptance_criteria": ["The scoped implementation exists."],
+                    "verification": {"t0": [], "t1": ["true"], "t2": []},
+                    "expected_evidence": [],
+                }],
+            }],
+            "constraints": {"frozen_scope": []},
+            "verification": {"t0": [], "t1": [], "t2": []},
+        })
+
+    monkeypatch.setattr("grace_control.core.llm_runner.run_llm", fake_run_llm)
 
 
 @pytest.mark.usefixtures("db")
@@ -81,7 +117,7 @@ class TestFeaturePlanningStore:
             assert runs[-1].duration_ms is not None
 
     @pytest.mark.asyncio
-    async def test_run_architect(self):
+    async def test_run_architect(self, current_architect_llm):
         from grace_control.services.feature_intake_service import FeatureIntakeService
         from grace_control.services.feature_planning_service import FeaturePlanningService
         from grace_control.db import get_db
@@ -104,7 +140,7 @@ class TestFeaturePlanningStore:
             assert feat.status == "PLAN_READY"
 
     @pytest.mark.asyncio
-    async def test_approve_plan_sets_queued_and_readies_first_wave(self):
+    async def test_approve_plan_sets_queued_and_readies_first_wave(self, current_architect_llm):
         from grace_control.services.feature_intake_service import FeatureIntakeService
         from grace_control.services.feature_planning_service import FeaturePlanningService
         from grace_control.db import get_db
@@ -152,7 +188,7 @@ class TestFeaturePlanningStore:
                 planning.approve_plan(fid)
 
     @pytest.mark.asyncio
-    async def test_regenerate_plan_resets_state(self):
+    async def test_regenerate_plan_resets_state(self, current_architect_llm):
         from grace_control.services.feature_intake_service import FeatureIntakeService
         from grace_control.services.feature_planning_service import FeaturePlanningService
         from grace_control.db import get_db
@@ -237,7 +273,7 @@ class TestFeaturePlanningStore:
             assert settings.planning_logs_root in r.stderr_path
 
     @pytest.mark.asyncio
-    async def test_architect_sets_stdout_stderr_paths(self):
+    async def test_architect_sets_stdout_stderr_paths(self, current_architect_llm):
         """Wave 4: architect run stores log paths."""
         from grace_control.services.feature_intake_service import FeatureIntakeService
         from grace_control.services.feature_planning_service import FeaturePlanningService
@@ -282,7 +318,7 @@ class TestFeaturePlanningStore:
                 planning.approve_plan(fid)
 
     @pytest.mark.asyncio
-    async def test_approve_creates_ready_first_wave_draft_rest(self):
+    async def test_approve_creates_ready_first_wave_draft_rest(self, current_architect_llm):
         """After approve, exact state assertions on multi-wave plan."""
         from grace_control.services.feature_intake_service import FeatureIntakeService
         from grace_control.services.feature_planning_service import FeaturePlanningService
@@ -326,7 +362,7 @@ class TestFeaturePlanningStore:
             assert len(fid) == 15  # feat_ + 10 nanoid chars
 
     @pytest.mark.asyncio
-    async def test_packets_use_canonical_pkt_uid(self):
+    async def test_packets_use_canonical_pkt_uid(self, current_architect_llm):
         """After approve, packet IDs start with pkt_."""
         from grace_control.services.feature_intake_service import FeatureIntakeService
         from grace_control.services.feature_planning_service import FeaturePlanningService
@@ -380,7 +416,7 @@ class TestFeaturePlanningStore:
             assert spec.get("approval_mode") == "auto"
 
     @pytest.mark.asyncio
-    async def test_approve_plan_event_includes_approval_mode(self):
+    async def test_approve_plan_event_includes_approval_mode(self, current_architect_llm):
         """plan_materialized event carries approval_mode field."""
         from grace_control.services.feature_intake_service import FeatureIntakeService
         from grace_control.services.feature_planning_service import FeaturePlanningService

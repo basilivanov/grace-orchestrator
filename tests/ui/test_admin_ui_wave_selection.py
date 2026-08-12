@@ -73,6 +73,7 @@ def _first_packet_id() -> str | None:
 # 1. URL preservation: wave_id appears in shell URLs
 # ---------------------------------------------------------------------------
 
+@pytest.mark.external
 def test_wave_click_url_contains_wave_id_param():
     """The shell URL produced for a wave click must include wave_id."""
     fid = _first_feature_id()
@@ -121,6 +122,7 @@ def test_shell_url_helper_supports_wave_id():
 # 2. Wave details mode renders when only wave_id is selected
 # ---------------------------------------------------------------------------
 
+@pytest.mark.external
 def test_wave_details_mode_renders_when_wave_id_only():
     """When only wave_id is set, the detail pane shows wave details."""
     fid = _first_feature_id()
@@ -151,6 +153,7 @@ def test_wave_details_mode_renders_when_wave_id_only():
     assert wid in body, "wave_id from URL must appear in detail header"
 
 
+@pytest.mark.external
 def test_wave_details_shows_clickable_packet_list():
     """Wave details must list the wave's packets, each clickable to
     open the packet detail pane."""
@@ -187,6 +190,7 @@ def test_wave_details_shows_clickable_packet_list():
             )
 
 
+@pytest.mark.external
 def test_wave_details_with_nonexistent_wave_shows_banner():
     """If wave_id points to a missing wave, the detail pane shows a
     'Wave not found' banner instead of crashing."""
@@ -203,6 +207,7 @@ def test_wave_details_with_nonexistent_wave_shows_banner():
 # 3. Timeline: wave card is fully clickable; packet row is clickable
 # ---------------------------------------------------------------------------
 
+@pytest.mark.external
 def test_timeline_wave_card_is_clickable_element():
     """The wave card in the timeline is fully clickable (has hx-get + cursor)."""
     fid = _first_feature_id()
@@ -223,6 +228,7 @@ def test_timeline_wave_card_is_clickable_element():
         )
 
 
+@pytest.mark.external
 def test_timeline_wave_card_has_hx_get_to_detail_pane():
     """The wave card's hx-get targets #detail-pane and contains wave_id."""
     fid = _first_feature_id()
@@ -240,6 +246,7 @@ def test_timeline_wave_card_has_hx_get_to_detail_pane():
         assert "feature_id=" in u, f"wave hx-get must include feature_id: {u}"
 
 
+@pytest.mark.external
 def test_timeline_packet_row_has_hx_get_to_detail_pane():
     """Each packet row in the timeline has hx-get targeting #detail-pane."""
     fid = _first_feature_id()
@@ -260,6 +267,7 @@ def test_timeline_packet_row_has_hx_get_to_detail_pane():
 # 4. Visual selection: selected wave/packet have CSS classes
 # ---------------------------------------------------------------------------
 
+@pytest.mark.external
 def test_selected_wave_has_selected_class():
     """When wave_id is in URL, the matching .ft-wave has the 'selected' class."""
     fid = _first_feature_id()
@@ -282,6 +290,7 @@ def test_selected_wave_has_selected_class():
     )
 
 
+@pytest.mark.external
 def test_selected_packet_has_selected_class_in_timeline():
     """When packet_id is in URL, the matching .ft-packet has 'selected'."""
     fid = _first_feature_id()
@@ -296,6 +305,7 @@ def test_selected_packet_has_selected_class_in_timeline():
     # but the route must still work. Check a real case below.
 
 
+@pytest.mark.external
 def test_selected_packet_visual_when_present():
     """When a real packet_id is in URL, the matching packet row has 'selected'."""
     fid = _first_feature_id()
@@ -327,19 +337,20 @@ def test_selected_packet_visual_when_present():
 # 5. Browser-level: click wave → detail pane shows wave details
 # ---------------------------------------------------------------------------
 
-playwright = pytest.importorskip("playwright")
-sync_api = pytest.importorskip("playwright.sync_api")
-
-
 @pytest.fixture(scope="module")
 def browser():
-    from playwright.sync_api import sync_playwright
-    with sync_playwright() as p:
-        b = p.chromium.launch(headless=True)
+    playwright = pytest.importorskip("playwright")
+    sync_api = pytest.importorskip("playwright.sync_api")
+    with sync_api.sync_playwright() as p:
+        try:
+            b = p.chromium.launch(headless=True)
+        except Exception as exc:
+            pytest.skip(f"Chromium unavailable: {exc}")
         yield b
         b.close()
 
 
+@pytest.mark.external
 def test_browser_wave_click_shows_wave_details(browser):
     """Click anywhere on a wave card → detail pane shows wave details."""
     fid = _first_feature_id()
@@ -389,6 +400,7 @@ def test_browser_wave_click_shows_wave_details(browser):
         page.close()
 
 
+@pytest.mark.external
 def test_browser_packet_click_inside_wave_does_not_bubble(browser):
     """Clicking a packet row inside a wave must open packet details
     (not wave details). The packet click must not bubble up to the
@@ -433,6 +445,7 @@ def test_browser_packet_click_inside_wave_does_not_bubble(browser):
         page.close()
 
 
+@pytest.mark.external
 def test_browser_mobile_390_hierarchy_preserved(browser):
     """At 390px, the master/timeline/detail panes still stack, and wave
     cards are still visible and tappable."""

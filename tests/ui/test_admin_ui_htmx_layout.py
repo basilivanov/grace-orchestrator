@@ -19,14 +19,10 @@ from pathlib import Path
 import pytest
 
 
-# Skip if playwright is not installed (CI without browser deps)
-playwright = pytest.importorskip("playwright")
-sync_api = pytest.importorskip("playwright.sync_api")
-
-
 # Server is expected to be already running (pytest does not start the server).
 # Override with env var GRACE_BASE_URL.
 BASE_URL = os.environ.get("GRACE_BASE_URL", "http://127.0.0.1:8042")
+pytestmark = pytest.mark.external
 
 
 # ---------------------------------------------------------------------------

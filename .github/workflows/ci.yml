@@ -7,7 +7,7 @@ on:
     branches: [ main ]
 
 jobs:
-  unit-tests:
+  test:
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -22,9 +22,9 @@ jobs:
           pip install --upgrade pip
           pip install -e ".[dev]"
       - name: Run tests
-        run: pytest tests/grace_control/ -q --tb=short
+        run: make test
 
-  grace-lint:
+  lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -34,8 +34,8 @@ jobs:
       - name: Install
         run: |
           pip install -e ".[dev]"
-      - name: GraceLint
-        run: python scripts/grace_lint.py src/grace_control tests scripts
+      - name: Lint
+        run: make lint
 
   docs-check:
     runs-on: ubuntu-latest
@@ -60,37 +60,5 @@ jobs:
       - name: Install
         run: |
           pip install -e ".[dev]"
-      - name: Check tracked artifacts
-        run: |
-          python -c "
-import subprocess, sys
-r = subprocess.run(['git', 'ls-files', 'agents/'], capture_output=True, text=True)
-if r.stdout.strip():
-    print('FAIL: tracked artifacts in agents/')
-    sys.exit(1)
-"
-      - name: Check no legacy CLI entrypoints
-        run: |
-          python -c "
-import tomllib, sys
-with open('pyproject.toml', 'rb') as f:
-    d = tomllib.load(f)
-scripts = d.get('project', {}).get('scripts', {})
-for name in ('grace', 'grace-dev', 'prefect-grace', 'gracectl'):
-    if name in scripts:
-        print(f'FAIL: {name} entrypoint found')
-        sys.exit(1)
-print('OK: no legacy entrypoints')
-"
-      - name: Check no prefect_grace in packages
-        run: |
-          python -c "
-import tomllib, sys
-with open('pyproject.toml', 'rb') as f:
-    d = tomllib.load(f)
-pkgs = d.get('tool', {}).get('hatch', {}).get('build', {}).get('packages', [])
-if 'src/prefect_grace' in pkgs:
-    print('FAIL: src/prefect_grace in packages')
-    sys.exit(1)
-print('OK: packages clean')
-"
+      - name: Repository hygiene
+        run: make hygiene
