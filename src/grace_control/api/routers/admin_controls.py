@@ -382,7 +382,7 @@ async def local_openapi_control(
 # error_behavior: Raises HTTP 503 when Hub wiring is missing.
 # END_FUNCTION_CONTRACT
 def _mutation_service(request: Request) -> AdminMutationService:
-    state = request.app.__dict__["state"]
+    state = request.app.state
     hub = getattr(state, "admin_cross_project_service", None)
     if not isinstance(hub, AdminCrossProjectService):
         raise HTTPException(status_code=503, detail="Admin Hub mutation service is unavailable")
@@ -617,8 +617,7 @@ def _maintenance_service() -> MaintenanceService:
 # error_behavior: Uninitialized/partial DB returns empty groups.
 # END_FUNCTION_CONTRACT
 def _maintenance_state() -> tuple[dict[str, str], dict[str, list[dict[str, Any]]]]:
-    reader = getattr(_maintenance_control_service, "st" + "ate")
-    return reader()
+    return _maintenance_control_service.state()
 
 
 # START_FUNCTION_CONTRACT
@@ -631,8 +630,7 @@ def _maintenance_state() -> tuple[dict[str, str], dict[str, list[dict[str, Any]]
 # error_behavior: Missing/unreadable roots return an empty list.
 # END_FUNCTION_CONTRACT
 def _state_directory_summary(state_root: Any) -> list[dict[str, Any]]:
-    reader = getattr(_maintenance_control_service, "st" + "ate_directory_summary")
-    return reader(state_root)
+    return _maintenance_control_service.state_directory_summary(state_root)
 
 
 # START_FUNCTION_CONTRACT

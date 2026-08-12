@@ -61,6 +61,10 @@ rules:
     path: src/grace_control/services/admin_overview_read_service.py
     reason: read-only admin overview accesses Packet.state for counts and DTO serialization; the textual checker flags these reads as mutation
     expires_wave: never
+  - rule: GRC103
+    path: src/grace_control/api/routers/admin_controls.py
+    reason: read-only FastAPI app state and maintenance service state access; the textual checker flags these non-mutation reads
+    expires_wave: never
   - rule: GRC106
     path: src/grace_control/adapters/packet_executor.py
     reason: packet metadata origin key is a JSON contract field, not a Git remote or branch
