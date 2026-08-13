@@ -53,6 +53,9 @@ def test_confirmed_runtime_paths_are_rejected():
         ".lw3/packets/pkt/EXECUTION_PACKET.md",
         ".grace-live-wt/packets/pkt/EXECUTION_PACKET.md",
         "src/gold-test/result.txt",
+        "runtime.db",
+        "state/runtime.db-shm",
+        "state/runtime.db-wal",
     )
     assert _MODULE.tracked_runtime_artifacts(paths) == paths
 

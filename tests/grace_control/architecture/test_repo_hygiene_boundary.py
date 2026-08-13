@@ -66,6 +66,9 @@ def test_hygiene_script_and_policy_exist():
         ".lw3/x",
         ".grace-live-wt/x",
         "src/gold-test/result.txt",
+        "runtime.db",
+        "state/runtime.db-shm",
+        "state/runtime.db-wal",
     )
     assert _MODULE.tracked_runtime_artifacts(samples) == samples
 

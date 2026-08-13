@@ -50,6 +50,7 @@ _TRACKED_RUNTIME_PATTERNS = (
     re.compile(r"^\.lw3/"),
     re.compile(r"^\.grace-live-wt/"),
     re.compile(r"^src/gold-test/"),
+    re.compile(r"^(?:[^/]+/)*[^/]+\.db(?:-(?:shm|wal))?$"),
 )
 # END_BLOCK_CONSTANTS
 
