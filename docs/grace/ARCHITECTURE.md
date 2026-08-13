@@ -50,10 +50,15 @@ as deterministic CI coverage.
 
 ## Execution backends
 
-`select_backend()` returns one of:
+`select_backend()` supports the following current backends:
+- `cli` → `UniversalCliAgentBackend` (internal generic subprocess runtime for
+  packet execution, including mini-swe-compatible declarative profiles)
 - `api` → `ApiAgentBackend` (strategic, delegates to `AgentGatewayService`)
 - `mock` → `MockBackend` (in-process, no subprocess, for tests/CI)
-- `legacy` → removed in W8
+
+`legacy` was removed in W8 and is explicitly rejected; it is not a selectable
+supported backend. The internal `cli` execution backend must not be confused
+with the removed public/operator control CLI.
 
 ## File budgets
 
