@@ -150,12 +150,12 @@ if [ "$UPDATE_IMPORTS_ONLY" = false ]; then
         log_success "grace-orchestrator installed"
     fi
 
-    # Verify installation
+    # Verify the supported direct supervisor bootstrap instead of a removed CLI.
     if [ "$DRY_RUN" = false ]; then
-        if command -v gracectl &>/dev/null; then
-            log_success "gracectl command available at: $(which gracectl)"
+        if python3 -m grace_control.supervisor --help &>/dev/null; then
+            log_success "supervisor bootstrap module is available"
         else
-            log_error "gracectl command not found after installation"
+            log_error "supervisor bootstrap module is not available"
             exit 1
         fi
     fi
@@ -311,9 +311,10 @@ else
     echo "  1. Review the changes: git status"
     echo "  2. Update docker-compose.grace-worker.yml manually (see MIGRATION.md)"
     echo "  3. Test the migration: ./scripts/validate_migration.sh"
-    echo "  4. Test a slice: gracectl slice list"
-    echo "  5. Remove old directories after verification:"
-    echo "     rm -rf src/prefect_grace/ gracectl/ infra/grace-worker/"
+    echo "  4. Start the supervisor: scripts/live_supervisor.sh --target-dir /tmp/grace-live-wt"
+    echo "  5. Check status through HTTP: curl http://127.0.0.1:8042/api/admin/lifecycle/status"
+    echo "  6. Remove old directories after verification:"
+    echo "     rm -rf src/prefect_grace/ infra/grace-worker/"
     echo ""
     echo "If you need to rollback:"
     echo "  ./scripts/rollback_migration.sh"

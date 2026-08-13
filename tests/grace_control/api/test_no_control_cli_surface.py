@@ -54,6 +54,13 @@ REMOVED_CONTROL_CLI_REFERENCES = (
     "grace_control.cli",
     "grace_ctl",
     "python -m grace_control.cli",
+    "command -v gracectl",
+    "which gracectl",
+    "gracectl --",
+    "gracectl slice",
+    "python -m gracectl.cli",
+    "python3 -m gracectl.cli",
+    "python3 -m grace_control.cli",
 )
 REMOVED_ENTRY_POINT_NAMES = {
     "grace",

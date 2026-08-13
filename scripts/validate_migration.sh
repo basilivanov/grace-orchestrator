@@ -64,12 +64,12 @@ else
     print_fail "grace-orchestrator not installed. Run: pip install grace-orchestrator[prefect]"
 fi
 
-print_check "gracectl command"
-if command -v gracectl &>/dev/null; then
+print_check "supervisor bootstrap module"
+if python3 -m grace_control.supervisor --help &>/dev/null; then
     print_pass
-    echo "  Location: $(which gracectl)"
+    echo "  Entry point: python3 -m grace_control.supervisor"
 else
-    print_fail "gracectl command not found in PATH"
+    print_fail "supervisor bootstrap module is not available"
 fi
 
 # Check 2: grace/ directory structure
@@ -243,20 +243,11 @@ else
     print_fail "Cannot import grace_orchestrator module"
 fi
 
-print_check "gracectl CLI works"
-if gracectl --help &>/dev/null; then
+print_check "HTTP/OpenAPI control surface"
+if python3 -c "from grace_control.api.main import app; assert any(getattr(route, 'path', '') == '/api/admin/lifecycle/status' for route in app.routes)" &>/dev/null; then
     print_pass
 else
-    print_fail "gracectl command fails"
-fi
-
-print_check "gracectl can list slices"
-if gracectl slice list &>/dev/null; then
-    SLICE_COUNT=$(gracectl slice list 2>/dev/null | grep -c "^  " || echo "0")
-    print_pass
-    echo "  Slices found: $SLICE_COUNT"
-else
-    print_fail "gracectl slice list fails"
+    print_fail "HTTP/OpenAPI lifecycle status route is not available"
 fi
 
 # Summary

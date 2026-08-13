@@ -15,14 +15,14 @@ Validates that the grace-orchestrator migration is complete and correct.
 
 **What it checks:**
 - ✓ grace-orchestrator package is installed
-- ✓ gracectl command is available
+- ✓ supervisor bootstrap module is available
 - ✓ grace/ directory structure is correct
 - ✓ Required configuration files exist and are valid
 - ✓ Old directories (src/prefect_grace/, gracectl/, infra/grace-worker/) are removed
 - ✓ Docker configuration is updated
 - ✓ Python imports are updated
 - ✓ Environment variables are configured
-- ✓ Runtime validation (imports work, CLI works)
+- ✓ Runtime validation (imports work, HTTP/OpenAPI control surface is available)
 
 **Exit codes:**
 - `0`: Validation passed (with or without warnings)
@@ -41,8 +41,8 @@ Root: /opt/astro-project
 ==========================================
 Checking grace-orchestrator package... ✓ PASS
   Version: 0.1.0
-Checking gracectl command... ✓ PASS
-  Location: /usr/local/bin/gracectl
+Checking supervisor bootstrap module... ✓ PASS
+  Entry point: python3 -m grace_control.supervisor
 
 ...
 
@@ -148,7 +148,6 @@ Rolls back the grace-orchestrator migration to pre-migration state.
 2. Creates rollback branch (rollback-grace-migration-TIMESTAMP)
 3. Restores old directories from backup:
    - src/prefect_grace/
-   - gracectl/
    - infra/grace-worker/
    - docker-compose.grace-worker.yml
 4. Reverts Python imports (grace_orchestrator → prefect_grace)
@@ -169,7 +168,6 @@ GRACE Orchestrator Migration Rollback
 
 [WARN] This will rollback the grace-orchestrator migration and restore:
   - src/prefect_grace/ directory
-  - gracectl/ directory
   - infra/grace-worker/ directory
   - docker-compose.grace-worker.yml
 
@@ -209,10 +207,10 @@ Are you sure you want to continue? (yes/no): yes
    ./scripts/validate_migration.sh
    ```
 
-5. **Test the system:**
+5. **Test the system through the supported control surface:**
    ```bash
-   gracectl slice list
-   gracectl slice verify M-NATAL-SUMMARY-LAYER --dry-run
+   scripts/live_supervisor.sh --target-dir /tmp/grace-live-wt
+   curl http://127.0.0.1:8042/api/admin/lifecycle/status
    ```
 
 6. **If issues occur, rollback:**
@@ -238,8 +236,9 @@ Are you sure you want to continue? (yes/no): yes
 # 4. Validate
 ./scripts/validate_migration.sh
 
-# 5. Test
-gracectl slice list
+# 5. Start and inspect through HTTP/OpenAPI
+scripts/live_supervisor.sh --target-dir /tmp/grace-live-wt
+curl http://127.0.0.1:8042/api/admin/lifecycle/status
 ```
 
 ### Scenario 2: Only update imports
